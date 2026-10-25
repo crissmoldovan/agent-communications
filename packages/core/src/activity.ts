@@ -1,0 +1,1328 @@
+import { execFile } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
+import { access, constants, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { join } from 'node:path';
+import {
+  type ActivitySettings,
+  DEFAULT_ACTIVITY_RETENTION_DAYS,
+  isActivityRetention,
+  MAX_ACTIVITY_RETENTION_DAYS,
+  MIN_ACTIVITY_RETENTION_DAYS,
+} from './activity-settings.ts';
+import type { Core } from './core.ts';
+import { CommsError } from './errors.ts';
+import { appendPrivateLine, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
+
+/**
+ * The activity log (design 2026-10-25-activity, §4 with S1–S5): one line for every call an agent session makes that
+ * reads or writes account data, tied to the session that made it — what it touched, never what it said.
+ *
+ * - **Where:** `<state>/activity/YYYY-MM-DD.jsonl` (the UTC day of the line), each file owner-only (600) in an
+ *   owner-only folder (700), each line appended whole with `appendPrivateLine`, as the audit log's are. Daily files,
+ *   so retention drops whole days (`prune`).
+ * - **What a line holds:** `ActivityLine`, and nothing else. Every line is rebuilt field by field from the fields a
+ *   line has (`activityLineOf`), so a channel that hands over a whole message — body, text, HTML, attachment bytes —
+ *   still writes only its id, subject and sender: the type says so, and the copy makes it so. Subjects and names are
+ *   kept as received, cut to their bounds, and shown only inside the untrusted-content envelope.
+ * - **Never in the way:** `append` never throws into its caller. A line that cannot be written is said once per
+ *   process on stderr, remembered for `doctor`, and the call it describes goes on (§4.6).
+ * - **The audit log is unchanged.** It stays small, content-free and shareable; this one is private.
+ */
+
+// ── What a line is ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** What the call did with account data: read it, wrote it, was told of it (an event delivery, S1), or approved it. */
+export const ACTIVITY_KINDS: readonly ['read', 'write', 'told', 'approval'] = Object.freeze([
+  'read',
+  'write',
+  'told',
+  'approval',
+] as const);
+export type ActivityKind = (typeof ACTIVITY_KINDS)[number];
+
+/** How it ended: done, refused by a policy, an approval or a rule, or failed. */
+export const ACTIVITY_OUTCOMES: readonly ['ok', 'refused', 'failed'] = Object.freeze([
+  'ok',
+  'refused',
+  'failed',
+] as const);
+export type ActivityOutcome = (typeof ACTIVITY_OUTCOMES)[number];
+
+/** Which kind of process recorded it: an MCP server, a CLI call, or the event service's own work. */
+export const ACTIVITY_SURFACES: readonly ['mcp', 'cli', 'daemon'] = Object.freeze(['mcp', 'cli', 'daemon'] as const);
+export type ActivitySurface = (typeof ACTIVITY_SURFACES)[number];
+
+/** The most items one line lists; past that it lists the first fifty and `count` says how many there were. */
+export const MAX_ACTIVITY_ITEMS = 50;
+/** How much of a subject a line keeps, in characters. */
+export const MAX_SUBJECT_CHARS = 200;
+
+/** An MCP client's `clientInfo`, as the client reported it: what it said, never proof of what it is (§4.3). */
+export interface ClientInfo {
+  readonly name: string;
+  readonly version?: string | undefined;
+}
+
+/** The account a call acted on: its immutable id, and its name at the time. */
+export interface ActivityAccount {
+  readonly id: string;
+  readonly alias: string;
+}
+
+/** Who sent a message, as its sender wrote it. */
+export interface ActivitySender {
+  readonly name?: string | undefined;
+  readonly address?: string | undefined;
+}
+
+/**
+ * One thing a call touched: a message, a thread, a file. Its id, and for a message its subject and sender, for a
+ * download its file name and size, for a chat message the conversation it is in. Never a body, a preview or bytes.
+ */
+export interface ActivityItem {
+  readonly id: string;
+  readonly subject?: string | undefined;
+  readonly from?: ActivitySender | undefined;
+  /** A file's name. */
+  readonly name?: string | undefined;
+  /** A file's size, in bytes. */
+  readonly size?: number | undefined;
+  /** Where it is: a Slack channel's name, say. */
+  readonly conversation?: string | undefined;
+}
+
+/** A process as `ps` names it: its id, when it started (as `ps` prints it, an identity rather than a time), its name. */
+export interface ActivityParent {
+  readonly pid: number;
+  readonly startedAt: string;
+  readonly name: string;
+}
+
+/**
+ * Which session made a call (S2). A session is an agent window: the processes one parent started in one folder.
+ *
+ * - `key` names the session: a hash of the parent's id, its start and the folder when `grouped`; otherwise a key of
+ *   this process's own, which no other process shares.
+ * - `process` is a random id this process made when it started, and `pid` its process id.
+ * - `folder` is the working folder, as a real path (shown with the home as `~` only at display time), or null when it
+ *   could not be read.
+ * - `parent` is the parent that grouped it — for a CLI call that joined a window, that window's parent.
+ * - `ancestors` (CLI calls only) names up to three processes above it, nearest first, so a person typing in a terminal
+ *   can be told from an agent's shell.
+ */
+export interface ActivitySession {
+  readonly key: string;
+  readonly process: string;
+  readonly pid: number;
+  readonly client?: ClientInfo | undefined;
+  readonly folder: string | null;
+  readonly parent?: ActivityParent | undefined;
+  readonly ancestors?: readonly string[] | undefined;
+  readonly grouped: boolean;
+  readonly surface: ActivitySurface;
+}
+
+/** What a `told` line says of a delivery (S1): the rule that matched and the target it reached. No sender, no payload. */
+export interface ActivityTold {
+  readonly rule: string;
+  readonly target: string;
+}
+
+/**
+ * One call, as the log keeps it (§4.2, S1, S2, S4). Content never: what was touched, by id, subject and sender, and
+ * how it ended.
+ *
+ * - `operation` is the capability id (`gmail.search`), `channel` the channel's word (`gmail`).
+ * - `items` lists at most fifty things touched; `count` says how many there were in all.
+ * - `counts` holds named counts where a channel records no identities (WhatsApp's `chats` and `messages`, S4).
+ * - `query` is a search's words — an agent wrote them, not a sender.
+ * - `recipients` and `approvalId` are a write's, as the audit records them.
+ * - `told` is a delivery's (S1).
+ */
+export interface ActivityLine {
+  readonly at: string;
+  readonly channel: string;
+  readonly account: ActivityAccount;
+  readonly operation: string;
+  readonly kind: ActivityKind;
+  readonly outcome: ActivityOutcome;
+  readonly reason?: string | undefined;
+  readonly session: ActivitySession;
+  readonly ms: number;
+  readonly items?: readonly ActivityItem[] | undefined;
+  readonly count?: number | undefined;
+  readonly counts?: Readonly<Record<string, number>> | undefined;
+  readonly query?: string | undefined;
+  readonly recipients?: readonly string[] | undefined;
+  readonly approvalId?: string | undefined;
+  readonly told?: ActivityTold | undefined;
+}
+
+/** A line to append: `at` is now when left out. */
+export type ActivityLineInput = Omit<ActivityLine, 'at'> & { readonly at?: string | undefined };
+
+// ── Bounds ─────────────────────────────────────────────────────────────────────────────────────────────────────
+
+const BOUNDS = {
+  id: 200,
+  name: 200,
+  address: 320,
+  fileName: 255,
+  conversation: 200,
+  query: 500,
+  reason: 300,
+  word: 100,
+  alias: 128,
+  folder: 4096,
+  startedAt: 64,
+  version: 64,
+} as const;
+const MAX_RECIPIENTS = 50;
+const MAX_COUNTS = 10;
+const SESSION_KEY = /^[0-9a-f]{16}$/;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const DAY_FILE = /^(\d{4}-\d{2}-\d{2})\.jsonl$/;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** `value` cut to `max` characters — whole characters, never half a surrogate pair — ending in `…` when cut. */
+function cut(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  if (value.length <= max) return value;
+  // Read no more than the bound needs: a subject of megabytes is not split into characters whole.
+  const chars = Array.from(value.slice(0, max * 2 + 2));
+  return chars.length <= max ? chars.join('') : `${chars.slice(0, max - 1).join('')}…`;
+}
+
+function whole(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : undefined;
+}
+
+function isoDay(at: number): string {
+  return new Date(at).toISOString().slice(0, 10);
+}
+
+function own<T extends object>(value: unknown): T | undefined {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as T) : undefined;
+}
+
+function itemOf(raw: unknown): ActivityItem | null {
+  const item = own<Record<string, unknown>>(raw);
+  const id = cut(item?.id, BOUNDS.id);
+  if (item === undefined || id === undefined) return null;
+  const sender = own<Record<string, unknown>>(item.from);
+  const from =
+    sender === undefined
+      ? undefined
+      : {
+          ...(typeof sender.name === 'string' ? { name: cut(sender.name, BOUNDS.name) } : {}),
+          ...(typeof sender.address === 'string' ? { address: cut(sender.address, BOUNDS.address) } : {}),
+        };
+  const size = whole(item.size);
+  return {
+    id,
+    ...(typeof item.subject === 'string' ? { subject: cut(item.subject, MAX_SUBJECT_CHARS) } : {}),
+    ...(from !== undefined && Object.keys(from).length > 0 ? { from } : {}),
+    ...(typeof item.name === 'string' ? { name: cut(item.name, BOUNDS.fileName) } : {}),
+    ...(size !== undefined ? { size } : {}),
+    ...(typeof item.conversation === 'string' ? { conversation: cut(item.conversation, BOUNDS.conversation) } : {}),
+  };
+}
+
+function clientOf(raw: unknown): ClientInfo | undefined {
+  const client = own<Record<string, unknown>>(raw);
+  const name = cut(client?.name, BOUNDS.word);
+  if (name === undefined || name === '') return undefined;
+  const version = cut(client?.version, BOUNDS.version);
+  return { name, ...(version ? { version } : {}) };
+}
+
+/** A parent in this exact key order — the order `sessionOfAncestor` finds it by. */
+function parentOf(raw: unknown): ActivityParent | undefined {
+  const parent = own<Record<string, unknown>>(raw);
+  const pid = whole(parent?.pid);
+  const startedAt = cut(parent?.startedAt, BOUNDS.startedAt);
+  if (pid === undefined || startedAt === undefined) return undefined;
+  return { pid, startedAt, name: cut(parent?.name, BOUNDS.word) ?? '' };
+}
+
+function sessionOf(raw: unknown): ActivitySession {
+  const session = own<Record<string, unknown>>(raw) ?? {};
+  const key = typeof session.key === 'string' && SESSION_KEY.test(session.key) ? session.key : null;
+  const surface = (ACTIVITY_SURFACES as readonly unknown[]).includes(session.surface)
+    ? (session.surface as ActivitySurface)
+    : 'mcp';
+  const client = clientOf(session.client);
+  const parent = parentOf(session.parent);
+  const ancestors = Array.isArray(session.ancestors)
+    ? session.ancestors.slice(0, 3).flatMap((name) => (typeof name === 'string' ? [cut(name, BOUNDS.word) ?? ''] : []))
+    : undefined;
+  return {
+    // A key that is not one is no session's: this line stands alone rather than in someone else's.
+    key: key ?? randomKey(),
+    process: cut(session.process, BOUNDS.word) ?? PROCESS_ID,
+    pid: whole(session.pid) ?? 0,
+    ...(client === undefined ? {} : { client }),
+    folder: typeof session.folder === 'string' ? (cut(session.folder, BOUNDS.folder) ?? null) : null,
+    ...(parent === undefined ? {} : { parent }),
+    ...(ancestors === undefined ? {} : { ancestors }),
+    grouped: key !== null && session.grouped === true,
+    surface,
+  };
+}
+
+/**
+ * The line as it is written: every field copied from what a line has, each cut to its bound, in one fixed order.
+ * Anything else the input carries — a body, a text, an HTML part, bytes — is not copied, whatever it is called.
+ */
+export function activityLineOf(input: ActivityLineInput, now: Date = new Date()): ActivityLine {
+  const raw = input as unknown as Record<string, unknown>;
+  const at = typeof raw.at === 'string' && ISO_TIME.test(raw.at) ? raw.at : now.toISOString();
+  const account = own<Record<string, unknown>>(raw.account);
+  const items = Array.isArray(raw.items) ? raw.items : undefined;
+  const kept = items?.slice(0, MAX_ACTIVITY_ITEMS).flatMap((item) => itemOf(item) ?? []);
+  const given = whole(raw.count);
+  const count = items === undefined ? given : Math.max(items.length, given ?? 0);
+  const counts = own<Record<string, unknown>>(raw.counts);
+  const keptCounts =
+    counts === undefined
+      ? undefined
+      : Object.fromEntries(
+          Object.entries(counts)
+            .filter(([name, value]) => /^[a-z][A-Za-z]{0,31}$/.test(name) && whole(value) !== undefined)
+            .slice(0, MAX_COUNTS)
+            .map(([name, value]) => [name, whole(value) as number]),
+        );
+  const recipients = Array.isArray(raw.recipients)
+    ? raw.recipients
+        .slice(0, MAX_RECIPIENTS)
+        .flatMap((address) => (typeof address === 'string' ? [cut(address, BOUNDS.address) as string] : []))
+    : undefined;
+  const told = own<Record<string, unknown>>(raw.told);
+  const reason = cut(raw.reason, BOUNDS.reason);
+  const query = cut(raw.query, BOUNDS.query);
+  const approvalId =
+    typeof raw.approvalId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.approvalId) ? raw.approvalId : undefined;
+  return {
+    at,
+    channel: cut(raw.channel, BOUNDS.word) ?? '',
+    account: { id: cut(account?.id, BOUNDS.alias) ?? '', alias: cut(account?.alias, BOUNDS.alias) ?? '' },
+    operation: cut(raw.operation, BOUNDS.word) ?? '',
+    kind: (ACTIVITY_KINDS as readonly unknown[]).includes(raw.kind) ? (raw.kind as ActivityKind) : 'read',
+    outcome: (ACTIVITY_OUTCOMES as readonly unknown[]).includes(raw.outcome) ? (raw.outcome as ActivityOutcome) : 'ok',
+    ...(reason ? { reason } : {}),
+    session: sessionOf(raw.session),
+    ms: whole(raw.ms) ?? 0,
+    ...(kept === undefined ? {} : { items: kept }),
+    ...(count === undefined ? {} : { count }),
+    ...(keptCounts === undefined || Object.keys(keptCounts).length === 0 ? {} : { counts: keptCounts }),
+    ...(query === undefined ? {} : { query }),
+    ...(recipients === undefined ? {} : { recipients }),
+    ...(approvalId === undefined ? {} : { approvalId }),
+    ...(told === undefined
+      ? {}
+      : { told: { rule: cut(told.rule, BOUNDS.name) ?? '', target: cut(told.target, BOUNDS.name) ?? '' } }),
+  };
+}
+
+/** A line read back from a file: one this release can show, or null for anything else. */
+function readLine(text: string): ActivityLine | null {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const line = own<Record<string, unknown>>(raw);
+  if (line === undefined || typeof line.at !== 'string' || !ISO_TIME.test(line.at)) return null;
+  const session = own<Record<string, unknown>>(line.session);
+  if (typeof session?.key !== 'string' || !SESSION_KEY.test(session.key)) return null;
+  // Rebuilt as it was written: a hand edit to the file adds nothing a line does not have.
+  return activityLineOf(line as unknown as ActivityLineInput);
+}
+
+// ── Sessions, summarised ───────────────────────────────────────────────────────────────────────────────────────
+
+/** How many lines of each kind, and of each outcome. */
+export interface ActivityCounts {
+  readonly kind: Readonly<Record<ActivityKind, number>>;
+  readonly outcome: Readonly<Record<ActivityOutcome, number>>;
+}
+
+/**
+ * One session as `sessions` lists it: where and by what it ran, when it was first and last seen, how many processes
+ * recorded lines for it, and its counts by kind and outcome. Its folder, client and parent are those of its first
+ * server process — or of its first line, when only CLI calls recorded any.
+ */
+export interface ActivitySessionSummary {
+  readonly key: string;
+  readonly grouped: boolean;
+  readonly surfaces: readonly ActivitySurface[];
+  readonly folder: string | null;
+  readonly client: ClientInfo | null;
+  readonly parent: ActivityParent | null;
+  readonly firstSeen: string;
+  readonly lastSeen: string;
+  readonly processes: number;
+  readonly channels: readonly string[];
+  readonly accounts: readonly string[];
+  readonly counts: ActivityCounts;
+}
+
+/** What a session's lines add up to, in a form two days' worth can be added together. */
+interface Aggregate {
+  key: string;
+  grouped: boolean;
+  surfaces: ActivitySurface[];
+  /** The line its folder, client and parent come from: the first of a server process, or the first at all. */
+  primary: {
+    at: string;
+    cli: boolean;
+    folder: string | null;
+    client: ClientInfo | null;
+    parent: ActivityParent | null;
+  };
+  firstSeen: string;
+  lastSeen: string;
+  processes: string[];
+  channels: string[];
+  accounts: string[];
+  kind: Record<ActivityKind, number>;
+  outcome: Record<ActivityOutcome, number>;
+}
+
+function emptyKinds(): Record<ActivityKind, number> {
+  return { read: 0, write: 0, told: 0, approval: 0 };
+}
+
+function emptyOutcomes(): Record<ActivityOutcome, number> {
+  return { ok: 0, refused: 0, failed: 0 };
+}
+
+function aggregateOf(line: ActivityLine): Aggregate {
+  const kind = emptyKinds();
+  kind[line.kind] += 1;
+  const outcome = emptyOutcomes();
+  outcome[line.outcome] += 1;
+  return {
+    key: line.session.key,
+    grouped: line.session.grouped,
+    surfaces: [line.session.surface],
+    primary: {
+      at: line.at,
+      cli: line.session.surface === 'cli',
+      folder: line.session.folder,
+      client: line.session.client ?? null,
+      parent: line.session.parent ?? null,
+    },
+    firstSeen: line.at,
+    lastSeen: line.at,
+    processes: [line.session.process],
+    channels: line.channel ? [line.channel] : [],
+    accounts: line.account.alias ? [line.account.alias] : [],
+    kind,
+    outcome,
+  };
+}
+
+function union<T>(a: readonly T[], b: readonly T[]): T[] {
+  return [...new Set([...a, ...b])];
+}
+
+/** Two aggregates of one session, added together. */
+function merge(a: Aggregate, b: Aggregate): Aggregate {
+  // A server process's line names the window; among those, or among CLI lines, the earliest.
+  const first = (x: Aggregate['primary'], y: Aggregate['primary']) =>
+    x.cli !== y.cli ? (x.cli ? y : x) : x.at <= y.at ? x : y;
+  const primary = first(a.primary, b.primary);
+  const other = primary === a.primary ? b.primary : a.primary;
+  const kind = emptyKinds();
+  const outcome = emptyOutcomes();
+  for (const name of ACTIVITY_KINDS) kind[name] = a.kind[name] + b.kind[name];
+  for (const name of ACTIVITY_OUTCOMES) outcome[name] = a.outcome[name] + b.outcome[name];
+  return {
+    key: a.key,
+    grouped: a.grouped || b.grouped,
+    surfaces: union(a.surfaces, b.surfaces),
+    primary: { ...primary, client: primary.client ?? other.client, parent: primary.parent ?? other.parent },
+    firstSeen: a.firstSeen <= b.firstSeen ? a.firstSeen : b.firstSeen,
+    lastSeen: a.lastSeen >= b.lastSeen ? a.lastSeen : b.lastSeen,
+    processes: union(a.processes, b.processes),
+    channels: union(a.channels, b.channels),
+    accounts: union(a.accounts, b.accounts),
+    kind,
+    outcome,
+  };
+}
+
+function add(groups: Map<string, Aggregate>, aggregate: Aggregate): void {
+  const held = groups.get(aggregate.key);
+  groups.set(aggregate.key, held === undefined ? aggregate : merge(held, aggregate));
+}
+
+function summaryOf(aggregate: Aggregate): ActivitySessionSummary {
+  return {
+    key: aggregate.key,
+    grouped: aggregate.grouped,
+    surfaces: [...aggregate.surfaces].sort(),
+    folder: aggregate.primary.folder,
+    client: aggregate.primary.client,
+    parent: aggregate.primary.parent,
+    firstSeen: aggregate.firstSeen,
+    lastSeen: aggregate.lastSeen,
+    processes: aggregate.processes.length,
+    channels: [...aggregate.channels].sort(),
+    accounts: [...aggregate.accounts].sort(),
+    counts: { kind: { ...aggregate.kind }, outcome: { ...aggregate.outcome } },
+  };
+}
+
+/** A day's aggregates read back from its index: trusted only as far as their shape, and dropped whole otherwise. */
+function aggregatesOf(raw: unknown): Aggregate[] | null {
+  if (!Array.isArray(raw)) return null;
+  const strings = (value: unknown) => Array.isArray(value) && value.every((each) => typeof each === 'string');
+  for (const each of raw) {
+    const held = own<Aggregate>(each);
+    if (
+      held === undefined ||
+      typeof held.key !== 'string' ||
+      !SESSION_KEY.test(held.key) ||
+      typeof held.firstSeen !== 'string' ||
+      typeof held.lastSeen !== 'string' ||
+      own(held.primary) === undefined ||
+      own(held.kind) === undefined ||
+      own(held.outcome) === undefined ||
+      !strings(held.processes) ||
+      !strings(held.channels) ||
+      !strings(held.accounts) ||
+      !strings(held.surfaces)
+    ) {
+      return null;
+    }
+  }
+  return raw as Aggregate[];
+}
+
+// ── The log ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A line that could not be written: when, why, and which process — never anything the line held. */
+export interface ActivityFailure {
+  readonly at: string;
+  readonly code: string;
+  readonly message: string;
+  readonly pid: number;
+}
+
+/** What `doctor` reads of the log: where it is, whether it is private and writable, and the last failure. */
+export interface ActivityHealth {
+  readonly directory: string;
+  /** False when nothing was recorded yet. */
+  readonly exists: boolean;
+  /** False when something that is not a folder stands where it goes. */
+  readonly isDirectory: boolean;
+  /** Whether only its owner can read it; null where that cannot be told (Windows), or before it exists. */
+  readonly private: boolean | null;
+  /** Whether today's file can be written: the file when it exists, its folder otherwise. */
+  readonly writable: boolean;
+  /** The days held, oldest first. */
+  readonly days: readonly string[];
+  /** When a line was last written, from the newest file's time; null when there is none. */
+  readonly lastWritten: string | null;
+  /** The last failure any process recorded, or this one remembers. */
+  readonly failure: ActivityFailure | null;
+}
+
+/** What `show` filters by. `account` is a name or an id; `since` an ISO time. */
+export interface ActivityFilters {
+  readonly kind?: ActivityKind | undefined;
+  readonly channel?: string | undefined;
+  readonly account?: string | undefined;
+  readonly outcome?: ActivityOutcome | undefined;
+  readonly since?: string | undefined;
+  /** The most lines to return, newest first: 1000 when left out. */
+  readonly limit?: number | undefined;
+}
+
+/** One session's lines, newest first, filtered; and what all of its lines in the time asked add up to. */
+export interface ActivityShown {
+  readonly lines: ActivityLine[];
+  /** True when more lines matched than `limit`. */
+  readonly more: boolean;
+  /** The session over the time asked, before the other filters; null when it has no line there at all. */
+  readonly summary: ActivitySessionSummary | null;
+}
+
+export interface ActivityLogOptions {
+  now?: (() => Date) | undefined;
+  /**
+   * The settings in force, read afresh for every line, so turning recording off applies at once in every process.
+   * Left out, on and 30 days. A reader that throws — a configuration that cannot be read — is read as off.
+   */
+  settings?: (() => Promise<ActivitySettings>) | undefined;
+  /** Where the once-a-process line about a failure goes: stderr when left out. */
+  warn?: ((line: string) => void) | undefined;
+}
+
+const FAILURE_FILE = 'activity-failure.json';
+const INDEX_DIR = '.index';
+const DEFAULT_SHOW_LIMIT = 1000;
+const ON_BY_DEFAULT: ActivitySettings = Object.freeze({
+  record: 'on',
+  retentionDays: DEFAULT_ACTIVITY_RETENTION_DAYS,
+  problems: [],
+});
+const UNREADABLE: ActivitySettings = Object.freeze({
+  record: 'off',
+  retentionDays: MAX_ACTIVITY_RETENTION_DAYS,
+  problems: ['the configuration could not be read, so nothing is recorded'],
+});
+
+/** The once-a-process line, when the stderr default is used: one process, one line, however many logs it opens. */
+let warnedOnStderr = false;
+
+function codeOf(error: unknown): string {
+  if (error instanceof CommsError) return error.code;
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return typeof code === 'string' ? code : 'error';
+}
+
+function messageOf(error: unknown): string {
+  return cut(error instanceof Error ? error.message : String(error), BOUNDS.reason) ?? 'unknown';
+}
+
+export class ActivityLog {
+  readonly directory: string;
+  readonly #failureFile: string;
+  readonly #now: () => Date;
+  readonly #settings: () => Promise<ActivitySettings>;
+  readonly #warn: ((line: string) => void) | undefined;
+  #failure: ActivityFailure | null = null;
+  #failureWrittenAt = 0;
+  #warned = false;
+  #prunedDay: string | null = null;
+
+  constructor(stateDir: string, options: ActivityLogOptions = {}) {
+    this.directory = join(stateDir, 'activity');
+    this.#failureFile = join(stateDir, FAILURE_FILE);
+    this.#now = options.now ?? (() => new Date());
+    this.#settings = options.settings ?? (async () => ON_BY_DEFAULT);
+    this.#warn = options.warn;
+  }
+
+  /** The last line this process could not write, or null. */
+  get lastFailure(): ActivityFailure | null {
+    return this.#failure;
+  }
+
+  /**
+   * Appends one line, unless recording is off. True when it was written. Never throws: a line that cannot be written
+   * is said once per process (`warn`, stderr by default), recorded beside the log for `doctor`, and returns false.
+   *
+   * The first line a process writes on each day also prunes days older than the retention in force — the log's
+   * daily maintenance, best effort.
+   */
+  async append(input: ActivityLineInput): Promise<boolean> {
+    let settings: ActivitySettings;
+    try {
+      settings = await this.#settings();
+    } catch {
+      settings = UNREADABLE;
+    }
+    if (settings.record !== 'on') return false;
+    try {
+      const line = activityLineOf(input, this.#now());
+      await appendPrivateLine(join(this.directory, `${line.at.slice(0, 10)}.jsonl`), JSON.stringify(line));
+      if (this.#failure !== null) {
+        // Recording again: what this process recorded of its failure is no longer true.
+        this.#failure = null;
+        await rm(this.#failureFile, { force: true }).catch(() => undefined);
+      }
+    } catch (error) {
+      await this.#failed(error);
+      return false;
+    }
+    await this.#dailyPrune(settings);
+    return true;
+  }
+
+  async #failed(error: unknown): Promise<void> {
+    const now = this.#now();
+    const failure: ActivityFailure = {
+      at: now.toISOString(),
+      code: codeOf(error),
+      message: messageOf(error),
+      pid: process.pid,
+    };
+    this.#failure = failure;
+    const said = `agentcomms: activity is not being recorded: ${failure.message}`;
+    if (this.#warn !== undefined) {
+      if (!this.#warned) this.#warn(said);
+    } else if (!warnedOnStderr) {
+      warnedOnStderr = true;
+      process.stderr.write(`${said}\n`);
+    }
+    this.#warned = true;
+    // Beside the log rather than in it, which may be what cannot be written; at most once a minute a process.
+    if (now.getTime() - this.#failureWrittenAt < 60_000) return;
+    this.#failureWrittenAt = now.getTime();
+    await writeFileAtomic(this.#failureFile, `${JSON.stringify(failure)}\n`).catch(() => undefined);
+  }
+
+  async #dailyPrune(settings: ActivitySettings): Promise<void> {
+    const today = isoDay(this.#now().getTime());
+    if (this.#prunedDay === today) return;
+    this.#prunedDay = today;
+    await this.prune(settings.retentionDays).catch(() => undefined);
+  }
+
+  /** The days held, oldest first. */
+  async days(): Promise<string[]> {
+    let names: string[];
+    try {
+      names = await readdir(this.directory);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return [];
+      throw error;
+    }
+    return names.flatMap((name) => DAY_FILE.exec(name)?.[1] ?? []).sort();
+  }
+
+  /**
+   * Deletes every day whose last line is older than `retentionDays` days: a day goes once all of it is that old, so
+   * every line is kept at least that long and at most a day longer. Whole days only; every other day is left whole.
+   */
+  async prune(retentionDays: number): Promise<{ deleted: string[] }> {
+    if (!isActivityRetention(retentionDays)) {
+      throw new CommsError(
+        'USAGE',
+        `the activity log keeps a whole number of days, ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, not ${String(retentionDays)}`,
+      );
+    }
+    const cutoff = isoDay(this.#now().getTime() - retentionDays * DAY_MS);
+    const deleted: string[] = [];
+    for (const day of await this.days()) {
+      if (day >= cutoff) continue;
+      await rm(join(this.directory, `${day}.jsonl`), { force: true });
+      await rm(join(this.directory, INDEX_DIR, `${day}.json`), { force: true }).catch(() => undefined);
+      deleted.push(day);
+    }
+    return { deleted };
+  }
+
+  async #lines(day: string): Promise<ActivityLine[]> {
+    const text = await this.#text(day);
+    return text === null ? [] : text.split('\n').flatMap((raw) => (raw ? (readLine(raw) ?? []) : []));
+  }
+
+  async #text(day: string): Promise<string | null> {
+    try {
+      return await readFile(join(this.directory, `${day}.jsonl`), 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw error;
+    }
+  }
+
+  /**
+   * A whole past day's sessions, from its index when the index was made from the file as it is now, else from the
+   * file — and the index written again, best effort. Today's is never indexed: it is still being written.
+   */
+  async #dayAggregates(day: string): Promise<Aggregate[]> {
+    const file = join(this.directory, `${day}.jsonl`);
+    const index = join(this.directory, INDEX_DIR, `${day}.json`);
+    let mark: string;
+    try {
+      const info = await stat(file);
+      mark = `${info.size}:${info.mtimeMs}`;
+    } catch {
+      return [];
+    }
+    try {
+      const held = JSON.parse(await readFile(index, 'utf8')) as {
+        version?: unknown;
+        mark?: unknown;
+        sessions?: unknown;
+      };
+      const sessions = held.version === 1 && held.mark === mark ? aggregatesOf(held.sessions) : null;
+      if (sessions !== null) return sessions;
+    } catch {
+      // No index yet, or one that cannot be read: made again below.
+    }
+    const groups = new Map<string, Aggregate>();
+    for (const line of await this.#lines(day)) add(groups, aggregateOf(line));
+    const sessions = [...groups.values()];
+    await writeFileAtomic(index, `${JSON.stringify({ version: 1, mark, sessions })}\n`).catch(() => undefined);
+    return sessions;
+  }
+
+  /** Every session with a line at or after `since` (every day held, when left out), newest first. */
+  async sessions(options: { since?: string | undefined } = {}): Promise<ActivitySessionSummary[]> {
+    const since = options.since;
+    const today = isoDay(this.#now().getTime());
+    const groups = new Map<string, Aggregate>();
+    for (const day of await this.days()) {
+      if (since !== undefined && `${day}T23:59:59.999Z` < since) continue;
+      const whole = since === undefined || since <= `${day}T00:00:00.000Z`;
+      if (whole && day < today) {
+        for (const aggregate of await this.#dayAggregates(day)) add(groups, aggregate);
+        continue;
+      }
+      for (const line of await this.#lines(day)) {
+        if (since === undefined || line.at >= since) add(groups, aggregateOf(line));
+      }
+    }
+    return [...groups.values()]
+      .map(summaryOf)
+      .sort((a, b) => (a.lastSeen === b.lastSeen ? a.key.localeCompare(b.key) : a.lastSeen < b.lastSeen ? 1 : -1));
+  }
+
+  /**
+   * One session's lines, newest first, that match every filter given; and its summary over the time asked. Only
+   * lines whose session key is exactly `key` are ever read into the answer.
+   */
+  async show(key: string, filters: ActivityFilters = {}): Promise<ActivityShown> {
+    if (!SESSION_KEY.test(key)) throw new CommsError('USAGE', `"${cut(key, 40)}" is not a session key`);
+    const limit = filters.limit ?? DEFAULT_SHOW_LIMIT;
+    const since = filters.since;
+    // A session key is hex, and a quote inside any string a line holds is written `\"`: this finds only the key.
+    const needle = `"key":"${key}"`;
+    const lines: ActivityLine[] = [];
+    let more = false;
+    let summary: Aggregate | null = null;
+    const days = (await this.days()).reverse();
+    for (const day of days) {
+      if (since !== undefined && `${day}T23:59:59.999Z` < since) break;
+      const text = await this.#text(day);
+      if (text === null) continue;
+      const raws = text.split('\n');
+      for (let index = raws.length - 1; index >= 0; index -= 1) {
+        const raw = raws[index] as string;
+        if (!raw.includes(needle)) continue;
+        const line = readLine(raw);
+        if (line === null || line.session.key !== key) continue;
+        if (since !== undefined && line.at < since) continue;
+        const aggregate = aggregateOf(line);
+        summary = summary === null ? aggregate : merge(summary, aggregate);
+        if (!matches(line, filters)) continue;
+        if (lines.length >= limit) {
+          more = true;
+          continue;
+        }
+        lines.push(line);
+      }
+    }
+    // Lines appended out of order (two processes, one file) are put back in time order, newest first.
+    lines.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1));
+    return { lines, more, summary: summary === null ? null : summaryOf(summary) };
+  }
+
+  /**
+   * The window a CLI call belongs to (S2): the session of a server process, in today's or yesterday's file, whose
+   * parent is one of `ancestors` — the nearest first. Null when none is.
+   */
+  async sessionOfAncestor(
+    ancestors: readonly ActivityParent[],
+  ): Promise<{ key: string; parent: ActivityParent; folder: string | null } | null> {
+    const now = this.#now().getTime();
+    const texts: string[] = [];
+    for (const day of [isoDay(now), isoDay(now - DAY_MS)]) {
+      const text = await this.#text(day).catch(() => null);
+      if (text !== null) texts.push(text);
+    }
+    for (const ancestor of ancestors) {
+      // In the order `parentOf` writes a parent's keys; the start is JSON, so its quotes cannot end it early.
+      const needle = `"parent":{"pid":${ancestor.pid},"startedAt":${JSON.stringify(ancestor.startedAt)}`;
+      for (const text of texts) {
+        let from = text.indexOf(needle);
+        while (from !== -1) {
+          const start = text.lastIndexOf('\n', from) + 1;
+          const end = text.indexOf('\n', from);
+          const line = readLine(text.slice(start, end === -1 ? text.length : end));
+          const parent = line?.session.parent;
+          if (
+            line?.session.grouped &&
+            line.session.surface === 'mcp' &&
+            parent?.pid === ancestor.pid &&
+            parent.startedAt === ancestor.startedAt
+          ) {
+            return { key: line.session.key, parent, folder: line.session.folder };
+          }
+          from = text.indexOf(needle, from + needle.length);
+        }
+      }
+    }
+    return null;
+  }
+
+  /** The last failure recorded by any process — the newer of the file beside the log and this process's own. */
+  async readFailure(): Promise<ActivityFailure | null> {
+    let stored: ActivityFailure | null = null;
+    try {
+      const raw = own<Record<string, unknown>>(JSON.parse(await readFile(this.#failureFile, 'utf8')));
+      if (raw !== undefined && typeof raw.at === 'string' && ISO_TIME.test(raw.at)) {
+        stored = {
+          at: raw.at,
+          code: cut(raw.code, BOUNDS.word) ?? 'error',
+          message: cut(raw.message, BOUNDS.reason) ?? 'unknown',
+          pid: whole(raw.pid) ?? 0,
+        };
+      }
+    } catch {
+      // None recorded, or one that cannot be read: nothing to report from it.
+    }
+    const mine = this.#failure;
+    if (mine === null) return stored;
+    if (stored === null) return mine;
+    return mine.at >= stored.at ? mine : stored;
+  }
+
+  /** What `doctor` shows of the log. Reads only: it creates nothing. */
+  async health(): Promise<ActivityHealth> {
+    const today = isoDay(this.#now().getTime());
+    let exists = false;
+    let isDirectory = true;
+    try {
+      const info = await stat(this.directory);
+      exists = true;
+      isDirectory = info.isDirectory();
+    } catch {
+      // Not there yet: made by the first line.
+    }
+    const days = exists && isDirectory ? await this.days().catch(() => []) : [];
+    let lastWritten: string | null = null;
+    const newest = days.at(-1);
+    if (newest !== undefined) {
+      lastWritten = await stat(join(this.directory, `${newest}.jsonl`)).then(
+        (info) => info.mtime.toISOString(),
+        () => null,
+      );
+    }
+    // Today's file when there is one; else the folder it goes in; else the state folder that folder is made in — and
+    // when even that is not there yet, the first line makes both.
+    const state = join(this.directory, '..');
+    const target = days.includes(today)
+      ? join(this.directory, `${today}.jsonl`)
+      : exists
+        ? this.directory
+        : existsSync(state)
+          ? state
+          : null;
+    const writable =
+      isDirectory &&
+      (target === null ||
+        (await access(target, constants.W_OK).then(
+          () => true,
+          () => false,
+        )));
+    const loose = exists && isDirectory ? await isGroupOrWorldAccessible(this.directory).catch(() => false) : false;
+    return {
+      directory: this.directory,
+      exists,
+      isDirectory,
+      private: !exists || !isDirectory || process.platform === 'win32' ? null : !loose,
+      writable,
+      days,
+      lastWritten,
+      failure: await this.readFailure(),
+    };
+  }
+}
+
+function matches(line: ActivityLine, filters: ActivityFilters): boolean {
+  if (filters.kind !== undefined && line.kind !== filters.kind) return false;
+  if (filters.outcome !== undefined && line.outcome !== filters.outcome) return false;
+  if (filters.channel !== undefined && line.channel !== filters.channel) return false;
+  if (filters.account !== undefined && line.account.alias !== filters.account && line.account.id !== filters.account) {
+    return false;
+  }
+  return true;
+}
+
+// ── Which session ──────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A process's parent, its start and its name, as `ps` reports them. */
+export interface ProcessFacts {
+  readonly ppid: number;
+  readonly startedAt: string;
+  readonly name: string;
+}
+
+/** Reads one process's facts within `timeoutMs`, or null. */
+export type ProcessProbe = (pid: number, timeoutMs: number) => Promise<ProcessFacts | null>;
+
+/** `ps -o ppid=,lstart=,comm=` in the C locale: the parent, the start as five words, and the executable — last. */
+const PS_LINE = /^\s*(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{1,2}:\d{2}:\d{2}\s+\d{4})\s+(.+?)\s*$/;
+
+/** One process's line of `ps -o ppid=,lstart=,comm=`, or null for anything else. The name is the executable's own. */
+export function parsePsLine(text: string): ProcessFacts | null {
+  const first = text.split('\n').find((row) => row.trim() !== '');
+  const match = first === undefined ? null : PS_LINE.exec(first);
+  if (match === null) return null;
+  const command = match[3] as string;
+  const name = command.includes('/') ? (command.split('/').at(-1) ?? command) : command;
+  return { ppid: Number(match[1]), startedAt: (match[2] as string).replace(/\s+/g, ' '), name };
+}
+
+const PS_PROGRAMS = ['/bin/ps', '/usr/bin/ps'];
+
+/**
+ * This machine's `ps`, by its full path, in the C locale so the start reads the same in every process, bounded by
+ * `timeoutMs`. Never on Windows: no query there answers inside the bound (PowerShell alone takes longer to start),
+ * so a Windows process is ungrouped.
+ */
+export const psProbe: ProcessProbe = (pid, timeoutMs) =>
+  new Promise((resolve) => {
+    const program = PS_PROGRAMS.find((path) => existsSync(path));
+    if (process.platform === 'win32' || program === undefined) {
+      resolve(null);
+      return;
+    }
+    try {
+      const child = execFile(
+        program,
+        ['-o', 'ppid=,lstart=,comm=', '-p', String(pid)],
+        {
+          timeout: Math.max(1, Math.round(timeoutMs)),
+          env: { LC_ALL: 'C', LANG: 'C', PATH: '/bin:/usr/bin' },
+          maxBuffer: 64 * 1024,
+          windowsHide: true,
+        },
+        (error, stdout) => resolve(error ? null : parsePsLine(String(stdout))),
+      );
+      child.on('error', () => resolve(null));
+    } catch {
+      // Starting a process was refused: this one is ungrouped.
+      resolve(null);
+    }
+  });
+
+/** About how long working out a session may take, at most: it is done once per process. */
+export const SESSION_IDENTITY_BUDGET_MS = 200;
+
+export interface SessionIdentityOptions {
+  /**
+   * For a CLI call: the log whose recent lines are searched for an agent window among its ancestors (S2). Left out,
+   * a CLI call is always a session of its own.
+   */
+  log?: Pick<ActivityLog, 'sessionOfAncestor'> | undefined;
+  /** For a test: this process's id, its parent's, its folder, how processes are read, the system, the bound. */
+  pid?: number | undefined;
+  ppid?: number | undefined;
+  cwd?: (() => string) | undefined;
+  probe?: ProcessProbe | undefined;
+  platform?: NodeJS.Platform | undefined;
+  budgetMs?: number | undefined;
+}
+
+/** A random id this process made when it started (§4.3). */
+const PROCESS_ID = randomBytes(6).toString('hex');
+/** The key of this process's own session, when it is not grouped with others. */
+const OWN_KEY = randomBytes(8).toString('hex');
+
+function randomKey(): string {
+  return randomBytes(8).toString('hex');
+}
+
+interface Ancestry {
+  readonly pid: number;
+  readonly folder: string | null;
+  /** Nearest first; each with the parent it names in turn. */
+  readonly chain: readonly (ActivityParent & { readonly ppid: number })[];
+}
+
+/** The ancestry of this process, read once per depth and kept: the parent cannot change while a process lives. */
+const ANCESTRY = new Map<number, Promise<Ancestry>>();
+/** A CLI call's identity, worked out once per log it was asked against. */
+const CLI_IDENTITY = new Map<string, Promise<ActivitySession>>();
+
+function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(null), Math.max(0, ms));
+    timer.unref?.();
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(null);
+      },
+    );
+  });
+}
+
+async function readAncestry(options: SessionIdentityOptions, depth: number, initIsParent: boolean): Promise<Ancestry> {
+  const platform = options.platform ?? process.platform;
+  const pid = options.pid ?? process.pid;
+  let folder: string | null;
+  try {
+    folder = (options.cwd ?? (() => process.cwd()))();
+  } catch {
+    folder = null;
+  }
+  const chain: (ActivityParent & { ppid: number })[] = [];
+  if (platform === 'win32') return { pid, folder, chain };
+  const probe = options.probe ?? psProbe;
+  const deadline = Date.now() + (options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS);
+  let next = options.ppid ?? process.ppid;
+  // Process 1 adopts a process whose parent has gone: it is no window, except to the event service, which it starts.
+  while (chain.length < depth && (next > 1 || (initIsParent && next === 1 && chain.length === 0))) {
+    const left = deadline - Date.now();
+    if (left <= 0) break;
+    const facts = await within(probe(next, left), left);
+    if (facts === null) break;
+    chain.push({ pid: next, startedAt: facts.startedAt, name: facts.name, ppid: facts.ppid });
+    if (next === 1) break;
+    next = facts.ppid;
+  }
+  return { pid, folder, chain };
+}
+
+function windowKey(parent: ActivityParent, folder: string): string {
+  return createHash('sha256').update(`${parent.pid}\0${parent.startedAt}\0${folder}`).digest('hex').slice(0, 16);
+}
+
+/**
+ * Which session this process's calls belong to (S2), worked out once per process and kept: its id, its parent's id,
+ * start and name, its folder and the session key. Bounded to about 200 ms; never throws.
+ *
+ * - **An MCP server** (`mcp`) is grouped with every other server its parent started in the same folder: one agent
+ *   window. When its parent cannot be read in time, or has gone, it is ungrouped, with a key of its own.
+ * - **A CLI call** (`cli`) reads up to three processes above it. When one of them is the parent of a server process
+ *   that recorded a line today (or yesterday) in `options.log`, the call joins that window's session; otherwise it is
+ *   a session of its own. Its `ancestors` name those processes either way.
+ * - **The event service** (`daemon`) is grouped by its parent too, process 1 included: one session since it started.
+ * - **On Windows** no process is grouped: a query of a process's parent and start does not answer within the bound.
+ *
+ * `clientInfo` is what an MCP client said it is; it is stored as that, and nothing depends on it.
+ */
+export async function sessionIdentity(
+  surface: ActivitySurface,
+  clientInfo?: ClientInfo | undefined,
+  options: SessionIdentityOptions = {},
+): Promise<ActivitySession> {
+  const seams =
+    options.pid !== undefined ||
+    options.ppid !== undefined ||
+    options.cwd !== undefined ||
+    options.probe !== undefined ||
+    options.platform !== undefined ||
+    options.budgetMs !== undefined;
+  const client = clientOf(clientInfo);
+  try {
+    if (surface === 'cli' && !seams) {
+      const directory = (options.log as { directory?: string } | undefined)?.directory ?? '';
+      let held = CLI_IDENTITY.get(directory);
+      if (held === undefined) {
+        held = identityOf(surface, options, false);
+        CLI_IDENTITY.set(directory, held);
+      }
+      return { ...(await held), ...(client === undefined ? {} : { client }) };
+    }
+    const session = await identityOf(surface, options, seams);
+    return { ...session, ...(client === undefined ? {} : { client }) };
+  } catch {
+    return {
+      key: seams ? randomKey() : OWN_KEY,
+      process: PROCESS_ID,
+      pid: options.pid ?? process.pid,
+      ...(client === undefined ? {} : { client }),
+      folder: null,
+      grouped: false,
+      surface,
+    };
+  }
+}
+
+async function identityOf(
+  surface: ActivitySurface,
+  options: SessionIdentityOptions,
+  seams: boolean,
+): Promise<ActivitySession> {
+  const depth = surface === 'cli' ? 3 : 1;
+  const initIsParent = surface === 'daemon';
+  let ancestry: Promise<Ancestry>;
+  if (seams) ancestry = readAncestry(options, depth, initIsParent);
+  else {
+    const cached = ANCESTRY.get(depth * 2 + (initIsParent ? 1 : 0));
+    ancestry = cached ?? readAncestry(options, depth, initIsParent);
+    if (cached === undefined) ANCESTRY.set(depth * 2 + (initIsParent ? 1 : 0), ancestry);
+  }
+  const { pid, folder, chain } = await ancestry;
+  const own = seams ? randomKey() : OWN_KEY;
+  const parentOfChain = (index: number): ActivityParent | undefined => {
+    const held = chain[index];
+    return held === undefined ? undefined : { pid: held.pid, startedAt: held.startedAt, name: held.name };
+  };
+  const base = { process: seams ? randomBytes(6).toString('hex') : PROCESS_ID, pid, folder, surface };
+  if (surface === 'cli') {
+    const ancestors = chain.map((held) => held.name);
+    const parents = chain.map((_, index) => parentOfChain(index) as ActivityParent);
+    const joined = parents.length > 0 && options.log ? await options.log.sessionOfAncestor(parents) : null;
+    if (joined !== null) return { key: joined.key, ...base, parent: joined.parent, ancestors, grouped: true };
+    const parent = parentOfChain(0);
+    return { key: own, ...base, ...(parent === undefined ? {} : { parent }), ancestors, grouped: false };
+  }
+  const parent = parentOfChain(0);
+  if (parent === undefined || folder === null) {
+    return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
+  }
+  return { key: windowKey(parent, folder), ...base, parent, grouped: true };
+}
+
+// ── For the channels ───────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Records one line in `core`'s activity log. Never throws, and never fails the call it describes: a line that cannot
+ * be written is reported by the log itself (`ActivityLog.append`). Recording off writes nothing.
+ *
+ * For a line a channel builds itself — the event service's `told` lines (S1), say. Around an operation, use
+ * `withActivity`, which times it and records how it ended.
+ */
+export async function recordActivity(core: Pick<Core, 'activity'>, line: ActivityLineInput): Promise<void> {
+  try {
+    await core.activity.append(line);
+  } catch {
+    // `append` does not throw; a log handed in by a test might.
+  }
+}
+
+/** Who a call is recorded as: the core whose log it goes to, the channel, the surface and the account. */
+export interface ActivityContext {
+  readonly core: Pick<Core, 'activity'>;
+  /** The channel's word: `gmail`, `slack`, `resend`, `whatsapp`, `events`. */
+  readonly channel: string;
+  readonly surface: ActivitySurface;
+  /** The account the call acts on, as known before it runs; `describe` may name it more exactly after. */
+  readonly account: ActivityAccount;
+  /** The MCP client's `clientInfo` — a function, since a server knows it only once a client has connected. */
+  readonly clientInfo?: ClientInfo | (() => ClientInfo | undefined) | undefined;
+  /** The session, when the caller has worked it out already; otherwise `sessionIdentity(surface, clientInfo)`. */
+  readonly session?: ActivitySession | undefined;
+  /** A search's words, known before it runs. */
+  readonly query?: string | undefined;
+}
+
+/**
+ * What a finished call touched, for its line: never content. Only these fields are written; anything else in the
+ * object `describe` returns is dropped (`activityLineOf`).
+ */
+export interface ActivityDetail {
+  readonly account?: ActivityAccount | undefined;
+  /** `refused` for a result that is a refusal rather than a throw; `ok` when left out. */
+  readonly outcome?: ActivityOutcome | undefined;
+  readonly reason?: string | undefined;
+  readonly items?: readonly ActivityItem[] | undefined;
+  readonly count?: number | undefined;
+  readonly counts?: Readonly<Record<string, number>> | undefined;
+  readonly query?: string | undefined;
+  readonly recipients?: readonly string[] | undefined;
+  readonly approvalId?: string | undefined;
+  readonly told?: ActivityTold | undefined;
+}
+
+/** The refusals a call can end in — a policy, an approval, a rule, a cap or a usage mistake — rather than a failure. */
+const REFUSED_CODES: ReadonlySet<string> = new Set([
+  'APPROVAL_REQUIRED',
+  'APPROVAL_PENDING',
+  'APPROVAL_EXPIRED',
+  'APPROVAL_VOID',
+  'SEND_REFUSED',
+  'POLICY_NEVER',
+  'ACT_NOT_ALLOWED',
+  'STANDING_REFUSED',
+  'STANDING_LIMIT',
+  'RATE_CAPPED',
+  'LOOSENING_REFUSED',
+  'USAGE',
+  'WHATSAPP_VISIBILITY_SEAM_REQUIRED',
+]);
+
+function failureDetail(error: unknown): ActivityDetail {
+  const code = error instanceof CommsError ? error.code : 'UNEXPECTED';
+  return { outcome: REFUSED_CODES.has(code) ? 'refused' : 'failed', reason: `${code}: ${messageOf(error)}` };
+}
+
+async function recordCall(
+  context: ActivityContext,
+  operation: string,
+  kind: ActivityKind,
+  ms: number,
+  detail: ActivityDetail,
+): Promise<void> {
+  try {
+    const clientInfo = typeof context.clientInfo === 'function' ? context.clientInfo() : context.clientInfo;
+    const session =
+      context.session ??
+      (await sessionIdentity(context.surface, clientInfo, {
+        log: context.core.activity as Pick<ActivityLog, 'sessionOfAncestor'>,
+      }));
+    const query = detail.query ?? context.query;
+    await recordActivity(context.core, {
+      channel: context.channel,
+      account: detail.account ?? context.account,
+      operation,
+      kind,
+      outcome: detail.outcome ?? 'ok',
+      ...(detail.reason === undefined ? {} : { reason: detail.reason }),
+      session,
+      ms,
+      ...(detail.items === undefined ? {} : { items: detail.items }),
+      ...(detail.count === undefined ? {} : { count: detail.count }),
+      ...(detail.counts === undefined ? {} : { counts: detail.counts }),
+      ...(query === undefined ? {} : { query }),
+      ...(detail.recipients === undefined ? {} : { recipients: detail.recipients }),
+      ...(detail.approvalId === undefined ? {} : { approvalId: detail.approvalId }),
+      ...(detail.told === undefined ? {} : { told: detail.told }),
+    });
+  } catch {
+    // Recording never fails the call.
+  }
+}
+
+/**
+ * Runs one operation and records its line (§8): times `fn`, and when it returns records `describe(result)` as `ok`
+ * (or the outcome `describe` names); when it throws, records `refused` for a policy's, an approval's or a rule's
+ * refusal and `failed` for anything else, with the error's code and message as the reason, and throws the same error
+ * on. What it returns, or throws, is exactly what `fn` did: recording never changes or fails the call, and a
+ * `describe` that throws records the line without its details.
+ *
+ * `operationId` is the capability id in `capabilities.json` (`gmail.search`); `kind` is `read`, `write`, `told` or
+ * `approval`.
+ *
+ * @example
+ *   const found = await withActivity(
+ *     { core, channel: 'gmail', surface: 'mcp', account: { id: inbox.id, alias }, clientInfo: () => server.getClientVersion() },
+ *     'gmail.search',
+ *     'read',
+ *     () => search(core, request),
+ *     (result) => ({ query: request.query, count: result.total, items: result.messages.map((m) => ({ id: m.id, subject: m.subject, from: m.from })) }),
+ *   );
+ */
+export async function withActivity<T>(
+  context: ActivityContext,
+  operationId: string,
+  kind: ActivityKind,
+  fn: () => Promise<T>,
+  describe: (result: T) => ActivityDetail,
+): Promise<T> {
+  const started = performance.now();
+  let result: T;
+  try {
+    result = await fn();
+  } catch (error) {
+    await recordCall(context, operationId, kind, performance.now() - started, failureDetail(error));
+    throw error;
+  }
+  const ms = performance.now() - started;
+  let detail: ActivityDetail = {};
+  try {
+    detail = describe(result) ?? {};
+  } catch {
+    detail = {};
+  }
+  await recordCall(context, operationId, kind, ms, detail);
+  return result;
+}

@@ -1,3 +1,5 @@
+import { ActivityLog } from './activity.ts';
+import { readActivitySettings } from './activity-settings.ts';
 import { ApprovalStore } from './approvals.ts';
 import { AuditLog } from './audit.ts';
 import type { CliCommandCaller } from './cli-command.ts';
@@ -29,6 +31,11 @@ export interface Core {
   plans: PlanStore;
   taint: TaintStore;
   audit: AuditLog;
+  /**
+   * The activity log (design 2026-10-25-activity): one line per call an agent session makes to account data, private,
+   * by day, under the settings in `config.json`'s `activity`. Never throws into a caller (`ActivityLog.append`).
+   */
+  activity: ActivityLog;
   /** Opens the config directory's one secret backend (as recorded in config, or `kind` before the first write). */
   secrets(kind?: SecretStoreKind): Promise<SecretStore>;
   /**
@@ -80,6 +87,12 @@ export function openCore(options: OpenCoreOptions = {}): Core {
     plans: new PlanStore(paths.stateDir, now),
     taint: new TaintStore(paths.stateDir, now),
     audit,
+    // Its settings read afresh for every line — the store answers from its cache while the file is unchanged — so
+    // turning recording off applies at once in every process sharing this configuration.
+    activity: new ActivityLog(paths.stateDir, {
+      now,
+      settings: async () => readActivitySettings(await config.load()),
+    }),
     handoffs,
     async secrets(kind?: SecretStoreKind): Promise<SecretStore> {
       const chosen = kind ?? secretsStoreOf(await config.load());
