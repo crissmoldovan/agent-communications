@@ -258,7 +258,7 @@ describe('Activity', () => {
         if (call.kind !== 'activityShow') return answers.cli(call);
         if (answer === 'nothing') return failed('NOT_FOUND', `no activity for session ${WINDOW}`, null, 66);
         if (answer === 'broken') return failed('APP_TIMEOUT', 'core did not answer within 30 seconds', null, -1);
-        const shown = (await answers.cli(call)) as { status: 'ok'; data: { lines: unknown[] } };
+        const shown = (await answers.cli(call)) as { status: 'ok'; exit: number; data: { lines: unknown[] } };
         return {
           ...shown,
           data: { ...shown.data, lines: answer === 'none' ? [] : shown.data.lines, more: answer === 'more' },

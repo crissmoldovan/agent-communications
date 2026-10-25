@@ -1,4 +1,5 @@
 import { expect, type Page, test } from '@playwright/test';
+import approvalsFinished from '../src/test/fixtures/approvals-finished.json' with { type: 'json' };
 import approvalsPending from '../src/test/fixtures/approvals-pending.populated.json' with { type: 'json' };
 import { installMockIpc } from './support/mock-ipc.ts';
 
@@ -81,7 +82,8 @@ test('revoke removes the approval', async ({ page }) => {
   await rememberRevokes(page);
   await openApprovals(page);
   await expect(page.getByRole('article')).toHaveCount(3);
-  const count = page.getByRole('region', { name: 'Waiting' }).locator('[data-slot="section-header-count"]');
+  // Waiting's count is on its tab (0.29.0).
+  const count = page.getByRole('tab', { name: /^Waiting/ }).locator('[data-slot="tab-count"] [aria-hidden="true"]');
   await expect(count).toHaveText('3');
   await card(page, GMAIL).getByRole('button', { name: 'Revoke' }).click();
   await expect(card(page, GMAIL)).toHaveCount(0);
@@ -174,4 +176,49 @@ test("an enveloped approval shows each sender's string in a From outside block, 
   expect(text).not.toContain('field=');
   await expect(page.locator('main img, main a, main script, main iframe')).toHaveCount(0);
   expect(await page.evaluate(() => (window as unknown as { __pwned?: number }).__pwned)).toBeUndefined();
+});
+
+test('Recent lists what no longer waits, read-only, one allow-listed read per finished state', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-10-25T12:00:00.000Z'));
+  await installMockIpc(page, scenario());
+  // Each finished state's list, as core's store would answer `approvals list --state <state>`.
+  await page.addInitScript((finished: { state: string }[]) => {
+    type Args = { call?: { kind?: string; state?: string } };
+    const internals = (
+      window as unknown as { __TAURI_INTERNALS__: { invoke: (cmd: string, args?: Args) => Promise<unknown> } }
+    ).__TAURI_INTERNALS__;
+    const invoke = internals.invoke;
+    internals.invoke = async (cmd: string, args: Args = {}) => {
+      if (cmd === 'cli' && args.call?.kind === 'approvalsFinished') {
+        await invoke(cmd, args);
+        return { status: 'ok', exit: 0, data: finished.filter((each) => each.state === args.call?.state) };
+      }
+      return invoke(cmd, args);
+    };
+  }, approvalsFinished);
+  await openApprovals(page);
+  await expect(page.getByRole('article')).toHaveCount(3);
+  // Nothing finished is read until Recent is opened.
+  const finishedCalls = async () =>
+    (await recorded(page))
+      .filter((call) => call.cmd === 'cli' && (call.args.call as { kind: string }).kind === 'approvalsFinished')
+      .map((call) => (call.args.call as { state: string }).state);
+  expect(await finishedCalls()).toEqual([]);
+  await page.getByRole('tab', { name: 'Recent' }).click();
+  const recent = page.getByRole('region', { name: 'Recent' });
+  await expect(recent.locator('[data-approval]')).toHaveCount(6);
+  expect((await finishedCalls()).sort()).toEqual(['approved', 'expired', 'failed', 'revoked', 'unknown', 'used']);
+  await expect(recent.locator('[data-slot="decision"]')).toHaveText([
+    'Approved',
+    'Sent',
+    'Revoked',
+    'Expired',
+    'Failed',
+    'Outcome unknown',
+  ]);
+  // Read-only and content-free: no button, no subject or recipient, no markup from the record.
+  await expect(recent.getByRole('button')).toHaveCount(0);
+  await expect(recent).not.toContainText('The figures you asked for');
+  await expect(page.locator('main img, main script, main iframe')).toHaveCount(0);
+  expect((await recorded(page)).map((call) => call.cmd)).not.toContain('open_in_terminal');
 });
