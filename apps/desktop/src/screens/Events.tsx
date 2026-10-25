@@ -10,6 +10,7 @@ import {
   Panel,
   SectionHeader,
   Spinner,
+  StatusDot,
   Switch,
   Table,
   TableScrollRegion,
@@ -213,6 +214,8 @@ function ListTable({
 export const EVENTS_COPY = {
   tabs: { service: 'Service', judges: 'Judges', rules: 'Rules', deliveries: 'Deliveries' },
   toLookAt: 'to look at',
+  failed: 'could not be read',
+  needsUpdate: 'needs an update',
   everyOne: 'The events CLI and MCP list every one.',
   everyOneLabel: 'Where every one is listed',
 } as const;
@@ -583,32 +586,39 @@ function Service() {
 
 /**
  * What the Service tab holds that waits on the person, so its badge says it while another tab is open: a service the
- * app gave up restarting, a newer version to restart onto, and Full Disk Access to give. Each as the section shows it.
+ * app gave up restarting, a newer version to restart onto, Start for one that is wanted and stopped (D4), Full Disk
+ * Access to give, and what the last command or first-start answer came to when it failed. Each as the section shows it.
  */
-function serviceAttention(eventService: Loadable<EventServiceState> | 'absent'): number {
-  if (eventService === 'absent' || eventService.state !== 'ready' || !eventService.value.available) return 0;
+function serviceAttention(eventService: Loadable<EventServiceState> | 'absent', problem: string | null): number {
+  const failed = problem === null ? 0 : 1;
+  if (eventService === 'absent' || eventService.state !== 'ready' || !eventService.value.available) return failed;
   const state = eventService.value;
-  return [
-    state.status === 'gaveUp',
-    state.status === 'running' && state.newerVersion !== null,
-    state.fullDiskAccess === 'missing',
-  ].filter(Boolean).length;
+  return (
+    failed +
+    [
+      state.status === 'gaveUp',
+      state.status === 'running' && state.newerVersion !== null,
+      state.wanted && state.status === 'stopped' && !state.firstStartQuestion,
+      state.fullDiskAccess === 'missing',
+    ].filter(Boolean).length
+  );
 }
 
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };
 
-/** How many rules a read lists: each rule once, whatever its versions; nothing when it is not a list. */
-function ruleCount(result: Loadable<unknown>): number | null {
-  if (result.state !== 'ready' || !Array.isArray(result.value)) return null;
-  const ids = result.value.filter(isRecord).map((row) => row.rule_id);
-  return new Set(ids.filter((id) => typeof id === 'string')).size;
-}
-
-/** How many deliveries a read lists, every one of them and not only those shown; nothing when it is not a list. */
-function deliveryCount(result: Loadable<unknown>): number | null {
+/**
+ * How many rows a list's table has, as `ListTable` reads them: each entry that is a row, a rule's every version among
+ * them; for the deliveries, every one, and not only the most recent it shows. Nothing while it is unread or unreadable.
+ */
+function listCount(result: Loadable<unknown>): number | null {
   if (result.state !== 'ready' || !Array.isArray(result.value)) return null;
   return result.value.filter(isRecord).length;
+}
+
+/** Whether a list's read failed, or came back as something `ListTable` cannot read: its view then says so. */
+function listFailed(result: Loadable<unknown>): boolean {
+  return result.state === 'error' || (result.state === 'ready' && !Array.isArray(result.value));
 }
 
 /** The rules: read when the screen opens, and again when the service starts or stops running, since they come from it. */
@@ -1254,11 +1264,13 @@ function Laya({
   read: kindRead,
   judges,
   reloadKinds,
+  onFailed,
 }: {
   version: Loadable<string>;
   read: KindRead;
   judges: Judge[] | null;
   reloadKinds: () => Promise<void>;
+  onFailed: (failed: boolean) => void;
 }) {
   const bridge = useBridge();
   const { events } = useAppData();
@@ -1270,6 +1282,18 @@ function Laya({
   const read = supported && result.state === 'ready' ? readLaya(result.value) : null;
   const status = read?.kind === 'status' ? read.status : null;
   const action = status === null ? null : actionFor(status.state);
+
+  // A status that failed, or that cannot be read, marks the Judges tab: this row may be behind it.
+  const failed = supported && (result.state === 'error' || read?.kind === 'unreadable');
+  useEffect(() => {
+    onFailed(failed);
+  }, [failed, onFailed]);
+  useEffect(
+    () => () => {
+      onFailed(false);
+    },
+    [onFailed],
+  );
 
   // Each read of the events service the screen's poll makes is Laya's cue too, while a download is in progress.
   const inProgress = useRef(false);
@@ -1356,11 +1380,13 @@ function KindRows({
   judges,
   version,
   reloadKinds,
+  onLayaFailed,
 }: {
   value: unknown;
   judges: Loadable<unknown>;
   version: Loadable<string>;
   reloadKinds: () => Promise<void>;
+  onLayaFailed: (failed: boolean) => void;
 }) {
   const kinds = readKinds(value);
   if (kinds === null) {
@@ -1375,7 +1401,7 @@ function KindRows({
     <>
       <div className="flex flex-col divide-y divide-border">
         <EndpointKind kind="typesafe" read={kinds.typesafe} judges={listed} reloadKinds={reloadKinds} />
-        <Laya version={version} read={kinds.laya} judges={listed} reloadKinds={reloadKinds} />
+        <Laya version={version} read={kinds.laya} judges={listed} reloadKinds={reloadKinds} onFailed={onLayaFailed} />
         <EndpointKind kind="local-endpoint" read={kinds['local-endpoint']} judges={listed} reloadKinds={reloadKinds} />
       </div>
       {judges.state === 'error' ? (
@@ -1392,13 +1418,18 @@ function KindRows({
   );
 }
 
-/** What the Judges section reads: the events service's version, then, once it has judges, its kinds and its judges. */
+/**
+ * What the Judges section reads: the events service's version, then, once it has judges, its kinds and its judges; and
+ * whether Laya's own status, which its row reads, failed or could not be read.
+ */
 interface JudgeReads {
   version: Loadable<string>;
   hasJudges: boolean;
   kinds: Loadable<unknown>;
   judges: Loadable<unknown>;
   reloadKinds: () => Promise<void>;
+  layaFailed: boolean;
+  onLayaFailed: (failed: boolean) => void;
 }
 
 /**
@@ -1417,7 +1448,8 @@ function useJudgeReads(): JudgeReads {
   }, [reloadKinds, reloadJudges]);
   useReloadOnReturn(reload);
   useReloadOnServiceTurn(reload);
-  return { version, hasJudges, kinds, judges, reloadKinds };
+  const [layaFailed, onLayaFailed] = useState(false);
+  return { version, hasJudges, kinds, judges, reloadKinds, layaFailed, onLayaFailed };
 }
 
 /**
@@ -1434,15 +1466,43 @@ function judgesWaiting({ hasJudges, kinds, judges }: JudgeReads): number {
   ).length;
 }
 
+/**
+ * Whether anything the Judges section reads failed, or came back as something it cannot read: its version, its kinds
+ * (the list, or one kind's entry), its judges, or Laya's status. Each is then said, as an alert or a line, in the view.
+ */
+function judgesFailed({ version, hasJudges, kinds, judges, layaFailed }: JudgeReads): boolean {
+  if (version.state === 'error') return true;
+  if (!hasJudges) return false;
+  if (kinds.state === 'error' || judges.state === 'error' || layaFailed) return true;
+  if (kinds.state === 'ready') {
+    const read = readKinds(kinds.value);
+    if (read === null || KIND_NAMES.some((kind) => read[kind].state === 'unreadable')) return true;
+  }
+  return judges.state === 'ready' && readJudges(judges.value) === null;
+}
+
+/** Whether the events service is one from before judges: the section then asks for an update, and reads nothing. */
+function judgesNeedUpdate({ version, hasJudges }: JudgeReads): boolean {
+  return version.state === 'ready' && !hasJudges;
+}
+
 /** The Judges section: its three kinds, once the events service has judges, or what it needs first. */
 function Judges({ reads }: { reads: JudgeReads }) {
-  const { version, hasJudges, kinds, judges, reloadKinds } = reads;
+  const { version, hasJudges, kinds, judges, reloadKinds, onLayaFailed } = reads;
   return (
     <section aria-label={JUDGES_COPY.title}>
       <Panel>
         {hasJudges ? (
           <InPanel value={kinds}>
-            {(value) => <KindRows value={value} judges={judges} version={version} reloadKinds={reloadKinds} />}
+            {(value) => (
+              <KindRows
+                value={value}
+                judges={judges}
+                version={version}
+                reloadKinds={reloadKinds}
+                onLayaFailed={onLayaFailed}
+              />
+            )}
           </InPanel>
         ) : (
           <div className={INSET}>
@@ -1475,6 +1535,19 @@ function Attention({ count }: { count: number }) {
   );
 }
 
+/**
+ * A tab's dot, for what its view says beyond a count: a read that failed or cannot be read, in danger; a view that needs
+ * a newer events service, in warn. Its words are for a screen reader; the view says the rest.
+ */
+function Mark({ tone, says }: { tone: 'danger' | 'warn'; says: string }) {
+  return (
+    <>
+      {' '}
+      <StatusDot tone={tone} label={says} data-slot="tab-mark" data-tone={tone} />
+    </>
+  );
+}
+
 /** A tab's count of what its list holds, quietly, beside its name. */
 function Count({ count }: { count: number | null }) {
   if (count === null || count === 0) return null;
@@ -1494,7 +1567,7 @@ type EventsTab = keyof typeof EVENTS_COPY.tabs;
  * always was, and a tab's badge can say what waits in it: nothing is hidden behind a tab.
  */
 function EventsTabs() {
-  const { eventService } = useAppData();
+  const { eventService, eventServiceProblem } = useAppData();
   const judgeReads = useJudgeReads();
   const rules = useCall<unknown>(RULES);
   useReloadOnServiceTurn(rules.reload);
@@ -1510,10 +1583,42 @@ function EventsTabs() {
   return (
     <Tabs.Root defaultValue={'service' satisfies EventsTab}>
       <Tabs.List aria-label="Events" className="self-start">
-        {tab('service', <Attention count={serviceAttention(eventService)} />)}
-        {tab('judges', <Attention count={judgesWaiting(judgeReads)} />)}
-        {tab('rules', <Count count={ruleCount(rules.result)} />)}
-        {tab('deliveries', <Count count={deliveryCount(deliveries.result)} />)}
+        {tab(
+          'service',
+          <>
+            <Attention count={serviceAttention(eventService, eventServiceProblem)} />
+            {eventService !== 'absent' && eventService.state === 'error' ? (
+              <Mark tone="danger" says={EVENTS_COPY.failed} />
+            ) : null}
+          </>,
+        )}
+        {tab(
+          'judges',
+          <>
+            <Attention count={judgesWaiting(judgeReads)} />
+            {judgesFailed(judgeReads) ? (
+              <Mark tone="danger" says={EVENTS_COPY.failed} />
+            ) : judgesNeedUpdate(judgeReads) ? (
+              <Mark tone="warn" says={EVENTS_COPY.needsUpdate} />
+            ) : null}
+          </>,
+        )}
+        {tab(
+          'rules',
+          listFailed(rules.result) ? (
+            <Mark tone="danger" says={EVENTS_COPY.failed} />
+          ) : (
+            <Count count={listCount(rules.result)} />
+          ),
+        )}
+        {tab(
+          'deliveries',
+          listFailed(deliveries.result) ? (
+            <Mark tone="danger" says={EVENTS_COPY.failed} />
+          ) : (
+            <Count count={listCount(deliveries.result)} />
+          ),
+        )}
       </Tabs.List>
       <Tabs.Panel value={'service' satisfies EventsTab} keepMounted>
         <div className="flex flex-col gap-(--cue-space-6)">
