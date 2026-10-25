@@ -1101,6 +1101,9 @@ pub struct Supervisor {
     requested: Requested,
     /// Set from Quit's Stop it until its stop is done, so the window says it is stopping.
     stopping_for_quit: bool,
+    /// Set when the switch was turned off while the service was shown running or starting: said to be stopping, not
+    /// stopped, until the watchdog has stopped it.
+    stopping_shown: bool,
     /// Set, by the window's thread, the moment Quit is pressed (`on_quit`): from then on nothing is started, unless the
     /// person answers Keep running (`start_before_quit`).
     quit_pressed: Arc<AtomicBool>,
@@ -1133,6 +1136,7 @@ impl Supervisor {
             quitting: false,
             requested,
             stopping_for_quit: false,
+            stopping_shown: false,
             quit_pressed: Arc::new(AtomicBool::new(false)),
         }
     }
@@ -1526,19 +1530,18 @@ impl Supervisor {
         }
     }
 
-    /// The state the window is shown.
-    pub fn state(&mut self, ctx: &RunContext) -> EventServiceState {
-        if self.platform == Platform::Windows {
-            return unavailable();
-        }
-        let process = self.process();
-        let status = match self.requested {
+    /// Where the service stands, from what the supervisor knows, with `process` what became of the one it knows of.
+    fn status_of(&self, process: Process) -> EventServiceStatus {
+        let known_to_run = self.owner == Owner::Running || process == Process::Alive;
+        match self.requested {
             // Quit's Stop it, under way: stopping until it has stopped.
             _ if self.stopping_for_quit => EventServiceStatus::Stopping,
             // Restart to use it: starting from the press until the new one answers.
             Requested::Restart => EventServiceStatus::Starting,
-            // The switch off: stopping, never running, until the watchdog has stopped whatever runs.
-            Requested::Stop => EventServiceStatus::Stopping,
+            // The switch off: stopping, never running, until the watchdog has stopped what runs; stopped at once when
+            // nothing is known to run, or to be starting.
+            Requested::Stop if self.stopping_shown || known_to_run => EventServiceStatus::Stopping,
+            Requested::Stop => EventServiceStatus::Stopped,
             _ if self.owner == Owner::Running => EventServiceStatus::Running,
             // A start asked for: starting from the press until it answers, or its start fails and waits, or gives up.
             Requested::Start => EventServiceStatus::Starting,
@@ -1549,7 +1552,16 @@ impl Supervisor {
                 EventServiceStatus::GaveUp
             }
             Requested::Nothing => EventServiceStatus::Stopped,
-        };
+        }
+    }
+
+    /// The state the window is shown.
+    pub fn state(&mut self, ctx: &RunContext) -> EventServiceState {
+        if self.platform == Platform::Windows {
+            return unavailable();
+        }
+        let process = self.process();
+        let status = self.status_of(process);
         let running = status == EventServiceStatus::Running;
         let ours = self.record.started_by_app && process == Process::Alive;
         let known = self.record.started_at.is_some();
@@ -1587,6 +1599,15 @@ impl Supervisor {
     /// stopped at that look. Either is the first-start question's answer. Nothing here runs the events CLI or starts
     /// or stops a process, so the window never waits for one.
     pub fn set_wanted(&mut self, on: bool) {
+        let process = self.process();
+        let shown = self.status_of(process);
+        self.stopping_shown = !on
+            && matches!(
+                shown,
+                EventServiceStatus::Running
+                    | EventServiceStatus::Starting
+                    | EventServiceStatus::Stopping
+            );
         self.restart_due = None;
         self.restarting = false;
         self.first_start_question = false;
@@ -1610,6 +1631,7 @@ impl Supervisor {
     /// Restart to use it (D5), recorded as the switch is: wanted, with its failures cleared, and starting from now
     /// until the watchdog's next look has stopped whatever runs and started the version installed now.
     pub fn restart(&mut self) {
+        self.stopping_shown = false;
         self.restart_due = None;
         self.restarting = false;
         self.first_start_question = false;
@@ -1662,6 +1684,7 @@ impl Supervisor {
         }
         self.child = None;
         self.record = forget(&self.record);
+        self.stopping_shown = false;
         self.save();
     }
 
@@ -2005,7 +2028,8 @@ fn asked(
 /// What a request comes to, from the state the window was last told: what `Supervisor::state` says once it is
 /// recorded, before the watchdog has done it. The question is answered; on, it is wanted, and starting unless it runs
 /// (Restart to use it is starting even then), with its failures and any stop from outside forgotten; off, it is
-/// stopping until the watchdog has stopped whatever runs.
+/// stopping until the watchdog has stopped whatever runs, when it was shown running or starting, and stopped at once
+/// when nothing ran.
 fn requested_state(shown: &EventServiceState, request: Request) -> EventServiceState {
     if !shown.available {
         return shown.clone();
@@ -2015,10 +2039,16 @@ fn requested_state(shown: &EventServiceState, request: Request) -> EventServiceS
         Request::Retry | Request::Restart => true,
     };
     let running = shown.status == EventServiceStatus::Running;
+    let under_way = matches!(
+        shown.status,
+        EventServiceStatus::Running | EventServiceStatus::Starting | EventServiceStatus::Stopping
+    );
     let status = if request == Request::Restart {
         EventServiceStatus::Starting
-    } else if !on {
+    } else if !on && under_way {
         EventServiceStatus::Stopping
+    } else if !on {
+        EventServiceStatus::Stopped
     } else if running {
         EventServiceStatus::Running
     } else {
@@ -4030,8 +4060,13 @@ exit 64
                 );
             }
         }
-        // And what each comes to, in words: a start is starting, unless it runs; off is stopping until it has stopped.
+        // And what each comes to, in words: a start is starting, unless it runs; off is stopping while the service is
+        // known to run or to be starting, and stopped at once when nothing runs.
         let stopped = made("stopped").state(&ctx);
+        let asking = made("asking").state(&ctx);
+        let gave_up = made("gave up").state(&ctx);
+        let waiting = made("restart waits").state(&ctx);
+        assert_eq!(waiting.status, EventServiceStatus::Starting);
         let running = made("adopted, older").state(&ctx);
         assert_eq!(running.status, EventServiceStatus::Running);
         let after = |state: &EventServiceState, request| requested_state(state, request).status;
@@ -4052,9 +4087,32 @@ exit 64
             EventServiceStatus::Stopping
         );
         assert_eq!(
-            after(&stopped, Request::FirstStart(false)),
+            after(&waiting, Request::Switch(false)),
             EventServiceStatus::Stopping
         );
+        // Nothing runs: Not now, the switch off after giving up, or when stopped, say stopped at once, the stop still
+        // recorded for the watchdog's next look.
+        assert_eq!(
+            after(&asking, Request::FirstStart(false)),
+            EventServiceStatus::Stopped
+        );
+        assert_eq!(
+            after(&stopped, Request::FirstStart(false)),
+            EventServiceStatus::Stopped
+        );
+        assert_eq!(
+            after(&gave_up, Request::Switch(false)),
+            EventServiceStatus::Stopped
+        );
+        let mut not_now = made("asking");
+        not_now.answer_first_start(false);
+        assert!(not_now.stop_pending(), "the stop is still recorded");
+        assert_eq!(not_now.state(&ctx).status, EventServiceStatus::Stopped);
+        // A service known to run, by what `status` last said, is stopping, whatever was shown.
+        let mut answering = made("stopped");
+        answering.owner = Running;
+        answering.set_wanted(false);
+        assert_eq!(answering.state(&ctx).status, EventServiceStatus::Stopping);
     }
 
     /// A context with folders of its own and no launcher: nothing in it can run.
