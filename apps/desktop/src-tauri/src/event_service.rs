@@ -616,15 +616,18 @@ fn process_ids() -> Vec<u32> {
         .collect()
 }
 
-/// How many slots a listing of the processes must leave empty to be taken as whole.
+/// How many slots a listing of the processes must leave empty to be taken as whole. Only macOS lists them so.
+#[cfg(any(target_os = "macos", test))]
 const PIDS_ROOM: usize = 64;
 /// The most PIDs the app lists, far past any Mac's `kern.maxproc`: a megabyte of them.
+#[cfg(any(target_os = "macos", test))]
 const PIDS_MOST: usize = 1 << 18;
 
 /// The processes, listed whole: `list` fills a buffer and says how many it wrote, as the kernel does, and `expected` is
 /// how many it counted first. Processes start between the count and the listing, so a listing that leaves fewer than
 /// `PIDS_ROOM` slots empty may have been cut short: it is asked again with twice the room, until one fits, or the
 /// buffer holds `most`, when what it gave is kept. None when a listing fails.
+#[cfg(any(target_os = "macos", test))]
 fn listed_with_room<T: Copy + Default>(
     expected: usize,
     most: usize,
