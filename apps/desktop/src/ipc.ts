@@ -108,8 +108,6 @@ export type Call =
   | { kind: 'judgeKindsList' }
   | { kind: 'judgesList' }
   | { kind: 'judgeKindDisable'; judgeKind: EndpointJudgeKind }
-  | { kind: 'eventsJudgeModelStatus' }
-  | { kind: 'eventsJudgeKindDisable' }
   | { kind: 'approvalsFinished'; state: FinishedApprovalState }
   | { kind: 'activitySessions'; since: ActivitySince }
   | {
@@ -120,7 +118,10 @@ export type Call =
       channel?: ActivityChannel;
       account?: string;
       outcome?: ActivityOutcome;
-    };
+    }
+  // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
+  | { kind: 'eventsJudgeModelStatus' }
+  | { kind: 'eventsJudgeKindDisable' };
 
 /** What one CLI call came to (`runner::parse_output`). */
 export type CliResult =

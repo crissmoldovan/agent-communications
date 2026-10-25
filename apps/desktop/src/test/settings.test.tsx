@@ -225,7 +225,8 @@ describe('Settings', () => {
     for (const folder of Object.values(EXAMPLE_FOLDERS)) expect(within(inUse).getByText(folder)).toBeTruthy();
     // Each path is a literal value, set in mono.
     expect(within(inUse).getByText(EXAMPLE_FOLDERS.configDir).closest('.font-mono')).not.toBeNull();
-    const toggle = within(folders).getByRole('button', { name: CHANGE });
+    // Waited for, not looked up at once: on a slow runner the header's button can follow its region.
+    const toggle = await within(folders).findByRole('button', { name: CHANGE });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(within(folders).queryByRole('textbox')).toBeNull();
     fireEvent.click(toggle);
@@ -248,7 +249,7 @@ describe('Settings', () => {
     });
     renderApp(named, { screen: 'settings' });
     const shown = await screen.findByRole('region', { name: 'Folders' });
-    expect(within(shown).getByRole('button', { name: CHANGE }).getAttribute('aria-expanded')).toBe('true');
+    expect((await within(shown).findByRole('button', { name: CHANGE })).getAttribute('aria-expanded')).toBe('true');
     expect((within(shown).getByLabelText('State folder') as HTMLInputElement).value).toBe(
       '/example/home/elsewhere/state',
     );
