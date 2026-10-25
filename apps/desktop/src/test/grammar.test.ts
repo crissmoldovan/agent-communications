@@ -12,10 +12,12 @@ import {
   isActs,
   isApprovalId,
   isConversation,
+  isLaneName,
   isPlainValue,
   isQueueItemId,
   isRuleId,
   isSessionKey,
+  isWindowId,
 } from '../grammar.ts';
 import { formatActs } from '../ipc.ts';
 
@@ -215,6 +217,74 @@ describe('the grammars', () => {
     const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
     expect(rust).toContain('pub fn rule_id(value: &str) -> bool');
     expect(rust).toContain('pub fn queue_item_id(value: &str) -> bool');
+  });
+
+  it("a lane's name is 1 to 40 lowercase letters, digits and -, and never read as an option", () => {
+    // The event service's lane grammar (design 2026-10-25-routing §3.1): `[a-z0-9-]{1,40}`.
+    expect(new RegExp(grammar.laneName, 'u').source).toBe(/^[a-z0-9-]{1,40}$/u.source);
+    for (const good of ['david', 'billing', 'david-on-slack', 'a', '0', 'lane-2', 'x'.repeat(40)]) {
+      expect(isLaneName(good), good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      '-david',
+      '--json',
+      'David',
+      'DAVID',
+      'david_slack',
+      'david.slack',
+      'david slack',
+      'david/slack',
+      'david\\slack',
+      'david\n',
+      'david\u202e',
+      'david\u200b',
+      'd\u00e9vid',
+      'david;rm',
+      'david$(x)',
+      'david --window 3f9a1c2e7b4d5a60',
+      'x'.repeat(41),
+    ]) {
+      expect(isLaneName(bad), JSON.stringify(bad)).toBe(false);
+    }
+    for (const value of CORPUS) {
+      if (!/^[a-z0-9-]{1,40}$/.test(value) || value.startsWith('-')) expect(isLaneName(value), value).toBe(false);
+    }
+  });
+
+  it("a window's id is a lowercase UUID, as Claude Code names a session, or an activity key", () => {
+    for (const good of [
+      '3f9a1c2e7b4d5a60',
+      '0000000000000000',
+      '0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90',
+      '00000000-0000-0000-0000-000000000000',
+    ]) {
+      expect(isWindowId(good), good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      '3f9a1c2e7b4d5a6',
+      '3f9a1c2e7b4d5a600',
+      '3F9A1C2E7B4D5A60',
+      '0F8B5C3E-2D41-4A7E-9C11-5B2E8D7F6A90',
+      '0f8b5c3e2d414a7e9c115b2e8d7f6a90',
+      '{0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90}',
+      '0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a9',
+      '0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90 --json',
+      '-f9a1c2e7b4d5a60',
+      '3f9a1c2e7b4d5a60\n',
+      '3f9a1c2e7b4d5a6g',
+      '../3f9a1c2e7b4d5',
+      'david',
+    ]) {
+      expect(isWindowId(bad), JSON.stringify(bad)).toBe(false);
+    }
+    // Every activity key core makes is a window id.
+    expect(isWindowId('3f9a1c2e7b4d5a60')).toBe(isSessionKey('3f9a1c2e7b4d5a60'));
+    // The Rust side tries the same words (`grammar.rs`, `lane_names_…` and `window_ids_…`).
+    const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
+    expect(rust).toContain('pub fn lane_name(value: &str) -> bool');
+    expect(rust).toContain('pub fn window_id(value: &str) -> bool');
   });
 
   it('the Rust side reads the same file', () => {

@@ -43,7 +43,14 @@ describe('what each CLI version supports', () => {
       judges: '0.17.0',
       activity: '0.29.0',
       queue: '0.30.0',
+      lanes: '0.31.0',
     });
+    // Lanes are the event service's from 0.31.0, read from its own version, a pull request's build of it included.
+    expect(supports('0.30.0', 'lanes')).toBe(false);
+    expect(supports('0.30.9', 'lanes')).toBe(false);
+    expect(supports('0.31.0', 'lanes')).toBe(true);
+    expect(supports('0.31.0-feat-0.31', 'lanes')).toBe(true);
+    expect(supports(null, 'lanes')).toBe(false);
     // The queue is the event service's from 0.30.0, read from its own version, a pull request's build of it included.
     expect(supports('0.29.0', 'queue')).toBe(false);
     expect(supports('0.29.9', 'queue')).toBe(false);

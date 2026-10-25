@@ -83,6 +83,19 @@ checked_word!(
     grammar::rule_id,
     "a rule id"
 );
+checked_word!(
+    /// A lane's name (0.31.0, design 2026-10-25-routing §3.1): 1 to 40 lowercase letters, digits and `-`.
+    LaneName,
+    grammar::lane_name,
+    "a lane name"
+);
+checked_word!(
+    /// The agent window a lane is bound to (0.31.0, B1): a Claude Code session id (a lowercase UUID), or an activity
+    /// session's key (sixteen lowercase hex digits).
+    WindowId,
+    grammar::window_id,
+    "a window id"
+);
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -275,13 +288,17 @@ impl ActivityChannel {
     }
 }
 
-/// How far back the Activity screen reads (design 2026-10-25-activity §4.5): today, 7 days or 30 days. Closed: 7 and 30
-/// days are core's spans; today is the start of the person's day, which only the window knows the time zone of, so it
-/// arrives as a time Rust checks and writes itself. No text the window sends reaches `--since`.
+/// How far back the Activity screen reads (design 2026-10-25-activity §4.5): today, 7 days or 30 days; and the last 24
+/// hours, which the Queue screen's lane picker reads recent agent windows over (0.31.0, design 2026-10-25-routing B1).
+/// Closed: 24 hours, 7 and 30 days are core's spans; today is the start of the person's day, which only the window
+/// knows the time zone of, so it arrives as a time Rust checks and writes itself. No text the window sends reaches
+/// `--since`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ActivitySince {
     #[serde(rename = "today")]
     Today(StartOfToday),
+    #[serde(rename = "24h")]
+    Day,
     #[serde(rename = "7d")]
     SevenDays,
     #[serde(rename = "30d")]
@@ -293,6 +310,7 @@ impl ActivitySince {
     pub fn word(self) -> String {
         match self {
             ActivitySince::Today(start) => iso_time(start.0),
+            ActivitySince::Day => "24h".into(),
             ActivitySince::SevenDays => "7d".into(),
             ActivitySince::ThirtyDays => "30d".into(),
         }
@@ -580,6 +598,13 @@ pub enum Call {
     /// The events service's `queue clear` (0.30.0): purges the done and dismissed items now, rather than at their
     /// retention. It takes no argument; the screen asks first.
     QueueClear {},
+    /// The events service's `lane list` (0.31.0, design 2026-10-25-routing §3.7 and B1): each lane, its rules and
+    /// channels, its open count, and the window bound to it. Content-free and read-only. It takes no argument.
+    LaneList {},
+    /// The events service's `lane unbind <lane>` (0.31.0, B1): ends a lane's binding. It takes a window's reading away
+    /// and gives nothing, a tightening, so the app applies it itself (DA10); the screen asks first. Binding is never a
+    /// call: the person binds at a terminal (`TerminalCommand::LaneBind`), so no agent can bind itself.
+    LaneUnbind { lane: LaneName },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -598,6 +623,10 @@ pub const ACTIVITY_VERSION: &str = "0.29.0";
 /// The first release of the events service with the action queue (design 2026-10-25-action-queue): its `queue list`,
 /// `counts`, `done`, `dismiss`, `reopen` and `clear`. An older one says "Needs 0.30.0 or later" (DA12).
 pub const QUEUE_VERSION: &str = "0.30.0";
+
+/// The first release of the events service with lanes (design 2026-10-25-routing): its `lane list`, `lane unbind` and
+/// `lane bind`. An older one says "Needs 0.31.0 or later" (DA12).
+pub const LANES_VERSION: &str = "0.31.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -837,6 +866,8 @@ impl Call {
             Call::QueueDismiss { item_id } => events(&["queue", "dismiss", item_id.as_str()]),
             Call::QueueReopen { item_id } => events(&["queue", "reopen", item_id.as_str()]),
             Call::QueueClear {} => events(&["queue", "clear"]),
+            Call::LaneList {} => events(&["lane", "list"]),
+            Call::LaneUnbind { lane } => events(&["lane", "unbind", lane.as_str()]),
         })
     }
 
@@ -878,6 +909,7 @@ impl Call {
             | Call::QueueDismiss { .. }
             | Call::QueueReopen { .. }
             | Call::QueueClear {} => Some(QUEUE_VERSION),
+            Call::LaneList {} | Call::LaneUnbind { .. } => Some(LANES_VERSION),
             _ => None,
         }
     }
@@ -952,6 +984,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "activitySessions", "since": "7d" }),
         json!({ "kind": "activitySessions", "since": "30d" }),
         json!({ "kind": "activitySessions", "since": { "today": TODAY } }),
+        json!({ "kind": "activitySessions", "since": "24h" }),
         json!({ "kind": "activityShow", "session": SESSION, "since": "7d" }),
         json!({
             "kind": "activityShow",
@@ -979,6 +1012,8 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "queueDismiss", "itemId": QUEUE_ITEM }),
         json!({ "kind": "queueReopen", "itemId": QUEUE_ITEM }),
         json!({ "kind": "queueClear" }),
+        json!({ "kind": "laneList" }),
+        json!({ "kind": "laneUnbind", "lane": "david" }),
     ];
     values
         .into_iter()
@@ -2629,6 +2664,103 @@ mod tests {
             QueueLimit::try_from(QUEUE_LIMIT_MAX).map(u64::from).ok(),
             Some(200)
         );
+    }
+
+    /// The lanes' calls (0.31.0, design 2026-10-25-routing B1): `lane list`, a read, and `lane unbind <lane>`, a
+    /// tightening the app applies itself; each the events launcher, its words, `--json` and the pins, and nothing else.
+    /// The picker's read of recent agent windows is core's `activity sessions` over the last 24 hours.
+    #[test]
+    fn lane_calls_build_exactly_their_words() {
+        assert_eq!(events_line(json!({ "kind": "laneList" })), ["lane", "list"]);
+        let longest = "x".repeat(40);
+        for lane in ["david", "billing", "a", "lane-2", longest.as_str()] {
+            assert_eq!(
+                events_line(json!({ "kind": "laneUnbind", "lane": lane })),
+                ["lane", "unbind", lane]
+            );
+        }
+        for value in [
+            json!({ "kind": "laneList" }),
+            json!({ "kind": "laneUnbind", "lane": "david" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.31.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(LANES_VERSION, "0.31.0");
+        assert!(!crate::version::at_least("0.30.0", LANES_VERSION));
+        assert!(!crate::version::at_least("0.30.9", LANES_VERSION));
+        assert!(crate::version::at_least("0.31.0", LANES_VERSION));
+        assert!(crate::version::at_least("0.31.0-feat-0.31", LANES_VERSION));
+        assert_eq!(
+            whole_line(json!({ "kind": "activitySessions", "since": "24h" })),
+            ["activity", "sessions", "--since", "24h"]
+        );
+        assert_eq!(ActivitySince::Day.word(), "24h");
+        assert_eq!(
+            serde_json::to_value(ActivitySince::Day).expect("json"),
+            json!("24h")
+        );
+    }
+
+    /// Nothing the window sends reaches a lane's words unchecked: the name is 1 to 40 of `[a-z0-9-]`, no call takes a
+    /// field it does not name, and nothing binds, reads a lane's items or asks who a window is: binding is the person's,
+    /// at a terminal.
+    #[test]
+    fn lane_calls_refuse_bad_names_and_extra_fields() {
+        for lane in [
+            json!(""),
+            json!("-david"),
+            json!("--json"),
+            json!("David"),
+            json!("david_slack"),
+            json!("david.slack"),
+            json!("david slack"),
+            json!("david --window 3f9a1c2e7b4d5a60"),
+            json!("david\n"),
+            json!("david\u{202e}"),
+            json!("david\u{200b}"),
+            json!("x".repeat(41)),
+            json!("../david"),
+            json!(7),
+            json!(null),
+            json!(["david"]),
+            json!({ "name": "david" }),
+        ] {
+            refused(json!({ "kind": "laneUnbind", "lane": lane }));
+        }
+        // The lane is never left out, and is named `lane`, nothing else.
+        refused(json!({ "kind": "laneUnbind" }));
+        refused(json!({ "kind": "laneUnbind", "name": "david" }));
+        for (field, value) in [
+            ("window", json!(SESSION)),
+            ("approval", json!(ID)),
+            ("approvalId", json!(ID)),
+            ("args", json!(["--all"])),
+            ("json", json!(false)),
+            ("force", json!(true)),
+            ("all", json!(true)),
+        ] {
+            let mut given = json!({ "kind": "laneUnbind", "lane": "david" });
+            given[field] = value.clone();
+            refused(given);
+            let mut list = json!({ "kind": "laneList" });
+            list[field] = value;
+            refused(list);
+        }
+        refused(json!({ "kind": "laneList", "lane": "david" }));
+        for kind in [
+            "laneBind",
+            "laneItem",
+            "laneWatch",
+            "laneWait",
+            "laneWhoami",
+            "lane",
+            "lanes",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "lane": "david" }));
+            refused(json!({ "kind": kind, "lane": "david", "window": SESSION }));
+        }
     }
 
     /// Today's start is written as core reads an ISO time, in UTC, for any day from 2020 to 2099.

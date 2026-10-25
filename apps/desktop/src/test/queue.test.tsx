@@ -160,7 +160,7 @@ describe('Queue', () => {
   });
 
   it(
-    'three tabs, Open first with its count, Done and Dismissed with theirs; the sidebar badge is the open count',
+    'the item tabs, Open first with its count, Done and Dismissed with theirs, then Lanes; the sidebar badge is the open count',
     SLOW,
     async () => {
       const bridge = bridgeAt();
@@ -169,7 +169,7 @@ describe('Queue', () => {
       const names = within(list)
         .getAllByRole('tab')
         .map((each) => each.textContent?.replace(/\d.*$/, '').trim());
-      expect(names).toEqual(['Open', 'Done', 'Dismissed']);
+      expect(names).toEqual(['Open', 'Done', 'Dismissed', 'Lanes']);
       expect((await tab('Open')).getAttribute('aria-selected')).toBe('true');
       await waitFor(() => expect(within(list).getByRole('tab', { name: 'Open 5 waiting' })).toBeTruthy());
       expect(within(list).getByRole('tab', { name: 'Done 2' })).toBeTruthy();

@@ -17,6 +17,8 @@ const ACTS: readonly string[] = grammar.acts;
 const SESSION_KEY = new RegExp(grammar.sessionKey, 'u');
 const QUEUE_ITEM_ID = new RegExp(grammar.queueItemId, 'u');
 const RULE_ID = new RegExp(grammar.ruleId, 'u');
+const LANE_NAME = new RegExp(grammar.laneName, 'u');
+const WINDOW_ID = new RegExp(grammar.windowId, 'u');
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -66,6 +68,22 @@ export function isQueueItemId(value: string): boolean {
  */
 export function isRuleId(value: string): boolean {
   return isPlainValue(value) && RULE_ID.test(value);
+}
+
+/**
+ * A lane's name, as the event service takes one (design 2026-10-25-routing §3.1): 1 to 40 lowercase letters, digits and
+ * `-`. A lane whose name is outside it is shown, and the app never names it in a call.
+ */
+export function isLaneName(value: string): boolean {
+  return isPlainValue(value) && LANE_NAME.test(value);
+}
+
+/**
+ * The agent window a lane is bound to, as `lane bind --window` takes it (B1): a Claude Code session id, a lowercase
+ * UUID; or an activity session's key, sixteen lowercase hex digits.
+ */
+export function isWindowId(value: string): boolean {
+  return isPlainValue(value) && WINDOW_ID.test(value);
 }
 
 /** The acts a rule can allow, in the order the form shows them. */
