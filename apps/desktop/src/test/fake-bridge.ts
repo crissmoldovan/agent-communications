@@ -9,6 +9,7 @@ import accountsGmail from './fixtures/accounts-gmail.populated.json';
 import accountsResend from './fixtures/accounts-resend.populated.json';
 import accountsSlack from './fixtures/accounts-slack.populated.json';
 import activitySessions from './fixtures/activity-sessions.json';
+import activitySessionsRecent from './fixtures/activity-sessions-recent.json';
 import activityShow from './fixtures/activity-show.json';
 import activityShowDaemon from './fixtures/activity-show-daemon.json';
 import approvalsFinished from './fixtures/approvals-finished.json';
@@ -23,6 +24,7 @@ import doctorWhatsapp from './fixtures/doctor-whatsapp.json';
 import layaDisabled from './fixtures/events-judge-model-status.disabled.json';
 import eventsStatus from './fixtures/events-status.running.json';
 import label from './fixtures/label.populated.json';
+import laneList from './fixtures/lane-list.json';
 import queueCounts from './fixtures/queue-counts.json';
 import queueDismissed from './fixtures/queue-list-dismissed.json';
 import queueDone from './fixtures/queue-list-done.json';
@@ -174,6 +176,10 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   queueDismiss: queueChangeAnswer,
   queueReopen: queueChangeAnswer,
   queueClear: { cleared: 3 },
+  // The event service's lanes (0.31.0), from fixtures written to the contract (design 2026-10-25-routing §6) until the
+  // event service's own output replaces them. Their calls run only where its version is 0.31.0 or later.
+  laneList,
+  laneUnbind: (call: Call) => ({ lane: (call as Extract<Call, { kind: 'laneUnbind' }>).lane, unbound: true }),
 };
 
 /** An installation with every product at 0.29.0, the first core with the activity log. */
@@ -181,6 +187,35 @@ export const ACTIVITY_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, ve
 
 /** Every product at 0.30.0, the first events service with the action queue: core's version, and each `--version`. */
 export const QUEUE_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.30.0' };
+
+/** Every product at 0.31.0, the first events service with lanes. */
+export const LANES_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.31.0' };
+
+/** `lane list`: `david`, bound to a window in `~/work/acme-site`, and `billing`, bound to none. */
+export const LANE_LIST = laneList;
+
+/**
+ * `activity sessions --since 24h`: two agent windows grouped as one each — one in `~/work/billing-tool`, and the one
+ * `david` is bound to — then the event service and a command, which are not.
+ */
+export const RECENT_SESSIONS = activitySessionsRecent;
+
+/**
+ * Lanes that keep what is done to them, as the event service does: unbind ends a lane's binding, and the list answers
+ * from what is left. Each call of this starts again from the fixture.
+ */
+export function fakeLanes(): Partial<Record<Call['kind'], Fixture>> {
+  const lanes: { name: string; binding: unknown }[] = JSON.parse(JSON.stringify(LANE_LIST.lanes));
+  return {
+    laneList: () => ({ lanes: JSON.parse(JSON.stringify(lanes)) }),
+    laneUnbind: (call: Call) => {
+      const { lane } = call as Extract<Call, { kind: 'laneUnbind' }>;
+      const found = lanes.find((each) => each.name === lane);
+      if (found !== undefined) found.binding = null;
+      return { lane, unbound: true };
+    },
+  };
+}
 
 /** The queue's lists, by the state each holds (written from the contract, design 2026-10-25-action-queue §8). */
 export const QUEUE_LISTS = { open: queueOpen, done: queueDone, dismissed: queueDismissed } as const;
