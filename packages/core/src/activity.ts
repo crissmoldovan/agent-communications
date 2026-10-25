@@ -58,6 +58,11 @@ export type ActivitySurface = (typeof ACTIVITY_SURFACES)[number];
 export const MAX_ACTIVITY_ITEMS = 50;
 /** How much of a subject a line keeps, in characters. */
 export const MAX_SUBJECT_CHARS = 200;
+/**
+ * The most a line may take as written, its newline included: 16 KiB, well inside the one write `appendPrivateLine`
+ * makes of it, so a line is always whole or absent, whatever its items hold. Past it, `fitted` cuts it.
+ */
+export const MAX_ACTIVITY_LINE_BYTES: number = 16 * 1024;
 
 /** An MCP client's `clientInfo`, as the client reported it: what it said, never proof of what it is (§4.3). */
 export interface ClientInfo {
@@ -158,6 +163,11 @@ export interface ActivityLine {
   readonly recipients?: readonly string[] | undefined;
   readonly approvalId?: string | undefined;
   readonly told?: ActivityTold | undefined;
+  /**
+   * The line was cut to `MAX_ACTIVITY_LINE_BYTES`: items, then recipients, dropped from the end, and long words
+   * shortened. `count` still says how many items there were.
+   */
+  readonly truncated?: true | undefined;
 }
 
 /** A line to append: `at` is now when left out. */
@@ -277,6 +287,70 @@ function sessionOf(raw: unknown): ActivitySession {
  * Anything else the input carries — a body, a text, an HTML part, bytes — is not copied, whatever it is called.
  */
 export function activityLineOf(input: ActivityLineInput, now: Date = new Date()): ActivityLine {
+  return fitted(boundedLine(input, now));
+}
+
+/** How many bytes a line takes as written, its newline included. */
+function bytesOf(line: ActivityLine): number {
+  return Buffer.byteLength(JSON.stringify(line)) + 1;
+}
+
+/**
+ * The line, cut until it fits in `MAX_ACTIVITY_LINE_BYTES`, and marked `truncated` when it was: items from the end
+ * first — `count` keeps how many there were — then recipients from the end, then the longer words shortened, and
+ * last the words that are not the line's own dropped. Text a sender wrote can be many times its length as JSON (a
+ * control character is six bytes), so the bounds on each field alone do not bound the line.
+ */
+function fitted(line: ActivityLine): ActivityLine {
+  if (bytesOf(line) <= MAX_ACTIVITY_LINE_BYTES) return line;
+  const items = [...(line.items ?? [])];
+  const recipients = [...(line.recipients ?? [])];
+  let cutLine: ActivityLine = { ...line, truncated: true };
+  const fits = () => bytesOf(cutLine) <= MAX_ACTIVITY_LINE_BYTES;
+  while (items.length > 0 && !fits()) {
+    items.pop();
+    cutLine = { ...cutLine, items: [...items] };
+  }
+  while (recipients.length > 0 && !fits()) {
+    recipients.pop();
+    cutLine = { ...cutLine, recipients: [...recipients] };
+  }
+  if (fits()) return cutLine;
+  const short = (text: string | undefined, max: number) => (text === undefined ? undefined : cut(text, max));
+  const { ancestors: _ancestors, ...session } = cutLine.session;
+  cutLine = {
+    ...cutLine,
+    channel: short(cutLine.channel, 40) ?? '',
+    operation: short(cutLine.operation, 64) ?? '',
+    account: { id: short(cutLine.account.id, 64) ?? '', alias: short(cutLine.account.alias, 64) ?? '' },
+    session: {
+      ...session,
+      folder: cutLine.session.folder === null ? null : (short(cutLine.session.folder, 256) ?? null),
+      ...(session.client === undefined
+        ? {}
+        : {
+            client: {
+              name: short(session.client.name, 40) ?? '',
+              ...(session.client.version === undefined ? {} : { version: short(session.client.version, 20) }),
+            },
+          }),
+      ...(session.parent === undefined
+        ? {}
+        : { parent: { ...session.parent, name: short(session.parent.name, 40) ?? '' } }),
+    },
+    ...(cutLine.reason === undefined ? {} : { reason: short(cutLine.reason, 100) }),
+    ...(cutLine.query === undefined ? {} : { query: short(cutLine.query, 100) }),
+    ...(cutLine.told === undefined
+      ? {}
+      : { told: { rule: short(cutLine.told.rule, 60) ?? '', target: short(cutLine.told.target, 60) ?? '' } }),
+  };
+  if (fits()) return cutLine;
+  const { reason: _reason, query: _query, told: _told, counts: _counts, ...rest } = cutLine;
+  return { ...rest, truncated: true };
+}
+
+/** The line every field of it bounded, before the line as a whole is (`fitted`). */
+function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
   const raw = input as unknown as Record<string, unknown>;
   const at = typeof raw.at === 'string' && ISO_TIME.test(raw.at) ? raw.at : now.toISOString();
   const account = own<Record<string, unknown>>(raw.account);
@@ -323,6 +397,7 @@ export function activityLineOf(input: ActivityLineInput, now: Date = new Date())
     ...(told === undefined
       ? {}
       : { told: { rule: cut(told.rule, BOUNDS.name) ?? '', target: cut(told.target, BOUNDS.name) ?? '' } }),
+    ...(raw.truncated === true ? { truncated: true as const } : {}),
   };
 }
 

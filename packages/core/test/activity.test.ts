@@ -11,6 +11,7 @@ import {
   ActivityLog,
   type ActivitySession,
   MAX_ACTIVITY_ITEMS,
+  MAX_ACTIVITY_LINE_BYTES,
   MAX_SUBJECT_CHARS,
   type ProcessProbe,
   parsePsLine,
@@ -303,14 +304,18 @@ test('subjects are cut at 200 characters, and a line lists at most 50 items with
   const state = tempDir();
   const log = new ActivityLog(state, { settings: ON });
   const long = `${'é'.repeat(150)}${'🙂'.repeat(100)}`;
-  const items = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, subject: long }));
+  // Fifty items with short subjects fit in a line; long ones are cut to fit as well (`MAX_ACTIVITY_LINE_BYTES`).
+  const items = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, subject: `Invoice ${index}` }));
   await log.append(line({ items }));
   const [stored] = rawLines(state);
-  const kept = stored?.items as { id: string; subject: string }[];
   assert.equal(MAX_ACTIVITY_ITEMS, 50);
   assert.equal(MAX_SUBJECT_CHARS, 200);
-  assert.equal(kept.length, 50);
+  assert.equal(((stored?.items ?? []) as unknown[]).length, 50);
   assert.equal(stored?.count, 120, 'past fifty, the count says how many there were');
+  assert.equal(stored?.truncated, undefined, 'fifty short items fit whole');
+  await log.append(line({ items: items.slice(0, 5).map((item) => ({ ...item, subject: long })) }));
+  const kept = rawLines(state)[1]?.items as { id: string; subject: string }[];
+  assert.equal(kept.length, 5);
   for (const item of kept) {
     assert.ok([...item.subject].length <= 200, `${[...item.subject].length} characters`);
     assert.ok(item.subject.endsWith('…'), 'a cut subject says it was cut');
@@ -318,7 +323,7 @@ test('subjects are cut at 200 characters, and a line lists at most 50 items with
   }
   // A count smaller than the items is not believed.
   await log.append(line({ items: items.slice(0, 3), count: 1 }));
-  assert.equal(rawLines(state)[1]?.count, 3);
+  assert.equal(rawLines(state)[2]?.count, 3);
 });
 
 // ── Sessions ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -1114,4 +1119,49 @@ test('warming starts the read when the server starts; the event service waits fo
   assert.equal(cold.grouped, false);
   const service = await sessionIdentity('daemon', undefined, { ...base, cache: new SessionIdentityCache(), waitMs: 5 });
   assert.equal(service.grouped, true);
+});
+
+// ── A line is small enough to be appended whole (0.29.0 review) ────────────────────────────────────────────────
+
+test('a line is cut to 16 KiB: items go from the end first, the count stays, and it says it was cut', async () => {
+  const state = tempDir();
+  const log = new ActivityLog(state, { settings: ON });
+  // Control characters are written six bytes each (`\u0001`): fifty such items are some 200 KiB as JSON.
+  const loud = (length: number) => '\u0001'.repeat(length);
+  const items = Array.from({ length: 50 }, (_, index) => ({
+    id: `m${index}`,
+    subject: loud(200),
+    name: loud(255),
+    from: { name: loud(200), address: loud(320) },
+  }));
+  const key = 'cdcdcdcdcdcdcdcd';
+  assert.equal(await log.append(line({ session: session({ key }), items })), true);
+  const [file] = filesOf(join(state, 'activity'));
+  const written = readFileSync(join(state, 'activity', file as string), 'utf8');
+  assert.ok(Buffer.byteLength(written) <= MAX_ACTIVITY_LINE_BYTES, `${Buffer.byteLength(written)} bytes`);
+  assert.equal(MAX_ACTIVITY_LINE_BYTES, 16 * 1024);
+  const [stored] = rawLines(state);
+  const kept = stored?.items as { id: string }[];
+  assert.ok(kept.length > 0 && kept.length < 50, `${kept.length} items kept`);
+  assert.deepEqual(
+    kept.map((each) => each.id),
+    items.slice(0, kept.length).map((each) => each.id),
+    'the first ones, in order',
+  );
+  assert.equal(stored?.count, 50, 'the count says how many there were');
+  assert.equal(stored?.truncated, true);
+  const shown = await log.show(key);
+  assert.equal(shown.lines[0]?.truncated, true, 'read back as cut');
+
+  // Recipients too, when items are not what makes it long.
+  const many = Array.from({ length: 50 }, () => loud(320));
+  await log.append(
+    line({ session: session({ key }), operation: 'gmail.send.execute', kind: 'write', recipients: many }),
+  );
+  const second = readFileSync(join(state, 'activity', file as string), 'utf8').split('\n')[1] ?? '';
+  assert.ok(Buffer.byteLength(second) + 1 <= MAX_ACTIVITY_LINE_BYTES, `${Buffer.byteLength(second)} bytes`);
+  assert.equal(JSON.parse(second).truncated, true);
+  // A line that fits is not marked.
+  await log.append(line({ session: session({ key }) }));
+  assert.equal(rawLines(state)[2]?.truncated, undefined);
 });
