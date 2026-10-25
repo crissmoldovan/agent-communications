@@ -271,3 +271,19 @@ One line per delivery outcome: rule, account, count, target, outcome. No payload
 - WhatsApp lines hold no chat id, name or number.
 - Session grouping: two server processes with one parent are one session.
 - Parity, in `pnpm verify:parity`.
+
+## 9. Settled while building (the lead's calls, 2026-10-25)
+
+- **WhatsApp stands alone.** Grouping a process with its window reads the parent's start time with `ps`. The WhatsApp
+  package promises to start no process but the link opener, and its tests hold it to that. So each WhatsApp server
+  process is a session of its own (`grouped: false`), and its lines show in the full view (the CLI and the app) but
+  not in an agent's `comms_activity`, which only shows the calling window's own lines. Keeping the promise is worth
+  more than the grouping.
+- **Kinds across channels:**
+  - preparing, cancelling or asking about an act that needs approval is `approval`;
+  - the act that reaches the provider is `write`;
+  - a dry run is `read`.
+  
+  Drafts that live only on this machine are `approval`. A Slack reaction made at once under the `chat` policy is
+  still recorded as its `approval` row.
+- **One call over several accounts is one line,** with the aliases comma-joined and an empty account id.
