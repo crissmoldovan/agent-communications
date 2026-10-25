@@ -1,4 +1,14 @@
-import { type ActivityAccount, type ActivityKind, CommsError, isCommsError, withActivity } from '@agentcomms/core';
+import { randomBytes } from 'node:crypto';
+import {
+  type ActivityAccount,
+  type ActivityKind,
+  type ActivitySession,
+  CommsError,
+  isCommsError,
+  lookupName,
+  withActivity,
+} from '@agentcomms/core';
+import { PLATFORM } from './config.ts';
 import type { WhatsAppContext } from './context.ts';
 
 /**
@@ -14,6 +24,9 @@ import type { WhatsAppContext } from './context.ts';
  *   leaves nothing in the index (`visibility.ts`), and core never needs WhatsApp's lists to keep the log clean.
  * - **Nor does its reason.** A refusal here names the chat it refused (`no chat 15555550101@s.whatsapp.net in …`), so a
  *   failed or refused line keeps the error's code and none of its words. The call still throws the error it threw.
+ * - **Its session is this process's own, ungrouped.** Grouping a process with its agent window (S2) reads the parent's
+ *   start with `ps`, and this package starts no process but the link opener (`no-network.test.ts`): so each server and
+ *   each command is a session of its own, marked ungrouped, with its folder and — over MCP — what the client said.
  */
 
 const CHANNEL = 'whatsapp';
@@ -33,6 +46,9 @@ export interface WhatsAppCounts {
  * joined by commas and no id, as a call over several accounts is recorded (the lead's rule for 0.29.0). Undefined when
  * the call names an account this machine does not have, or none where one is needed: it is then refused before any
  * account is read, and records nothing.
+ *
+ * Read from the configuration alone — never through `context.account`, which reads the person's lists too: the
+ * operation looks its account up itself, once, as it always has.
  */
 async function accountOf(
   context: WhatsAppContext,
@@ -40,19 +56,46 @@ async function accountOf(
   anyAccount: boolean,
 ): Promise<ActivityAccount | undefined> {
   try {
-    if (named !== undefined || context.pinned !== undefined) {
-      const { name, account } = await context.account(named);
-      return { id: account.id, alias: name };
-    }
-    if (!anyAccount) return undefined;
-    const names = await context.accountNames();
-    if (names.length === 0) return undefined;
-    if (names.length > 1) return { id: '', alias: names.join(',') };
-    const { name, account } = await context.account(names[0]);
-    return { id: account.id, alias: name };
+    let names: string[];
+    if (context.pinned !== undefined) {
+      // The pinned account under the name it has now; a call naming another is refused, and records nothing.
+      names = await context.accountNames();
+      if (named !== undefined && !names.includes(named)) return undefined;
+    } else if (named !== undefined) names = [named];
+    else if (anyAccount) names = await context.accountNames();
+    else return undefined;
+    const config = await context.config();
+    const accounts = names.map((name) => ({ name, account: lookupName(config, 'account', name) }));
+    if (accounts.length === 0 || accounts.some(({ account }) => account?.platform !== PLATFORM)) return undefined;
+    const [only] = accounts;
+    if (accounts.length === 1 && only?.account !== undefined) return { id: only.account.id, alias: only.name };
+    return { id: '', alias: names.join(',') };
   } catch {
     return undefined;
   }
+}
+
+/** This process's own session key and id: made once, so every line of this process is one session. */
+const OWN = { key: randomBytes(8).toString('hex'), process: randomBytes(6).toString('hex') };
+
+/** The session a line of this process is recorded under: its own, ungrouped, with no process started to learn more. */
+function ownSession(context: WhatsAppContext): ActivitySession {
+  let folder: string | null;
+  try {
+    folder = process.cwd();
+  } catch {
+    folder = null;
+  }
+  const client = context.clientInfo?.();
+  return {
+    key: OWN.key,
+    process: OWN.process,
+    pid: process.pid,
+    ...(client?.name ? { client: { name: client.name, ...(client.version ? { version: client.version } : {}) } } : {}),
+    folder,
+    grouped: false,
+    surface: context.surface,
+  };
 }
 
 /** The counts of a result, as whole numbers, and only the two a WhatsApp line may hold. */
@@ -84,7 +127,7 @@ export async function recordWhatsApp<T>(
   let thrown: { error: unknown } | undefined;
   try {
     return await withActivity(
-      { core: context.core, channel: CHANNEL, surface: context.surface, account, clientInfo: context.clientInfo },
+      { core: context.core, channel: CHANNEL, surface: context.surface, account, session: ownSession(context) },
       operation,
       kind,
       async () => {

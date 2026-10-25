@@ -199,6 +199,9 @@ test('every read and the draft record one line on each surface, with counts of c
     const fromMcp = one(w, tool.lines, { ...row, outcome: 'ok', surface: 'mcp' });
     assert.deepEqual(fromMcp.counts, row.counts(tool.result.structuredContent), row.operation);
     assert.deepEqual(fromMcp.session.client, { name: 'test', version: '0' }, 'what the client said it is');
+    // This package starts no process, so it cannot read its parent's start: each process is a session of its own.
+    assert.deepEqual([fromCli.session.grouped, fromMcp.session.grouped], [false, false]);
+    assert.equal(fromMcp.session.key, fromCli.session.key, 'one process, one session');
   }
   // Something was counted: a line of zeros everywhere would pass the shape and say nothing.
   assert.ok(w.lines().some((line) => (line.counts?.messages ?? 0) > 1));
