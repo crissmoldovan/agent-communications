@@ -1,0 +1,12 @@
+{
+  "$description": "Density override: soft, ultra-large. Rung 5 of 5. Generated from soft.normal.tokens.json by theme-tools deriveRungs: each token is the theme's normal value times the base ladder's own ultra-large/normal ratio for that token, so picking this rung moves soft's corners the way it moves every other theme's. GEOMETRY ONLY.",
+  "density": {
+    "$type": "dimension",
+    "radius-control": {
+      "$value": "12px"
+    },
+    "radius-surface": {
+      "$value": "21px"
+    }
+  }
+}
