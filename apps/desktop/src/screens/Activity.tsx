@@ -12,7 +12,7 @@ import {
   Timeline,
 } from '@cueplusplus/ui';
 import { ArrowLeft, ChevronRight, RefreshCw } from 'lucide-react';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ACTIVITY_KINDS,
   ACTIVITY_OUTCOMES,
@@ -162,8 +162,8 @@ function ActivityViews() {
   const [range, setRange] = useState<Range>('7d');
   const [open, setOpen] = useState<SessionView | null>(null);
   const [tick, setTick] = useState(0);
-  // Today is today when the range is chosen: read again, it is still that day's start.
-  const since = useMemo(() => sinceOf(range), [range]);
+  // Worked out when the range is chosen and again on each Read again, so Today moves on past midnight.
+  const [since, setSince] = useState(() => sinceOf('7d'));
   return (
     <div className="flex flex-col gap-(--cue-space-4)">
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
@@ -183,13 +183,19 @@ function ActivityViews() {
             size="sm"
             items={RANGES.map(({ value, label }) => ({ value, label }))}
             value={range}
-            onValueChange={(value) => setRange(value as Range)}
+            onValueChange={(value) => {
+              setRange(value as Range);
+              setSince(sinceOf(value as Range));
+            }}
           />
           <IconButton
             aria-label={ACTIVITY_COPY.refresh}
             icon={RefreshCw}
             size="sm"
-            onClick={() => setTick((n) => n + 1)}
+            onClick={() => {
+              setSince(sinceOf(range));
+              setTick((n) => n + 1);
+            }}
           />
         </span>
       </div>

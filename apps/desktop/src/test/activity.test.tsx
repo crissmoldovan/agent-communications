@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { startOfToday } from '../activity.ts';
 import { COPY } from '../copy.ts';
 import type { Call } from '../ipc.ts';
@@ -136,6 +136,29 @@ describe('Activity', () => {
     fireEvent.click(within(main()).getByRole('button', { name: ACTIVITY_COPY.refresh }));
     await waitFor(() => expect(activityCalls(bridge)).toHaveLength(4));
     expect(activityCalls(bridge).at(-1)).toEqual({ kind: 'activitySessions', since: '30d' });
+  });
+
+  it('Today moves on: read again after midnight, it starts at the new day', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date(2026, 9, 25, 23, 59, 0));
+      const bridge = bridgeAt();
+      renderApp(bridge, { screen: 'activity' });
+      await rows();
+      const range = within(main()).getByRole('group', { name: ACTIVITY_COPY.range });
+      fireEvent.click(within(range).getByRole('button', { name: 'Today' }));
+      await waitFor(() => expect(activityCalls(bridge)).toHaveLength(2));
+      const before = startOfToday();
+      expect(activityCalls(bridge).at(-1)).toEqual({ kind: 'activitySessions', since: { today: before } });
+      vi.setSystemTime(new Date(2026, 9, 26, 0, 1, 0));
+      fireEvent.click(within(main()).getByRole('button', { name: ACTIVITY_COPY.refresh }));
+      await waitFor(() => expect(activityCalls(bridge)).toHaveLength(3));
+      const after = startOfToday();
+      expect(after).not.toBe(before);
+      expect(activityCalls(bridge).at(-1)).toEqual({ kind: 'activitySessions', since: { today: after } });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("a session's timeline: a line a call, by minute, each in a few words, a sender's text plain and marked", async () => {
