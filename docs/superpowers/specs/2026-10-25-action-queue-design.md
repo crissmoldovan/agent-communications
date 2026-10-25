@@ -200,6 +200,13 @@ Each answer overrides the section it names.
     removed";
   - the Queue screen says the same beside the rule's filter when a tightening is pending.
 - Keeping items across a revocation would change D2's security model. It is not done here.
+- **Follow-up, recorded 2026-10-25 (0.30.0 review), not built in 0.30.0:**
+  - **The Queue screen does not yet show a pending tightening's notice.** The count reaches the person only in the
+    `tightening` preview of `rule create` and `rule update` (`openQueueItemsRemoved`, with its `notice`); §8's
+    `queue counts` carries no pending-tightening field for the screen to show beside the rule's filter.
+  - **The count is taken when the version is created, not when `rule enable` applies it.** Items that arrive, or that
+    the person marks done or dismissed, in between change what enabling it removes. The tightening itself is
+    unchanged: it removes the revoked version's items as they stand at enable.
 
 ## 8. Build plan (the lead's, 2026-10-25)
 
