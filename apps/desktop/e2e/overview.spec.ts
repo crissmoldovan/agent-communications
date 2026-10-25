@@ -67,6 +67,10 @@ test('Overview shows the version, approvals waiting and each doctor', async ({ p
   await expect(page.getByRole('region', { name: 'Updates' })).toContainText('every-14-days');
   await expect(page.getByRole('region', { name: 'Standing approvals' })).toContainText('example/slack');
   await expect(page.getByRole('region', { name: 'Event service' })).toContainText('Running');
+  // The queue's tile, beside Approvals waiting, says what an older events service needs.
+  await expect(page.getByRole('region', { name: 'Queue' })).toContainText(
+    'Needs 0.30.0 or later; this machine has 0.24.0.',
+  );
 
   // Gmail's row says it waits to be asked; why is in a hint the pointer reaches.
   const gmail = doctor.locator('[data-product="gmail"]');
@@ -93,7 +97,7 @@ test('Overview shows the version, approvals waiting and each doctor', async ({ p
   expect(calls).not.toContain('cli:doctor:gmail');
   for (const call of calls) {
     expect(call).toMatch(
-      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+))$/,
+      /^(installation|take_deep_link|event_service_state|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+|version:events-daemon))$/,
     );
   }
 });

@@ -6,8 +6,8 @@ import type { Page } from '@playwright/test';
  * listeners. Every invoke is recorded in `window.__calls`. Requests to anywhere but the preview server are refused.
  *
  * `scenario` names each command's answer by its Rust name (`installation`, `take_deep_link`, …). `cli` maps a call's
- * kind to the data of an `ok` result — or, for `doctor` and `accounts`, a map by product — and `cliResults` maps a
- * kind to a whole `CliResult`, for a failure or a pending approval.
+ * kind to the data of an `ok` result — or, for `doctor` and `accounts`, a map by product, and for `queueList` a map by
+ * the state it asks for — and `cliResults` maps a kind to a whole `CliResult`, for a failure or a pending approval.
  */
 export async function installMockIpc(page: Page, scenario: Record<string, unknown>): Promise<void> {
   await page.route('**/*', (route) => {
@@ -51,10 +51,12 @@ export async function installMockIpc(page: Page, scenario: Record<string, unknow
         }
         if (cmd === 'plugin:event|unlisten') return null;
         if (cmd === 'cli') {
-          const call = args.call as { kind: string; product?: string };
+          const call = args.call as { kind: string; product?: string; state?: string };
           if (call.kind in cliResults) return cliResults[call.kind];
           if (call.kind === 'version') return { status: 'version', version: '0.24.0' };
-          if (call.kind in cli) return { status: 'ok', exit: 0, data: scoped(cli[call.kind], call.product) };
+          if (call.kind in cli) {
+            return { status: 'ok', exit: 0, data: scoped(cli[call.kind], call.product ?? call.state) };
+          }
           return {
             status: 'failed',
             exit: -1,
