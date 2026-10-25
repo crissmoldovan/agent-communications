@@ -3,6 +3,27 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**The desktop app, `desktop-v0.27.1`: Start shows that it is starting, and Events shows every judge, Jev among them.**
+Both came from the owner's first run of 0.27.0.
+- **Start answers at once.** Clicking **Start** in "Start the event service?" used to leave the question on screen,
+  its buttons greyed, for several seconds: the app asked the service for its status before starting it, which took
+  3.7 s on the owner's Mac. Now the question closes as soon as you answer, and the start happens in the background.
+  Events shows "Starting the event service…" with a spinner until the service answers. Every screen that shows
+  whether the service runs updates when it does.
+- **A Judges section on Events.** It lists the event service's three kinds of judge, says where each sends what it
+  reads, and shows whether each is off, on or unavailable, with the judges of each kind:
+  - **Jev, by TypeSafe:** a hosted judge. The fields a rule names are sent to TypeSafe, with your TypeSafe API key.
+  - **Laya:** runs on this Mac, and nothing leaves it. Laya is still not offered in this release, as before.
+  - **A local model server:** a model server you run on this machine, at 127.0.0.1 or ::1.
+- **Turning a judge on stays yours, at the terminal.** **Turn on in Terminal** opens your terminal with the
+  enablement for you to approve, as Laya's Enable did. **Turn off** applies at once, after you confirm it, because it
+  only takes something away. A kind that is on but has no judge yet links to how to add one and its key.
+- **What doesn't change:** the app still approves nothing, enters no API key, and calls no judge itself.
+
+The npm packages are re-released at 0.27.1 with the desktop app, and nothing in them changes.
+
 ## 0.27.0
 
 **The desktop app, Agent Comms, now runs the event service for you, and updates itself.** Until now the event service
