@@ -3,6 +3,39 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Activity: what your agents read, were told about, did and sent, by agent window, kept private on this machine.**
+The owner asked for an audit of what agent sessions read and sent, as the first step towards an action queue and
+routing. Until now only writes were recorded, with no way to tell one agent window from another.
+
+- **What is recorded:** one line for every call that reads or changes an account, made through Gmail, Resend, Slack or
+  WhatsApp, and one line for each delivery the event service makes.
+  - Each line says when it happened, the channel, the account, what was done (search, read, download, send, post,
+    approval…) and how it ended (ok, refused or failed, with the reason).
+  - Each line also says which **agent window** did it: the project folder, the client as it names itself (for
+    example Claude Code), and the process. The servers and commands one window starts are grouped together.
+  - It records subjects, senders, file names, conversation names and the query an agent wrote, so a line reads like
+    "Read 'Invoice March' from David".
+  - **It never records** a message body, a preview, an attachment's contents, a token or a secret.
+  - **WhatsApp is recorded only as counts**, with no chat, name, number or text. **The event service's lines** name
+    the rule, the target, how many events and the outcome, never what the events said.
+- **Where and for how long:** `<state>/activity/`, one private file a day, kept 30 days. The audit log is unchanged,
+  and is still the small record you can share when asking for help.
+- **Seeing it:**
+  - the desktop app's new **Activity** screen lists agent windows by project folder, each with its timeline and
+    filters by channel, account, kind and outcome;
+  - **Approvals → Recent** lists what was approved, refused, expired or revoked in the last 30 days;
+  - `agentcomms activity sessions` and `agentcomms activity show <session>` give the same at a terminal.
+- **What an agent sees:** only its own window's lines, through `comms_activity` (or `agentcomms activity mine`), never
+  another project's mail.
+  - WhatsApp's lines stand on their own: its package starts no process, and grouping a window needs one. So they
+    show in the app and at the terminal, but not to the agent.
+- **Turning it off:** `agentcomms activity record off`, or `comms_activity_settings`, stops recording at once.
+  `agentcomms activity retention <days>` keeps it for less. Turning it back on, or keeping it longer, is a loosening
+  you approve, as every other is. `doctor` reports when lines can't be written.
+- **What doesn't change:** a call never fails because its line couldn't be written, and the send gate is untouched.
+
 ## 0.28.0
 
 **The desktop app, `desktop-v0.28.0`, has a new look: calm, soft and quiet, in the way of Linear and QuotaMate.** The
