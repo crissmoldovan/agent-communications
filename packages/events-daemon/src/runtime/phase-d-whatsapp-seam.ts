@@ -42,7 +42,8 @@ export type DRetentionKind =
   | 'dead-letter'
   | 'dry-run'
   | 'sse-replay'
-  | 'decision-metadata';
+  | 'decision-metadata'
+  | 'queue';
 
 export type DSourceRetentionTighteningInput = Readonly<{
   readonly ruleId: string;

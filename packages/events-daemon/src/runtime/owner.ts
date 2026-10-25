@@ -113,6 +113,9 @@ import {
   requirePhaseDWhatsAppVisibilitySeam,
 } from './phase-d-whatsapp-owner-composition.ts';
 import { EventProjectionStore } from './projections.ts';
+import { QueueStore } from './queue.ts';
+import { QueueDispatcher } from './queue-dispatcher.ts';
+import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
@@ -455,7 +458,8 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
       transport:
         options.targetTestTransport ??
         (async ({ target: selected }: { readonly target: { readonly kind: string } }) => {
-          if (selected.kind !== 'dry-run')
+          // A queue target is local too: its test reaches nothing and puts nothing in the person's list.
+          if (selected.kind !== 'dry-run' && selected.kind !== 'queue')
             throw new CommsError('CONFIG', 'the selected target has no owner-composed synthetic test transport');
         }),
       ...(pendingOrigin === undefined
@@ -1090,6 +1094,25 @@ async function startOwnerWithLock(
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
+  // The action queue's local adapter and read model: dry-run's fences, with no network path (§2's anti-goals).
+  const queueDispatcher = new QueueDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    expiry,
+    now,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+  });
+  const queue = new QueueStore({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    expiry,
+    now,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+  });
   const webhook = new WebhookDispatcher({
     store: database,
     cipher,
@@ -1127,6 +1150,7 @@ async function startOwnerWithLock(
     dryrun,
     webhook,
     sse,
+    queue: queueDispatcher,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
@@ -1575,6 +1599,7 @@ async function startOwnerWithLock(
           sourceRegistry,
           writerQuiescer,
           request,
+          queue,
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
@@ -1656,6 +1681,7 @@ async function handleControl(
   sourceRegistry: LocalEventSourceRegistry,
   writerQuiescer: WriterQuiescer,
   request: AuthenticatedControlRequest,
+  queue: QueueStore,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
@@ -1695,6 +1721,23 @@ async function handleControl(
       return dispatcher.list();
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
+    // The action queue. Content reads are reached only from the CLI (Q1); every state change is the person's own.
+    case OWNER_CONTROL_WIRES.queueList:
+      return queue.list(request.args);
+    case OWNER_CONTROL_WIRES.queueShow:
+      return queue.show(request.args.itemId);
+    case OWNER_CONTROL_WIRES.queueItems:
+      return queue.items(request.args);
+    case OWNER_CONTROL_WIRES.queueCounts:
+      return queue.counts();
+    case OWNER_CONTROL_WIRES.queueDone:
+      return queue.done(request.args.itemId);
+    case OWNER_CONTROL_WIRES.queueDismiss:
+      return queue.dismiss(request.args.itemId);
+    case OWNER_CONTROL_WIRES.queueReopen:
+      return queue.reopen(request.args.itemId);
+    case OWNER_CONTROL_WIRES.queueClear:
+      return queue.clear();
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1825,9 +1868,16 @@ function ruleShow(database: Awaited<ReturnType<typeof openEventDatabase>>, ruleI
   return rows.map((row) => ({ ...row, document: JSON.parse(row.document) }));
 }
 
-/** The owner composes E2's artifact manager, so the rules it keeps carry B3 control v3's judge documents. */
+/**
+ * The owner composes E2's artifact manager, so the rules it keeps carry B3 control v3's judge documents. A version that
+ * narrows the active one carries its tightening's preview: what enabling it removes at once (action queue Q6).
+ */
 function createRule(database: Awaited<ReturnType<typeof openEventDatabase>>, document: unknown): unknown {
-  return domain(() => ImmutableVersions.forJudgeContract(database.database, 'b3-control-v3').createRule(document));
+  return domain(() => {
+    const created = ImmutableVersions.forJudgeContract(database.database, 'b3-control-v3').createRule(document);
+    const tightening = tighteningPreviewFor(database.database, created.document);
+    return tightening === undefined ? created : { ...created, tightening };
+  });
 }
 
 function targetRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unknown[] {

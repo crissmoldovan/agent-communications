@@ -86,7 +86,11 @@ function retainedWork(database: DatabaseSync, ruleId: string, ruleVersion: numbe
        SELECT 1 FROM stream_log WHERE rule_id = ? AND rule_version = ?
        UNION ALL
        SELECT 1 FROM decisions WHERE rule_id = ? AND rule_version = ? AND outcome = 'hold'
+       UNION ALL
+       SELECT 1 FROM queue_items WHERE rule_id = ? AND rule_version = ? AND encrypted_record IS NOT NULL
      )`,
+    ruleId,
+    ruleVersion,
     ruleId,
     ruleVersion,
     ruleId,

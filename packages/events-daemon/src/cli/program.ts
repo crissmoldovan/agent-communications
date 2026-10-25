@@ -47,6 +47,16 @@ import {
   updateJudge,
 } from '../operations/judges.ts';
 import { pause, resume } from '../operations/pause.ts';
+import {
+  queueClear,
+  queueCounts,
+  queueDismiss,
+  queueDone,
+  queueItems,
+  queueList,
+  queueReopen,
+  queueShow,
+} from '../operations/queue.ts';
 import { ruleTest, ruleTestRetained } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -76,7 +86,9 @@ import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
+import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
+import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
 import { VERSION } from '../version.ts';
 
 export interface EventsCliStreams {
@@ -675,6 +687,89 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     streams.stdout.write(`${renderDryRunRecordForTerminal(await dryrunShow(deliveryId, controlOptions(program)))}\n`);
   });
 
+  // The action queue (action queue design §4.4, §8). list and show give a person the content, at a terminal or in the
+  // app (which runs them with --json); they refuse inside an MCP server's process (Q1). The rest are content-free.
+  const queue = program
+    .command('queue')
+    .description('work through the action queue: what matched your queue rules, and what you have done with it');
+  const queueFilters = (options: Record<string, unknown>, withSince: boolean) => {
+    const filters = {
+      ...(options.state === undefined ? {} : { state: options.state as string }),
+      ...(options.rule === undefined ? {} : { rule: options.rule as string }),
+      ...(options.channel === undefined ? {} : { channel: options.channel as string }),
+      ...(withSince && options.since !== undefined ? { since: options.since as string } : {}),
+      ...(options.limit === undefined ? {} : { limit: parseLimit(options.limit as string) }),
+    };
+    // The owner parses these again; checking here first gives a bad argument its exit (64) without the owner.
+    parseQueueQuery(filters, Date.now(), { since: withSince });
+    return filters;
+  };
+  const printQueue = (result: unknown, render: () => string): void => {
+    if (program.opts<EventsCliOptions>().json) print(result);
+    else streams.stdout.write(`${escapeForDisplay(render())}\n`);
+  };
+  queue
+    .command('list')
+    .description('list queue items with what they say, newest first (a person at a terminal or in the app)')
+    .option('--state <state>', 'open (the default), done, dismissed or all')
+    .option('--rule <rule-id>', 'only this rule')
+    .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
+    .option('--since <when>', 'an ISO time, or a span back from now such as 7d or 12h')
+    .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
+    .action(async (options: Record<string, unknown>) => {
+      ran = true;
+      assertNotMcpServer(env);
+      const result = await queueList(queueFilters(options, true), controlOptions(program));
+      printQueue(result, () => renderQueueList(result));
+    });
+  queue
+    .command('show <item-id>')
+    .description('show one queue item with what it says (a person at a terminal or in the app)')
+    .action(async (itemId: string) => {
+      ran = true;
+      assertNotMcpServer(env);
+      const result = await queueShow(requireQueueItemId(itemId), controlOptions(program));
+      printQueue(result, () => renderQueueItem(result.item));
+    });
+  queue
+    .command('items')
+    .description('list queue items without what they say: ids, rules, channels, accounts, states and times')
+    .option('--state <state>', 'open (the default), done, dismissed or all')
+    .option('--rule <rule-id>', 'only this rule')
+    .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
+    .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
+    .action(async (options: Record<string, unknown>) => {
+      ran = true;
+      print(await queueItems(queueFilters(options, false), controlOptions(program)));
+    });
+  queue
+    .command('counts')
+    .description('count open, done and dismissed queue items, and each rule’s open items')
+    .action(async () => {
+      ran = true;
+      print(await queueCounts(controlOptions(program)));
+    });
+  for (const [name, description, operation] of [
+    ['done', 'mark one queue item done', queueDone],
+    ['dismiss', 'dismiss one queue item', queueDismiss],
+    ['reopen', 'reopen a done or dismissed queue item', queueReopen],
+  ] as const) {
+    queue
+      .command(`${name} <item-id>`)
+      .description(description)
+      .action(async (itemId: string) => {
+        ran = true;
+        print(await operation(requireQueueItemId(itemId), controlOptions(program)));
+      });
+  }
+  queue
+    .command('clear')
+    .description('remove done and dismissed queue items now; open items stay')
+    .action(async () => {
+      ran = true;
+      print(await queueClear(controlOptions(program)));
+    });
+
   program
     .command('approve <approval-id>')
     .description('approve a standing disclosure by typing its challenge at this terminal, after optional target tests')
@@ -710,6 +805,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .description('serve the MCP interface over standard input and output')
     .action(async () => {
       ran = true;
+      // Every program this server starts inherits the mark, so none of them can read the queue's content (Q1).
+      markMcpServerProcess(env, 'events');
       if (deps.startMcp) await deps.startMcp();
       else await (await createEventsMcpServer(controlOptions(program))).connectStdio();
     });
@@ -757,6 +854,12 @@ function controlOptions(program: Command): { stateDir?: string } {
 
 /** The environment each program was made with, read by `controlOptions` outside `run`'s closure. */
 const runEnvironment = new WeakMap<Command, NodeJS.ProcessEnv>();
+
+function parseLimit(value: string): number {
+  const limit = Number(value);
+  if (!/^\d+$/u.test(value) || !Number.isSafeInteger(limit)) throw new CommsError('USAGE', '--limit is a whole number');
+  return limit;
+}
 
 function parseVersion(value: string): number {
   const version = Number(value);

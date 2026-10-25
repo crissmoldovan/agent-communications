@@ -1,10 +1,16 @@
 import type { AnyEventDefinition, JsonValue, MappedClassification } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument, TargetDocument } from '../domain/activation-documents.ts';
+import { type QueueItemContent, queueItemContent } from '../domain/queue-target.ts';
 import { sseDeliveryTarget } from '../domain/sse-subscriber.ts';
 import { webhookDeliveryTarget } from '../domain/webhook-target.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import type { ProjectionCipher } from './projections.ts';
-import { constructTargetDelivery, type DeliveryRepresentation, type DeliveryTarget } from './target-delivery.ts';
+import {
+  constructTargetDelivery,
+  type DeliveryRepresentation,
+  type DeliveryTarget,
+  targetDeliveryKey,
+} from './target-delivery.ts';
 
 export interface PreparedDelivery {
   readonly id: string;
@@ -23,6 +29,16 @@ export interface DeliveryRecord {
   readonly representation: DeliveryRepresentation;
 }
 
+/**
+ * A queue delivery's payload: the item content the rule's mapping allows (action queue design Q4), and whether a person
+ * let a held decision through (Q3), which the item shows instead of a judge's answer. It never holds CloudEvent bytes.
+ */
+export interface QueueDeliveryRecord {
+  readonly kind: 'queue-item';
+  readonly item: QueueItemContent;
+  readonly released: boolean;
+}
+
 export async function prepareDeliveries(input: {
   readonly cipher: ProjectionCipher;
   readonly definition: AnyEventDefinition;
@@ -35,11 +51,17 @@ export async function prepareDeliveries(input: {
   readonly data: JsonValue;
   /** B2's private document seam; B1 derives its frozen dry-run targets when this is absent. */
   readonly targets?: readonly DeliveryTarget[] | undefined;
+  /** A held decision a person let through: its queue item says so instead of showing a judge's answer (Q3). */
+  readonly released?: boolean | undefined;
 }): Promise<readonly PreparedDelivery[]> {
   const deliveries: PreparedDelivery[] = [];
   const targets = input.targets ?? input.rule.targets.map((target) => documentDeliveryTarget(input.rule, target));
   for (const target of targets) {
     const id = input.newId();
+    if (target.kind === 'queue') {
+      deliveries.push(await prepareQueueDelivery(input, target, id));
+      continue;
+    }
     const constructed = constructTargetDelivery({
       target,
       definition: input.definition,
@@ -75,6 +97,38 @@ export async function prepareDeliveries(input: {
   return deliveries;
 }
 
+/** A queue delivery carries its item content, encrypted for the delivery row; nothing is mapped or fetched again. */
+async function prepareQueueDelivery(
+  input: Parameters<typeof prepareDeliveries>[0],
+  target: Extract<DeliveryTarget, { readonly kind: 'queue' }>,
+  id: string,
+): Promise<PreparedDelivery> {
+  const record: QueueDeliveryRecord = {
+    kind: 'queue-item',
+    item: queueItemContent({
+      eventType: input.rule.event.type,
+      mapping: input.rule.mapping,
+      event: input.event as JsonValue,
+      show: target.show,
+    }),
+    released: input.released === true,
+  };
+  const encryptedRecord = await input.cipher.encrypt(
+    { table: 'deliveries', column: 'encryptedRecord', key: [{ type: 'text', value: id }] },
+    Buffer.from(JSON.stringify(record)),
+  );
+  return {
+    id,
+    targetKey: targetDeliveryKey(target),
+    target,
+    representation: target.representation,
+    // A queue item is not a CloudEvent; there are no bytes to select later.
+    cloudEventBytes: '',
+    encryptedRecord,
+    expiresAt: fixedDeadline(input.createdAt, input.rule.retention.deliveryMs),
+  };
+}
+
 function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetDocument): DeliveryTarget {
   switch (target.kind) {
     case 'dry-run':
@@ -98,5 +152,14 @@ function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetD
         representation: target.representation,
       });
     }
+    case 'queue':
+      return {
+        kind: 'queue',
+        targetId: target.targetId,
+        targetVersion: target.version,
+        representation: 'plain',
+        show: target.show,
+        retentionMs: target.retentionMs,
+      };
   }
 }

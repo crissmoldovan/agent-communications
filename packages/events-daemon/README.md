@@ -4,6 +4,7 @@
 agent-communications. When an event matches a rule you approved, it delivers that event to the rule's targets:
 - a signed HTTPS webhook;
 - a local live stream (server-sent events) for your own tools;
+- a queue you work through in the desktop app or at your terminal;
 - a dry-run log you read at your terminal.
 
 Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal.
@@ -99,6 +100,37 @@ that lapsed this way no longer blocks the rule's next version.
 Rules, targets and subscribers are immutable versions. To change one, create its next version and enable it. The
 approval preview then shows exactly what changes.
 
+## A queue
+
+From 0.30.0 a rule can put each match in a list you work through: a `queue` target. Each item says what arrived (the
+channel, the account, from whom, the subject or first words, when), which rule matched and, when the rule asked a
+judge, what it answered. You mark it **done** or **dismiss** it, and open the message in Gmail or Slack when the item
+has a link. The desktop app shows the queue in its own screen; at a terminal:
+
+```bash
+agent-events target add '{"targetId":"inbox-queue","version":1,"kind":"queue","retentionMs":604800000,"show":"summary"}'
+agent-events queue list              # open items, newest first, with what they say: add --json for the app's shape
+agent-events queue show <item-id>
+agent-events queue done <item-id>    # or: dismiss, reopen
+agent-events queue clear             # remove done and dismissed items now
+```
+
+- **What a rule needs:** a queue target, `retention.queueMs` (1 to 30 days; a queue target's own retention is 1 to 30
+  days, 7 by default, and the lesser of the two applies), and a mapping that includes what an item shows. For Gmail,
+  that is the sender and the subject; for Slack, the poster's name and the text; for Resend, the sender and the
+  subject or body; for WhatsApp, the sender and the text. A rule without them is refused, and the refusal names
+  what is missing. Nothing is fetched to fill an item: its first words come only from a field the rule maps, and its
+  link only from ids the rule maps.
+- **How long it keeps:** an item's content goes at its retention, whatever you did with it; its content-free row
+  (rule, state, times) stays one retention more, for the counts. Every revocation that removes a rule's dry-run
+  records removes its queue items too: disabling or tightening the rule, removing its target or judge, turning its
+  judge's kind off, `disable-all`, removing the account, or a WhatsApp chat your lists now hide. A tighter version's
+  `rule update` result says how many open items enabling it will remove.
+- **Who can read it:** you. `queue list` and `queue show` refuse inside an MCP server's process. Over MCP an agent gets
+  `events_queue_items` and `events_queue_counts`, which never carry a sender, subject, text or link, and can mark an
+  item done, dismissed or reopened, or clear the done ones, without reading it. A queue target makes no network
+  connection.
+
 ## What you can do with it
 
 - **Sources:**
@@ -116,6 +148,7 @@ approval preview then shows exactly what changes.
     is signed (Standard Webhooks). Each delivery can be retried or dropped (`delivery retry`, `delivery drop`).
   - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
     token, and its origin is checked.
+  - **A queue** you work through ([A queue](#a-queue)).
   - **The dry-run log.**
 - **Control:**
   - `pause` / `resume`;
@@ -143,7 +176,7 @@ channel servers applies, and the result tells you to restart the client. The
   and turn a judge kind off.
 - **An agent can never:**
   - approve anything;
-  - read what the dry-run log kept;
+  - read what the dry-run log kept, or what a queue item says;
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - resume a target;

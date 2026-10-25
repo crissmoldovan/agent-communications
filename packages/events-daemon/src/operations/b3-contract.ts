@@ -22,11 +22,30 @@ import {
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import type { CanonicalJudgeDocument } from '../domain/judges.ts';
 import {
+  isQueueItemId,
+  QUEUE_CHANNELS,
+  QUEUE_JUDGE_ANSWERS,
+  QUEUE_JUDGE_STATES,
+  QUEUE_LINK_KINDS,
+  QUEUE_STATES,
+  type QueueChannel,
+  type QueueStateFilter,
+} from '../domain/queue-target.ts';
+import {
   type B3ControlWireOperation,
   type DesktopControlWireOperation,
   isB3ControlWireOperation,
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
+import type {
+  QueueClearResultV1,
+  QueueCountsResultV1,
+  QueueItemsResultV1,
+  QueueItemV1,
+  QueueListResultV1,
+  QueueStateChangeResultV1,
+} from '../runtime/queue.ts';
+import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
@@ -420,6 +439,9 @@ type B3VersionResultV1<Kind extends 'rule' | 'target' | 'subscriber', Document> 
   digest: string;
   state: null;
 }>;
+/** A created rule version; one that narrows the active version carries its tightening's preview (action queue Q6). */
+type B3RuleVersionResultV1 = B3VersionResultV1<'rule', CanonicalFullRuleDocument> &
+  Readonly<{ tightening?: TighteningPreview }>;
 type B3RuleTestResultV1 = Readonly<{
   agentic: B3RuleTestAgenticResult;
   outcome: B3RuleTestOutcome;
@@ -484,8 +506,8 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'source-show': Readonly<{ source: string; accounts: readonly JsonValue[] }>;
   readonly 'rules-list': readonly JsonValue[];
   readonly 'rule-show': readonly JsonValue[];
-  readonly 'rule-create': B3VersionResultV1<'rule', CanonicalFullRuleDocument>;
-  readonly 'rule-update': B3VersionResultV1<'rule', CanonicalFullRuleDocument>;
+  readonly 'rule-create': B3RuleVersionResultV1;
+  readonly 'rule-update': B3RuleVersionResultV1;
   readonly 'rule-enable': B3PreparedActivationResultV1;
   readonly 'rule-disable': Readonly<{ ruleId: string; disabled: true }>;
   readonly 'rule-remove': Readonly<{ ruleId: string; disabled: true }>;
@@ -507,6 +529,14 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly dropDelivery: B3DeliveryDropResultV1;
   readonly 'dryrun-list': readonly JsonValue[];
   readonly 'dryrun-show': B3DryRunShowResultV1;
+  readonly 'queue-list': QueueListResultV1;
+  readonly 'queue-show': Readonly<{ item: QueueItemV1 }>;
+  readonly 'queue-items': QueueItemsResultV1;
+  readonly 'queue-counts': QueueCountsResultV1;
+  readonly 'queue-done': QueueStateChangeResultV1;
+  readonly 'queue-dismiss': QueueStateChangeResultV1;
+  readonly 'queue-reopen': QueueStateChangeResultV1;
+  readonly 'queue-clear': QueueClearResultV1;
 };
 
 /**
@@ -643,6 +673,24 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly approve: { readonly approvalId: string; readonly answer: string };
   readonly 'dryrun-list': Record<string, never>;
   readonly 'dryrun-show': { readonly deliveryId: string };
+  readonly 'queue-list': B3QueueListArgumentsV1;
+  readonly 'queue-show': { readonly itemId: string };
+  readonly 'queue-items': Omit<B3QueueListArgumentsV1, 'since'>;
+  readonly 'queue-counts': Record<string, never>;
+  readonly 'queue-done': { readonly itemId: string };
+  readonly 'queue-dismiss': { readonly itemId: string };
+  readonly 'queue-reopen': { readonly itemId: string };
+  readonly 'queue-clear': Record<string, never>;
+}
+
+/** `queue list`'s closed filter shape (action queue design §8); every field is optional. */
+export interface B3QueueListArgumentsV1 {
+  readonly state?: QueueStateFilter | undefined;
+  readonly rule?: string | undefined;
+  readonly channel?: QueueChannel | undefined;
+  /** An ISO time, or a span back from now such as `7d` or `12h`. */
+  readonly since?: string | undefined;
+  readonly limit?: number | undefined;
 }
 
 type AssertNever<Value extends never> = Value;
@@ -766,6 +814,84 @@ const B3_ORDINARY_RESULT_ARRAY_OPERATIONS = new Set<string>([
   'dryrun-list',
 ]);
 
+const QUEUE_SUMMARY_FIELDS = ['id', 'state', 'stateAt', 'arrivedAt', 'expiresAt', 'rule', 'channel', 'account'];
+
+function assertIsoTime(value: unknown, name: string): void {
+  if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value)
+    throw new TypeError(`${name} must be an ISO 8601 UTC time`);
+}
+
+function assertQueueItemSummary(value: unknown, name: string, extra: readonly string[] = []): void {
+  if (!isRecord(value)) throw new TypeError(`${name} must be a closed object`);
+  const optional = ['subject', 'text', 'link'].filter((key) => Object.hasOwn(value, key));
+  assertClosedRecord(value, [...QUEUE_SUMMARY_FIELDS, ...extra, ...optional], name);
+  if (!isQueueItemId(value.id)) throw new TypeError(`${name} has a malformed item id`);
+  if (!QUEUE_STATES.includes(value.state as never)) throw new TypeError(`${name} has an unknown state`);
+  for (const field of ['stateAt', 'arrivedAt', 'expiresAt']) assertIsoTime(value[field], `${name} ${field}`);
+  assertClosedRecord(value.rule, ['id', 'version', 'name'], `${name} rule`);
+  assertText(value.rule.id, `${name} rule id`);
+  assertPositiveInteger(value.rule.version, `${name} rule version`);
+  assertText(value.rule.name, `${name} rule name`);
+  if (!QUEUE_CHANNELS.includes(value.channel as never)) throw new TypeError(`${name} has an unknown channel`);
+  assertClosedRecord(value.account, ['id', 'alias'], `${name} account`);
+  assertText(value.account.id, `${name} account id`);
+  if (value.account.alias !== null) assertText(value.account.alias, `${name} account alias`);
+}
+
+/** A content item: its sender-written fields are envelope strings; its judge part is closed per state (Q3). */
+function assertQueueItem(value: unknown, name: string): void {
+  assertQueueItemSummary(value, name, ['from', 'judge']);
+  const item = value as Record<string, unknown>;
+  if (!isRecord(item.from) || Object.keys(item.from).some((key) => key !== 'name' && key !== 'address'))
+    throw new TypeError(`${name} from must be a closed object`);
+  for (const field of [item.from.name, item.from.address, item.subject, item.text])
+    if (field !== undefined && (typeof field !== 'string' || !field.startsWith('<untrusted-content ')))
+      throw new TypeError(`${name} sender-written fields must be enveloped`);
+  if (item.link !== undefined) {
+    assertClosedRecord(item.link, ['kind', 'url'], `${name} link`);
+    if (!QUEUE_LINK_KINDS.includes(item.link.kind as never)) throw new TypeError(`${name} has an unknown link kind`);
+    const host = item.link.kind === 'gmail' ? 'https://mail.google.com/' : 'https://app.slack.com/';
+    if (typeof item.link.url !== 'string' || !item.link.url.startsWith(host))
+      throw new TypeError(`${name} link leaves its provider's web host`);
+  }
+  if (!isRecord(item.judge) || !QUEUE_JUDGE_STATES.includes(item.judge.state as never))
+    throw new TypeError(`${name} has an unknown judge state`);
+  const judge = item.judge;
+  const keys =
+    judge.state === 'none'
+      ? ['state']
+      : judge.state === 'answered'
+        ? ['state', 'id', 'kind', 'model', 'question', 'answer', 'confidence', 'uncalibrated']
+        : ['state', 'id', 'kind', 'model', 'question'];
+  assertClosedRecord(judge, keys, `${name} judge`);
+  if (judge.state === 'answered') {
+    if (!QUEUE_JUDGE_ANSWERS.includes(judge.answer as never)) throw new TypeError(`${name} has an unknown answer`);
+    if (typeof judge.confidence !== 'number' || !Number.isFinite(judge.confidence))
+      throw new TypeError(`${name} judge confidence must be a finite number`);
+    if (typeof judge.uncalibrated !== 'boolean') throw new TypeError(`${name} judge uncalibrated must be a boolean`);
+  }
+}
+
+function assertQueueStateChange(value: Readonly<Record<string, unknown>>, name: string): void {
+  assertClosedRecord(value.item, ['id', 'state', 'stateAt'], `${name} item`);
+  if (!isQueueItemId(value.item.id)) throw new TypeError(`${name} has a malformed item id`);
+  if (!QUEUE_STATES.includes(value.item.state as never)) throw new TypeError(`${name} has an unknown state`);
+  assertIsoTime(value.item.stateAt, `${name} stateAt`);
+}
+
+function assertTighteningPreview(value: unknown): void {
+  if (!isRecord(value)) throw new TypeError('a tightening preview must be a closed object');
+  assertClosedRecord(
+    value,
+    ['editKind', 'appliesWhen', 'openQueueItemsRemoved', ...(Object.hasOwn(value, 'notice') ? ['notice'] : [])],
+    'a tightening preview',
+  );
+  assertText(value.editKind, 'a tightening edit kind');
+  if (value.appliesWhen !== 'rule enable') throw new TypeError('a tightening applies when its version is enabled');
+  assertNonNegativeInteger(value.openQueueItemsRemoved, 'a tightening open queue item count');
+  if (value.notice !== undefined) assertText(value.notice, 'a tightening notice');
+}
+
 const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
   status: ['owner', 'enabled', 'paused', 'switchGeneration', 'activationIntents'],
   stop: ['stopping'],
@@ -793,6 +919,14 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   removeSubscriber: ['subscriberId', 'removed'],
   retryDelivery: ['kind', 'deliveryId', 'nextAt'],
   dropDelivery: ['kind', 'deliveryId'],
+  'queue-list': ['items', 'more'],
+  'queue-show': ['item'],
+  'queue-items': ['items', 'more'],
+  'queue-counts': ['open', 'done', 'dismissed', 'byRule'],
+  'queue-done': ['item'],
+  'queue-dismiss': ['item'],
+  'queue-reopen': ['item'],
+  'queue-clear': ['cleared'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -907,6 +1041,12 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     assertB3PreparedActivation(value, operation);
     return;
   }
+  if ((operation === 'rule-create' || operation === 'rule-update') && isRecord(value) && 'tightening' in value) {
+    const { tightening, ...version } = value;
+    assertTighteningPreview(tightening);
+    assertB3OrdinaryControlResultV1(operation, version);
+    return;
+  }
   assertClosedRecord(value, fields, `a ${operation} result`);
   switch (operation) {
     case 'status': {
@@ -974,6 +1114,38 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'dropDelivery':
       if (value.kind !== 'delivery-dropped') throw new TypeError('a dropDelivery result has an unknown result kind');
       assertText(value.deliveryId, 'a dropped delivery id');
+      return;
+    case 'queue-list':
+    case 'queue-items': {
+      if (!Array.isArray(value.items) || typeof value.more !== 'boolean')
+        throw new TypeError(`a ${operation} result needs items and more`);
+      for (const item of value.items)
+        if (operation === 'queue-list') assertQueueItem(item, 'a queue list item');
+        else assertQueueItemSummary(item, 'a queue items entry');
+      return;
+    }
+    case 'queue-show':
+      assertQueueItem(value.item, 'a queue show item');
+      return;
+    case 'queue-counts': {
+      for (const field of ['open', 'done', 'dismissed'])
+        assertNonNegativeInteger(value[field], `a queue ${field} count`);
+      if (!Array.isArray(value.byRule)) throw new TypeError('a queue counts result needs its per-rule counts');
+      for (const entry of value.byRule) {
+        assertClosedRecord(entry, ['ruleId', 'name', 'open'], 'a per-rule queue count');
+        assertText(entry.ruleId, 'a per-rule queue count rule id');
+        assertText(entry.name, 'a per-rule queue count name');
+        assertNonNegativeInteger(entry.open, 'a per-rule open count');
+      }
+      return;
+    }
+    case 'queue-done':
+    case 'queue-dismiss':
+    case 'queue-reopen':
+      assertQueueStateChange(value, `a ${operation} result`);
+      return;
+    case 'queue-clear':
+      assertNonNegativeInteger(value.cleared, 'a queue clear count');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);

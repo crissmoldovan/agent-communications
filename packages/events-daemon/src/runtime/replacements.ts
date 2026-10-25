@@ -13,6 +13,7 @@ import {
   shortenB2DeadLetterDeadlines,
   shortenB2SseReplayDeadlines,
 } from './phase-d-b2-retention.ts';
+import { purgeQueueItemsForRuleVersions, shortenQueueItemDeadlines } from './queue-retention.ts';
 import type { DRetentionKind, DSourceRetentionTighteningDispatcher } from './retained-content-hooks.ts';
 import {
   addActiveRuleTargetReferences,
@@ -430,6 +431,8 @@ export function purgeRevokedRuleWork(
   const keepAuthority = options.keepAuthority === true;
   new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
+  // The action queue (Q6): a revoked version's items go with its dry-run rows, in this same transaction.
+  purgeQueueItemsForRuleVersions(database, { ruleId, ruleVersions: versions });
   for (const version of versions) {
     const versionId = ruleVersionId(ruleId, version);
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
@@ -528,10 +531,15 @@ function changedRetentions(
     ['dry-run', 'dryrunMs'],
     ['sse-replay', 'sseReplayMs'],
     ['decision-metadata', 'decisionMetadataMs'],
+    ['queue', 'queueMs'],
   ];
-  return fields.flatMap(([retention, field]) =>
-    child[field] < parent[field] ? [{ retention, durationMs: child[field] }] : [],
-  );
+  return fields.flatMap(([retention, field]) => {
+    const shortened = child[field];
+    const prior = parent[field];
+    return shortened !== undefined && prior !== undefined && shortened < prior
+      ? [{ retention, durationMs: shortened }]
+      : [];
+  });
 }
 
 /**
@@ -704,6 +712,8 @@ export function shortenRuleRetentionDeadlines(input: {
     durationMs: child.retention.sseReplayMs,
     at: now,
   });
+  if (child.retention.queueMs !== undefined)
+    shortenQueueItemDeadlines(database, { ruleId, queueMs: child.retention.queueMs, now });
 
   const dueWhatsapp = database
     .prepare(

@@ -8,6 +8,11 @@ export interface EventMigration {
   readonly version: number;
   readonly name: string;
   readonly statements: readonly string[];
+  /**
+   * SQLite's documented way to change a parent table's constraints: rebuild it with foreign keys off for the
+   * transaction, check every reference with `foreign_key_check` before the commit, then turn them back on.
+   */
+  readonly rebuildsParentTable?: true;
 }
 
 export interface MigrationHooks {
@@ -745,6 +750,99 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '23' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // The action queue (0.30.0): a delivery may target a local queue, and each match appends one encrypted item. The
+    // deliveries kind check is a closed set, so the table is rebuilt with its exact columns, in order, to admit it.
+    version: 24,
+    name: 'event-action-queue-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v24 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing'))
+      ) STRICT`,
+      `INSERT INTO deliveries_v24
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v24 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      // One item per queue delivery. Its content (`encrypted_record`) goes at `expires_at`, whatever its state; the
+      // content-free row (rule, state, times) stays one retention more, for the counts, then goes too (Q2, §4.3).
+      `CREATE TABLE queue_items (
+        id TEXT PRIMARY KEY CHECK (
+          length(id) = 29 AND substr(id, 1, 3) = 'qi_' AND substr(id, 4) NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*'
+        ),
+        delivery_id TEXT NOT NULL UNIQUE REFERENCES deliveries(id),
+        decision_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL CHECK (target_version > 0),
+        account_id TEXT NOT NULL,
+        channel TEXT NOT NULL CHECK (channel IN ('gmail', 'slack', 'resend', 'whatsapp')),
+        whatsapp_message_id TEXT,
+        state TEXT NOT NULL CHECK (state IN ('open', 'done', 'dismissed')),
+        state_at INTEGER NOT NULL,
+        arrived_at INTEGER NOT NULL,
+        appended_at INTEGER NOT NULL,
+        retention_ms INTEGER NOT NULL CHECK (retention_ms >= 86400000 AND retention_ms <= 2592000000),
+        expires_at INTEGER NOT NULL,
+        row_expires_at INTEGER NOT NULL,
+        released INTEGER NOT NULL DEFAULT 0 CHECK (released IN (0, 1)),
+        encrypted_record BLOB,
+        CHECK (expires_at > appended_at AND expires_at - appended_at <= retention_ms),
+        CHECK (row_expires_at >= expires_at AND row_expires_at - expires_at <= retention_ms),
+        CHECK ((channel = 'whatsapp') = (whatsapp_message_id IS NOT NULL))
+      ) STRICT`,
+      'CREATE INDEX queue_items_rule_version ON queue_items(rule_id, rule_version)',
+      'CREATE INDEX queue_items_state_arrived ON queue_items(state, arrived_at, id)',
+      'CREATE INDEX queue_items_account_whatsapp_message ON queue_items(account_id, whatsapp_message_id)',
+      'CREATE INDEX queue_items_expiry ON queue_items(expires_at) WHERE encrypted_record IS NOT NULL',
+      'CREATE INDEX queue_items_row_expiry ON queue_items(row_expires_at)',
+      "UPDATE meta SET value = '24' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
@@ -815,19 +913,30 @@ export function applyMigrations(
         throw new Error(`event migration ${migration.version} does not match its ledger name`);
       continue;
     }
-    database.exec('BEGIN IMMEDIATE');
+    // PRAGMA foreign_keys is a no-op inside a transaction, so a parent-table rebuild switches it before BEGIN.
+    const foreignKeys = migration.rebuildsParentTable
+      ? (database.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }).foreign_keys
+      : undefined;
+    if (foreignKeys !== undefined) database.exec('PRAGMA foreign_keys = OFF');
     try {
-      migration.statements.forEach((statement, statementIndex) => {
-        hooks.beforeStatement?.({ migration, statementIndex });
-        database.exec(statement);
-      });
-      database
-        .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
-        .run(migration.version, migration.name, Date.now());
-      database.exec('COMMIT');
-    } catch (error) {
-      database.exec('ROLLBACK');
-      throw error;
+      database.exec('BEGIN IMMEDIATE');
+      try {
+        migration.statements.forEach((statement, statementIndex) => {
+          hooks.beforeStatement?.({ migration, statementIndex });
+          database.exec(statement);
+        });
+        if (foreignKeys !== undefined && database.prepare('PRAGMA foreign_key_check').all().length > 0)
+          throw new Error(`event migration ${migration.version} would leave a foreign key without its row`);
+        database
+          .prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)')
+          .run(migration.version, migration.name, Date.now());
+        database.exec('COMMIT');
+      } catch (error) {
+        database.exec('ROLLBACK');
+        throw error;
+      }
+    } finally {
+      if (foreignKeys !== undefined) database.exec(`PRAGMA foreign_keys = ${foreignKeys === 1 ? 'ON' : 'OFF'}`);
     }
   }
 }

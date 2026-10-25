@@ -302,6 +302,26 @@ function removesTargets(parent: CanonicalFullRuleDocument, child: CanonicalFullR
 }
 
 /**
+ * Removing a rule's last queue target takes its queue retention with it: `retention.queueMs` exists exactly when the
+ * rule has a queue target (action queue design Q2), so that one field goes with the target and nothing else may.
+ */
+/** A retention both versions name (the key sets are compared first); an absent optional one never compares. */
+function retentionValue(rule: CanonicalFullRuleDocument, key: keyof CanonicalFullRuleDocument['retention']): number {
+  return rule.retention[key] ?? Number.NaN;
+}
+
+function withoutRetiredQueueRetention(
+  parent: CanonicalFullRuleDocument,
+  child: CanonicalFullRuleDocument,
+): CanonicalFullRuleDocument {
+  const parentQueued = parent.targets.some((target) => target.kind === 'queue');
+  const childQueued = child.targets.some((target) => target.kind === 'queue');
+  if (!parentQueued || childQueued || parent.retention.queueMs === undefined) return parent;
+  const { queueMs: _retired, ...retention } = parent.retention;
+  return { ...parent, retention };
+}
+
+/**
  * D2's whitelist of no-approval tightenings, checked mechanically: an edge of each kind changes exactly its own field,
  * strictly narrower, and leaves every other part of the rule byte-identical. Anything else needs a fresh approval.
  */
@@ -313,7 +333,10 @@ export function isWhitelistedTightening(
   if (parent.ruleId !== child.ruleId || child.version <= parent.version) return false;
   switch (editKind) {
     case 'remove-target':
-      return restOf(parent, 'targets') === restOf(child, 'targets') && removesTargets(parent, child);
+      return (
+        restOf(withoutRetiredQueueRetention(parent, child), 'targets') === restOf(child, 'targets') &&
+        removesTargets(parent, child)
+      );
     case 'remove-output-field': {
       const removed = removedOutputFields(parent.mapping, child.mapping);
       return restOf(parent, 'mapping') === restOf(child, 'mapping') && removed !== null && removed > 0;
@@ -328,8 +351,8 @@ export function isWhitelistedTightening(
       return (
         restOf(parent, 'retention') === restOf(child, 'retention') &&
         sameJson(Object.keys(child.retention).sort(), [...keys].sort()) &&
-        keys.every((key) => child.retention[key] <= parent.retention[key]) &&
-        keys.some((key) => child.retention[key] < parent.retention[key])
+        keys.every((key) => retentionValue(child, key) <= retentionValue(parent, key)) &&
+        keys.some((key) => retentionValue(child, key) < retentionValue(parent, key))
       );
     }
     case 'narrow-source-options':

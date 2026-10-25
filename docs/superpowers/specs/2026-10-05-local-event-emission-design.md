@@ -1225,6 +1225,32 @@ adds the network adapters. Broker and hosted-queue adapters require the separate
 future design in D15; this specification does not define their schemas, credentials, acceptance boundaries or
 delivery guarantees.
 
+**Note, 2026-10-25 (0.30.0; action queue design 2026-10-25, §4, §7 and §8).** A fourth adapter, **queue**, sits beside
+dry-run, webhook and SSE. It is local and secretless: no network I/O, no secret slot, and the same approval as any
+target (D2).
+- **The target version** binds `retentionMs` (1 to 30 days, default 7) and `show` (`summary` or `minimal`).
+  `targetKey` is `queue:<targetId>:<targetVersion>`.
+- **The rule** binds `retention.queueMs`, 1 to 30 days, exactly when it has a queue target. The canonical form omits
+  it otherwise, so no stored rule or digest changes. Shortening it is D2's whitelisted retention tightening. Removing
+  a rule's last queue target takes `queueMs` with it as the one `remove-target` edit.
+- **Its mapping must include what an item shows,** or creating or activating the rule is refused, naming the missing
+  fields: Gmail's sender and subject, Slack's poster and text, Resend's sender and subject or body, WhatsApp's sender
+  and text. An item reads only fields the mapping includes. Nothing is fetched to fill one, so D8's "keep only what
+  the rule uses" is unchanged.
+- **At the delivery boundary** it is dry-run's pattern exactly. The claim charges the cap and fences the work. One
+  transaction repeats every fence (switch generation, bound versions, object revocations, judge kind, live account,
+  reset barrier, and for WhatsApp the live-list check), charges the cap if the claim did not, appends one encrypted
+  `queue_items` row and marks the delivery `delivered`.
+- **The promise is "kept for the person to work through within the approved window".** It is never receipt or
+  action. An item's content is read only by a person, at a terminal or in the app, through the same fences as a
+  dry-run read. `queue list` and `queue show` refuse inside an MCP server's process. No MCP tool returns a sender,
+  subject, text or link.
+- **The judge's part is read from the item's decision while its metadata lives, never copied.** A held decision the
+  person let through shows that instead of an answer.
+- **Every rule, target or judge revocation that purges deliveries or `dryrun_log` rows** also purges the matching queue
+  items in the same transaction. So do judge-kind disable, `disable-all`, account removal and D9's WhatsApp list
+  changes. Done, dismissed and clear change only the person's own list.
+
 Every matched target creates one delivery, and the rule's rolling cap counts **deliveries**, not attempts or reads.
 For a webhook the first attempt transaction charges the slot once and records `capChargedAt`; every retry is another
 attempt of that same delivery and never consumes another slot. For dry-run and SSE, the append transaction charges
@@ -1810,6 +1836,22 @@ everything else is capped at the content's `stagedAt` plus the applicable ingest
 | SSE entry (`stream_log`) | the CloudEvent bytes | append | + SSE replay retention, at most seven days | SSE replay, separate, capped | purged |
 | Decision metadata | outcome, judge value and reason code; no sender content | decision | + decision-metadata retention | decision metadata, separate | cleared; uniqueness tombstone kept |
 | Installation-reset delivery | reset metadata only; no content | creation | + 24 hours, fixed (D7) | fixed by this design | `dead-lettered` or `retention-expired`; barrier degraded |
+
+**Note, 2026-10-25 (0.30.0; action queue design Q2 and §4.3).** The table gains one record, the queue item:
+
+| Record | Holds | Clock starts | Ends at | Approved retention | At the end |
+|---|---|---|---|---|---|
+| Queue item content (`queue_items.encrypted_record`) | what the item shows, from the mapped projection | append | `expiresAt` = append + min(rule `queueMs`, target `retentionMs`), at most 30 days | queue, separate, capped | content purged, whatever the item's state |
+| Queue item row (content-free) | rule, account, channel, state and times | the content's end | + the same retention | queue, separate | row deleted |
+
+- **`queue_items` is an encrypted table:** its `encryptedRecord` binds the AAD of its single primary-key component,
+  `id`. The item id is `qi_` and 26 Crockford base32 characters.
+- **Purges:** a revocation of the item's bound rule version deletes the item, content and row, as it deletes
+  `dryrun_log` rows, and `queue clear` deletes done and dismissed items at once.
+- **Tightening:** a `queueMs` tightening shortens, and never lengthens, every retained item of the rule's superseded
+  versions from its own append time. The revoked version's items go with it.
+- **Longest life:** with the defaults, a queue item's content can exist for the ingest retention, then the delivery
+  retention, then the queue retention: 7 + 7 + 7 days.
 
 Identity rows hold no event content and are outside the table: the ingest tombstone, resolution rows, cursors and
 continuation, and WhatsApp's snapshot keys and occurrence ledger, whose raw chat and sender identifiers stay for

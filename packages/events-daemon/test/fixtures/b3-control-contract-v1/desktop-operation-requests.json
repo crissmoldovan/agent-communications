@@ -107,5 +107,34 @@
     "request": { "operation": "approve", "args": { "approvalId": "approval-1", "answer": "challenge-1" } }
   },
   { "name": "dryrun-list-request", "request": { "operation": "dryrun-list", "args": {} } },
-  { "name": "dryrun-show-request", "request": { "operation": "dryrun-show", "args": { "deliveryId": "delivery-1" } } }
+  { "name": "dryrun-show-request", "request": { "operation": "dryrun-show", "args": { "deliveryId": "delivery-1" } } },
+  {
+    "name": "queue-list-request",
+    "request": {
+      "operation": "queue-list",
+      "args": { "state": "all", "rule": "rule-1", "channel": "gmail", "since": "7d", "limit": 20 }
+    }
+  },
+  {
+    "name": "queue-show-request",
+    "request": { "operation": "queue-show", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+  },
+  {
+    "name": "queue-items-request",
+    "request": { "operation": "queue-items", "args": { "state": "open", "channel": "slack", "limit": 50 } }
+  },
+  { "name": "queue-counts-request", "request": { "operation": "queue-counts", "args": {} } },
+  {
+    "name": "queue-done-request",
+    "request": { "operation": "queue-done", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+  },
+  {
+    "name": "queue-dismiss-request",
+    "request": { "operation": "queue-dismiss", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+  },
+  {
+    "name": "queue-reopen-request",
+    "request": { "operation": "queue-reopen", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+  },
+  { "name": "queue-clear-request", "request": { "operation": "queue-clear", "args": {} } }
 ]

@@ -687,6 +687,51 @@
     "result": []
   },
   {
+    "name": "queue-list-result",
+    "request": {
+      "operation": "queue-list",
+      "args": {}
+    },
+    "result": {
+      "items": [],
+      "more": false
+    }
+  },
+  {
+    "name": "queue-items-result",
+    "request": {
+      "operation": "queue-items",
+      "args": {}
+    },
+    "result": {
+      "items": [],
+      "more": false
+    }
+  },
+  {
+    "name": "queue-counts-result",
+    "request": {
+      "operation": "queue-counts",
+      "args": {}
+    },
+    "result": {
+      "open": 0,
+      "done": 0,
+      "dismissed": 0,
+      "byRule": []
+    }
+  },
+  {
+    "name": "queue-clear-result",
+    "request": {
+      "operation": "queue-clear",
+      "args": {}
+    },
+    "result": {
+      "cleared": 0
+    }
+  },
+  {
     "name": "stop-result",
     "request": {
       "operation": "stop",
