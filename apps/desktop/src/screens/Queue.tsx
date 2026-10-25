@@ -10,7 +10,7 @@ import {
   Spinner,
   Tabs,
 } from '@cueplusplus/ui';
-import { Check, ExternalLink, RefreshCw, RotateCcw, X } from 'lucide-react';
+import { Check, ExternalLink, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
@@ -24,7 +24,6 @@ import { type Call, type CliResult, errorMessage, type QueueChannel } from '../i
 import {
   FILTER_CHANNELS,
   filterRules,
-  JUDGE_WORDS,
   judgeWords,
   noQueueYet,
   openableLink,
@@ -68,8 +67,9 @@ export const QUEUE_COPY = {
   clearBody: 'They are removed from this Mac now, rather than when their retention ends. Open items stay.',
   clearAction: 'Clear',
   gone: 'This item is no longer in the queue.',
-  question: 'What the rule asked',
-  uncalibratedHint: "A local model server's score: not a probability, so it is not calibrated.",
+  aboutAnswer: 'About this answer',
+  asked: 'The rule asked:',
+  uncalibratedHint: "Uncalibrated: a local model server's score, not a probability.",
   keptUntil: 'Kept until',
   arrived: 'Arrived',
   markedDone: 'Done',
@@ -222,6 +222,7 @@ function QueueViews() {
   const [tab, setTab] = useState<QueueTab>('open');
   const [filters, setFilters] = useState<Filters>({ rule: null, channel: null });
   const [cleared, setCleared] = useState<string | null>(null);
+  const [clearProblem, setClearProblem] = useState<string | null>(null);
   const { read, reload } = useQueueList(listCall(tab, filters));
   const again = useCallback(async () => {
     await Promise.all([reload(), refresh('queue')]);
@@ -242,7 +243,11 @@ function QueueViews() {
       {typeof queueCounts !== 'string' && queueCounts.state === 'error' ? (
         <Problem message={queueCounts.message} />
       ) : null}
-      <Tabs.Root value={tab} onValueChange={(value) => setTab(value as QueueTab)}>
+      <Tabs.Root
+        value={tab}
+        onValueChange={(value) => setTab(value as QueueTab)}
+        className="flex flex-col gap-(--cue-space-4)"
+      >
         <div className="flex flex-wrap items-center gap-(--cue-space-3)">
           <Tabs.List aria-label={QUEUE_COPY.title} className="self-start">
             <Tabs.Tab value={'open' satisfies QueueTab}>
@@ -258,24 +263,31 @@ function QueueViews() {
             </Tabs.Tab>
           </Tabs.List>
           <InfoTip label="About the queue" text={QUEUE_COPY.about} />
-          <span className="ml-auto flex flex-wrap items-center gap-(--cue-space-2)">
-            <FilterBar counts={counts} filters={filters} onChange={setFilters} />
+          <span className="ml-auto flex items-center gap-(--cue-space-2)">
+            {/* Clear touches only the done and dismissed, so only their tabs offer it. */}
+            {tab === 'open' ? null : (
+              <ClearButton
+                counts={counts}
+                onCleared={(line) => {
+                  setCleared(line);
+                  void again();
+                }}
+                onFailed={setClearProblem}
+              />
+            )}
             <IconButton aria-label={QUEUE_COPY.refresh} icon={RefreshCw} size="sm" onClick={() => void again()} />
           </span>
         </div>
+        <FilterBar counts={counts} filters={filters} onChange={setFilters} />
+        {cleared === null ? null : (
+          <p role="status" className="text-(length:--cue-text-ui) text-fg-muted">
+            {cleared}
+          </p>
+        )}
+        {clearProblem === null ? null : <Problem message={clearProblem} />}
         {QUEUE_TAB_ORDER.map((each) => (
           <Tabs.Panel key={each} value={each}>
             <section aria-label={QUEUE_COPY.tabs[each]} className="flex flex-col gap-(--cue-space-3)">
-              {each === 'open' ? null : (
-                <ClearBar
-                  counts={counts}
-                  cleared={cleared}
-                  onCleared={(line) => {
-                    setCleared(line);
-                    void again();
-                  }}
-                />
-              )}
               <Items
                 tab={each}
                 read={read}
@@ -328,7 +340,7 @@ function FilterBar({
 }) {
   const rules = counts === null ? [] : filterRules(counts);
   return (
-    <section aria-label={QUEUE_COPY.filters} className="flex flex-wrap items-center gap-(--cue-space-2)">
+    <section aria-label={QUEUE_COPY.filters} className="grid grid-cols-2 gap-(--cue-space-2) md:grid-cols-4">
       <Select
         aria-label={QUEUE_COPY.rule}
         size="sm"
@@ -355,66 +367,55 @@ function FilterBar({
   );
 }
 
-/** Clear, which asks first: only its own Clear runs it, and Cancel, Escape or closing it runs nothing. */
-function ClearBar({
+/**
+ * Clear, which asks first: only its own Clear runs it, and Cancel, Escape or closing it runs nothing. Off when nothing
+ * is done or dismissed.
+ */
+function ClearButton({
   counts,
-  cleared,
   onCleared,
+  onFailed,
 }: {
   counts: QueueCounts | null;
-  cleared: string | null;
   onCleared: (line: string) => void;
+  onFailed: (problem: string | null) => void;
 }) {
   const bridge = useBridge();
-  const [problem, setProblem] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const nothing = counts !== null && counts.done + counts.dismissed === 0;
   const clear = async () => {
     setBusy(true);
-    setProblem(null);
+    onFailed(null);
     try {
       const result = await bridge.cli({ kind: 'queueClear' });
-      if (result.status === 'ok') {
-        onCleared(clearedLine(readCleared(result.data)));
-      } else {
-        setProblem(result.status === 'failed' ? result.message : QUEUE_COPY.unreadable);
-      }
+      if (result.status === 'ok') onCleared(clearedLine(readCleared(result.data)));
+      else onFailed(result.status === 'failed' ? result.message : QUEUE_COPY.unreadable);
     } catch (error) {
-      setProblem(errorMessage(error));
+      onFailed(errorMessage(error));
     } finally {
       setBusy(false);
     }
   };
   return (
-    <div className="flex flex-wrap items-center gap-(--cue-space-3)">
-      {cleared === null ? null : (
-        <p role="status" className="text-(length:--cue-text-ui) text-fg-muted">
-          {cleared}
-        </p>
-      )}
-      {problem === null ? null : <Problem message={problem} />}
-      <span className="ml-auto">
-        <AlertDialog.Root>
-          <AlertDialog.Trigger
-            render={
-              <Button size="sm" variant="ghost" disabled={busy || nothing} loading={busy}>
-                {QUEUE_COPY.clear}
-              </Button>
-            }
-          />
-          <AlertDialog.Content>
-            <AlertDialog.Title>{QUEUE_COPY.clearTitle}</AlertDialog.Title>
-            <AlertDialog.Description>{QUEUE_COPY.clearBody}</AlertDialog.Description>
-            <AlertDialog.Footer>
-              <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
-              <AlertDialog.Action tone="danger" onClick={() => void clear()}>
-                {QUEUE_COPY.clearAction}
-              </AlertDialog.Action>
-            </AlertDialog.Footer>
-          </AlertDialog.Content>
-        </AlertDialog.Root>
-      </span>
-    </div>
+    <AlertDialog.Root>
+      <AlertDialog.Trigger
+        render={
+          <Button size="sm" variant="ghost" icon={Trash2} disabled={busy || nothing} loading={busy}>
+            {QUEUE_COPY.clear}
+          </Button>
+        }
+      />
+      <AlertDialog.Content>
+        <AlertDialog.Title>{QUEUE_COPY.clearTitle}</AlertDialog.Title>
+        <AlertDialog.Description>{QUEUE_COPY.clearBody}</AlertDialog.Description>
+        <AlertDialog.Footer>
+          <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
+          <AlertDialog.Action tone="danger" onClick={() => void clear()}>
+            {QUEUE_COPY.clearAction}
+          </AlertDialog.Action>
+        </AlertDialog.Footer>
+      </AlertDialog.Content>
+    </AlertDialog.Root>
   );
 }
 
@@ -575,16 +576,17 @@ function ItemCard({
             {COPY.fromOutside}
           </Chip>
           <span className="ml-auto flex items-center gap-(--cue-space-2)">
+            {/* When it arrived, in the same place on every tab; when it was marked, after it. */}
+            <Short at={item.arrivedAt} {...(hover === '' ? {} : { title: hover })} />
             {item.state === 'open' || item.stateAt === null ? null : (
               <>
+                <span aria-hidden="true">·</span>
                 <span>
                   {item.state === 'done' ? QUEUE_COPY.markedDone : QUEUE_COPY.markedDismissed}{' '}
                   <Short at={item.stateAt} />
                 </span>
-                <span aria-hidden="true">·</span>
               </>
             )}
-            <Short at={item.arrivedAt} {...(hover === '' ? {} : { title: hover })} />
           </span>
         </div>
         <div className="flex min-w-0 flex-col gap-(--cue-space-1)">
@@ -596,8 +598,11 @@ function ItemCard({
           )}
         </div>
         <div className="flex flex-wrap items-center gap-x-(--cue-space-3) gap-y-(--cue-space-2)">
-          <span className="text-(length:--cue-text-ui) text-fg-muted" data-slot="queue-rule">
-            <UntrustedText text={item.rule.name ?? item.rule.id} />
+          <span className="text-(length:--cue-text-ui) text-fg-muted">
+            <span className="sr-only">{QUEUE_COPY.rule}: </span>
+            <span data-slot="queue-rule">
+              <UntrustedText text={item.rule.name ?? item.rule.id} />
+            </span>
           </span>
           <Judge item={item} />
           <span className="ml-auto flex flex-wrap items-center gap-(--cue-space-2)">
@@ -669,8 +674,9 @@ function From({ from }: { from: QueueItem['from'] }) {
 }
 
 /**
- * What the judge said, as a quiet chip (§4.5, Q3): "Jev: yes, 0.86", with what the rule asked in a hint beside it; that
- * its answer is no longer kept; that the person let it through; or nothing, when the rule asked no judge.
+ * What the judge said, as a quiet chip (§4.5, Q3): "Jev: yes, 0.86", with what the rule asked, and why a local model's
+ * score is uncalibrated, in one hint beside it; that its answer is no longer kept; that the person let it through; or
+ * nothing, when the rule asked no judge.
  */
 function Judge({ item }: { item: QueueItem }) {
   const words = judgeWords(item.judge);
@@ -688,9 +694,20 @@ function Judge({ item }: { item: QueueItem }) {
       <Chip variant="tag" data-slot="queue-judge" data-judge={judge.state}>
         {words}
       </Chip>
-      {judge.uncalibrated ? <InfoTip label={JUDGE_WORDS.uncalibrated} text={QUEUE_COPY.uncalibratedHint} /> : null}
-      {judge.question === null ? null : (
-        <InfoTip label={QUEUE_COPY.question} text={<UntrustedText text={judge.question} />} />
+      {judge.question === null && !judge.uncalibrated ? null : (
+        <InfoTip
+          label={QUEUE_COPY.aboutAnswer}
+          text={
+            <span className="flex flex-col gap-(--cue-space-1)">
+              {judge.question === null ? null : (
+                <span>
+                  {QUEUE_COPY.asked} <UntrustedText text={judge.question} />
+                </span>
+              )}
+              {judge.uncalibrated ? <span>{QUEUE_COPY.uncalibratedHint}</span> : null}
+            </span>
+          }
+        />
       )}
     </span>
   );

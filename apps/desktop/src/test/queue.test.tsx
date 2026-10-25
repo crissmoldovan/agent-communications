@@ -2,15 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { COPY } from '../copy.ts';
 import type { Call, CliResult } from '../ipc.ts';
-import {
-  JUDGE_WORDS,
-  judgeWords,
-  openableLink,
-  type QueueJudge,
-  queueLink,
-  readQueueCounts,
-  readQueueList,
-} from '../queue.ts';
+import { judgeWords, openableLink, type QueueJudge, queueLink, readQueueCounts, readQueueList } from '../queue.ts';
 import { QUEUE_COPY, QUEUE_LIMIT, QUEUE_POLL_MS } from '../screens/Queue.tsx';
 import {
   createFakeBridge,
@@ -272,16 +264,17 @@ describe('Queue', () => {
       expect(chip(OPEN[3] as string)).toBeNull();
       expect(chip(OPEN[4] as string)?.textContent).toBe('You let it through');
       expect(chip(OPEN[4] as string)?.dataset.judge).toBe('released');
-      // What the rule asked, and why a score is uncalibrated, are each a hint beside the chip.
-      expect(within(card(view, OPEN[0] as string)).getByRole('button', { name: QUEUE_COPY.question })).toBeTruthy();
-      expect(
-        within(card(view, OPEN[1] as string)).getByRole('button', { name: JUDGE_WORDS.uncalibrated }),
-      ).toBeTruthy();
-      const question = within(card(view, OPEN[0] as string)).getByRole('button', { name: QUEUE_COPY.question });
+      // What the rule asked, and why a score is uncalibrated, are one hint beside the chip; none without a judge.
+      const about = (id: string) => within(card(view, id)).queryAllByRole('button', { name: QUEUE_COPY.aboutAnswer });
+      expect(about(OPEN[0] as string)).toHaveLength(1);
+      expect(about(OPEN[1] as string)).toHaveLength(1);
+      for (const id of [OPEN[2], OPEN[3], OPEN[4]] as string[]) expect(about(id), id).toHaveLength(0);
       await act(async () => {
-        question.focus();
+        about(OPEN[1] as string)[0]?.focus();
       });
-      expect((await screen.findByRole('tooltip')).textContent).toContain('Does this message ask me to do something?');
+      const tip = (await screen.findByRole('tooltip')).textContent ?? '';
+      expect(tip).toContain(`${QUEUE_COPY.asked} Is David asking me for something?`);
+      expect(tip).toContain(QUEUE_COPY.uncalibratedHint);
     },
   );
 
@@ -346,14 +339,14 @@ describe('Queue', () => {
     await opened(bridge);
     // Not offered under Open, which it never touches.
     expect(within(main()).queryByRole('button', { name: QUEUE_COPY.clear })).toBeNull();
-    const done = await openTab('Done');
-    fireEvent.click(within(done).getByRole('button', { name: QUEUE_COPY.clear }));
+    await openTab('Done');
+    fireEvent.click(within(main()).getByRole('button', { name: QUEUE_COPY.clear }));
     const dialog = await screen.findByRole('alertdialog', { name: QUEUE_COPY.clearTitle });
     expect(within(dialog).getByText(QUEUE_COPY.clearBody)).toBeTruthy();
     fireEvent.click(within(dialog).getByRole('button', { name: COPY.cancel }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(queueCalls(bridge).filter((call) => call.kind === 'queueClear')).toEqual([]);
-    fireEvent.click(within(done).getByRole('button', { name: QUEUE_COPY.clear }));
+    fireEvent.click(within(main()).getByRole('button', { name: QUEUE_COPY.clear }));
     const again = await screen.findByRole('alertdialog', { name: QUEUE_COPY.clearTitle });
     fireEvent.click(within(again).getByRole('button', { name: QUEUE_COPY.clearAction }));
     expect(await within(main()).findByText('Cleared 3 items.')).toBeTruthy();

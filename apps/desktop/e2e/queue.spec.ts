@@ -166,18 +166,18 @@ test('Done, Dismiss, Reopen and Clear make exactly their calls, and links open t
   await expect
     .poll(async () => (await queueCalls(page)).filter((call) => call.kind === 'queueReopen'))
     .toEqual([{ kind: 'queueReopen', itemId: DONE[0] }]);
-  await done.getByRole('button', { name: 'Clear done and dismissed' }).click();
+  await page.getByRole('button', { name: 'Clear done and dismissed' }).click();
   const dialog = page.getByRole('alertdialog', { name: 'Clear done and dismissed items?' });
   await expect(dialog).toBeVisible();
   await dialog.getByRole('button', { name: 'Cancel' }).click();
   await expect(dialog).toHaveCount(0);
   expect((await queueCalls(page)).filter((call) => call.kind === 'queueClear')).toEqual([]);
-  await done.getByRole('button', { name: 'Clear done and dismissed' }).click();
+  await page.getByRole('button', { name: 'Clear done and dismissed' }).click();
   await page
     .getByRole('alertdialog', { name: 'Clear done and dismissed items?' })
     .getByRole('button', { name: 'Clear', exact: true })
     .click();
-  await expect(done.getByText('Cleared 3 items.')).toBeVisible();
+  await expect(page.getByRole('main').getByText('Cleared 3 items.')).toBeVisible();
   expect((await queueCalls(page)).filter((call) => call.kind === 'queueClear')).toEqual([{ kind: 'queueClear' }]);
   // Every change named the item by its id and nothing else; nothing approved, and no terminal opened.
   for (const call of await queueCalls(page)) {
