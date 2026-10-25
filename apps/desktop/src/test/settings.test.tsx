@@ -1,7 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { AppSettings, FolderOverrides, Folders, UpdaterState } from '../ipc.ts';
-import { LOGIN_ITEM_UNKNOWN } from '../screens/Settings.tsx';
+import { LOGIN_ITEM_UNKNOWN, SETTINGS_COPY } from '../screens/Settings.tsx';
 import { createFakeBridge, EXAMPLE_FOLDERS, EXAMPLE_INSTALLATION } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 
@@ -15,6 +15,25 @@ const ELSEWHERE: Folders = {
 };
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
+
+const CHANGE = 'Change folders…';
+
+/** Opens the folder fields, which wait behind "Change folders…" for the few who keep the folders elsewhere. */
+async function changeFolders(): Promise<HTMLElement> {
+  const folders = await screen.findByRole('region', { name: 'Folders' });
+  const toggle = await within(folders).findByRole('button', { name: CHANGE });
+  if (toggle.getAttribute('aria-expanded') !== 'true') fireEvent.click(toggle);
+  await within(folders).findByLabelText('Config folder');
+  return folders;
+}
+
+/** What a hint says, once its "i" has the keyboard's focus: a hint reachable without a pointer. */
+async function hint(trigger: HTMLElement): Promise<string> {
+  await act(async () => {
+    trigger.focus();
+  });
+  return (await screen.findByRole('tooltip')).textContent ?? '';
+}
 
 const settings = (folders: FolderOverrides, resolved: Folders, more: Partial<AppSettings> = {}): AppSettings => ({
   folders,
@@ -40,6 +59,7 @@ describe('Settings', () => {
     const installations = () => bridge.calls.filter((call) => call.command === 'installation').length;
     const before = installations();
 
+    await changeFolders();
     fireEvent.change(within(folders).getByLabelText('Config folder'), {
       target: { value: '/example/home/elsewhere/config' },
     });
@@ -70,8 +90,7 @@ describe('Settings', () => {
   it('a folder that is not a whole path is refused before anything is saved', async () => {
     const bridge = createFakeBridge();
     renderApp(bridge, { screen: 'settings' });
-    const folders = await screen.findByRole('region', { name: 'Folders' });
-    await within(folders).findByRole('region', { name: 'Folders in use' });
+    const folders = await changeFolders();
     fireEvent.change(within(folders).getByLabelText('State folder'), { target: { value: 'relative/state' } });
     fireEvent.click(within(folders).getByRole('button', { name: 'Save' }));
     expect(await within(folders).findByText(/Give the whole path/)).toBeTruthy();
@@ -90,8 +109,7 @@ describe('Settings', () => {
   it('a network share is never taken as a folder, in any of its forms', async () => {
     const bridge = createFakeBridge();
     renderApp(bridge, { screen: 'settings' });
-    const folders = await screen.findByRole('region', { name: 'Folders' });
-    await within(folders).findByRole('region', { name: 'Folders in use' });
+    const folders = await changeFolders();
     for (const share of [
       '\\\\server\\share\\data',
       '//server/share/data',
@@ -154,6 +172,10 @@ describe('Settings', () => {
     const login = screen.getByRole('switch', { name: 'Start at login' });
     expect(login.getAttribute('aria-checked')).toBe('false');
     expect(login.getAttribute('aria-disabled') === 'true' || login.hasAttribute('data-disabled')).toBe(true);
+    // Why, in its hint beside the line.
+    expect(await hint(screen.getByRole('button', { name: SETTINGS_COPY.loginItemUnknownLabel }))).toBe(
+      "macOS's login-items service is not responding, so whether Agent Comms starts at login can't be read or changed.",
+    );
     // The rest of Settings is there as usual.
     expect(region('Folders')).toBeTruthy();
   });
@@ -179,6 +201,65 @@ describe('Settings', () => {
     expect(await within(updater).findByText('Agent Comms 0.25.0 is available.')).toBeTruthy();
     fireEvent.click(within(updater).getByRole('button', { name: 'Install and restart' }));
     await waitFor(() => expect(bridge.calls.filter((call) => call.command === 'installUpdate')).toHaveLength(1));
+  });
+
+  it('This app comes first, with the updater then Start at login; the folders in use follow', async () => {
+    renderApp(createFakeBridge(), { screen: 'settings' });
+    const app = await screen.findByRole('region', { name: 'This app' });
+    const updater = within(app).getByRole('region', { name: 'Updates for this app' });
+    const login = await within(app).findByRole('switch', { name: 'Start at login' });
+    expect(within(updater).getByRole('button', { name: 'Check for Updates' })).toBeTruthy();
+    // In the page's order: the updater, Start at login, then the folders.
+    const folders = region('Folders');
+    expect(updater.compareDocumentPosition(login) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(app.compareDocumentPosition(folders) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // The appearance menu stays in the window's bar, not on the screen.
+    expect(screen.getByRole('button', { name: 'Appearance' })).toBeTruthy();
+    expect(within(screen.getByRole('main')).queryByRole('button', { name: 'Appearance' })).toBeNull();
+  });
+
+  it('Change folders… keeps the folder fields closed until asked, and opens on them when one is set', async () => {
+    const view = renderApp(createFakeBridge(), { screen: 'settings' });
+    const folders = await screen.findByRole('region', { name: 'Folders' });
+    const inUse = await within(folders).findByRole('region', { name: 'Folders in use' });
+    for (const folder of Object.values(EXAMPLE_FOLDERS)) expect(within(inUse).getByText(folder)).toBeTruthy();
+    // Each path is a literal value, set in mono.
+    expect(within(inUse).getByText(EXAMPLE_FOLDERS.configDir).closest('.font-mono')).not.toBeNull();
+    const toggle = within(folders).getByRole('button', { name: CHANGE });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(within(folders).queryByRole('textbox')).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(within(folders).getAllByRole('textbox')).toHaveLength(3);
+    for (const label of ['Config folder', 'State folder', 'Data folder']) {
+      expect(within(folders).getByLabelText(label)).toBeTruthy();
+    }
+    // Its two explanations are hints, each beside what it explains.
+    expect(await hint(within(folders).getByRole('button', { name: SETTINGS_COPY.elsewhereLabel }))).toBe(
+      'An app started from the Dock or the Start menu sees no shell variables, so it needs the same folders named here.',
+    );
+    fireEvent.click(toggle);
+    expect(within(folders).queryByRole('textbox')).toBeNull();
+    view.unmount();
+
+    // Someone who has named a folder sees it from the start.
+    const named = createFakeBridge({
+      getSettings: async () => settings({ stateDir: '/example/home/elsewhere/state' }, EXAMPLE_FOLDERS),
+    });
+    renderApp(named, { screen: 'settings' });
+    const shown = await screen.findByRole('region', { name: 'Folders' });
+    expect(within(shown).getByRole('button', { name: CHANGE }).getAttribute('aria-expanded')).toBe('true');
+    expect((within(shown).getByLabelText('State folder') as HTMLInputElement).value).toBe(
+      '/example/home/elsewhere/state',
+    );
+  });
+
+  it('what the folders in use are is a hint beside their heading', async () => {
+    renderApp(createFakeBridge(), { screen: 'settings' });
+    const inUse = await screen.findByRole('region', { name: 'Folders in use' });
+    expect(await hint(within(inUse).getByRole('button', { name: SETTINGS_COPY.inUseLabel }))).toBe(
+      'Every call pins these four folders, and starts the launcher in the data folder.',
+    );
   });
 
   it('settings that cannot be read say so, and Settings runs no CLI call when nothing is installed', async () => {
