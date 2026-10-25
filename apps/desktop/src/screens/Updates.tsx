@@ -1,10 +1,10 @@
-import { Button, Chip, DescriptionList, SegmentedControl } from '@cueplusplus/ui';
-import { useState } from 'react';
+import { Button, Chip, InfoTip, Panel, SectionHeader, SegmentedControl } from '@cueplusplus/ui';
+import { type ReactNode, useState } from 'react';
 import type { UpdateStatus } from '../cli-types.ts';
 import { ChangePreview } from '../components/ChangePreview.tsx';
+import { Fact, Facts } from '../components/Facts.tsx';
 import { Gated } from '../components/NeedsNewerCli.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
-import { SectionPanel } from '../components/SectionPanel.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { When } from '../components/When.tsx';
 import { useAppData } from '../data.tsx';
@@ -14,14 +14,17 @@ import { ScreenFrame } from './Screen.tsx';
 
 /** The three levels, in the order the control shows them, each with what it means (core `update-settings.ts`). */
 const LEVELS: readonly { value: UpdateLevel; label: string; means: string }[] = [
-  { value: 'auto', label: 'Auto', means: 'Checks daily, and installs in the background once that is set up.' },
+  { value: 'auto', label: 'Auto', means: 'Checks daily; installs in the background once that is set up.' },
   {
     value: 'every-14-days',
     label: 'Every 14 days',
-    means: 'Checks at most once every 14 days, and installs only with your yes.',
+    means: 'Checks every 14 days at most; installs only with your yes.',
   },
   { value: 'never', label: 'Never', means: 'Never checks: updates only by hand.' },
 ];
+
+/** What rolling back does: said on hover or focus beside its heading, since its button says the rest. */
+export const ROLLBACK_HINT = 'Puts back the release this machine ran before its last update.';
 
 const levelOf = (value: string) => LEVELS.find((level) => level.value === value);
 
@@ -136,29 +139,78 @@ function ChangeResult({
   );
 }
 
+/**
+ * One part of the screen (D3): a quiet heading over a soft panel, as a region its heading names. `hint` is the
+ * sentence that only explains it, on hover or focus beside the heading; `action` sits at the heading's far end.
+ */
+function Part({
+  title,
+  hint,
+  action,
+  children,
+}: {
+  title: string;
+  hint?: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section aria-label={title}>
+      <SectionHeader
+        label={
+          hint === undefined ? (
+            title
+          ) : (
+            <span className="flex items-center gap-(--cue-space-2)">
+              {title}
+              <InfoTip label={`About ${title.toLowerCase()}`} text={hint} />
+            </span>
+          )
+        }
+        action={action}
+      >
+        <Panel className="flex flex-col gap-(--cue-space-4) p-(--cue-space-5)">{children}</Panel>
+      </SectionHeader>
+    </section>
+  );
+}
+
+/** A version, a literal value: in the mono face. */
+function Version({ children }: { children: string }) {
+  return <span className="font-mono">{children}</span>;
+}
+
 /** What this machine runs, and what the last check found. */
 function Versions({ status }: { status: UpdateStatus }) {
   return (
-    <SectionPanel title="Versions">
-      <DescriptionList.Root>
-        <DescriptionList.Term>Running</DescriptionList.Term>
-        <DescriptionList.Detail>{status.running}</DescriptionList.Detail>
-        <DescriptionList.Term>Latest</DescriptionList.Term>
-        <DescriptionList.Detail>{status.latest ?? 'not known yet'}</DescriptionList.Detail>
-        <DescriptionList.Term>Last checked</DescriptionList.Term>
-        <DescriptionList.Detail>
-          {status.lastChecked === null ? 'never' : <When at={status.lastChecked} />}
-        </DescriptionList.Detail>
+    <Part title="Versions">
+      <Facts>
+        <Fact name="Running">
+          <Version>{status.running}</Version>
+        </Fact>
+        <Fact name="Latest">
+          {status.latest === null ? (
+            <span className="text-fg-muted">not known yet</span>
+          ) : (
+            <Version>{status.latest}</Version>
+          )}
+        </Fact>
+        <Fact name="Last checked">
+          {status.lastChecked === null ? (
+            <span className="text-fg-muted">never</span>
+          ) : (
+            <When at={status.lastChecked} />
+          )}
+        </Fact>
         {status.lastError === null ? null : (
-          <>
-            <DescriptionList.Term>Last check failed</DescriptionList.Term>
-            <DescriptionList.Detail>
+          <Fact name="Last check failed">
+            <span className="text-warn">
               <UntrustedText text={status.lastError} />
-            </DescriptionList.Detail>
-          </>
+            </span>
+          </Fact>
         )}
-      </DescriptionList.Root>
-    </SectionPanel>
+      </Facts>
+    </Part>
   );
 }
 
@@ -168,20 +220,23 @@ function Level({ status }: { status: UpdateStatus }) {
   const set = levelOf(status.set);
   const inForce = levelOf(status.level)?.label ?? status.level;
   return (
-    <SectionPanel title="Level">
-      <SegmentedControl
-        aria-label="Update level"
-        items={LEVELS.map(({ value, label }) => ({ value, label }))}
-        value={status.set}
-        disabled={change.busy}
-        onValueChange={(value) => {
-          const picked = levelOf(value);
-          if (picked !== undefined && picked.value !== status.set) {
-            void change.start({ kind: 'updateLevel', level: picked.value });
-          }
-        }}
-      />
-      {set === undefined ? null : <p className="text-fg-muted">{set.means}</p>}
+    <Part title="Level">
+      <div className="flex flex-col gap-(--cue-space-2)">
+        <SegmentedControl
+          aria-label="Update level"
+          className="self-start"
+          items={LEVELS.map(({ value, label }) => ({ value, label }))}
+          value={status.set}
+          disabled={change.busy}
+          onValueChange={(value) => {
+            const picked = levelOf(value);
+            if (picked !== undefined && picked.value !== status.set) {
+              void change.start({ kind: 'updateLevel', level: picked.value });
+            }
+          }}
+        />
+        {set === undefined ? null : <p className="text-(length:--cue-text-ui) text-fg-muted">{set.means}</p>}
+      </div>
       {status.by === 'setting' ? null : (
         <p className="text-fg">
           <UntrustedText text={`${status.by} decides the level here: ${inForce}.`} />
@@ -195,41 +250,60 @@ function Level({ status }: { status: UpdateStatus }) {
         </p>
       )}
       <ChangeResult outcome={change.outcome} onDone={change.done} />
-    </SectionPanel>
+    </Part>
   );
 }
 
-/** Update notices held for 1, 7 or 14 days, or let through again. Both apply at once: they ask nobody. */
+/**
+ * Update notices held for 1, 7 or 14 days, or let through again. Both apply at once: they ask nobody. Each pause says
+ * its length on its button, after the "Pause for" they share; its name says the whole of it.
+ */
 function Pause({ status }: { status: UpdateStatus }) {
   const change = usePartChange();
   return (
-    <SectionPanel title="Pause">
-      {status.pausedUntil === null ? (
-        <p className="text-fg">Update notices are on.</p>
-      ) : (
-        <p className="text-fg">
-          Update notices are paused until <When at={status.pausedUntil} />.
-        </p>
-      )}
+    <Part title="Pause">
+      <div className="flex flex-wrap items-center gap-x-(--cue-space-5) gap-y-(--cue-space-3)">
+        {status.pausedUntil === null ? (
+          <p className="text-fg">Update notices are on.</p>
+        ) : (
+          <p className="text-fg">
+            Update notices are paused until <When at={status.pausedUntil} />.
+          </p>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-(--cue-space-2)">
+          <span aria-hidden="true" className="text-(length:--cue-text-ui) text-fg-muted">
+            Pause for
+          </span>
+          {PAUSES.map(({ days, label }) => (
+            <Button
+              key={days}
+              size="sm"
+              aria-label={label}
+              disabled={change.busy}
+              onClick={() => void change.start({ kind: 'updatePause', days })}
+            >
+              {days === 1 ? '1 day' : `${days} days`}
+            </Button>
+          ))}
+          {status.pausedUntil === null ? null : (
+            <Button
+              size="sm"
+              variant="primary"
+              disabled={change.busy}
+              onClick={() => void change.start({ kind: 'updateResume' })}
+            >
+              Resume
+            </Button>
+          )}
+        </div>
+      </div>
       {status.security === null ? null : (
-        <p className="text-warn">
+        <p className="rounded-control bg-(--cue-warn-soft) px-(--cue-space-4) py-(--cue-space-3) text-warn">
           <UntrustedText text={`A security fix is waiting: ${status.security}. A pause never holds it.`} />
         </p>
       )}
-      <div className="flex flex-wrap gap-(--cue-space-2)">
-        {PAUSES.map(({ days, label }) => (
-          <Button key={days} disabled={change.busy} onClick={() => void change.start({ kind: 'updatePause', days })}>
-            {label}
-          </Button>
-        ))}
-        {status.pausedUntil === null ? null : (
-          <Button disabled={change.busy} onClick={() => void change.start({ kind: 'updateResume' })}>
-            Resume
-          </Button>
-        )}
-      </div>
       <ChangeResult outcome={change.outcome} onDone={change.done} />
-    </SectionPanel>
+    </Part>
   );
 }
 
@@ -241,9 +315,9 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
   const canSetUp = job.state === 'not-set-up' || job.state === 'missing' || job.state === 'stale';
   const canRemove = job.state === 'installed' || job.state === 'missing' || job.state === 'stale';
   return (
-    <SectionPanel
+    <Part
       title="Background updates"
-      actions={
+      action={
         <Chip tone={shown.tone} variant="tag">
           {shown.label}
         </Chip>
@@ -257,26 +331,28 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
         </p>
       ) : (
         <>
-          <DescriptionList.Root>
-            <DescriptionList.Term>Where</DescriptionList.Term>
-            <DescriptionList.Detail className="font-mono">
-              {job.where === null ? 'nowhere yet' : <UntrustedText text={job.where} />}
-            </DescriptionList.Detail>
-            <DescriptionList.Term>Set up</DescriptionList.Term>
-            <DescriptionList.Detail>
-              {job.installedAt === null ? 'not yet' : <When at={job.installedAt} />}
-            </DescriptionList.Detail>
-            <DescriptionList.Term>Last run</DescriptionList.Term>
-            <DescriptionList.Detail>
-              {job.lastRun === null ? 'not yet' : <When at={job.lastRun} />}
-            </DescriptionList.Detail>
-            {job.working === null ? null : (
-              <>
-                <DescriptionList.Term>Working</DescriptionList.Term>
-                <DescriptionList.Detail>{job.working ? 'yes' : 'no'}</DescriptionList.Detail>
-              </>
-            )}
-          </DescriptionList.Root>
+          <Facts>
+            <Fact name="Where">
+              {job.where === null ? (
+                <span className="text-fg-muted">nowhere yet</span>
+              ) : (
+                <span className="font-mono">
+                  <UntrustedText text={job.where} />
+                </span>
+              )}
+            </Fact>
+            <Fact name="Set up">
+              {job.installedAt === null ? (
+                <span className="text-fg-muted">not yet</span>
+              ) : (
+                <When at={job.installedAt} />
+              )}
+            </Fact>
+            <Fact name="Last run">
+              {job.lastRun === null ? <span className="text-fg-muted">not yet</span> : <When at={job.lastRun} />}
+            </Fact>
+            {job.working === null ? null : <Fact name="Working">{job.working ? 'yes' : 'no'}</Fact>}
+          </Facts>
           {job.state === 'foreign' ? (
             <p className="text-fg-muted">Something this installation did not write is in the job's place.</p>
           ) : null}
@@ -287,6 +363,8 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
             <div className="flex flex-wrap gap-(--cue-space-2)">
               {canSetUp ? (
                 <Button
+                  size="sm"
+                  variant="primary"
                   disabled={change.busy}
                   onClick={() => void change.start({ kind: 'updateBackgroundJob', on: true })}
                 >
@@ -295,6 +373,7 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
               ) : null}
               {canRemove ? (
                 <Button
+                  size="sm"
                   variant="danger-outline"
                   disabled={change.busy}
                   onClick={() => void change.start({ kind: 'updateBackgroundJob', on: false })}
@@ -307,7 +386,7 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
         </>
       )}
       <ChangeResult outcome={change.outcome} onDone={change.done} />
-    </SectionPanel>
+    </Part>
   );
 }
 
@@ -318,10 +397,9 @@ function BackgroundJob({ status }: { status: UpdateStatus }) {
 function Rollback() {
   const change = usePartChange(rollbackLine);
   return (
-    <SectionPanel title="Rollback">
-      <p className="text-fg-muted">Puts back the release this machine ran before its last update.</p>
+    <Part title="Rollback" hint={ROLLBACK_HINT}>
       <div>
-        <Button disabled={change.busy} onClick={() => void change.start({ kind: 'updateRollback' })}>
+        <Button size="sm" disabled={change.busy} onClick={() => void change.start({ kind: 'updateRollback' })}>
           Roll back to the release before
         </Button>
       </div>
@@ -331,7 +409,7 @@ function Rollback() {
         </p>
       )}
       <ChangeResult outcome={change.outcome} onDone={change.done} />
-    </SectionPanel>
+    </Part>
   );
 }
 
@@ -348,13 +426,13 @@ export function Updates() {
         {updateStatus === 'unsupported' ? null : (
           <ScreenState value={updateStatus}>
             {(status) => (
-              <>
+              <div className="flex flex-col gap-(--cue-space-6)">
                 <Versions status={status} />
                 <Level status={status} />
                 <Pause status={status} />
                 <BackgroundJob status={status} />
                 <Rollback />
-              </>
+              </div>
             )}
           </ScreenState>
         )}

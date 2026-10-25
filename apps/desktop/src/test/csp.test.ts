@@ -75,6 +75,19 @@ describe('the content policy', () => {
     expect(security.csp).not.toMatch(/https?:\/\/(?!ipc\.localhost)/);
   });
 
+  it('the hash pinned is the pre-paint script that opens on soft (0.28.0), not the one before it', () => {
+    const source = prepaintSource();
+    expect(source).toContain('var T=["soft","cue","terminal"]');
+    const hash = createHash('sha256').update(source, 'utf8').digest('base64');
+    const security = JSON.parse(read('src-tauri/tauri.conf.json')).app.security;
+    for (const policy of [security.csp, security.devCsp]) {
+      const pinned = [...String(policy).matchAll(/'sha256-([^']+)'/g)].map((match) => match[1]);
+      expect(pinned).toEqual([hash]);
+    }
+    // The script 0.27 pinned registered cue and terminal and opened on cue.
+    expect(hash).not.toBe('wLkmBKemGb0dgFM5hke0n98F0sY24defqs04ByLzfv8=');
+  });
+
   it('index.html carries no inline script of its own', () => {
     const html = read('index.html');
     const scripts = [...html.matchAll(/<script\b([^>]*)>([\s\S]*?)<\/script>/g)];

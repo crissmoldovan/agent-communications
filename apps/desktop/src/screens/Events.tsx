@@ -4,17 +4,21 @@ import {
   Chip,
   DescriptionList,
   EmptyState,
+  InfoTip,
   Row as Line,
   Link,
   Panel,
+  SectionHeader,
   Spinner,
+  StatusDot,
   Switch,
   Table,
+  TableScrollRegion,
+  Tabs,
 } from '@cueplusplus/ui';
-import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
+import { Fragment, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
-import { SectionPanel } from '../components/SectionPanel.tsx';
 import { TerminalResult } from '../components/TerminalResult.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { Ago, When } from '../components/When.tsx';
@@ -53,15 +57,29 @@ interface EventsStatus {
 
 type Row = Record<string, unknown>;
 
-/** A column of a list: its heading, and what a row shows under it. */
+/** A column of a list: its heading, what a row shows under it, and whether that is a literal value, set in mono. */
 interface Column {
   label: string;
   show: (row: Row) => ReactNode;
   numeric?: boolean;
+  literal?: boolean;
 }
 
 /** The most deliveries the table shows; the CLI and MCP list every one. */
 const DELIVERIES_SHOWN = 100;
+
+/** The padding of what a panel holds that is not one of its rows: a spinner, an error, a line, so it lines up with them. */
+const INSET = 'px-(--cue-pad-row-x) py-(--cue-space-3)';
+
+/** A read inside a panel: its spinner or its error inset, and its value as `children` lay it out. */
+function InPanel<T>({ value, children }: { value: Loadable<T>; children: (value: T) => ReactNode }) {
+  if (value.state === 'ready') return <>{children(value.value)}</>;
+  return (
+    <div className={INSET}>
+      <ScreenState value={value}>{() => null}</ScreenState>
+    </div>
+  );
+}
 
 const isRecord = (value: unknown): value is Row => typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -95,19 +113,19 @@ function digest(value: unknown): ReactNode {
 }
 
 const RULE_COLUMNS: readonly Column[] = [
-  { label: 'Rule', show: (row) => plain(row.rule_id) },
+  { label: 'Rule', show: (row) => plain(row.rule_id), literal: true },
   { label: 'Version', show: (row) => plain(row.version), numeric: true },
   { label: 'State', show: (row) => plain(row.state) },
-  { label: 'Approval', show: (row) => plain(row.approval_id) },
-  { label: 'Activation', show: (row) => plain(row.authorization_activation_id) },
-  { label: 'Digest', show: (row) => digest(row.digest) },
+  { label: 'Approval', show: (row) => plain(row.approval_id), literal: true },
+  { label: 'Activation', show: (row) => plain(row.authorization_activation_id), literal: true },
+  { label: 'Digest', show: (row) => digest(row.digest), literal: true },
 ];
 
 const DELIVERY_COLUMNS: readonly Column[] = [
-  { label: 'Delivery', show: (row) => plain(row.deliveryId) },
-  { label: 'Rule', show: (row) => versioned(row.ruleId, row.ruleVersion) },
-  { label: 'Target', show: (row) => versioned(row.targetId, row.targetVersion) },
-  { label: 'Account', show: (row) => plain(row.accountId) },
+  { label: 'Delivery', show: (row) => plain(row.deliveryId), literal: true },
+  { label: 'Rule', show: (row) => versioned(row.ruleId, row.ruleVersion), literal: true },
+  { label: 'Target', show: (row) => versioned(row.targetId, row.targetVersion), literal: true },
+  { label: 'Account', show: (row) => plain(row.accountId), literal: true },
   { label: 'State', show: (row) => plain(row.state) },
   { label: 'Attempts', show: (row) => plain(row.attempts), numeric: true },
   { label: 'Next try', show: (row) => moment(row.nextAt) },
@@ -141,7 +159,7 @@ function ListTable({
 }) {
   if (!Array.isArray(value)) {
     return (
-      <p role="alert" className="text-danger">
+      <p role="alert" className={`${INSET} text-danger`}>
         The list could not be read.
       </p>
     );
@@ -151,37 +169,64 @@ function ListTable({
   const shown = limit === undefined ? rows : rows.slice(0, limit);
   return (
     <>
-      <Table.Root>
-        <Table.Caption className="sr-only">{caption}</Table.Caption>
-        <Table.Header>
-          <Table.Row>
-            {columns.map((column) => (
-              <Table.Head key={column.label} numeric={column.numeric ?? false}>
-                {column.label}
-              </Table.Head>
-            ))}
-          </Table.Row>
-        </Table.Header>
-        <Table.Body>
-          {shown.map((row, index) => (
-            // Rows have no id of their own across both lists; their place in this read is what keys them.
-            // biome-ignore lint/suspicious/noArrayIndexKey: a read's rows are replaced whole, never reordered in place
-            <Table.Row key={index}>
+      {/* Wider than the panel with long ids and times: it scrolls sideways on its own, never the page. */}
+      <TableScrollRegion aria-label={`${caption} table`}>
+        {/* Each row stays on one line, the region scrolling, rather than a column of ids wrapping into a tall row. */}
+        <Table.Root className="min-w-max">
+          <Table.Caption className="sr-only">{caption}</Table.Caption>
+          <Table.Header>
+            <Table.Row>
               {columns.map((column) => (
-                <Table.Cell key={column.label} numeric={column.numeric ?? false}>
-                  {column.show(row)}
-                </Table.Cell>
+                <Table.Head key={column.label} numeric={column.numeric ?? false}>
+                  {column.label}
+                </Table.Head>
               ))}
             </Table.Row>
-          ))}
-        </Table.Body>
-      </Table.Root>
+          </Table.Header>
+          <Table.Body>
+            {shown.map((row, index) => (
+              // Rows have no id of their own across both lists; their place in this read is what keys them.
+              // biome-ignore lint/suspicious/noArrayIndexKey: a read's rows are replaced whole, never reordered in place
+              <Table.Row key={index}>
+                {columns.map((column) => (
+                  <Table.Cell key={column.label} numeric={column.numeric ?? false}>
+                    {column.literal === true ? <span className="font-mono">{column.show(row)}</span> : column.show(row)}
+                  </Table.Cell>
+                ))}
+              </Table.Row>
+            ))}
+          </Table.Body>
+        </Table.Root>
+      </TableScrollRegion>
       {shown.length < rows.length ? (
-        <p className="text-fg-muted">
-          The {shown.length} most recent of {rows.length}. The events CLI and MCP list every one.
+        <p className={`${INSET} flex items-center gap-(--cue-space-2) text-fg-muted`}>
+          <span>
+            The {shown.length} most recent of {rows.length}.
+          </span>
+          <InfoTip text={EVENTS_COPY.everyOne} label={EVENTS_COPY.everyOneLabel} />
         </p>
       ) : null}
     </>
+  );
+}
+
+/** The screen's own words beside the event service's and the judges' (below): its tabs, and the hints it moved. */
+export const EVENTS_COPY = {
+  tabs: { service: 'Service', judges: 'Judges', rules: 'Rules', deliveries: 'Deliveries' },
+  toLookAt: 'to look at',
+  failed: 'could not be read',
+  needsUpdate: 'needs an update',
+  everyOne: 'The events CLI and MCP list every one.',
+  everyOneLabel: 'Where every one is listed',
+} as const;
+
+/** A fact about the status: what it is, then what it says, at the far end, as Overview's rows say theirs. */
+function Fact({ name, children }: { name: string; children: ReactNode }) {
+  return (
+    <Line>
+      <span className="text-fg-muted">{name}</span>
+      <span className="ml-auto text-right text-fg">{children}</span>
+    </Line>
   );
 }
 
@@ -189,7 +234,7 @@ function ListTable({
 function StatusView({ value }: { value: unknown }) {
   if (!isRecord(value) || typeof value.owner !== 'string') {
     return (
-      <p role="alert" className="text-danger">
+      <p role="alert" className={`${INSET} text-danger`}>
         The status could not be read.
       </p>
     );
@@ -198,16 +243,10 @@ function StatusView({ value }: { value: unknown }) {
   const running = status.owner === 'running';
   const collecting = status.enabled === true ? (status.paused === true ? 'paused' : 'on') : 'off';
   return (
-    <DescriptionList.Root>
-      <DescriptionList.Term>Service</DescriptionList.Term>
-      <DescriptionList.Detail>{running ? 'running' : 'not running'}</DescriptionList.Detail>
-      {running ? (
-        <>
-          <DescriptionList.Term>Collecting</DescriptionList.Term>
-          <DescriptionList.Detail>{collecting}</DescriptionList.Detail>
-        </>
-      ) : null}
-    </DescriptionList.Root>
+    <>
+      <Fact name="Service">{running ? 'running' : 'not running'}</Fact>
+      {running ? <Fact name="Collecting">{collecting}</Fact> : null}
+    </>
   );
 }
 
@@ -231,33 +270,37 @@ function Status() {
   };
 
   return (
-    <SectionPanel
-      title="Status"
-      actions={
-        <div className="flex gap-(--cue-space-2)">
-          <Button size="sm" disabled={busy || !running || paused} onClick={() => void act({ kind: 'eventsPause' })}>
-            Pause
-          </Button>
-          <Button size="sm" disabled={busy || !running || !paused} onClick={() => void act({ kind: 'eventsResume' })}>
-            Resume
-          </Button>
-        </div>
-      }
-    >
-      {events === 'absent' ? null : <ScreenState value={events}>{(value) => <StatusView value={value} />}</ScreenState>}
-      {failure === null ? null : (
-        <div role="alert" className="flex flex-col gap-(--cue-space-1)">
-          <p className="text-danger">
-            <UntrustedText text={failure.message} />
-          </p>
-          {failure.hint === null ? null : (
-            <p className="text-fg-muted">
-              <UntrustedText text={failure.hint} />
-            </p>
+    <section aria-label="Status">
+      <SectionHeader
+        label="Status"
+        action={
+          <>
+            <Button size="sm" disabled={busy || !running || paused} onClick={() => void act({ kind: 'eventsPause' })}>
+              Pause
+            </Button>
+            <Button size="sm" disabled={busy || !running || !paused} onClick={() => void act({ kind: 'eventsResume' })}>
+              Resume
+            </Button>
+          </>
+        }
+      >
+        <Panel>
+          {events === 'absent' ? null : <InPanel value={events}>{(value) => <StatusView value={value} />}</InPanel>}
+          {failure === null ? null : (
+            <div role="alert" className={`${INSET} flex flex-col gap-(--cue-space-1)`}>
+              <p className="text-danger">
+                <UntrustedText text={failure.message} />
+              </p>
+              {failure.hint === null ? null : (
+                <p className="text-fg-muted">
+                  <UntrustedText text={failure.hint} />
+                </p>
+              )}
+            </div>
           )}
-        </div>
-      )}
-    </SectionPanel>
+        </Panel>
+      </SectionHeader>
+    </section>
   );
 }
 
@@ -305,12 +348,101 @@ const UNDER_WAY: ReadonlySet<EventServiceStatus> = new Set(['starting', 'stoppin
 /** Asks the supervisor something; what it answers with is the state shown next. */
 type Ask = (command: () => Promise<EventServiceState | null>) => Promise<void>;
 
-/** A line, and the one button that acts on it. */
+/** A dot in a well's tone, beside its line: the tint and the dot say the tone, the line stays in the page's ink. */
+function ToneDot({ tone }: { tone: 'warn' | 'danger' }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`size-(--cue-space-2) shrink-0 rounded-full ${tone === 'warn' ? 'bg-warn' : 'bg-danger'}`}
+    />
+  );
+}
+
+/** A line, and the one button that acts on it, on a well tinted by what the line is: news, or a caution. */
 function Offer({ line, tone, action }: { line: string; tone: 'fg' | 'warn'; action: ReactNode }) {
   return (
-    <div className="flex flex-wrap items-center gap-(--cue-space-3)">
-      <p className={tone === 'warn' ? 'text-warn' : 'text-fg'}>{line}</p>
+    <div
+      className={`flex flex-wrap items-center gap-(--cue-space-3) rounded-control px-(--cue-space-3) py-(--cue-space-2) ${tone === 'warn' ? 'bg-(color:--cue-warn-soft)' : 'bg-surface-2'}`}
+    >
+      {tone === 'warn' ? <ToneDot tone="warn" /> : null}
+      <p className="min-w-0 flex-1 text-fg">{line}</p>
       {action}
+    </div>
+  );
+}
+
+/**
+ * What the supervisor says of where the service stands, as one quiet line of facts beneath the switch: its state, since
+ * when, its version, who started it, its last restart and a stop from outside. Each is said only when it is true.
+ */
+function ServiceFacts({ state }: { state: EventServiceState }) {
+  const running = state.status === 'running';
+  const facts: { key: string; fact: ReactNode }[] = [
+    {
+      key: 'status',
+      fact: UNDER_WAY.has(state.status) ? (
+        <span className="flex items-center gap-(--cue-space-2)">
+          {/* The spinner says it to a screen reader; the words beside it are for the eye, so it is said once. */}
+          <Spinner size="sm" label={SERVICE_WORDS[state.status]} />
+          <span className="text-fg" aria-hidden="true">
+            {SERVICE_WORDS[state.status]}
+          </span>
+        </span>
+      ) : (
+        <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+      ),
+    },
+  ];
+  if (running && state.since !== null) {
+    facts.push({
+      key: 'since',
+      fact: (
+        <span>
+          since <When at={state.since} />
+        </span>
+      ),
+    });
+  }
+  if (running && state.version !== null) {
+    facts.push({
+      key: 'version',
+      fact: (
+        <span>
+          Version <span className="text-fg tabular-nums">{state.version}</span>
+        </span>
+      ),
+    });
+  }
+  if (running && state.startedBy === 'terminal')
+    facts.push({ key: 'terminal', fact: <span>Started from a terminal</span> });
+  if (state.lastRestartAt !== null) {
+    facts.push({
+      key: 'restarted',
+      fact: (
+        <span>
+          {SERVICE_COPY.restarted} <Ago at={state.lastRestartAt} />
+        </span>
+      ),
+    });
+  }
+  if (state.stoppedFromOutsideAt !== null) {
+    facts.push({
+      key: 'outside',
+      fact: (
+        <span>
+          {SERVICE_COPY.stoppedFromOutside} <When at={state.stoppedFromOutsideAt} />
+        </span>
+      ),
+    });
+  }
+  return (
+    <div className="flex flex-wrap items-center gap-x-(--cue-space-2) gap-y-(--cue-space-1) text-(length:--cue-text-ui) text-fg-muted">
+      {facts.map(({ key, fact }, index) => (
+        <Fragment key={key}>
+          {index === 0 ? null : <span aria-hidden="true">·</span>}
+          {fact}
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -318,66 +450,40 @@ function Offer({ line, tone, action }: { line: string; tone: 'fg' | 'warn'; acti
 /** The state, as its supervisor sent it: the switch, where it stands, and what it offers. */
 function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boolean; ask: Ask }) {
   const bridge = useBridge();
+  const labelId = useId();
   if (!state.available) return <p className="text-fg-muted">{SERVICE_COPY.windows}</p>;
   const running = state.status === 'running';
   return (
     <>
-      <Switch
-        label={SERVICE_COPY.switch}
-        checked={state.wanted}
-        disabled={busy}
-        onCheckedChange={(on) => void ask(() => bridge.setEventService(on))}
-      />
-      <div>
-        <Line>
-          {UNDER_WAY.has(state.status) ? (
-            <>
-              {/* The spinner says it to a screen reader; the words beside it are for the eye, so it is said once. */}
-              <Spinner size="sm" label={SERVICE_WORDS[state.status]} />
-              <span className="text-fg" aria-hidden="true">
-                {SERVICE_WORDS[state.status]}
-              </span>
-            </>
-          ) : (
-            <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
-          )}
-          {running && state.since !== null ? (
-            <span className="text-fg-muted">
-              since <When at={state.since} />
-            </span>
-          ) : null}
-        </Line>
-        {running && state.version !== null ? (
-          <Line>
-            <span className="text-fg-muted">Version</span>
-            <span className="text-fg">{state.version}</span>
-          </Line>
-        ) : null}
-        {running && state.startedBy === 'terminal' ? (
-          <Line>
-            <span className="text-fg-muted">Started from a terminal</span>
-          </Line>
-        ) : null}
-        {state.lastRestartAt === null ? null : (
-          <Line>
-            <span className="text-fg-muted">
-              {SERVICE_COPY.restarted} <Ago at={state.lastRestartAt} />
-            </span>
-          </Line>
-        )}
-        {state.stoppedFromOutsideAt === null ? null : (
-          <Line>
-            <span className="text-fg-muted">
-              {SERVICE_COPY.stoppedFromOutside} <When at={state.stoppedFromOutsideAt} />
-            </span>
-          </Line>
-        )}
+      <div className="flex items-center gap-(--cue-space-4)">
+        <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
+          <span id={labelId} className="font-medium text-fg">
+            {SERVICE_COPY.switch}
+          </span>
+          <ServiceFacts state={state} />
+        </div>
+        <Switch
+          aria-labelledby={labelId}
+          size="lg"
+          checked={state.wanted}
+          disabled={busy}
+          onCheckedChange={(on) => void ask(() => bridge.setEventService(on))}
+        />
       </div>
       {state.status === 'gaveUp' ? (
-        <div role="alert" className="flex flex-col gap-(--cue-space-2)">
-          <p className="text-danger">{SERVICE_COPY.gaveUp}</p>
+        <div
+          role="alert"
+          className="flex flex-col gap-(--cue-space-3) rounded-control bg-(color:--cue-danger-soft) px-(--cue-space-3) py-(--cue-space-3)"
+        >
+          <div className="flex flex-wrap items-center gap-(--cue-space-3)">
+            <ToneDot tone="danger" />
+            <p className="min-w-0 flex-1 text-fg">{SERVICE_COPY.gaveUp}</p>
+            <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.eventServiceRetry())}>
+              {SERVICE_COPY.tryAgain}
+            </Button>
+          </div>
           {state.logTail.length === 0 ? null : (
-            <div className="flex flex-col font-mono text-fg-muted">
+            <div className="flex flex-col rounded-control bg-sunken p-(--cue-space-3) font-mono text-(length:--cue-text-ui) text-fg-muted">
               {state.logTail.map((line, index) => (
                 // The lines come in the log's order and are replaced whole; their place is what tells two apart.
                 // biome-ignore lint/suspicious/noArrayIndexKey: a state's lines are never reordered in place
@@ -387,11 +493,6 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
               ))}
             </div>
           )}
-          <div>
-            <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.eventServiceRetry())}>
-              {SERVICE_COPY.tryAgain}
-            </Button>
-          </div>
         </div>
       ) : null}
       {running && state.newerVersion !== null ? (
@@ -464,53 +565,94 @@ function Service() {
   };
 
   if (eventService === 'absent') return null;
+  // Its region is named by the section, not a heading: the Service tab and the switch's own words already say what it is.
   return (
-    <SectionPanel title={SERVICE_TITLE}>
-      <ScreenState value={eventService}>{(state) => <ServiceView state={state} busy={busy} ask={ask} />}</ScreenState>
-      {problem === null ? null : (
-        <p role="alert" className="text-danger">
-          <UntrustedText text={problem} />
-        </p>
-      )}
-    </SectionPanel>
+    <section aria-label={SERVICE_TITLE}>
+      <Panel>
+        <div className="flex flex-col gap-(--cue-space-3) p-(--cue-space-4)">
+          <ScreenState value={eventService}>
+            {(state) => <ServiceView state={state} busy={busy} ask={ask} />}
+          </ScreenState>
+          {problem === null ? null : (
+            <p role="alert" className="text-danger">
+              <UntrustedText text={problem} />
+            </p>
+          )}
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+/**
+ * What the Service tab holds that waits on the person, so its badge says it while another tab is open: a service the
+ * app gave up restarting, a newer version to restart onto, Start for one that is wanted and stopped (D4), Full Disk
+ * Access to give, and what the last command or first-start answer came to when it failed. Each as the section shows it.
+ */
+function serviceAttention(eventService: Loadable<EventServiceState> | 'absent', problem: string | null): number {
+  const failed = problem === null ? 0 : 1;
+  if (eventService === 'absent' || eventService.state !== 'ready' || !eventService.value.available) return failed;
+  const state = eventService.value;
+  return (
+    failed +
+    [
+      state.status === 'gaveUp',
+      state.status === 'running' && state.newerVersion !== null,
+      state.wanted && state.status === 'stopped' && !state.firstStartQuestion,
+      state.fullDiskAccess === 'missing',
+    ].filter(Boolean).length
   );
 }
 
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };
 
-/** The rules, read when the screen opens, and again when the service starts or stops running: they come from it. */
-function Rules() {
-  const { result, reload } = useCall<unknown>(RULES);
-  useReloadOnServiceTurn(reload);
+/**
+ * How many rows a list's table has, as `ListTable` reads them: each entry that is a row, a rule's every version among
+ * them; for the deliveries, every one, and not only the most recent it shows. Nothing while it is unread or unreadable.
+ */
+function listCount(result: Loadable<unknown>): number | null {
+  if (result.state !== 'ready' || !Array.isArray(result.value)) return null;
+  return result.value.filter(isRecord).length;
+}
+
+/** Whether a list's read failed, or came back as something `ListTable` cannot read: its view then says so. */
+function listFailed(result: Loadable<unknown>): boolean {
+  return result.state === 'error' || (result.state === 'ready' && !Array.isArray(result.value));
+}
+
+/** The rules: read when the screen opens, and again when the service starts or stops running, since they come from it. */
+function Rules({ result }: { result: Loadable<unknown> }) {
   return (
-    <SectionPanel title="Rules">
-      <ScreenState value={result}>
-        {(value) => <ListTable caption="Rules" columns={RULE_COLUMNS} value={value} empty="No rules yet." />}
-      </ScreenState>
-    </SectionPanel>
+    <section aria-label="Rules">
+      <Panel>
+        <InPanel value={result}>
+          {(value) => <ListTable caption="Rules" columns={RULE_COLUMNS} value={value} empty="No rules yet." />}
+        </InPanel>
+      </Panel>
+    </section>
   );
 }
 
 /** The recent deliveries, read as the rules are. */
-function Deliveries() {
-  const { result, reload } = useCall<unknown>(DELIVERIES);
-  useReloadOnServiceTurn(reload);
+function Deliveries({ result }: { result: Loadable<unknown> }) {
   return (
-    <SectionPanel title="Recent deliveries">
-      <ScreenState value={result}>
-        {(value) => (
-          <ListTable
-            caption="Recent deliveries"
-            columns={DELIVERY_COLUMNS}
-            value={value}
-            empty="No deliveries yet."
-            arrange={recentFirst}
-            limit={DELIVERIES_SHOWN}
-          />
-        )}
-      </ScreenState>
-    </SectionPanel>
+    <section aria-label="Recent deliveries">
+      <Panel>
+        <InPanel value={result}>
+          {(value) => (
+            <ListTable
+              caption="Recent deliveries"
+              columns={DELIVERY_COLUMNS}
+              value={value}
+              empty="No deliveries yet."
+              arrange={recentFirst}
+              limit={DELIVERIES_SHOWN}
+            />
+          )}
+        </InPanel>
+      </Panel>
+    </section>
   );
 }
 
@@ -742,7 +884,9 @@ function LayaView({ read }: { read: LayaRead }) {
         <>
           <DescriptionList.Term>Model</DescriptionList.Term>
           <DescriptionList.Detail>
-            <UntrustedText text={status.manifestId} />
+            <span className="font-mono">
+              <UntrustedText text={status.manifestId} />
+            </span>
           </DescriptionList.Detail>
         </>
       )}
@@ -929,7 +1073,7 @@ function KindRow({
       <Line className="items-start">
         <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-2)">
           <div className="flex flex-col gap-(--cue-space-1)">
-            <span id={id} className="text-fg">
+            <span id={id} className="text-(length:--cue-text-body) font-medium text-fg">
               {name}
             </span>
             <span className="text-fg-muted">{where}</span>
@@ -999,11 +1143,15 @@ function KindJudges({ kind, on, judges }: { kind: KindName; on: boolean; judges:
             {live.map((judge) => (
               <Table.Row key={JSON.stringify([judge.judgeId, judge.version])}>
                 <Table.Cell>
-                  <UntrustedText text={judge.judgeId} />
+                  <span className="font-mono">
+                    <UntrustedText text={judge.judgeId} />
+                  </span>
                 </Table.Cell>
                 <Table.Cell numeric>{String(judge.version)}</Table.Cell>
                 <Table.Cell>
-                  <UntrustedText text={judge.model} />
+                  <span className="font-mono">
+                    <UntrustedText text={judge.model} />
+                  </span>
                 </Table.Cell>
               </Table.Row>
             ))}
@@ -1116,11 +1264,13 @@ function Laya({
   read: kindRead,
   judges,
   reloadKinds,
+  onFailed,
 }: {
   version: Loadable<string>;
   read: KindRead;
   judges: Judge[] | null;
   reloadKinds: () => Promise<void>;
+  onFailed: (failed: boolean) => void;
 }) {
   const bridge = useBridge();
   const { events } = useAppData();
@@ -1132,6 +1282,18 @@ function Laya({
   const read = supported && result.state === 'ready' ? readLaya(result.value) : null;
   const status = read?.kind === 'status' ? read.status : null;
   const action = status === null ? null : actionFor(status.state);
+
+  // A status that failed, or that cannot be read, marks the Judges tab: this row may be behind it.
+  const failed = supported && (result.state === 'error' || read?.kind === 'unreadable');
+  useEffect(() => {
+    onFailed(failed);
+  }, [failed, onFailed]);
+  useEffect(
+    () => () => {
+      onFailed(false);
+    },
+    [onFailed],
+  );
 
   // Each read of the events service the screen's poll makes is Laya's cue too, while a download is in progress.
   const inProgress = useRef(false);
@@ -1218,16 +1380,18 @@ function KindRows({
   judges,
   version,
   reloadKinds,
+  onLayaFailed,
 }: {
   value: unknown;
   judges: Loadable<unknown>;
   version: Loadable<string>;
   reloadKinds: () => Promise<void>;
+  onLayaFailed: (failed: boolean) => void;
 }) {
   const kinds = readKinds(value);
   if (kinds === null) {
     return (
-      <p role="alert" className="text-danger">
+      <p role="alert" className={`${INSET} text-danger`}>
         {JUDGES_COPY.unreadableKinds}
       </p>
     );
@@ -1237,16 +1401,16 @@ function KindRows({
     <>
       <div className="flex flex-col divide-y divide-border">
         <EndpointKind kind="typesafe" read={kinds.typesafe} judges={listed} reloadKinds={reloadKinds} />
-        <Laya version={version} read={kinds.laya} judges={listed} reloadKinds={reloadKinds} />
+        <Laya version={version} read={kinds.laya} judges={listed} reloadKinds={reloadKinds} onFailed={onLayaFailed} />
         <EndpointKind kind="local-endpoint" read={kinds['local-endpoint']} judges={listed} reloadKinds={reloadKinds} />
       </div>
       {judges.state === 'error' ? (
-        <p role="alert" className="text-danger">
+        <p role="alert" className={`${INSET} text-danger`}>
           <UntrustedText text={judges.message} />
         </p>
       ) : null}
       {judges.state === 'ready' && listed === null ? (
-        <p role="alert" className="text-danger">
+        <p role="alert" className={`${INSET} text-danger`}>
           {JUDGES_COPY.unreadableJudges}
         </p>
       ) : null}
@@ -1255,11 +1419,26 @@ function KindRows({
 }
 
 /**
- * The Judges section. Nothing is read until the events service's own `--version` says it has judges (DA12); then its
- * kinds and judges are read when the screen opens, and again when the window comes back, since the person may have
- * turned a kind on, or added a judge, at the terminal. Only the latest-started read of each is kept (`useCall`, DA16).
+ * What the Judges section reads: the events service's version, then, once it has judges, its kinds and its judges; and
+ * whether Laya's own status, which its row reads, failed or could not be read.
  */
-function Judges() {
+interface JudgeReads {
+  version: Loadable<string>;
+  hasJudges: boolean;
+  kinds: Loadable<unknown>;
+  judges: Loadable<unknown>;
+  reloadKinds: () => Promise<void>;
+  layaFailed: boolean;
+  onLayaFailed: (failed: boolean) => void;
+}
+
+/**
+ * The Judges section's reads. Nothing is read until the events service's own `--version` says it has judges (DA12);
+ * then its kinds and judges are read when the screen opens, and again when the window comes back, since the person may
+ * have turned a kind on, or added a judge, at the terminal. Only the latest-started read of each is kept (`useCall`,
+ * DA16). The screen holds them, so its Judges tab can say what waits there while another tab is open.
+ */
+function useJudgeReads(): JudgeReads {
   const { result: version } = useCall<string>(EVENTS_VERSION);
   const hasJudges = version.state === 'ready' && supports(version.value, 'judges');
   const { result: kinds, reload: reloadKinds } = useCall<unknown>(hasJudges ? JUDGE_KINDS : null);
@@ -1269,23 +1448,194 @@ function Judges() {
   }, [reloadKinds, reloadJudges]);
   useReloadOnReturn(reload);
   useReloadOnServiceTurn(reload);
+  const [layaFailed, onLayaFailed] = useState(false);
+  return { version, hasJudges, kinds, judges, reloadKinds, layaFailed, onLayaFailed };
+}
+
+/**
+ * How many kinds are on with no judge: each is a row that says what is next, exactly as `KindJudges` decides it. Nothing
+ * is counted while either list is unread or unreadable, since then the rows claim nothing either.
+ */
+function judgesWaiting({ hasJudges, kinds, judges }: JudgeReads): number {
+  if (!hasJudges || kinds.state !== 'ready' || judges.state !== 'ready') return 0;
+  const read = readKinds(kinds.value);
+  const listed = readJudges(judges.value);
+  if (read === null || listed === null) return 0;
+  return KIND_NAMES.filter(
+    (kind) => read[kind].state === 'on' && !listed.some((judge) => judge.kind === kind && judge.revokedAt === null),
+  ).length;
+}
+
+/**
+ * Whether anything the Judges section reads failed, or came back as something it cannot read: its version, its kinds
+ * (the list, or one kind's entry), its judges, or Laya's status. Each is then said, as an alert or a line, in the view.
+ */
+function judgesFailed({ version, hasJudges, kinds, judges, layaFailed }: JudgeReads): boolean {
+  if (version.state === 'error') return true;
+  if (!hasJudges) return false;
+  if (kinds.state === 'error' || judges.state === 'error' || layaFailed) return true;
+  if (kinds.state === 'ready') {
+    const read = readKinds(kinds.value);
+    if (read === null || KIND_NAMES.some((kind) => read[kind].state === 'unreadable')) return true;
+  }
+  return judges.state === 'ready' && readJudges(judges.value) === null;
+}
+
+/** Whether the events service is one from before judges: the section then asks for an update, and reads nothing. */
+function judgesNeedUpdate({ version, hasJudges }: JudgeReads): boolean {
+  return version.state === 'ready' && !hasJudges;
+}
+
+/** The Judges section: its three kinds, once the events service has judges, or what it needs first. */
+function Judges({ reads }: { reads: JudgeReads }) {
+  const { version, hasJudges, kinds, judges, reloadKinds, onLayaFailed } = reads;
   return (
-    <SectionPanel title={JUDGES_COPY.title}>
-      {hasJudges ? (
-        <ScreenState value={kinds}>
-          {(value) => <KindRows value={value} judges={judges} version={version} reloadKinds={reloadKinds} />}
-        </ScreenState>
-      ) : (
-        <ScreenState value={version}>
-          {(installed) => (
-            <div className="flex flex-col gap-(--cue-space-1)">
-              <p className="text-fg">{COPY.updateToUse}</p>
-              <p className="text-fg-muted">{needsLine(GATES.judges, installed)}</p>
-            </div>
-          )}
-        </ScreenState>
-      )}
-    </SectionPanel>
+    <section aria-label={JUDGES_COPY.title}>
+      <Panel>
+        {hasJudges ? (
+          <InPanel value={kinds}>
+            {(value) => (
+              <KindRows
+                value={value}
+                judges={judges}
+                version={version}
+                reloadKinds={reloadKinds}
+                onLayaFailed={onLayaFailed}
+              />
+            )}
+          </InPanel>
+        ) : (
+          <div className={INSET}>
+            <ScreenState value={version}>
+              {(installed) => (
+                <div className="flex flex-col gap-(--cue-space-1)">
+                  <p className="text-fg">{COPY.updateToUse}</p>
+                  <p className="text-fg-muted">{needsLine(GATES.judges, installed)}</p>
+                </div>
+              )}
+            </ScreenState>
+          </div>
+        )}
+      </Panel>
+    </section>
+  );
+}
+
+/** A tab's count of what waits in it for the person, as a caution chip; said in words to a screen reader. */
+function Attention({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <>
+      {' '}
+      <Chip tone="warn" data-slot="tab-attention">
+        {count}
+      </Chip>{' '}
+      <span className="sr-only">{EVENTS_COPY.toLookAt}</span>
+    </>
+  );
+}
+
+/**
+ * A tab's dot, for what its view says beyond a count: a read that failed or cannot be read, in danger; a view that needs
+ * a newer events service, in warn. Its words are for a screen reader; the view says the rest.
+ */
+function Mark({ tone, says }: { tone: 'danger' | 'warn'; says: string }) {
+  return (
+    <>
+      {' '}
+      <StatusDot tone={tone} label={says} data-slot="tab-mark" data-tone={tone} />
+    </>
+  );
+}
+
+/** A tab's count of what its list holds, quietly, beside its name. */
+function Count({ count }: { count: number | null }) {
+  if (count === null || count === 0) return null;
+  return (
+    <>
+      {' '}
+      <span className="text-fg-muted tabular-nums">{count}</span>
+    </>
+  );
+}
+
+type EventsTab = keyof typeof EVENTS_COPY.tabs;
+
+/**
+ * The screen's four views (desktop design D7): the event service and its status first, then the judges, the rules and
+ * the recent deliveries. Every view stays mounted while another is shown, so each is read when the screen opens, as it
+ * always was, and a tab's badge can say what waits in it: nothing is hidden behind a tab.
+ */
+function EventsTabs() {
+  const { eventService, eventServiceProblem } = useAppData();
+  const judgeReads = useJudgeReads();
+  const rules = useCall<unknown>(RULES);
+  useReloadOnServiceTurn(rules.reload);
+  const deliveries = useCall<unknown>(DELIVERIES);
+  useReloadOnServiceTurn(deliveries.reload);
+  const { tabs } = EVENTS_COPY;
+  const tab = (value: EventsTab, badge: ReactNode) => (
+    <Tabs.Tab value={value}>
+      {tabs[value]}
+      {badge}
+    </Tabs.Tab>
+  );
+  return (
+    <Tabs.Root defaultValue={'service' satisfies EventsTab}>
+      <Tabs.List aria-label="Events" className="self-start">
+        {tab(
+          'service',
+          <>
+            <Attention count={serviceAttention(eventService, eventServiceProblem)} />
+            {eventService !== 'absent' && eventService.state === 'error' ? (
+              <Mark tone="danger" says={EVENTS_COPY.failed} />
+            ) : null}
+          </>,
+        )}
+        {tab(
+          'judges',
+          <>
+            <Attention count={judgesWaiting(judgeReads)} />
+            {judgesFailed(judgeReads) ? (
+              <Mark tone="danger" says={EVENTS_COPY.failed} />
+            ) : judgesNeedUpdate(judgeReads) ? (
+              <Mark tone="warn" says={EVENTS_COPY.needsUpdate} />
+            ) : null}
+          </>,
+        )}
+        {tab(
+          'rules',
+          listFailed(rules.result) ? (
+            <Mark tone="danger" says={EVENTS_COPY.failed} />
+          ) : (
+            <Count count={listCount(rules.result)} />
+          ),
+        )}
+        {tab(
+          'deliveries',
+          listFailed(deliveries.result) ? (
+            <Mark tone="danger" says={EVENTS_COPY.failed} />
+          ) : (
+            <Count count={listCount(deliveries.result)} />
+          ),
+        )}
+      </Tabs.List>
+      <Tabs.Panel value={'service' satisfies EventsTab} keepMounted>
+        <div className="flex flex-col gap-(--cue-space-6)">
+          <Service />
+          <Status />
+        </div>
+      </Tabs.Panel>
+      <Tabs.Panel value={'judges' satisfies EventsTab} keepMounted>
+        <Judges reads={judgeReads} />
+      </Tabs.Panel>
+      <Tabs.Panel value={'rules' satisfies EventsTab} keepMounted>
+        <Rules result={rules.result} />
+      </Tabs.Panel>
+      <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
+        <Deliveries result={deliveries.result} />
+      </Tabs.Panel>
+    </Tabs.Root>
   );
 }
 
@@ -1300,13 +1650,7 @@ export function Events() {
   return (
     <ScreenFrame title="Events">
       {present ? (
-        <>
-          <Service />
-          <Status />
-          <Judges />
-          <Rules />
-          <Deliveries />
-        </>
+        <EventsTabs />
       ) : (
         <Panel>
           <EmptyState title="The events service isn't installed." />

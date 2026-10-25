@@ -6,6 +6,7 @@ import {
   FieldDescription,
   FieldError,
   FieldLabel,
+  InfoTip,
   Input,
   SectionHeader,
   Select,
@@ -17,6 +18,12 @@ import { type Call, formatActs } from '../ipc.ts';
 type Issue = { message: string };
 
 type BehaviourAllow = Extract<Call, { kind: 'behaviourAllow' }>;
+
+/** What a conversation may be: said on hover or focus beside its label, since the placeholder shows the forms. */
+export const CONVERSATION_HINT = 'A Slack channel or person id, or an address or @domain.';
+
+/** What the acts are: said on hover or focus beside their label. */
+export const ACTS_HINT = 'What an agent may start there.';
 
 const NONE: { account: Issue[]; conversation: Issue[]; acts: Issue[] } = { account: [], conversation: [], acts: [] };
 
@@ -75,7 +82,7 @@ export function RuleForm({
       aria-label="Add or change a rule"
       noValidate
       onSubmit={(event) => void submit(event)}
-      className="flex flex-col gap-(--cue-space-3) p-(--cue-space-4)"
+      className="flex flex-col gap-(--cue-space-4) p-(--cue-space-5)"
     >
       <SectionHeader label="Add or change a rule" />
       <div className="grid grid-cols-2 gap-(--cue-space-4)">
@@ -94,7 +101,10 @@ export function RuleForm({
           <FieldError issues={issues.account} />
         </Field>
         <Field name="conversation" invalid={issues.conversation.length > 0}>
-          <FieldLabel>Conversation</FieldLabel>
+          <span className="flex items-center gap-(--cue-space-2)">
+            <FieldLabel>Conversation</FieldLabel>
+            <InfoTip label="About the conversation" text={CONVERSATION_HINT} />
+          </span>
           <Input
             value={conversation}
             placeholder="C0123ABCD, someone@example.com or @example.com"
@@ -103,15 +113,15 @@ export function RuleForm({
               setIssues((current) => ({ ...current, conversation: [] }));
             }}
           />
-          <FieldDescription>
-            Optional: a Slack channel or person id, or an address or @domain. Left empty, the rule is for the whole
-            account.
-          </FieldDescription>
+          <FieldDescription>Optional. Leave it empty for the whole account.</FieldDescription>
           <FieldError issues={issues.conversation} />
         </Field>
       </div>
       <Field name="acts" invalid={issues.acts.length > 0}>
-        <FieldLabel>Acts</FieldLabel>
+        <span className="flex items-center gap-(--cue-space-2)">
+          <FieldLabel>Acts</FieldLabel>
+          <InfoTip label="About the acts" text={ACTS_HINT} />
+        </span>
         <CheckboxGroup
           aria-label="Acts"
           className="flex-row flex-wrap gap-x-(--cue-space-5)"
@@ -122,7 +132,7 @@ export function RuleForm({
             <Checkbox key={act} value={act} label={act} />
           ))}
         </CheckboxGroup>
-        <FieldDescription>What an agent may start there. Tick none to allow nothing.</FieldDescription>
+        <FieldDescription>Tick none to allow nothing.</FieldDescription>
         <FieldError issues={issues.acts} />
       </Field>
       <div>

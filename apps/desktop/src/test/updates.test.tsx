@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { UpdateStatus } from '../cli-types.ts';
 import { COPY } from '../copy.ts';
 import type { Call, CliResult } from '../ipc.ts';
+import { ROLLBACK_HINT } from '../screens/Updates.tsx';
 import { cliKinds, createFakeBridge, type FakeBridge, type Fixture, failed } from './fake-bridge.ts';
 import updateStatus from './fixtures/update-status.json';
 import { renderApp } from './render.tsx';
@@ -307,5 +308,49 @@ describe('Updates', () => {
     expect(await within(region('Pause')).findByText('the update record is locked')).toBeTruthy();
     expect(within(region('Pause')).getByText('Try again in a moment.')).toBeTruthy();
     expect(cliCalls(bridge)).toContainEqual({ kind: 'updatePause', days: 1 });
+  });
+});
+
+describe('Updates: the redesign (D3)', () => {
+  it('each pause shows its length after the "Pause for" they share, and its name says the whole of it', async () => {
+    renderApp(createFakeBridge(), { screen: 'updates' });
+    const pause = await screen.findByRole('region', { name: 'Pause' });
+    expect(within(pause).getByText('Pause for')).toBeTruthy();
+    expect(
+      within(pause)
+        .getAllByRole('button')
+        .map((button) => [button.getAttribute('aria-label'), button.textContent]),
+    ).toEqual([
+      ['Pause for 1 day', '1 day'],
+      ['Pause for 7 days', '7 days'],
+      ['Pause for 14 days', '14 days'],
+    ]);
+  });
+
+  it('the level set says what it means; versions and the job’s place are literal values, in mono', async () => {
+    renderApp(createFakeBridge(), { screen: 'updates' });
+    const level = await screen.findByRole('region', { name: 'Level' });
+    expect(within(level).getByText('Checks every 14 days at most; installs only with your yes.')).toBeTruthy();
+    const versions = region('Versions');
+    expect(within(versions).getByText('0.24.0').closest('.font-mono')).not.toBeNull();
+    expect(within(versions).getByText('0.24.1').closest('.font-mono')).not.toBeNull();
+    const job = region('Background updates');
+    expect(
+      within(job)
+        .getByText(STATUS.job.where ?? '')
+        .closest('.font-mono'),
+    ).not.toBeNull();
+  });
+
+  it('what rolling back does is a hover or focus away, beside its heading', async () => {
+    renderApp(createFakeBridge(), { screen: 'updates' });
+    const rollback = await screen.findByRole('region', { name: 'Rollback' });
+    expect(within(rollback).queryByText(ROLLBACK_HINT)).toBeNull();
+    const trigger = within(rollback).getByRole('button', { name: 'About rollback' });
+    fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(trigger);
+    fireEvent.mouseMove(trigger);
+    expect((await screen.findByRole('tooltip', {}, { timeout: 3000 })).textContent).toBe(ROLLBACK_HINT);
+    expect(ROLLBACK_HINT).toBe('Puts back the release this machine ran before its last update.');
   });
 });

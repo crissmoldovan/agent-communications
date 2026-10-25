@@ -114,3 +114,11 @@ test('rollback is sent to Terminal', async ({ page }) => {
   expect(kinds).not.toContain('approvalRevoke');
   expect(kinds.filter((kind) => kind === 'updateRollback')).toHaveLength(1);
 });
+
+test('what rolling back does shows on a pointer resting beside its heading', async ({ page }) => {
+  await openUpdates(page);
+  const rollback = page.getByRole('region', { name: 'Rollback' });
+  await expect(rollback.getByText('Puts back the release this machine ran before its last update.')).toHaveCount(0);
+  await rollback.getByRole('button', { name: 'About rollback' }).hover();
+  await expect(page.getByRole('tooltip')).toHaveText('Puts back the release this machine ran before its last update.');
+});

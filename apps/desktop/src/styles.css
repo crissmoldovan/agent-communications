@@ -2,6 +2,8 @@
 @import "@cueplusplus/ui/styles.css";
 @import "@cueplusplus/theme-cue/theme.css";
 @import "@cueplusplus/theme-terminal/theme.css";
+@import "./themes/soft/generated/theme.css";
+@import "./themes/soft/style.css";
 
 /*
  * macOS draws its traffic lights over the header (TitleBarStyle::Overlay with a hidden title): the header is at least
@@ -13,6 +15,41 @@
 
 .app-macos .app-titlebar-brand {
   padding-inline-start: 80px;
+}
+
+/*
+ * ── Interim: remove when cue-ui-77 ships ─────────────────────────────────────────────────────────────────────────────
+ * Two components the app draws set their text in a bare `font-mono` and read no face name, so a Look that sets labels
+ * in sans leaves them mono (cue-ui-77). Each is given the reader cue-ui-77 asks for, by its slot, falling back to the
+ * mono it draws today, so `cue` and `terminal` are unchanged: a sidebar item reads the nav face, and a description
+ * list's detail reads the data face. Its own `font-mono` is the class a screen would add, so a literal detail sets
+ * `font-mono` on what it holds instead, which stays right when cue-ui-77 ships.
+ */
+[data-slot="sidebar-item"] {
+  font-family: var(--cue-style-nav-face, var(--cue-font-mono));
+}
+
+[data-slot="description-list-detail"] {
+  font-family: var(--cue-style-data-face, var(--cue-font-mono));
+}
+
+/*
+ * ── Interim: remove when cue-ui-78 ships ─────────────────────────────────────────────────────────────────────────────
+ * `Panel`'s rim is a hairline no Look can take away (cue-ui-78), and the shell's bar, brand cell and sidebar draw the
+ * same hard-coded hairline (its notes). Under `soft` each is transparent, so grouping is the change of ground and the
+ * resting shade (`themes/soft/style.css`); the width stays, so `forced-colors` still draws an outline. A panel inside an
+ * item marked current keeps the colour the screen gives it: that mark is information. The panel header's rule is off
+ * through the existing `--cue-style-panel-rule`.
+ */
+[data-theme="soft"] [data-slot="panel"]:not([aria-current="true"] > *),
+[data-theme="soft"] [data-slot="app-shell-brand"],
+[data-theme="soft"] [data-slot="app-shell-sidebar"] {
+  border-color: transparent;
+}
+
+/* The bar's rule is taken away rather than cleared: a clear one shows the page's ground as a line under the brand. */
+[data-theme="soft"] [data-slot="app-shell-bar"] {
+  border-bottom-style: none;
 }
 
 /*

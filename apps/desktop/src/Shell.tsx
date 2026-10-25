@@ -19,6 +19,10 @@ const ICONS: Record<Screen, ComponentType> = {
 /**
  * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the seven
  * sections with Settings at its foot. On macOS the header leaves the traffic lights their room.
+ *
+ * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns
+ * under it, the brand over the sidebar's ground and the menu over the page's, and text the screens leave unsized is the
+ * rung's body size. Each is a token, so every theme paints it in its own colours.
  */
 export function Shell({
   screen,
@@ -37,16 +41,26 @@ export function Shell({
     </Sidebar.Item>
   );
   return (
-    <AppShell.Root className={mac ? 'app-macos' : undefined}>
+    <AppShell.Root className={mac ? 'app-macos text-(length:--cue-text-body)' : 'text-(length:--cue-text-body)'}>
       <AppShell.Bar
         platformDrag
-        className="app-titlebar"
-        brandClassName="app-titlebar-brand"
-        brand={<span className="text-fg">{COPY.appName}</span>}
+        className="app-titlebar bg-bg"
+        brandClassName="app-titlebar-brand bg-sunken"
+        brand={
+          <span className="flex min-w-0 items-center gap-(--cue-space-3)">
+            <span
+              aria-hidden="true"
+              className="flex size-chip shrink-0 items-center justify-center rounded-control bg-accent font-semibold text-(length:--cue-text-ui) text-accent-fg"
+            >
+              A
+            </span>
+            <span className="truncate font-semibold text-fg">{COPY.appName}</span>
+          </span>
+        }
         actions={<AppearanceMenu />}
       />
       <AppShell.Body>
-        <AppShell.Sidebar aria-label="Sections" drawerTitle="Sections" collapsible={false}>
+        <AppShell.Sidebar aria-label="Sections" drawerTitle="Sections" collapsible={false} className="bg-sunken">
           <Sidebar.Section>{SECTIONS.map(({ screen: target, label }) => item(target, label))}</Sidebar.Section>
           <Sidebar.Section className="mt-auto">{item(SETTINGS.screen, SETTINGS.label)}</Sidebar.Section>
         </AppShell.Sidebar>

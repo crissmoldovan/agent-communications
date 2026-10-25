@@ -1,17 +1,19 @@
 import {
+  Avatar,
   Button,
   Chip,
+  DescriptionList,
   Dialog,
   EmptyState,
   Field,
   FieldDescription,
   FieldError,
   FieldLabel,
+  InfoTip,
   Input,
   Panel,
-  PanelHeader,
   Row,
-  Table,
+  Tabs,
 } from '@cueplusplus/ui';
 import { Plus } from 'lucide-react';
 import { type FormEvent, type ReactNode, useState } from 'react';
@@ -37,7 +39,7 @@ import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { type AccountsProduct, errorMessage, type Product, type TerminalOutcome } from '../ipc.ts';
 import { ScreenFrame } from './Screen.tsx';
 
-/** Each channel with accounts to add: what it calls one, and what its section says. */
+/** Each channel with accounts to add: what it calls one, and what its tab says. */
 const CHANNELS: Readonly<
   Record<AccountsProduct, { title: string; caption: string; add: string; whose: string; empty: string; again: boolean }>
 > = {
@@ -68,6 +70,20 @@ const CHANNELS: Readonly<
   },
 };
 
+/** A channel the screen has a tab for: the three with accounts to add, and WhatsApp, read from its status. */
+type Channel = AccountsProduct | 'whatsapp';
+
+/** The tabs, in the order the app lists its products (D7: one tab per channel). */
+const ORDER: readonly Channel[] = ['gmail', 'slack', 'resend', 'whatsapp'];
+
+/** What each channel's tab and list are called, and what its list says when it is empty. */
+const TABS: Readonly<Record<Channel, { title: string; caption: string; empty: string }>> = {
+  gmail: CHANNELS.gmail,
+  slack: CHANNELS.slack,
+  resend: CHANNELS.resend,
+  whatsapp: { title: 'WhatsApp', caption: 'WhatsApp accounts', empty: 'No WhatsApp account is set up.' },
+};
+
 /** The features this screen fills that a later CLI brings (DA12): both 0.22.0 today, so one line says so. */
 const LATER: readonly Feature[] = ['behaviour', 'profiles'];
 
@@ -78,11 +94,16 @@ interface Shared {
   label: Loadable<LabelReport>;
 }
 
+/** What a writing profile is, said once beside it rather than as a line of its own (D3). */
+export const PROFILE_HINT =
+  "Your own profile applies to every message an agent writes for you; each account's adds to it.";
+
 /**
- * Every account on this machine, by channel (DA5.2): its mode and policies as its channel names them, the label its
- * agent messages carry, what agents may do there (0.22.0), and its writing profile (0.22.0), which opens in the
- * default editor after `profile init` makes it. Adding an account, and signing in again, happen only in Terminal: the
- * app never handles a password or a token.
+ * Every account on this machine, one tab per channel (DA5.2, D7): its mode and policies as its channel names them, the
+ * label its agent messages carry, what agents may do there (0.22.0), and its writing profile (0.22.0), which opens in
+ * the default editor after `profile init` makes it. Adding an account, and signing in again, happen only in Terminal:
+ * the app never handles a password or a token. Every channel's list is read when the screen opens, so a tab whose list
+ * holds an account that needs a look says how many before it is chosen.
  */
 export function Accounts() {
   const { installation } = useAppData();
@@ -100,6 +121,14 @@ export function Accounts() {
     behaviour: behaviourSupported ? behaviour.result : null,
     label: label.result,
   };
+  // Only a channel whose launcher is here is asked anything.
+  const lists: Record<Channel, Loadable<AccountRow[]>> = {
+    gmail: useGmail(present.includes('gmail')),
+    slack: useSlack(present.includes('slack')),
+    resend: useResend(present.includes('resend')),
+    whatsapp: useWhatsapp(present.includes('whatsapp')),
+  };
+  const channels = ORDER.filter((channel) => present.includes(channel));
 
   // One update line for each later version the screen waits for, not one per row.
   const waiting = [...new Map(LATER.filter((f) => !supports(version, f)).map((f) => [GATES[f], f])).values()];
@@ -123,11 +152,72 @@ export function Accounts() {
           <UntrustedText text={`What agents may do could not be read: ${shared.behaviour.message}`} />
         </p>
       ) : null}
-      {present.includes('gmail') ? <GmailAccounts shared={shared} /> : null}
-      {present.includes('slack') ? <SlackAccounts shared={shared} /> : null}
-      {present.includes('resend') ? <ResendAccounts shared={shared} /> : null}
-      {present.includes('whatsapp') ? <WhatsappAccounts shared={shared} /> : null}
+      {channels.length === 0 ? null : <ChannelTabs channels={channels} lists={lists} shared={shared} />}
     </ScreenFrame>
+  );
+}
+
+/**
+ * The channels' tab bar (D7), with the chosen channel's Add beside it, and its accounts below. A tab whose list has
+ * an account that needs a look, or could not be read, carries the count, so nothing waits unseen behind a tab.
+ */
+function ChannelTabs({
+  channels,
+  lists,
+  shared,
+}: {
+  channels: readonly Channel[];
+  lists: Record<Channel, Loadable<AccountRow[]>>;
+  shared: Shared;
+}) {
+  const [chosen, setChosen] = useState<Channel | null>(null);
+  const current = chosen !== null && channels.includes(chosen) ? chosen : (channels[0] as Channel);
+  return (
+    <Tabs.Root value={current} onValueChange={(value) => setChosen(value as Channel)}>
+      <div className="flex flex-wrap items-center justify-between gap-(--cue-space-3)">
+        <Tabs.List aria-label="Channels">
+          {channels.map((channel) => {
+            const count = needsALook(lists[channel]);
+            return (
+              <Tabs.Tab key={channel} value={channel} aria-label={tabName(TABS[channel].title, count)}>
+                {TABS[channel].title}
+                <NeedsALook count={count} />
+              </Tabs.Tab>
+            );
+          })}
+        </Tabs.List>
+        {current === 'whatsapp' ? null : <AddAccount key={current} product={current} />}
+      </div>
+      {/* Kept mounted, as Agent's and Events' are: a row's sign-in still opening, and what it or its profile came to,
+          stay through a change of tab, so a second sign-in cannot start while the first is still opening. */}
+      {channels.map((channel) => (
+        <Tabs.Panel key={channel} value={channel} keepMounted>
+          <ChannelList channel={channel} list={lists[channel]} shared={shared} />
+        </Tabs.Panel>
+      ))}
+    </Tabs.Root>
+  );
+}
+
+/** How many of a channel's accounts need a look: each with a warning, or the one list that could not be read. */
+function needsALook(list: Loadable<AccountRow[]>): number {
+  if (list.state === 'error') return 1;
+  if (list.state === 'loading') return 0;
+  return list.value.filter((row) => row.warning).length;
+}
+
+/** A tab's name: its channel's, and how many there need a look, in words, when any do. */
+function tabName(title: string, count: number): string {
+  return count === 0 ? title : `${title}, ${count} ${count === 1 ? 'needs' : 'need'} a look`;
+}
+
+/** A tab's count of what needs a look there, as a number; the tab's name says it in words. */
+function NeedsALook({ count }: { count: number }) {
+  if (count === 0) return null;
+  return (
+    <span aria-hidden="true" data-slot="needs-a-look">
+      <Chip tone="warn">{count}</Chip>
+    </span>
   );
 }
 
@@ -136,19 +226,17 @@ function OwnProfile() {
   const opening = useProfile();
   return (
     <Panel>
-      <PanelHeader title="Writing profiles" />
       <Row>
-        <div className="flex flex-col gap-(--cue-space-1)">
-          <span className="text-fg">
-            Your own profile applies to every message an agent writes for you; each account's adds to it.
+        <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
+          <span className="flex items-center gap-(--cue-space-2) font-medium text-fg">
+            Writing profiles
+            <InfoTip label="About writing profiles" text={PROFILE_HINT} />
           </span>
           {opening.said}
         </div>
-        <div className="ml-auto">
-          <Button size="sm" loading={opening.busy} onClick={() => void opening.open(undefined)}>
-            Open your own writing profile
-          </Button>
-        </div>
+        <Button size="sm" loading={opening.busy} onClick={() => void opening.open(undefined)}>
+          Open your own writing profile
+        </Button>
       </Row>
     </Panel>
   );
@@ -172,7 +260,10 @@ function useProfile(): { busy: boolean; said: ReactNode; open(account: string | 
         const opened = await bridge.openProfile(account === undefined ? {} : { account });
         setSaid(
           <p role="status" className="text-fg-muted">
-            <UntrustedText text={`${opened.created ? 'Created' : 'Opened'} ${opened.path}`} />
+            {opened.created ? 'Created ' : 'Opened '}
+            <span className="font-mono">
+              <UntrustedText text={opened.path} />
+            </span>
           </p>,
         );
       } catch (error) {
@@ -192,7 +283,7 @@ function Problem({ message }: { message: string }) {
   );
 }
 
-/** A read's loading and error states padded inside its panel; its value, a table or an empty state, edge to edge. */
+/** A read's loading and error states padded inside its panel; its value, a list or an empty state, edge to edge. */
 function PanelState<T>({ value, children }: { value: Loadable<T>; children: (value: T) => ReactNode }) {
   if (value.state !== 'ready') {
     return (
@@ -204,106 +295,43 @@ function PanelState<T>({ value, children }: { value: Loadable<T>; children: (val
   return <>{children(value.value)}</>;
 }
 
-/** One account's row: its name and what its channel says of it, then the columns every channel has. */
+/** One fact about an account, under the name its channel gives it. */
+interface Fact {
+  term: string;
+  value: ReactNode;
+}
+
+/** One account's row: its name and what its channel says of it, then the facts every channel has. */
 interface AccountRow {
   account: string;
   /** Its address, or its workspace's name, which the workspace wrote. */
   detail?: string | undefined;
   /** Something to know at once, such as a mailbox that needs attention. */
   flag?: string | undefined;
-  /** This channel's own columns, in `headers` order. */
-  values: ReactNode[];
+  /** Whether it needs a look: its tab counts it. */
+  warning: boolean;
+  /** This channel's own facts, in its order. */
+  facts: Fact[];
+  /** What its channel says it would take, under the facts. */
+  notes?: string[];
 }
 
-function ChannelPanel({
-  product,
-  title,
-  caption,
-  heading,
-  headers,
-  list,
-  empty,
-  add,
-  shared,
-  again,
-}: {
-  product: Product;
-  title: string;
-  caption: string;
-  heading: string;
-  headers: string[];
-  list: Loadable<AccountRow[]>;
-  empty: string;
-  add?: ReactNode;
-  shared: Shared;
-  again: boolean;
-}) {
+/** A channel's accounts in a soft panel: one row each, or what the list came to when it has none. */
+function ChannelList({ channel, list, shared }: { channel: Channel; list: Loadable<AccountRow[]>; shared: Shared }) {
+  const { caption, empty } = TABS[channel];
+  const again = channel === 'whatsapp' ? false : CHANNELS[channel].again;
   return (
     <Panel>
-      <PanelHeader title={title} actions={add} />
       <PanelState value={list}>
         {(rows) =>
           rows.length === 0 ? (
             <EmptyState title={empty} />
           ) : (
-            <Table.Root>
-              <Table.Caption className="sr-only">{caption}</Table.Caption>
-              <Table.Header>
-                <Table.Row>
-                  <Table.Head>{heading}</Table.Head>
-                  {headers.map((header) => (
-                    <Table.Head key={header}>{header}</Table.Head>
-                  ))}
-                  <Table.Head>Label</Table.Head>
-                  {shared.behaviour === null ? null : <Table.Head>Agents may</Table.Head>}
-                  <Table.Head>
-                    <span className="sr-only">Actions</span>
-                  </Table.Head>
-                </Table.Row>
-              </Table.Header>
-              <Table.Body>
-                {rows.map((row) => (
-                  <Table.Row key={row.account}>
-                    <Table.Cell>
-                      <div className="flex flex-col gap-(--cue-space-1)">
-                        <span className="text-fg">{row.account}</span>
-                        {row.detail === undefined ? null : (
-                          <span className="text-fg-muted">
-                            <UntrustedText text={row.detail} />
-                          </span>
-                        )}
-                        {row.flag === undefined ? null : (
-                          <span>
-                            <Chip tone="warn" variant="tag">
-                              {row.flag}
-                            </Chip>
-                          </span>
-                        )}
-                      </div>
-                    </Table.Cell>
-                    {row.values.map((value, index) => (
-                      <Table.Cell key={headers[index] ?? index}>{value}</Table.Cell>
-                    ))}
-                    <Table.Cell>
-                      <LabelStyle label={shared.label} account={row.account} />
-                    </Table.Cell>
-                    {shared.behaviour === null ? null : (
-                      <Table.Cell>
-                        <AgentsMay behaviour={shared.behaviour} account={row.account} />
-                      </Table.Cell>
-                    )}
-                    <Table.Cell>
-                      <AccountActions
-                        product={product}
-                        account={row.account}
-                        again={again}
-                        profiles={shared.profiles}
-                      />
-                    </Table.Cell>
-                  </Table.Row>
-                ))}
-              </Table.Body>
-            </Table.Root>
+            <ul aria-label={caption} className="flex flex-col">
+              {rows.map((row) => (
+                <AccountItem key={row.account} product={channel} row={row} again={again} shared={shared} />
+              ))}
+            </ul>
           )
         }
       </PanelState>
@@ -311,9 +339,86 @@ function ChannelPanel({
   );
 }
 
-/** A channel's accounts, read from its own launcher, and read again when the person comes back from Terminal. */
-function useAccounts<T>(product: AccountsProduct, rowsOf: (data: T) => AccountRow[]): Loadable<AccountRow[]> {
-  const { result, reload } = useCall<T>({ kind: 'accounts', product });
+/**
+ * One account: its initial, its name with what its channel says of it, its facts — its channel's own, then its label
+ * and what agents may do there — and its own buttons, with what each came to under the facts.
+ */
+function AccountItem({
+  product,
+  row,
+  again,
+  shared,
+}: {
+  product: Product;
+  row: AccountRow;
+  again: boolean;
+  shared: Shared;
+}) {
+  const actions = useAccountActions(product, row.account, again, shared.profiles);
+  const facts: Fact[] = [
+    ...row.facts,
+    { term: 'Label', value: <LabelStyle label={shared.label} account={row.account} /> },
+    ...(shared.behaviour === null
+      ? []
+      : [{ term: 'Agents may', value: <AgentsMay behaviour={shared.behaviour} account={row.account} /> }]),
+  ];
+  return (
+    <li>
+      <Row className="items-start">
+        <span aria-hidden="true" className="flex shrink-0">
+          <Avatar fallback={row.account.charAt(0)} />
+        </span>
+        <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-2)">
+          <div className="flex min-h-control-md flex-wrap items-center gap-x-(--cue-space-3) gap-y-(--cue-space-1)">
+            <span className="font-medium text-fg">{row.account}</span>
+            {row.detail === undefined ? null : (
+              <span className="text-fg-muted">
+                <UntrustedText text={row.detail} />
+              </span>
+            )}
+            {row.flag === undefined ? null : (
+              <Chip tone="warn" variant="tag">
+                {row.flag}
+              </Chip>
+            )}
+            {actions.buttons === null ? null : <div className="ml-auto">{actions.buttons}</div>}
+          </div>
+          <DescriptionList.Root
+            layout="stacked"
+            className="grid auto-cols-fr grid-flow-col gap-x-(--cue-space-5) gap-y-(--cue-space-2)"
+          >
+            {facts.map((fact) => (
+              <div key={fact.term} className="flex min-w-0 flex-col gap-(--cue-space-1)">
+                <DescriptionList.Term>{fact.term}</DescriptionList.Term>
+                <DescriptionList.Detail>{fact.value}</DescriptionList.Detail>
+              </div>
+            ))}
+          </DescriptionList.Root>
+          {row.notes === undefined || row.notes.length === 0 ? null : (
+            <div className="flex flex-col gap-(--cue-space-1) text-fg-muted">
+              {row.notes.map((note, index) => (
+                // A channel's message and its hint may say the same; their place is what tells them apart.
+                // biome-ignore lint/suspicious/noArrayIndexKey: the notes are never reordered.
+                <span key={index}>
+                  <UntrustedText text={note} />
+                </span>
+              ))}
+            </div>
+          )}
+          {actions.said}
+        </div>
+      </Row>
+    </li>
+  );
+}
+
+/** A channel's accounts, read from its own launcher when it is here, and read again when the person comes back. */
+function useAccounts<T>(
+  product: AccountsProduct,
+  here: boolean,
+  rowsOf: (data: T) => AccountRow[],
+): Loadable<AccountRow[]> {
+  const { result, reload } = useCall<T>(here ? { kind: 'accounts', product } : null);
   useReloadOnReturn(reload);
   return rowsOrError(CHANNELS[product].title, result, rowsOf);
 }
@@ -333,124 +438,73 @@ function policy(value: string, inherited: boolean): string {
   return inherited ? `${value} (default)` : value;
 }
 
-function GmailAccounts({ shared }: { shared: Shared }) {
-  const channel = CHANNELS.gmail;
-  const list = useAccounts<InboxView[]>('gmail', (inboxes) =>
+function useGmail(here: boolean): Loadable<AccountRow[]> {
+  return useAccounts<InboxView[]>('gmail', here, (inboxes) =>
     inboxes.map((inbox) => ({
       account: inbox.alias,
       detail: inbox.email,
       flag: inbox.health === 'needs-attention' ? 'needs attention' : undefined,
-      values: [
-        policy(inbox.sendPolicy, inbox.sendPolicyInherited),
-        policy(inbox.changePolicy, inbox.changePolicyInherited),
+      warning: inbox.health === 'needs-attention',
+      facts: [
+        { term: 'Send policy', value: policy(inbox.sendPolicy, inbox.sendPolicyInherited) },
+        { term: 'Change policy', value: policy(inbox.changePolicy, inbox.changePolicyInherited) },
       ],
     })),
   );
-  return (
-    <ChannelPanel
-      product="gmail"
-      title={channel.title}
-      caption={channel.caption}
-      heading="Mailbox"
-      headers={['Send policy', 'Change policy']}
-      list={list}
-      empty={channel.empty}
-      add={<AddAccount product="gmail" />}
-      shared={shared}
-      again={channel.again}
-    />
-  );
 }
 
-function SlackAccounts({ shared }: { shared: Shared }) {
-  const channel = CHANNELS.slack;
-  const list = useAccounts<WorkspaceView[]>('slack', (workspaces) =>
+function useSlack(here: boolean): Loadable<AccountRow[]> {
+  return useAccounts<WorkspaceView[]>('slack', here, (workspaces) =>
     workspaces.map((workspace) => ({
       account: workspace.alias,
       detail: workspace.workspaceName,
-      values: [workspace.mode],
+      warning: false,
+      facts: [{ term: 'Mode', value: workspace.mode }],
     })),
-  );
-  return (
-    <ChannelPanel
-      product="slack"
-      title={channel.title}
-      caption={channel.caption}
-      heading="Workspace"
-      headers={['Mode']}
-      list={list}
-      empty={channel.empty}
-      add={<AddAccount product="slack" />}
-      shared={shared}
-      again={channel.again}
-    />
   );
 }
 
-function ResendAccounts({ shared }: { shared: Shared }) {
-  const channel = CHANNELS.resend;
-  const list = useAccounts<{ accounts: ResendAccountView[] }>('resend', ({ accounts }) =>
+function useResend(here: boolean): Loadable<AccountRow[]> {
+  return useAccounts<{ accounts: ResendAccountView[] }>('resend', here, ({ accounts }) =>
     accounts.map((account) => ({
       account: account.name,
-      values: [
-        account.mode,
-        policy(account.sendPolicy, account.sendPolicyFrom === 'default'),
-        policy(account.changePolicy, account.changePolicyFrom === 'default'),
+      warning: false,
+      facts: [
+        { term: 'Mode', value: account.mode },
+        { term: 'Send policy', value: policy(account.sendPolicy, account.sendPolicyFrom === 'default') },
+        { term: 'Change policy', value: policy(account.changePolicy, account.changePolicyFrom === 'default') },
       ],
     })),
   );
-  return (
-    <ChannelPanel
-      product="resend"
-      title={channel.title}
-      caption={channel.caption}
-      heading="Account"
-      headers={['Mode', 'Send policy', 'Change policy']}
-      list={list}
-      empty={channel.empty}
-      add={<AddAccount product="resend" />}
-      shared={shared}
-      again={channel.again}
-    />
-  );
+}
+
+/**
+ * Whether WhatsApp's access needs a look, as Doctor reads the same status: readable is fine and not-checked is
+ * skipped; waiting is a warning, and missing, denied, unreadable or a state this app does not know is a failure.
+ */
+function accessNeedsALook(state: string): boolean {
+  return state !== 'readable' && state !== 'not-checked';
 }
 
 /** WhatsApp's accounts, from its status, which stands as its doctor: whether this machine can read each one's chats. */
-function WhatsappAccounts({ shared }: { shared: Shared }) {
-  const { result, reload } = useCall<WhatsappStatusResult>({ kind: 'doctor', product: 'whatsapp' });
+function useWhatsapp(here: boolean): Loadable<AccountRow[]> {
+  const { result, reload } = useCall<WhatsappStatusResult>(here ? { kind: 'doctor', product: 'whatsapp' } : null);
   useReloadOnReturn(reload);
-  const list = rowsOrError('WhatsApp', result, (status) =>
-    status.accounts.map((each) => ({
-      account: each.account,
-      values: [
-        <div key="access" className="flex flex-col gap-(--cue-space-1)">
-          <span className="text-fg">{each.access.state}</span>
-          {each.access.message === undefined ? null : (
-            <span className="text-fg-muted">
-              <UntrustedText text={each.access.message} />
-            </span>
-          )}
-          {each.access.hint === undefined ? null : (
-            <span className="text-fg-muted">
-              <UntrustedText text={each.access.hint} />
-            </span>
-          )}
-        </div>,
-      ],
-    })),
-  );
-  return (
-    <ChannelPanel
-      product="whatsapp"
-      title="WhatsApp"
-      caption="WhatsApp accounts"
-      heading="Account"
-      headers={['Access']}
-      list={list}
-      empty="No WhatsApp account is set up."
-      shared={shared}
-      again={false}
-    />
+  return rowsOrError('WhatsApp', result, (status) =>
+    status.accounts.map((each) => {
+      const warning = accessNeedsALook(each.access.state);
+      return {
+        account: each.account,
+        warning,
+        facts: [
+          {
+            term: 'Access',
+            value: <span className={warning ? 'text-warn' : undefined}>{each.access.state}</span>,
+          },
+        ],
+        notes: [each.access.message, each.access.hint].filter((note): note is string => note !== undefined),
+      };
+    }),
   );
 }
 
@@ -501,7 +555,7 @@ function AgentsMay({ behaviour, account }: { behaviour: Loadable<BehaviourReport
   // Not an account that acts on other people: WhatsApp only drafts.
   if (view === undefined) return <span className="text-fg-subtle">—</span>;
   return (
-    <div className="flex flex-col gap-(--cue-space-1)">
+    <div className="flex flex-wrap gap-x-(--cue-space-3) gap-y-(--cue-space-1)">
       <span className="text-fg">{actsText(view.allowed)}</span>
       {view.conversations.map((each) => (
         <span key={each.conversation} className="text-fg-muted">
@@ -512,18 +566,16 @@ function AgentsMay({ behaviour, account }: { behaviour: Loadable<BehaviourReport
   );
 }
 
-/** A row's own buttons: its writing profile (0.22.0), and signing in again (Gmail and Slack), each in Terminal. */
-function AccountActions({
-  product,
-  account,
-  again,
-  profiles,
-}: {
-  product: Product;
-  account: string;
-  again: boolean;
-  profiles: boolean;
-}) {
+/**
+ * A row's own buttons — its writing profile (0.22.0), and signing in again (Gmail and Slack), each in Terminal — and
+ * what each came to, which the row shows under its facts.
+ */
+function useAccountActions(
+  product: Product,
+  account: string,
+  again: boolean,
+  profiles: boolean,
+): { buttons: ReactNode; said: ReactNode } {
   const bridge = useBridge();
   const opening = useProfile();
   const [signing, setSigning] = useState(false);
@@ -544,10 +596,9 @@ function AccountActions({
       setSigning(false);
     }
   };
-  if (!profiles && !again) return null;
-  return (
-    <div className="flex flex-col items-end gap-(--cue-space-1)">
-      <div className="flex gap-(--cue-space-2)">
+  const buttons =
+    !profiles && !again ? null : (
+      <div className="flex shrink-0 gap-(--cue-space-1)">
         {profiles ? (
           <Button size="sm" variant="ghost" loading={opening.busy} onClick={() => void opening.open(account)}>
             Open writing profile
@@ -559,11 +610,16 @@ function AccountActions({
           </Button>
         ) : null}
       </div>
-      {opening.said}
-      {signedIn === null ? null : <TerminalResult outcome={signedIn} />}
-      {problem === null ? null : <Problem message={problem} />}
-    </div>
-  );
+    );
+  const said =
+    opening.said === null && signedIn === null && problem === null ? null : (
+      <div className="flex flex-col gap-(--cue-space-1)">
+        {opening.said}
+        {signedIn === null ? null : <TerminalResult outcome={signedIn} />}
+        {problem === null ? null : <Problem message={problem} />}
+      </div>
+    );
+  return { buttons, said };
 }
 
 /** Why a name cannot be used for an account of `product`: the grammar's refusal, or a name for another channel. */

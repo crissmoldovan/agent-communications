@@ -1,0 +1,88 @@
+{
+  "$description": "Theme: soft, dark \u2014 Agent Comms' own until cue-ui ships its soft preset (cue-ui-82). A near-black page, three soft surface steps, a cool grey ink ladder and a violet-blue accent. COLOR ONLY.",
+  "$extensions": {
+    "com.cueplusplus.provenance": "The approved mockup for Agent Comms 0.28.0 (the desktop design 2026-10-24, \u00a78 and \u00a79; files kept at ~/work/cue++/backups/agentcomms-0.28-mockup-2026-10-25/Main.dc.html), and cue-ui-82, which lists its values. bg, the three surfaces, the three inks, the accent and ok, warn and danger are the mockup's; accent-fg is its accentText and focus its ring colour without the alpha.",
+    "com.cueplusplus.adjustments": "fg-subtle is #8E8E97, not the mockup's #8B8B94, so it reads at 4.5:1 on surface-3 (cue-ui-82, 'the smallest moves'). The mockup leaves sunken, the rims, accent-hover, busy, info, stream, selection, the status inks, data-ground and scrim unset: sunken is one step under the page, the rims are quiet greys between the surfaces, accent-hover is the accent lifted, busy, info and stream are cool tints, warn-fg and danger-fg are the page's ink (white on danger is 2.77:1), and data-ground is black, as in every preset."
+  },
+  "color": {
+    "$type": "color",
+    "bg": {
+      "$value": "#0E0E10"
+    },
+    "sunken": {
+      "$value": "#09090B"
+    },
+    "surface-1": {
+      "$value": "#18181B"
+    },
+    "surface-2": {
+      "$value": "#1F1F23"
+    },
+    "surface-3": {
+      "$value": "#28282D"
+    },
+    "fg": {
+      "$value": "#EDEDF0"
+    },
+    "fg-muted": {
+      "$value": "#A1A1AA"
+    },
+    "fg-subtle": {
+      "$value": "#8E8E97"
+    },
+    "border": {
+      "$value": "#2A2A30"
+    },
+    "border-strong": {
+      "$value": "#3A3A42"
+    },
+    "border-overlay": {
+      "$value": "#34343B"
+    },
+    "accent": {
+      "$value": "#8A90F8"
+    },
+    "accent-hover": {
+      "$value": "#A2A7FA"
+    },
+    "accent-fg": {
+      "$value": "#0E0E10"
+    },
+    "ok": {
+      "$value": "#4ADE80"
+    },
+    "busy": {
+      "$value": "#67C6EE"
+    },
+    "warn": {
+      "$value": "#F5B454"
+    },
+    "warn-fg": {
+      "$value": "#0E0E10"
+    },
+    "danger": {
+      "$value": "#F87171"
+    },
+    "danger-fg": {
+      "$value": "#0E0E10"
+    },
+    "info": {
+      "$value": "#7FA8F8"
+    },
+    "stream": {
+      "$value": "#C08AF8"
+    },
+    "selection": {
+      "$value": "rgba(138,144,248,0.28)"
+    },
+    "focus": {
+      "$value": "#8A90F8"
+    },
+    "data-ground": {
+      "$value": "{primitive.black}"
+    },
+    "scrim": {
+      "$value": "rgba(0,0,0,0.6)"
+    }
+  }
+}

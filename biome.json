@@ -9,7 +9,8 @@
       "!**/node_modules",
       "!pnpm-lock.yaml",
       "!**/test/fixtures/released-*",
-      "!packages/events/vendor/*/generated"
+      "!packages/events/vendor/*/generated",
+      "!apps/desktop/src/themes/*/generated"
     ]
   },
   "formatter": {
