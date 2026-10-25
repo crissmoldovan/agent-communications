@@ -376,6 +376,7 @@ export const RECORD_LAYOUTS: readonly RecordLayout[] = [
     sqlColumn: 'encrypted_record',
     keyColumns: ['id'],
   },
+  { table: 'queue_items', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['id'] },
 ];
 
 type SqlValue = string | number | bigint | Uint8Array | null;

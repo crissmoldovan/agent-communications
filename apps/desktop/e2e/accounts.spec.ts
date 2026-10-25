@@ -112,6 +112,8 @@ test('one tab per channel, each counting what needs a look, and one channel show
       'accounts',
       'label',
       'behaviour',
+      // The events service's own version, which says whether it has the queue (0.30.0).
+      'version',
     ]).toContain(kind);
   }
   expect((await recorded(page)).map((call) => call.cmd)).not.toContain('open_in_terminal');

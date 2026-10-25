@@ -2,6 +2,7 @@ import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
+import { purgeAllQueueItems } from './queue-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 
 export interface EventLifecycleStatus {
@@ -66,6 +67,7 @@ export class EventLifecycle {
         )
         .all() as Array<{ id: string }>;
       database.exec('DELETE FROM dryrun_log');
+      purgeAllQueueItems(database);
       purgeAllB2StreamRecords(database);
       database.exec('DELETE FROM ingest_rules');
       database.exec('DELETE FROM source_scan_state');

@@ -11,10 +11,14 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
 /**
  * E owns this exact B3-v1 input inventory.  B3 is frozen here: a deliberate B3-v1 change updates its pin in the
  * same commit and records why in that commit, rather than silently weakening E's prerequisite gate.
+ *
+ * 0.30.0 (the action queue) is one such change, and only additive: the schema, the desktop request vectors and the
+ * ordinary and seeded result vectors gain the eight `queue-*` owner wires, the `queue` target document, a rule's
+ * optional `retention.queueMs` and a rule version's optional tightening preview. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '97a4050e291828dbe006c39fec50fd16859c3048350f37b76564d7e51f321e86',
+    '2dcb4794a542b022b8d04e517906df5a873be41d055c1374383baab351b0958f',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -26,7 +30,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '7687bbf9d530d19832cd029f351ec7ceb64f749a38a213f0fcd9c093c6545494',
+    'd89fc53739125ca576251c9b14a9375716ccfd1f1ea1ac0a68412f377ee16ca6',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -38,13 +42,13 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
     'f722a05d3197e2090a9fd70ae0fe4702119452b6214a8312b8048a7369b6e9c9',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
-    'b1d86dd3f4a31d96e0d99dddcff4840f57dd26a9f470264a0a3f3a6b40eeca78',
+    '235b0e3222abcd10f6e16d5ff4dc609e893c0d82c5ca8cd9414dd9218ef96532',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
     'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '47e2737fb102a12b1352d7b54f29a9202717e9bf4a84101b5dd13a4099395855',
+    '0f5de859b4913e43326cdd001719585e4538051b1939f0abb70d96521d59c235',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

@@ -59,6 +59,7 @@ Scripts should read these rather than parse output.
 | [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
+| [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
@@ -668,6 +669,93 @@ agent-events dryrun list [options]
 
 ```
 agent-events dryrun show [options] <delivery-id>
+```
+
+### `agent-events queue`
+
+work through the action queue: what matched your queue rules, and what you have done with it
+
+```
+agent-events queue [options] [command]
+```
+
+### `agent-events queue list`
+
+list queue items with what they say, newest first (a person at a terminal or in the app)
+
+```
+agent-events queue list [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--state <state>` | open (the default), done, dismissed or all | — |
+| `--rule <rule-id>` | only this rule | — |
+| `--channel <channel>` | gmail, slack, resend or whatsapp | — |
+| `--since <when>` | an ISO time, or a span back from now such as 7d or 12h | — |
+| `--limit <n>` | at most this many items (1 to 500, default 50) | — |
+
+### `agent-events queue show`
+
+show one queue item with what it says (a person at a terminal or in the app)
+
+```
+agent-events queue show [options] <item-id>
+```
+
+### `agent-events queue items`
+
+list queue items without what they say: ids, rules, channels, accounts, states and times
+
+```
+agent-events queue items [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--state <state>` | open (the default), done, dismissed or all | — |
+| `--rule <rule-id>` | only this rule | — |
+| `--channel <channel>` | gmail, slack, resend or whatsapp | — |
+| `--limit <n>` | at most this many items (1 to 500, default 50) | — |
+
+### `agent-events queue counts`
+
+count open, done and dismissed queue items, and each rule’s open items
+
+```
+agent-events queue counts [options]
+```
+
+### `agent-events queue done`
+
+mark one queue item done
+
+```
+agent-events queue done [options] <item-id>
+```
+
+### `agent-events queue dismiss`
+
+dismiss one queue item
+
+```
+agent-events queue dismiss [options] <item-id>
+```
+
+### `agent-events queue reopen`
+
+reopen a done or dismissed queue item
+
+```
+agent-events queue reopen [options] <item-id>
+```
+
+### `agent-events queue clear`
+
+remove done and dismissed queue items now; open items stay (a person at a terminal or in the app)
+
+```
+agent-events queue clear [options]
 ```
 
 ### `agent-events approve`

@@ -13,6 +13,7 @@ import {
   errorMessage,
   type Installation,
 } from './ipc.ts';
+import { type QueueCounts, readQueueCounts } from './queue.ts';
 
 /** Something a screen waits for: loading, there, or what went wrong. */
 export type Loadable<T> = { state: 'loading' } | { state: 'ready'; value: T } | { state: 'error'; message: string };
@@ -47,7 +48,20 @@ export interface AppData {
   eventServiceTurns: number;
   /** The approval an `agentcomms://` link asked for, until the screen that showed it clears it. */
   deepLink: DeepLinkTarget | null;
-  refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation'): Promise<void>;
+  /**
+   * The events service's own version (its `--version`), which gates the queue (DA12): read once its launcher is here,
+   * and again each time the supervisor says it started or stopped running. `absent` when there is no launcher.
+   */
+  eventsVersion: Loadable<string> | 'absent';
+  /**
+   * `queue counts` (0.30.0): the open count the sidebar and Overview show, and the Queue screen's tabs. Read with the
+   * other shared reads once the events service is 0.30.0 or later; `unsupported` before it, and nothing is asked;
+   * `absent` when there is no launcher.
+   */
+  queueCounts: Loadable<QueueCounts> | 'unsupported' | 'absent';
+  /** Whether the window can be seen: a screen's own poll runs only then. */
+  visible: boolean;
+  refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation' | 'queue' | 'eventsVersion'): Promise<void>;
   runDoctors(products: DoctorProduct[]): Promise<void>;
   clearDeepLink(): void;
 }
@@ -124,6 +138,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [eventServiceProblem, showEventServiceProblem] = useState<string | null>(null);
   const [eventServiceTurns, setEventServiceTurns] = useState(0);
   const [deepLink, setDeepLink] = useState<DeepLinkTarget | null>(null);
+  const [eventsVersion, setEventsVersion] = useState<Loadable<string> | 'absent'>({ state: 'loading' });
+  const [queueCounts, setQueueCounts] = useState<Loadable<QueueCounts> | 'unsupported' | 'absent'>({
+    state: 'loading',
+  });
   const visible = useVisible(bridge);
 
   const installed = installation.state === 'ready' && installation.value.installed ? installation.value : null;
@@ -142,6 +160,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const updateStatusRead = useLatestOnly();
   const eventsRead = useLatestOnly();
   const eventServiceRead = useLatestOnly();
+  const eventsVersionRead = useLatestOnly();
+  const queueCountsRead = useLatestOnly();
 
   const loadApprovals = useCallback(async () => {
     const latest = approvalsRead();
@@ -169,19 +189,80 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     if (latest()) setEvents(value);
   }, [bridge, eventsPresent, eventsRead]);
 
+  const loadEventsVersion = useCallback(async () => {
+    const latest = eventsVersionRead();
+    if (!eventsPresent) {
+      setEventsVersion('absent');
+      return;
+    }
+    const value = await read<string>(bridge, { kind: 'version', product: 'events-daemon' });
+    if (latest()) setEventsVersion(value);
+  }, [bridge, eventsPresent, eventsVersionRead]);
+
+  // The queue's counts, once the events service's own version says it has the queue (0.30.0); nothing is asked before.
+  // The version is read through a ref, so the loader, and `refresh` with it, stays one function: the listeners that
+  // call it are not taken down and set up again each time the version is read.
+  const knownEventsVersion = useRef(eventsVersion);
+  knownEventsVersion.current = eventsVersion;
+  const loadQueueCounts = useCallback(async () => {
+    const latest = queueCountsRead();
+    if (!eventsPresent) {
+      setQueueCounts('absent');
+      return;
+    }
+    const version = knownEventsVersion.current;
+    if (version === 'absent' || version.state === 'loading') return;
+    if (version.state === 'error') {
+      setQueueCounts(version);
+      return;
+    }
+    if (!supports(version.value, 'queue')) {
+      setQueueCounts('unsupported');
+      return;
+    }
+    const result = await read<unknown>(bridge, { kind: 'queueCounts' });
+    let counts: Loadable<QueueCounts>;
+    if (result.state === 'ready') {
+      const value = readQueueCounts(result.value);
+      counts =
+        value === null
+          ? { state: 'error', message: "The queue's counts could not be read." }
+          : { state: 'ready', value };
+    } else {
+      counts = result;
+    }
+    if (latest()) setQueueCounts(counts);
+  }, [bridge, eventsPresent, queueCountsRead]);
+
   const ready = installed !== null;
   const refresh = useCallback(
-    async (what?: 'approvals' | 'updateStatus' | 'events' | 'installation') => {
+    async (what?: 'approvals' | 'updateStatus' | 'events' | 'installation' | 'queue' | 'eventsVersion') => {
       if (what === 'installation') return loadInstallation();
       // Nothing runs without core's launcher.
       if (!ready) return;
       if (what === 'approvals') return loadApprovals();
       if (what === 'updateStatus') return loadUpdateStatus();
       if (what === 'events') return loadEvents();
-      await Promise.all([loadApprovals(), loadUpdateStatus(), loadEvents()]);
+      if (what === 'queue') return loadQueueCounts();
+      if (what === 'eventsVersion') return loadEventsVersion();
+      await Promise.all([loadApprovals(), loadUpdateStatus(), loadEvents(), loadQueueCounts()]);
     },
-    [ready, loadInstallation, loadApprovals, loadUpdateStatus, loadEvents],
+    [ready, loadInstallation, loadApprovals, loadUpdateStatus, loadEvents, loadQueueCounts, loadEventsVersion],
   );
+
+  // The events service's own version, once core's launcher and its own are here, and whenever which are here changes.
+  useEffect(() => {
+    if (!ready) return;
+    void loadEventsVersion();
+  }, [ready, loadEventsVersion]);
+
+  // The counts, as soon as the version says whether the queue is there, and each time it is read again: the poll then
+  // keeps them current.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new reading of the version is what asks for the counts.
+  useEffect(() => {
+    if (!ready) return;
+    void loadQueueCounts();
+  }, [ready, eventsVersion, loadQueueCounts]);
 
   const runDoctors = useCallback(
     async (products: DoctorProduct[]) => {
@@ -288,6 +369,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     if (before === null || runs(before) === runs(now)) return;
     setEventServiceTurns((turns) => turns + 1);
     void refresh('events');
+    // A service that started again may be a newer one: its version, which gates the queue, is read again too.
+    void refresh('eventsVersion');
     if (eventsPresent) void runDoctors(['events-daemon']);
   }, [eventService, eventsPresent, refresh, runDoctors]);
 
@@ -306,6 +389,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       showEventServiceProblem,
       eventServiceTurns,
       deepLink,
+      eventsVersion,
+      queueCounts,
+      visible,
       refresh,
       runDoctors,
       clearDeepLink,
@@ -321,6 +407,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       eventServiceProblem,
       eventServiceTurns,
       deepLink,
+      eventsVersion,
+      queueCounts,
+      visible,
       refresh,
       runDoctors,
       clearDeepLink,

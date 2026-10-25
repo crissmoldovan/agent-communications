@@ -1,13 +1,15 @@
 //! What the app opens outside itself, besides the terminal (DA7, DA15, DA16): `https://` links to the pages doctor fixes
-//! send a person to, and the events service's README at its Judges section (0.27.1); and a writing profile in
-//! `<config>/compose/`, in the default editor. Both go through the opener
-//! plugin from Rust: the capability file grants the webview none of its commands.
+//! send a person to, the events service's README at its Judges section (0.27.1), and a queue item's message in Gmail or
+//! Slack on the web (0.30.0); and a writing profile in `<config>/compose/`, in the default editor. Both go through the
+//! opener plugin from Rust: the capability file grants the webview none of its commands.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{AppError, CliResult, ProfileOpened};
 use crate::runner::{run, RunContext};
+use regex::Regex;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
@@ -32,26 +34,19 @@ const LINK_LIMIT: usize = 2048;
 /// What a link never holds as it is: a URL writes each of these, and anything outside printable ASCII, as `%XX`.
 const NEVER_IN_A_LINK: &[u8] = b"\"<>\\`{}";
 
-/// Whether the app may open `url`: `https://`, then one of `LINK_HOSTS` — with no user, password or port, and every
-/// label letters, digits and inner hyphens — then, if anything, a path, a query or a fragment of printable ASCII with
-/// nothing a URL would have encoded, and never Google's `/url` redirect, which would open anywhere. The UI checks the
-/// same before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
-/// those, `JUDGES_HELP` exactly.
-pub fn allowed_link(url: &str) -> bool {
-    if url == JUDGES_HELP {
-        return true;
-    }
+/// What every link the app opens is first: `https://`, then a host with no user, password or port, every label letters,
+/// digits and inner hyphens, then, if anything, a path, a query or a fragment of printable ASCII with nothing a URL would
+/// have encoded, and never Google's `/url` redirect, which would open anywhere. Its host, lowercased, or `None`.
+fn checked_host(url: &str) -> Option<String> {
     if url.len() > LINK_LIMIT {
-        return false;
+        return None;
     }
-    let Some(rest) = url.strip_prefix("https://") else {
-        return false;
-    };
+    let rest = url.strip_prefix("https://")?;
     if !rest
         .bytes()
         .all(|byte| (0x21..=0x7E).contains(&byte) && !NEVER_IN_A_LINK.contains(&byte))
     {
-        return false;
+        return None;
     }
     let host = rest[..rest.find(['/', '?', '#']).unwrap_or(rest.len())].to_ascii_lowercase();
     let labelled = host.split('.').all(|label| {
@@ -66,14 +61,67 @@ pub fn allowed_link(url: &str) -> bool {
     let after = &rest[host.len()..];
     let path = after[..after.find(['?', '#']).unwrap_or(after.len())].to_ascii_lowercase();
     let redirect = path == "/url" || path.starts_with("/url/");
-    labelled && !redirect && LINK_HOSTS.contains(&host.as_str())
+    (labelled && !redirect).then_some(host)
 }
 
-/// Opens `url` in the default browser, once `allowed_link` takes it.
+/// Whether the app may open `url` for a doctor fix: `checked_host`'s link, on one of `LINK_HOSTS`. The UI checks the same
+/// before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
+/// those, `JUDGES_HELP` exactly.
+pub fn allowed_link(url: &str) -> bool {
+    if url == JUDGES_HELP {
+        return true;
+    }
+    checked_host(url).is_some_and(|host| LINK_HOSTS.contains(&host.as_str()))
+}
+
+/// A queue item's Gmail link, as the event service makes it (`queueItemLink`, in
+/// `packages/events-daemon/src/domain/queue-target.ts`): `/mail/u/<n>/` or `/mail/?authuser=<the account's address,
+/// percent-encoded>`, then `#all/<message id>`, the id as its `GMAIL_ID` takes one.
+static GMAIL_QUEUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^https://mail\.google\.com/mail/(?:u/[0-9]{1,2}/|\?authuser=((?:[A-Za-z0-9._~!*'()-]|%[0-9A-F]{2})+))#all/[0-9A-Za-z_-]{1,128}$",
+    )
+    .expect("a pattern")
+});
+
+/// A queue item's Slack link, as the event service makes it: `/client/<team>/<channel>`, then, for a thread,
+/// `/thread/<the same channel>-<ts>`, each id as its `SLACK_ID` takes one and the ts as its `SLACK_TS`.
+static SLACK_QUEUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^https://app\.slack\.com/client/[0-9A-Z]{1,32}/([0-9A-Z]{1,32})(?:/thread/([0-9A-Z]{1,32})-[0-9]+\.[0-9]{6})?$")
+        .expect("a pattern")
+});
+
+/// Whether `url` is a queue item's link the app may open (0.30.0, design 2026-10-25-action-queue §8): exactly one of
+/// the two shapes the event service makes, and nothing else on Gmail's or Slack's hosts — not Gmail's compose page,
+/// not a workspace's own `<workspace>.slack.com`, not Slack's admin. A Gmail account is a percent-encoded address, with
+/// its `@`; a thread is the link's own channel's. The UI checks the same before it offers one (`queueLink`,
+/// `src/queue.ts`).
+pub fn queue_link(url: &str) -> bool {
+    if url.len() > LINK_LIMIT {
+        return false;
+    }
+    if let Some(gmail) = GMAIL_QUEUE_LINK.captures(url) {
+        return gmail
+            .get(1)
+            .is_none_or(|account| account.as_str().contains("%40"));
+    }
+    SLACK_QUEUE_LINK.captures(url).is_some_and(|slack| {
+        slack.get(2).is_none_or(|thread| {
+            Some(thread.as_str()) == slack.get(1).map(|channel| channel.as_str())
+        })
+    })
+}
+
+/// Whether `open_link` opens `url`: a doctor fix's link, the Judges README, or a queue item's link.
+pub fn may_open(url: &str) -> bool {
+    allowed_link(url) || queue_link(url)
+}
+
+/// Opens `url` in the default browser, once `may_open` takes it.
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
-    if !allowed_link(url) {
+    if !may_open(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com) and the events service's README at its Judges section",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, and a queue item's message as the event service links it, on mail.google.com or app.slack.com",
         ));
     }
     app.opener()
@@ -293,6 +341,101 @@ mod tests {
             "https://github.com/login?return_to=/crissmoldovan/agent-communications",
         ] {
             assert!(!allowed_link(url), "{url:?} was allowed");
+        }
+    }
+
+    /// A queue item's links as the event service makes them, and the near misses on the same hosts
+    /// (`src/test/fixtures/queue-links.json`, which `src/test/queue.test.tsx` holds the TypeScript port to as well).
+    const QUEUE_LINKS: &str = include_str!("../../src/test/fixtures/queue-links.json");
+
+    fn queue_links() -> (Vec<(String, String)>, Vec<String>) {
+        let fixture: serde_json::Value =
+            serde_json::from_str(QUEUE_LINKS).expect("queue-links.json");
+        let opens = fixture["opens"]
+            .as_array()
+            .expect("opens")
+            .iter()
+            .map(|link| {
+                (
+                    link["kind"].as_str().expect("a kind").to_string(),
+                    link["url"].as_str().expect("a url").to_string(),
+                )
+            })
+            .collect();
+        let refused = fixture["refused"]
+            .as_array()
+            .expect("refused")
+            .iter()
+            .map(|url| url.as_str().expect("a url").to_string())
+            .collect();
+        (opens, refused)
+    }
+
+    /// A queue item's "Open in Gmail" and "Open in Slack" (0.30.0) open exactly the two shapes the event service makes
+    /// (`queueItemLink`): Gmail's `/mail/u/<n>/#all/<id>` or `/mail/?authuser=<encoded address>#all/<id>`, and Slack's
+    /// `/client/<team>/<channel>` with, if anything, `/thread/<channel>-<ts>`. A doctor fix still opens none of them.
+    #[test]
+    fn queue_links_open_exactly_the_shapes_the_event_service_makes() {
+        let (opens, _) = queue_links();
+        assert!(opens.len() >= 10);
+        for (kind, url) in &opens {
+            assert!(queue_link(url), "{kind}: {url} was refused");
+            assert!(may_open(url), "{kind}: {url} would not open");
+            assert!(!allowed_link(url), "{url} is a doctor fix's link");
+        }
+        // A Gmail link of every account number and every id the event service writes, and every Slack shape.
+        for account in ["u/0/", "u/9/", "u/42/", "?authuser=someone%40example.com"] {
+            for id in ["1", "18c2f0a1b2c3d4e5", "a-b_C", &"Z".repeat(128)] {
+                let url = format!("https://mail.google.com/mail/{account}#all/{id}");
+                assert!(queue_link(&url), "{url}");
+            }
+        }
+        for thread in [
+            "",
+            "/thread/C0123ABCD-1792921860.000100",
+            "/thread/C0123ABCD-0.000000",
+        ] {
+            let url = format!("https://app.slack.com/client/T0123ABCD/C0123ABCD{thread}");
+            assert!(queue_link(&url), "{url}");
+        }
+    }
+
+    /// Anything else on those hosts is refused: Gmail's compose page, a Slack workspace's own host, Slack's admin, and
+    /// each real shape with anything added or taken away.
+    #[test]
+    fn queue_links_refuse_everything_else_on_gmail_and_slack() {
+        let (_, refused) = queue_links();
+        assert!(refused.len() >= 40);
+        for url in &refused {
+            assert!(!queue_link(url), "{url:?} was allowed");
+            // Opening takes it only when it is a doctor fix's own link.
+            assert_eq!(may_open(url), allowed_link(url), "{url:?}");
+        }
+        for url in [
+            "https://mail.google.com/mail/?view=cm&body=hello%20there&to=someone%40example.com",
+            "https://example.slack.com/signout",
+            "https://app.slack.com/admin",
+        ] {
+            assert!(
+                refused.iter().any(|each| each == url),
+                "{url} is in the fixture"
+            );
+            assert!(!may_open(url), "{url} would open");
+        }
+        let long = format!(
+            "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-{}.000100",
+            "1".repeat(4096)
+        );
+        assert!(!queue_link(&long));
+        // Opening still takes what it took before: the doctor fixes' hosts and the Judges README.
+        for url in [
+            "https://api.slack.com/apps",
+            "https://myaccount.google.com/permissions",
+            "https://console.cloud.google.com/apis/credentials",
+            JUDGES_HELP,
+        ] {
+            assert!(may_open(url), "{url}");
+            assert!(!queue_link(url), "{url}");
         }
     }
 

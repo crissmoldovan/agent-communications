@@ -217,7 +217,7 @@ describe('the data the screens share', () => {
 });
 
 describe('the shell', () => {
-  it('the sidebar has the eight sections in order, Activity after Approvals, then Settings', async () => {
+  it('the sidebar has the nine sections in order, Queue after Overview, Activity after Approvals, then Settings', async () => {
     renderApp(createFakeBridge());
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
     const items = within(navigation)
@@ -225,6 +225,7 @@ describe('the shell', () => {
       .map((button) => button.textContent?.trim());
     expect(items).toEqual([
       'Overview',
+      'Queue',
       'Accounts',
       'Approvals',
       'Activity',

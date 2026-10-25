@@ -27,6 +27,12 @@ import {
   type LayaEnablementInputs,
 } from './judges.ts';
 import { EventDomainError } from './lifecycle.ts';
+import {
+  assertQueueMapping,
+  canonicalQueueTarget,
+  isQueueRetention,
+  type QueueTargetDocument,
+} from './queue-target.ts';
 import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
 import {
   canonicalSseSubscriber,
@@ -43,7 +49,9 @@ export interface DryRunTargetDocument {
   readonly retentionMs: number;
 }
 
-export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument;
+export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument | QueueTargetDocument;
+
+export type { QueueTargetDocument } from './queue-target.ts';
 
 export type JudgeDocument = CanonicalJudgeDocument;
 
@@ -61,6 +69,11 @@ export interface RuleRetentionDocument {
   readonly sseReplayMs: number;
   readonly deadLetterMs: number;
   readonly decisionMetadataMs: number;
+  /**
+   * The action queue's item retention (action queue design Q2): present exactly when the rule has a queue target, and
+   * omitted from the canonical form otherwise, so every rule stored before it keeps its bytes and its digest.
+   */
+  readonly queueMs?: number;
 }
 
 export type CanonicalRuleSource =
@@ -187,6 +200,8 @@ export function canonicalTarget(value: unknown): TargetDocument {
       return canonicalWebhookTarget(target);
     case 'sse':
       return canonicalSseTarget(target);
+    case 'queue':
+      return canonicalQueueTarget(target);
     default:
       return fail('a target document has a known kind');
   }
@@ -214,7 +229,9 @@ function canonicalRetention(value: unknown): RuleRetentionDocument {
   };
   if (result.holdMs > result.ingestMs) return fail('hold retention cannot outlive ingest retention');
   if (result.dryrunMs > 86_400_000) return fail('dry-run retention is at most 24 hours');
-  return result;
+  if (retention.queueMs === undefined) return result;
+  if (!isQueueRetention(retention.queueMs)) return fail('queue retention (queueMs) is 1 to 30 days, in milliseconds');
+  return { ...result, queueMs: retention.queueMs };
 }
 
 function canonicalRuleSource(value: unknown): CanonicalRuleSource {
@@ -283,6 +300,13 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   /* Phase D carried an empty compatibility array. Agentic authority is now exclusively rule.agentic. */
   const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('rule judges are an array');
   if (judges.length !== 0) return fail('rule judges are represented only by the optional agentic sibling');
+  const retention = canonicalRetention(rule.retention);
+  // Q2 and Q4: a queue target needs its own retention on the rule and a mapping that includes what its items show.
+  const queued = targets.some((target) => target.kind === 'queue');
+  if (queued && retention.queueMs === undefined) return fail('a rule with a queue target sets retention.queueMs');
+  if (!queued && retention.queueMs !== undefined)
+    return fail('retention.queueMs applies only to a rule with a queue target');
+  if (queued) assertQueueMapping(eventType, mapping);
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);
@@ -302,7 +326,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     subscribers,
     judges,
     deliveryRateCap: positiveInteger(rule.deliveryRateCap, 'rule delivery rate cap'),
-    retention: canonicalRetention(rule.retention),
+    retention,
   };
 }
 

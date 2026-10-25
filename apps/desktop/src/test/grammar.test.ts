@@ -6,7 +6,17 @@ import { ALIAS_PATTERN } from '../../../../packages/core/src/config.ts';
 import { APPROVAL_ID_PATTERN } from '../../../../packages/core/src/ids.ts';
 import { NAME_PATTERN } from '../../../../packages/core/src/name-grammar.ts';
 import * as label from '../../../../packages/core/src/operations/label.ts';
-import { isAccountName, isActs, isApprovalId, isConversation, isPlainValue, isSessionKey } from '../grammar.ts';
+import grammar from '../../grammar.json';
+import {
+  isAccountName,
+  isActs,
+  isApprovalId,
+  isConversation,
+  isPlainValue,
+  isQueueItemId,
+  isRuleId,
+  isSessionKey,
+} from '../grammar.ts';
 import { formatActs } from '../ipc.ts';
 
 /**
@@ -143,6 +153,68 @@ describe('the grammars', () => {
     ];
     for (const key of keys) expect(isSessionKey(key), JSON.stringify(key)).toBe(core.test(key));
     expect(isSessionKey('3f9a1c2e7b4d5a60')).toBe(true);
+  });
+
+  it("a queue item's id is qi_ and 26 of Crockford's letters: core's approval-id alphabet, the event service's prefix", () => {
+    // The event service's queue is Task A's of 0.30.0 (design 2026-10-25-action-queue §8): its id is the contract's,
+    // `qi_` and 26 of Crockford's letters, the same alphabet core's ids are made of.
+    const crockford = APPROVAL_ID_PATTERN.source.replace(/^\^ap_/, '');
+    expect(new RegExp(`^qi_${crockford}`, 'u').source).toBe(new RegExp(grammar.queueItemId, 'u').source);
+    for (const good of [
+      'qi_0123456789ABCDEFGHJKMNPQRS',
+      'qi_ZZZZZZZZZZZZZZZZZZZZZZZZZZ',
+      'qi_01J9Z8QF0000000000000000AB',
+    ]) {
+      expect(isQueueItemId(good), good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      'qi_',
+      'qi_0123456789ABCDEFGHJKMNPQR',
+      'qi_0123456789ABCDEFGHJKMNPQRST',
+      'qi_0123456789ABCDEFGHIJKMNPQR',
+      'qi_0123456789ABCDEFGHJKLMNPQR',
+      'qi_0123456789ABCDEFGHJKMNOPQR',
+      'qi_0123456789ABCDEFGHJKMNPQRU',
+      'qi_0123456789abcdefghjkmnpqrs',
+      'QI_0123456789ABCDEFGHJKMNPQRS',
+      'ap_0123456789ABCDEFGHJKMNPQRS',
+      'qi_0123456789ABCDEFGHJKMNPQRS\n',
+      'qi_0123456789ABCDEFGHJKMNPQRS --json',
+      ' qi_0123456789ABCDEFGHJKMNPQRS',
+    ]) {
+      expect(isQueueItemId(bad), JSON.stringify(bad)).toBe(false);
+    }
+    for (const value of CORPUS) expect(isQueueItemId(value), value).toBe(false);
+  });
+
+  it("a rule's id the Queue screen filters by is a word of letters, digits and ._:@-, as Rust checks it", () => {
+    for (const good of ['rule-1', 'mail-asks', 'David_on_Slack', 'rule.v2', 'team:rule@1', 'r', 'r'.repeat(128)]) {
+      expect(isRuleId(good), good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      '-rule',
+      '--json',
+      '.rule',
+      '_rule',
+      'rule 1',
+      'rule/1',
+      'rule\\1',
+      'rule\n',
+      'rule\u202e',
+      'rule\u200b',
+      'r\u00e9gle',
+      'rule;rm',
+      'rule$(x)',
+      'r'.repeat(129),
+    ]) {
+      expect(isRuleId(bad), JSON.stringify(bad)).toBe(false);
+    }
+    // The Rust side tries the same words (`grammar.rs`, `rule_ids_are_a_word_of_letters_digits_and_a_few_marks`).
+    const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
+    expect(rust).toContain('pub fn rule_id(value: &str) -> bool');
+    expect(rust).toContain('pub fn queue_item_id(value: &str) -> bool');
   });
 
   it('the Rust side reads the same file', () => {

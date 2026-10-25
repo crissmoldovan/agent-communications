@@ -22,6 +22,7 @@ import {
   updateJudge,
 } from '../operations/judges.ts';
 import { pause, resume } from '../operations/pause.ts';
+import { queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
 import { ruleTest } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -468,6 +469,66 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
     (args) => removeTarget(args.targetId as string, options),
     true,
   );
+
+  // The action queue (action queue design Q1, Q5): an agent can find an item and mark it, never read what it says.
+  // No tool here returns a sender, subject, text or link; `queue list` and `queue show` are the person's, at the CLI.
+  // Nor can an agent clear the queue: `queue clear` would make the person's done and dismissed items disappear.
+  const queueFilters = {
+    state: z.enum(['open', 'done', 'dismissed', 'all']).optional().describe('Which items: open (the default) or all.'),
+    rule: z.string().min(1).max(256).optional().describe("Only this rule's items, by rule id."),
+    channel: z.enum(['gmail', 'slack', 'resend', 'whatsapp']).optional().describe("Only this channel's items."),
+    limit: z.number().int().min(1).max(500).optional().describe('At most this many items, newest first (default 50).'),
+  };
+  const queueItemId = {
+    itemId: z
+      .string()
+      .regex(/^qi_[0-9A-HJKMNP-TV-Z]{26}$/u)
+      .describe('The item, as events_queue_items gives it: qi_ and 26 Crockford base32 characters.'),
+  };
+  strictControlTool(
+    'events_queue_items',
+    'List queue items',
+    "Lists the action queue's items without what they say: id, rule, channel, account, state and times.",
+    queueFilters,
+    (args) =>
+      queueItems(
+        {
+          ...(args.state === undefined ? {} : { state: args.state as string }),
+          ...(args.rule === undefined ? {} : { rule: args.rule as string }),
+          ...(args.channel === undefined ? {} : { channel: args.channel as string }),
+          ...(args.limit === undefined ? {} : { limit: args.limit as number }),
+        },
+        options,
+      ),
+  );
+  strictControlTool(
+    'events_queue_counts',
+    'Count queue items',
+    'Counts open, done and dismissed queue items, and each rule’s open items.',
+    {},
+    () => queueCounts(options),
+  );
+  for (const [name, title, description, operation] of [
+    ['events_queue_done', 'Mark queue item done', 'Marks one queue item done; it stays for its retention.', queueDone],
+    [
+      'events_queue_dismiss',
+      'Dismiss queue item',
+      'Dismisses one queue item; it stays for its retention.',
+      queueDismiss,
+    ],
+    ['events_queue_reopen', 'Reopen queue item', 'Reopens one done or dismissed queue item.', queueReopen],
+  ] as const) {
+    server.registerTool(
+      name,
+      {
+        title,
+        description,
+        inputSchema: z.strictObject(queueItemId),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+      },
+      async (args) => reply(await operation(args.itemId as string, options)),
+    );
+  }
 
   return {
     server,

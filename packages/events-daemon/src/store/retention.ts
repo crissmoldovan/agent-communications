@@ -30,6 +30,23 @@ export function fixedDeadline(clockStart: number, retentionMs: number): number {
   return deadline;
 }
 
+/**
+ * An action-queue item's two fixed ends (action queue design Q2, §4.3): its content goes at the lesser of the rule's
+ * `queueMs` and the target version's retention after the append, and its content-free row one such retention later.
+ */
+export function queueDeadlines(
+  appendedAt: number,
+  queueMs: number,
+  targetRetentionMs: number,
+): { readonly retentionMs: number; readonly expiresAt: number; readonly rowExpiresAt: number } {
+  const retentionMs = Math.min(
+    checkedRetention(queueMs, 'queue retention'),
+    checkedRetention(targetRetentionMs, 'queue target retention'),
+  );
+  const expiresAt = fixedDeadline(appendedAt, retentionMs);
+  return { retentionMs, expiresAt, rowExpiresAt: fixedDeadline(expiresAt, retentionMs) };
+}
+
 /** Shared source content must use the shortest retention among every rule version that may still be owed it. */
 export function stageDeadline(stagedAt: number, owedIngestRetentions: readonly number[]): number {
   if (owedIngestRetentions.length === 0)

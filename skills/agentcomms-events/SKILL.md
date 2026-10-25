@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.29.0"
+compatibility: "@agentcomms/events-daemon@0.30.0"
 metadata:
   group: communications
   lifecycle: release
@@ -69,6 +69,15 @@ before anything is prepared. Report that state.
 - **Prepared is not active.** Never invent a local endpoint, and never call a prepared kind, budget or rule active.
 - Do not substitute a target test, a local endpoint or another tool for a judge.
 
+## The action queue
+
+A rule with a `queue` target puts each match in the person's queue, which they work through in the app or at their
+terminal. `events_queue_items` lists its items without what they say (id, rule, channel, account, state and times),
+and `events_queue_counts` says how many are open, done and dismissed. When the person asks, mark an item with
+`events_queue_done`, `events_queue_dismiss` or `events_queue_reopen`: a done or dismissed item stays in the person's
+Done or Dismissed tab for its retention. None of them tells you who sent an item or what it says, and nothing else
+does either: that is the person's to read. Clearing the queue is the person's too, at their terminal or in the app.
+
 ## Approval handoff
 
 An approval id, digest and preview mean the proposed activation is still pending. Give the approval id and preview to
@@ -79,11 +88,14 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 
 ## Human-only boundaries
 
-Do not invoke dry-run record reads, retained rule tests, target resume, held decisions, standing approval, or daemon
-secret operations. State the relevant human-only outcome exactly and hand it to the person:
+Do not invoke dry-run record reads, queue item reads, clearing the queue, retained rule tests, target resume, held
+decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it
+to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
+- Queue item list and show: “Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says.”
+- Queue clear: “an agent must not be able to make the person's queue disappear.”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”

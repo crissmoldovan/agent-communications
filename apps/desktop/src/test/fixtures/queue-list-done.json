@@ -1,0 +1,74 @@
+{
+  "items": [
+    {
+      "id": "qi_01JBH7Z3K90000000000000006",
+      "state": "done",
+      "stateAt": "2026-10-25T08:10:00.000Z",
+      "arrivedAt": "2026-10-25T07:50:00.000Z",
+      "expiresAt": "2026-11-01T07:50:00.000Z",
+      "rule": {
+        "id": "david-on-slack",
+        "version": 1,
+        "name": "David on Slack"
+      },
+      "channel": "slack",
+      "account": {
+        "id": "ws_01EXAMPLE0000000000000000",
+        "alias": "example/slack"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "text": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"text\">\nCould you approve the release notes?\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "slack",
+        "url": "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1792914600.000100"
+      },
+      "judge": {
+        "state": "answered",
+        "id": "jev",
+        "kind": "typesafe",
+        "model": "jev-1",
+        "question": "Is David asking me for something?",
+        "answer": "yes",
+        "confidence": 0.93
+      }
+    },
+    {
+      "id": "qi_01JBH7Z3K90000000000000007",
+      "state": "done",
+      "stateAt": "2026-10-24T16:00:00.000Z",
+      "arrivedAt": "2026-10-24T15:12:00.000Z",
+      "expiresAt": "2026-10-31T15:12:00.000Z",
+      "rule": {
+        "id": "mail-asks",
+        "version": 2,
+        "name": "Mail that asks something"
+      },
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nJo Example\n</untrusted-content boundary=\"q7Tn2bXa\">",
+        "address": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-address\">\njo@example.com\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "subject": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"subject\">\nLunch on Friday?\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "gmail",
+        "url": "https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d501"
+      },
+      "judge": {
+        "state": "answered",
+        "id": "jev",
+        "kind": "typesafe",
+        "model": "jev-1",
+        "question": "Does this message ask me to do something?",
+        "answer": "yes",
+        "confidence": 0.78
+      }
+    }
+  ],
+  "more": false
+}

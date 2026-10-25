@@ -7,6 +7,7 @@ import {
   type JsonValue,
   type MappedClassification,
 } from '@agentcomms/events';
+import type { QueueShow } from '../domain/queue-target.ts';
 
 export type DeliveryRepresentation = 'plain' | 'enveloped';
 
@@ -24,7 +25,9 @@ export type DeliveryTarget =
       readonly kind: 'sse';
       readonly subscriberId: string;
       readonly subscriberVersion: number;
-    });
+    })
+  // The action queue: a local list item, built from the projection rather than from CloudEvent bytes.
+  | (BaseDeliveryTarget & { readonly kind: 'queue'; readonly show: QueueShow; readonly retentionMs: number });
 
 export interface ConstructedTargetDelivery {
   readonly target: DeliveryTarget;
@@ -58,6 +61,8 @@ export function targetDeliveryKey(target: DeliveryTarget): string {
       return `webhook:${target.targetId}:${target.targetVersion}`;
     case 'sse':
       return `sse:${target.targetId}:${target.targetVersion}:${target.subscriberId}:${target.subscriberVersion}`;
+    case 'queue':
+      return `queue:${target.targetId}:${target.targetVersion}`;
   }
 }
 

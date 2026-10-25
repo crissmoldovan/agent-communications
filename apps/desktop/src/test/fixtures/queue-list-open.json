@@ -1,0 +1,153 @@
+{
+  "items": [
+    {
+      "id": "qi_01JBH7Z3K90000000000000001",
+      "state": "open",
+      "stateAt": "2026-10-25T09:40:00.000Z",
+      "arrivedAt": "2026-10-25T09:40:00.000Z",
+      "expiresAt": "2026-11-01T09:40:00.000Z",
+      "rule": {
+        "id": "mail-asks",
+        "version": 2,
+        "name": "Mail that asks something"
+      },
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"q7Tn2bXa\">",
+        "address": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-address\">\ndavid@example.com\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "subject": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"subject\">\nCan you send the March invoice?\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "gmail",
+        "url": "https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5"
+      },
+      "judge": {
+        "state": "answered",
+        "id": "jev",
+        "kind": "typesafe",
+        "model": "jev-1",
+        "question": "Does this message ask me to do something?",
+        "answer": "yes",
+        "confidence": 0.86
+      }
+    },
+    {
+      "id": "qi_01JBH7Z3K90000000000000002",
+      "state": "open",
+      "stateAt": "2026-10-25T09:31:00.000Z",
+      "arrivedAt": "2026-10-25T09:31:00.000Z",
+      "expiresAt": "2026-11-01T09:31:00.000Z",
+      "rule": {
+        "id": "david-on-slack",
+        "version": 1,
+        "name": "David on Slack"
+      },
+      "channel": "slack",
+      "account": {
+        "id": "ws_01EXAMPLE0000000000000000",
+        "alias": "example/slack"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "text": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"text\">\nCan you look at the deploy before 5? It fails on the second step.\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "slack",
+        "url": "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1792921860.000100"
+      },
+      "judge": {
+        "state": "answered",
+        "id": "local-ask",
+        "kind": "local-endpoint",
+        "model": "qwen2.5-7b-instruct",
+        "question": "Is David asking me for something?",
+        "answer": "yes",
+        "confidence": 0.71,
+        "uncalibrated": true
+      }
+    },
+    {
+      "id": "qi_01JBH7Z3K90000000000000003",
+      "state": "open",
+      "stateAt": "2026-10-25T08:55:00.000Z",
+      "arrivedAt": "2026-10-25T08:55:00.000Z",
+      "expiresAt": "2026-11-01T08:55:00.000Z",
+      "rule": {
+        "id": "invoices",
+        "version": 1,
+        "name": "Invoices"
+      },
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\n<script>alert(1)</script> Accounts\n</untrusted-content boundary=\"q7Tn2bXa\">",
+        "address": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-address\">\nbilling@evil.example\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "subject": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"subject\">\n<img src=x onerror=alert(1)> Overdue: pay now\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "link": {
+        "kind": "gmail",
+        "url": "https://evil.example/mail/u/0/#all/18c2f0a1b2c3d4f9"
+      },
+      "judge": {
+        "state": "expired"
+      }
+    },
+    {
+      "id": "qi_01JBH7Z3K90000000000000004",
+      "state": "open",
+      "stateAt": "2026-10-24T18:20:00.000Z",
+      "arrivedAt": "2026-10-24T18:20:00.000Z",
+      "expiresAt": "2026-10-31T18:20:00.000Z",
+      "rule": {
+        "id": "family-chat",
+        "version": 1,
+        "name": "Family chat"
+      },
+      "channel": "whatsapp",
+      "account": {
+        "id": "wa_01EXAMPLE0000000000000000",
+        "alias": "example/whatsapp"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nMum\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "text": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"text\">\nAre you coming on Sunday?\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "judge": {
+        "state": "none"
+      }
+    },
+    {
+      "id": "qi_01JBH7Z3K90000000000000005",
+      "state": "open",
+      "stateAt": "2026-10-23T07:05:00.000Z",
+      "arrivedAt": "2026-10-23T07:05:00.000Z",
+      "expiresAt": "2026-10-30T07:05:00.000Z",
+      "rule": {
+        "id": "receipts",
+        "version": 3,
+        "name": "Receipts"
+      },
+      "channel": "resend",
+      "account": {
+        "id": "rs_01EXAMPLE0000000000000000",
+        "alias": "example/resend"
+      },
+      "from": {
+        "name": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-name\">\nReceipts\n</untrusted-content boundary=\"q7Tn2bXa\">",
+        "address": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"from-address\">\nreceipts@shop.example\n</untrusted-content boundary=\"q7Tn2bXa\">"
+      },
+      "subject": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"subject\">\nYour receipt #1042\n</untrusted-content boundary=\"q7Tn2bXa\">",
+      "judge": {
+        "state": "released"
+      }
+    }
+  ],
+  "more": false
+}

@@ -26,5 +26,8 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['src/test/setup.ts'],
     include: ['src/**/*.test.{ts,tsx}'],
+    // Vitest's 5 s is too short on CI's slower macOS Intel runner: a different screen test passed it on each of 0.29.0's
+    // dry runs (Settings, Activity, Doctor). 15 s keeps a hang a failure without failing a slow machine.
+    testTimeout: 15_000,
   },
 });

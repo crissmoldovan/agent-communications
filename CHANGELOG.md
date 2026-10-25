@@ -3,6 +3,35 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.30.0
+
+**The action queue: matches you work through, in the app.** The second step the owner asked for, after activity: a
+rule can now send its matches to a **queue**, and each match becomes an item you mark done or dismiss.
+
+- **A new target kind, `queue`,** in the event service. Like the dry-run target, it makes no network call: each match
+  is kept encrypted on this machine, for 7 days by default and 30 at most.
+- **Each item says:**
+  - where it came from (channel and account), from whom, and the subject or first words, all marked *From outside*;
+  - which rule matched;
+  - **what the judge said:** Jev's or your local model's answer and how sure it was, "no longer kept" once the
+    decision's record has expired, or "you let it through" for one you released from a hold.
+- **The Queue screen,** first in the sidebar after Overview, with the open count:
+  - tabs for Open, Done and Dismissed;
+  - filters by rule and channel;
+  - Done, Dismiss and Reopen on each item, and Open in Gmail or Open in Slack when the item has a link;
+  - Clear, which removes done and dismissed items now.
+  
+  Overview gains a Queue tile.
+- **At a terminal:** `agent-events queue list`, `show`, `items`, `counts`, `done`, `dismiss`, `reopen` and `clear`.
+- **What an agent may do:** see the content-free list (`events_queue_items`: ids, rules, states and times) and the
+  counts, and mark items done, dismissed or reopened. It never reads who sent an item or what it says: that is for
+  you, in the app or at a terminal.
+- **A rule that sends to the queue must keep the sender and the subject** (or the first words), or it is refused,
+  naming what is missing. Nothing is fetched to fill an item in.
+- **Tightening a rule removes its items,** as it always removed its deliveries; the change says first how many open
+  items will go.
+- **What doesn't change:** every other target, and the approval for every new rule and target.
+
 ## 0.29.0
 
 **Activity: what your agents read, were told about, did and sent, by agent window, kept private on this machine.**

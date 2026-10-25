@@ -86,7 +86,11 @@ function retainedWork(database: DatabaseSync, ruleId: string, ruleVersion: numbe
        SELECT 1 FROM stream_log WHERE rule_id = ? AND rule_version = ?
        UNION ALL
        SELECT 1 FROM decisions WHERE rule_id = ? AND rule_version = ? AND outcome = 'hold'
+       UNION ALL
+       SELECT 1 FROM queue_items WHERE rule_id = ? AND rule_version = ? AND encrypted_record IS NOT NULL
      )`,
+    ruleId,
+    ruleVersion,
     ruleId,
     ruleVersion,
     ruleId,
@@ -693,6 +697,12 @@ export async function projectE2Doctor(
       ...report.judge,
       kinds: report.judge.kinds.map((entry) => (entry.kind === JUDGE_KIND_LAYA ? input.laya.kindEntry() : entry)),
       laya: await input.laya.doctor(),
+    },
+    queue: {
+      unreadableDeliveries: count(
+        input.database,
+        "SELECT count(*) AS count FROM deliveries WHERE target_kind = 'queue' AND state = 'content-unreadable'",
+      ),
     },
   });
 }

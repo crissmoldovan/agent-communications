@@ -505,6 +505,8 @@ export class HoldResolver {
             createdAt,
             newId: this.#newId,
             data: evaluated.mapped.data,
+            // A person let this held decision through: its queue item says so, not what the judge answered (Q3).
+            released: true,
           });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({

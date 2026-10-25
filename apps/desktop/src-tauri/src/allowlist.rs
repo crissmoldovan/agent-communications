@@ -71,6 +71,18 @@ checked_word!(
     grammar::session_key,
     "a session key"
 );
+checked_word!(
+    /// A queue item's id: `qi_` and 26 of Crockford's letters, as the event service makes it (0.30.0).
+    QueueItemId,
+    grammar::queue_item_id,
+    "a queue item id"
+);
+checked_word!(
+    /// A rule's id, as the Queue screen filters by one (0.30.0): a word of letters, digits and `._:@-`.
+    RuleId,
+    grammar::rule_id,
+    "a rule id"
+);
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +299,91 @@ impl ActivitySince {
     }
 }
 
+/// Which of the queue's items `queue list --state` reads (design 2026-10-25-action-queue §8): those waiting, those
+/// marked done, those dismissed, or all of them. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueState {
+    Open,
+    Done,
+    Dismissed,
+    All,
+}
+
+impl QueueState {
+    pub const ALL: [QueueState; 4] = [
+        QueueState::Open,
+        QueueState::Done,
+        QueueState::Dismissed,
+        QueueState::All,
+    ];
+
+    /// The state as the event service names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            QueueState::Open => "open",
+            QueueState::Done => "done",
+            QueueState::Dismissed => "dismissed",
+            QueueState::All => "all",
+        }
+    }
+}
+
+/// The channel a queue item came from, as `queue list --channel` takes it: the four channels the event service reads.
+/// Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueueChannel {
+    Gmail,
+    Slack,
+    Resend,
+    Whatsapp,
+}
+
+impl QueueChannel {
+    pub const ALL: [QueueChannel; 4] = [
+        QueueChannel::Gmail,
+        QueueChannel::Slack,
+        QueueChannel::Resend,
+        QueueChannel::Whatsapp,
+    ];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            QueueChannel::Gmail => "gmail",
+            QueueChannel::Slack => "slack",
+            QueueChannel::Resend => "resend",
+            QueueChannel::Whatsapp => "whatsapp",
+        }
+    }
+}
+
+/// The most items one `queue list` reads.
+pub const QUEUE_LIMIT_MAX: u64 = 200;
+
+/// How many items `queue list --limit` reads: a whole number from 1 to `QUEUE_LIMIT_MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct QueueLimit(u64);
+
+impl TryFrom<u64> for QueueLimit {
+    type Error = AppError;
+
+    fn try_from(limit: u64) -> Result<Self, Self::Error> {
+        if (1..=QUEUE_LIMIT_MAX).contains(&limit) {
+            Ok(QueueLimit(limit))
+        } else {
+            Err(AppError::refused("a queue list reads 1 to 200 items"))
+        }
+    }
+}
+
+impl From<QueueLimit> for u64 {
+    fn from(limit: QueueLimit) -> u64 {
+        limit.0
+    }
+}
+
 /// The first and the last second a start of today may be: 2020 to the end of 2099.
 const EARLIEST_TODAY: u64 = 1_577_836_800;
 const LATEST_TODAY: u64 = 4_102_444_800;
@@ -455,6 +552,34 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outcome: Option<ActivityOutcome>,
     },
+    /// The events service's `queue list --state <state> [--rule <id>] [--channel <channel>] [--since <since>] [--limit
+    /// <n>]` (0.30.0, design 2026-10-25-action-queue §8): the queue's items, newest first, with what each says. A read,
+    /// of content the person reads (Q1); every argument is a closed word or a checked one, and `since` is the Activity
+    /// screen's closed range.
+    QueueList {
+        state: QueueState,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule: Option<RuleId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<QueueChannel>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<ActivitySince>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<QueueLimit>,
+    },
+    /// The events service's `queue counts` (0.30.0): how many items are open, done and dismissed, and each rule's open
+    /// count. Content-free and read-only. It takes no argument.
+    QueueCounts {},
+    /// The events service's `queue done <item>` (0.30.0): marks one item done. It changes only the person's own list
+    /// and takes nothing away from anyone, so the app applies it itself (DA10).
+    QueueDone { item_id: QueueItemId },
+    /// The events service's `queue dismiss <item>` (0.30.0): marks one item dismissed, as Done is applied (DA10).
+    QueueDismiss { item_id: QueueItemId },
+    /// The events service's `queue reopen <item>` (0.30.0): puts a done or dismissed item back among the open ones.
+    QueueReopen { item_id: QueueItemId },
+    /// The events service's `queue clear` (0.30.0): purges the done and dismissed items now, rather than at their
+    /// retention. It takes no argument; the screen asks first.
+    QueueClear {},
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -469,6 +594,10 @@ pub const JUDGE_KINDS_VERSION: &str = "0.17.0";
 /// The first release of core with the activity log (design 2026-10-25-activity): its `activity sessions` and
 /// `activity show`. An older one says "Needs 0.29.0 or later" (DA12).
 pub const ACTIVITY_VERSION: &str = "0.29.0";
+
+/// The first release of the events service with the action queue (design 2026-10-25-action-queue): its `queue list`,
+/// `counts`, `done`, `dismiss`, `reopen` and `clear`. An older one says "Needs 0.30.0 or later" (DA12).
+pub const QUEUE_VERSION: &str = "0.30.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -676,6 +805,38 @@ impl Call {
                         .chain(["--since".to_string(), since.word()]),
                 )
             }
+            Call::QueueList {
+                state,
+                rule,
+                channel,
+                since,
+                limit,
+            } => {
+                let option = |flag: &str, value: Option<String>| {
+                    value
+                        .map(|value| [flag.to_string(), value])
+                        .into_iter()
+                        .flatten()
+                };
+                with(
+                    events(&["queue", "list", "--state", state.word()]),
+                    option("--rule", rule.as_ref().map(|id| id.as_str().to_string()))
+                        .chain(option(
+                            "--channel",
+                            channel.map(|channel| channel.word().to_string()),
+                        ))
+                        .chain(option("--since", since.map(ActivitySince::word)))
+                        .chain(option(
+                            "--limit",
+                            limit.map(|limit| u64::from(limit).to_string()),
+                        )),
+                )
+            }
+            Call::QueueCounts {} => events(&["queue", "counts"]),
+            Call::QueueDone { item_id } => events(&["queue", "done", item_id.as_str()]),
+            Call::QueueDismiss { item_id } => events(&["queue", "dismiss", item_id.as_str()]),
+            Call::QueueReopen { item_id } => events(&["queue", "reopen", item_id.as_str()]),
+            Call::QueueClear {} => events(&["queue", "clear"]),
         })
     }
 
@@ -711,6 +872,12 @@ impl Call {
                 Some(JUDGE_KINDS_VERSION)
             }
             Call::ActivitySessions { .. } | Call::ActivityShow { .. } => Some(ACTIVITY_VERSION),
+            Call::QueueList { .. }
+            | Call::QueueCounts {}
+            | Call::QueueDone { .. }
+            | Call::QueueDismiss { .. }
+            | Call::QueueReopen { .. }
+            | Call::QueueClear {} => Some(QUEUE_VERSION),
             _ => None,
         }
     }
@@ -795,6 +962,23 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
             "account": "example/gmail",
             "outcome": "refused"
         }),
+        json!({ "kind": "queueList", "state": "open" }),
+        json!({ "kind": "queueList", "state": "done" }),
+        json!({ "kind": "queueList", "state": "dismissed" }),
+        json!({ "kind": "queueList", "state": "all" }),
+        json!({
+            "kind": "queueList",
+            "state": "open",
+            "rule": "rule-1",
+            "channel": "slack",
+            "since": "7d",
+            "limit": 100
+        }),
+        json!({ "kind": "queueCounts" }),
+        json!({ "kind": "queueDone", "itemId": QUEUE_ITEM }),
+        json!({ "kind": "queueDismiss", "itemId": QUEUE_ITEM }),
+        json!({ "kind": "queueReopen", "itemId": QUEUE_ITEM }),
+        json!({ "kind": "queueClear" }),
     ];
     values
         .into_iter()
@@ -872,6 +1056,10 @@ pub(crate) const ID: &str = "ap_0123456789ABCDEFGHJKMNPQRS";
 /// A well-formed activity session key, for the tests.
 #[cfg(test)]
 pub(crate) const SESSION: &str = "3f9a1c2e7b4d5a60";
+
+/// A well-formed queue item id, for the tests: `qi_` and 26 of Crockford's letters.
+#[cfg(test)]
+pub(crate) const QUEUE_ITEM: &str = "qi_01J9Z8QF0000000000000000AB";
 
 /// The start of 2026-10-25 in UTC, as seconds since the epoch: a today, for the tests.
 #[cfg(test)]
@@ -2142,6 +2330,305 @@ mod tests {
             refused(json!({ "kind": kind }));
             refused(json!({ "kind": kind, "since": "7d" }));
         }
+    }
+
+    /// The whole line an events call runs: the events launcher, its words, `--json`, then the four pins, and nothing
+    /// else; and the words alone, back.
+    fn events_line(value: serde_json::Value) -> Vec<String> {
+        let folders = crate::paths::Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let program = crate::launchers::Program {
+            program: "/home/example/.local/share/agent-communications/launch/events-daemon".into(),
+            leading: vec![],
+        };
+        let built = call(value.clone()).words().expect("words");
+        assert_eq!(built.product, Product::EventsDaemon, "{value}");
+        assert_eq!(built.shape, Shape::Bare, "{value}");
+        assert!(built.pins, "{value}");
+        assert!(built.quiet_updates, "{value}");
+        assert_eq!(built.timeout, Duration::from_secs(30), "{value}");
+        let line = crate::runner::argv(&built, &program, &folders, true);
+        let mut tail = vec!["--json".to_string()];
+        tail.extend(folders.pins());
+        assert!(line.ends_with(&tail), "{value}: {line:?}");
+        assert_eq!(line[0], program.program, "{value}");
+        line[1..line.len() - tail.len()].to_vec()
+    }
+
+    /// The queue's calls (0.30.0, design 2026-10-25-action-queue §8): the two reads and the four changes the app applies
+    /// itself, each the events launcher, its words, `--json` and the pins, and nothing else.
+    #[test]
+    fn queue_calls_build_exactly_their_words() {
+        for state in QueueState::ALL {
+            let word = state.word();
+            assert_eq!(
+                events_line(json!({ "kind": "queueList", "state": word })),
+                ["queue", "list", "--state", word]
+            );
+            assert_eq!(serde_json::to_value(state).expect("json"), json!(word));
+        }
+        assert_eq!(
+            QueueState::ALL.map(QueueState::word),
+            ["open", "done", "dismissed", "all"]
+        );
+        assert_eq!(
+            events_line(json!({
+                "kind": "queueList",
+                "state": "open",
+                "rule": "rule-1",
+                "channel": "slack",
+                "since": "7d",
+                "limit": 100
+            })),
+            [
+                "queue",
+                "list",
+                "--state",
+                "open",
+                "--rule",
+                "rule-1",
+                "--channel",
+                "slack",
+                "--since",
+                "7d",
+                "--limit",
+                "100"
+            ]
+        );
+        assert_eq!(
+            events_line(
+                json!({ "kind": "queueList", "state": "done", "since": { "today": TODAY } })
+            ),
+            [
+                "queue",
+                "list",
+                "--state",
+                "done",
+                "--since",
+                "2026-10-25T00:00:00.000Z"
+            ]
+        );
+        for channel in QueueChannel::ALL {
+            assert_eq!(
+                events_line(
+                    json!({ "kind": "queueList", "state": "all", "channel": channel.word() })
+                ),
+                [
+                    "queue",
+                    "list",
+                    "--state",
+                    "all",
+                    "--channel",
+                    channel.word()
+                ]
+            );
+        }
+        assert_eq!(
+            QueueChannel::ALL.map(QueueChannel::word),
+            ["gmail", "slack", "resend", "whatsapp"]
+        );
+        for (limit, word) in [(1u64, "1"), (50, "50"), (200, "200")] {
+            assert_eq!(
+                events_line(json!({ "kind": "queueList", "state": "open", "limit": limit })),
+                ["queue", "list", "--state", "open", "--limit", word]
+            );
+        }
+        assert_eq!(
+            events_line(json!({ "kind": "queueCounts" })),
+            ["queue", "counts"]
+        );
+        for (kind, verb) in [
+            ("queueDone", "done"),
+            ("queueDismiss", "dismiss"),
+            ("queueReopen", "reopen"),
+        ] {
+            assert_eq!(
+                events_line(json!({ "kind": kind, "itemId": QUEUE_ITEM })),
+                ["queue", verb, QUEUE_ITEM]
+            );
+        }
+        assert_eq!(
+            events_line(json!({ "kind": "queueClear" })),
+            ["queue", "clear"]
+        );
+        // Every one needs the first events service with the queue, and none prepares a change: the reads change
+        // nothing, and done, dismiss, reopen and clear change only the person's own list, which the app applies (DA10).
+        for value in [
+            json!({ "kind": "queueList", "state": "open" }),
+            json!({ "kind": "queueCounts" }),
+            json!({ "kind": "queueDone", "itemId": QUEUE_ITEM }),
+            json!({ "kind": "queueDismiss", "itemId": QUEUE_ITEM }),
+            json!({ "kind": "queueReopen", "itemId": QUEUE_ITEM }),
+            json!({ "kind": "queueClear" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.30.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(QUEUE_VERSION, "0.30.0");
+        assert!(!crate::version::at_least("0.29.0", QUEUE_VERSION));
+        assert!(!crate::version::at_least("0.29.9", QUEUE_VERSION));
+        assert!(crate::version::at_least("0.30.0", QUEUE_VERSION));
+        assert!(crate::version::at_least("0.30.0-feat-0.30", QUEUE_VERSION));
+    }
+
+    /// Nothing the window sends reaches the queue's words unchecked: the item id matches the event service's exactly,
+    /// the state, channel and range are closed words, the rule a checked id, the limit 1 to 200, and no call takes a
+    /// field it does not name.
+    #[test]
+    fn queue_calls_refuse_bad_ids_enums_and_extra_fields() {
+        for item in [
+            json!(""),
+            json!("qi_"),
+            json!("qi_01J9Z8QF0000000000000000A"),
+            json!("qi_01J9Z8QF0000000000000000ABC"),
+            json!("qi_01J9Z8QF0000000000000000AI"),
+            json!("qi_01J9Z8QF0000000000000000AL"),
+            json!("qi_01J9Z8QF0000000000000000AO"),
+            json!("qi_01J9Z8QF0000000000000000AU"),
+            json!("qi_01j9z8qf0000000000000000ab"),
+            json!("QI_01J9Z8QF0000000000000000AB"),
+            json!("ap_0123456789ABCDEFGHJKMNPQRS"),
+            json!("-qi_01J9Z8QF0000000000000000A"),
+            json!("qi_01J9Z8QF0000000000000000AB --json"),
+            json!("qi_01J9Z8QF0000000000000000AB\n"),
+            json!(" qi_01J9Z8QF0000000000000000AB"),
+            json!("../qi_01J9Z8QF0000000000000000"),
+            json!("--all"),
+            json!(7),
+            json!(null),
+            json!(["qi_01J9Z8QF0000000000000000AB"]),
+            json!({ "id": "qi_01J9Z8QF0000000000000000AB" }),
+        ] {
+            for kind in ["queueDone", "queueDismiss", "queueReopen"] {
+                refused(json!({ "kind": kind, "itemId": item }));
+            }
+        }
+        for kind in ["queueDone", "queueDismiss", "queueReopen"] {
+            // The item is never left out, and is named `itemId`, nothing else.
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "id": QUEUE_ITEM }));
+            refused(json!({ "kind": kind, "item": QUEUE_ITEM }));
+            for (field, value) in [
+                ("state", json!("done")),
+                ("approval", json!(ID)),
+                ("approvalId", json!(ID)),
+                ("args", json!(["--all"])),
+                ("json", json!(false)),
+                ("force", json!(true)),
+                ("rule", json!("rule-1")),
+            ] {
+                let mut given = json!({ "kind": kind, "itemId": QUEUE_ITEM });
+                given[field] = value;
+                refused(given);
+            }
+        }
+        for state in [
+            json!("pending"),
+            json!("closed"),
+            json!("expired"),
+            json!("Open"),
+            json!("OPEN"),
+            json!("open "),
+            json!("open --json"),
+            json!("open,done"),
+            json!(""),
+            json!(null),
+            json!(7),
+            json!(["open"]),
+        ] {
+            refused(json!({ "kind": "queueList", "state": state }));
+        }
+        // The state is always said: the screen asks for one tab's items.
+        refused(json!({ "kind": "queueList" }));
+        // A filter left out, or given as null, is no filter: the words carry none.
+        assert_eq!(
+            events_line(
+                json!({ "kind": "queueList", "state": "open", "channel": null, "limit": null })
+            ),
+            ["queue", "list", "--state", "open"]
+        );
+        for (field, value) in [
+            ("channel", json!("events")),
+            ("channel", json!("core")),
+            ("channel", json!("Gmail")),
+            ("channel", json!("teams")),
+            ("channel", json!("gmail --json")),
+            ("channel", json!("")),
+            ("rule", json!("")),
+            ("rule", json!("-r")),
+            ("rule", json!("--json")),
+            ("rule", json!("rule 1")),
+            ("rule", json!("rule-1 --state all")),
+            ("rule", json!("rule\n")),
+            ("rule", json!("rule\u{202e}")),
+            ("rule", json!("r".repeat(129))),
+            ("rule", json!(7)),
+            ("rule", json!(["rule-1"])),
+            ("since", json!("1d")),
+            ("since", json!("today")),
+            ("since", json!("365d")),
+            ("since", json!("2026-10-25T00:00:00.000Z")),
+            ("since", json!("7d --limit 5")),
+            ("since", json!({ "today": 1_792_886_401u64 })),
+            ("since", json!({ "today": 0 })),
+            ("since", json!(7)),
+            ("limit", json!(0)),
+            ("limit", json!(201)),
+            ("limit", json!(-1)),
+            ("limit", json!(1.5)),
+            ("limit", json!("100")),
+            ("account", json!("example/gmail")),
+            ("itemId", json!(QUEUE_ITEM)),
+            ("show", json!(true)),
+            ("content", json!(false)),
+            ("approval", json!(ID)),
+            ("args", json!(["--all"])),
+        ] {
+            let mut given = json!({ "kind": "queueList", "state": "open" });
+            given[field] = value;
+            refused(given);
+        }
+        for kind in ["queueCounts", "queueClear"] {
+            for (field, value) in [
+                ("state", json!("done")),
+                ("itemId", json!(QUEUE_ITEM)),
+                ("rule", json!("rule-1")),
+                ("approval", json!(ID)),
+                ("args", json!(["--all"])),
+                ("force", json!(true)),
+            ] {
+                let mut given = json!({ "kind": kind });
+                given[field] = value;
+                refused(given);
+            }
+        }
+        // What the queue's CLI has besides, the app never calls: `show` reads one item it already listed, `items` is
+        // the agents' content-free list, and nothing approves, deletes or reads an item another way.
+        for kind in [
+            "queueShow",
+            "queueItems",
+            "queueApprove",
+            "queueDelete",
+            "queueRead",
+            "queueOpen",
+            "queuePurge",
+            "queue",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "itemId": QUEUE_ITEM }));
+        }
+        assert_eq!(
+            QueueLimit::try_from(0).expect_err("none").code,
+            "APP_REFUSED"
+        );
+        assert_eq!(
+            QueueLimit::try_from(QUEUE_LIMIT_MAX).map(u64::from).ok(),
+            Some(200)
+        );
     }
 
     /// Today's start is written as core reads an ISO time, in UTC, for any day from 2020 to 2099.

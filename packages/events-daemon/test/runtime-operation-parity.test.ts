@@ -43,6 +43,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'deliveries',
     'delivery',
     'held',
+    'queue',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -101,8 +102,18 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_target_remove',
         'events_target_update',
         'events_targets_list',
+        'events_queue_items',
+        'events_queue_counts',
+        'events_queue_done',
+        'events_queue_dismiss',
+        'events_queue_reopen',
       ].sort(),
     );
+    for (const contentRead of ['events_queue_list', 'events_queue_show', 'events_queue_clear'])
+      assert.ok(
+        !names.includes(contentRead),
+        `${contentRead}: no MCP tool reads what a queue item says or clears the person's queue`,
+      );
     assert.ok(!names.includes('events_run'), 'the owner-starting command is not an MCP tool');
     assert.ok(!names.includes('events_approve'), 'standing disclosure approval is terminal-only');
     assert.ok(!names.includes('events_dryrun_list'), 'retained local content has no MCP selection surface');

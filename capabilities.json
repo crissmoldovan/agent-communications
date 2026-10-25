@@ -2596,6 +2596,84 @@
       "reason": "Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context."
     },
     {
+      "id": "events-daemon.queue.list",
+      "package": "events-daemon",
+      "cli": "queue list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "queueList",
+      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says."
+    },
+    {
+      "id": "events-daemon.queue.show",
+      "package": "events-daemon",
+      "cli": "queue show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "queueShow",
+      "argv": ["qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"],
+      "expect": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" },
+      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says."
+    },
+    {
+      "id": "events-daemon.queue.items",
+      "package": "events-daemon",
+      "cli": "queue items",
+      "mcp": "events_queue_items",
+      "status": "both",
+      "operation": "queueItems"
+    },
+    {
+      "id": "events-daemon.queue.counts",
+      "package": "events-daemon",
+      "cli": "queue counts",
+      "mcp": "events_queue_counts",
+      "status": "both",
+      "operation": "queueCounts"
+    },
+    {
+      "id": "events-daemon.queue.done",
+      "package": "events-daemon",
+      "cli": "queue done",
+      "mcp": "events_queue_done",
+      "status": "both",
+      "operation": "queueDone",
+      "argv": ["qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"],
+      "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" },
+      "expect": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" }
+    },
+    {
+      "id": "events-daemon.queue.dismiss",
+      "package": "events-daemon",
+      "cli": "queue dismiss",
+      "mcp": "events_queue_dismiss",
+      "status": "both",
+      "operation": "queueDismiss",
+      "argv": ["qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"],
+      "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" },
+      "expect": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" }
+    },
+    {
+      "id": "events-daemon.queue.reopen",
+      "package": "events-daemon",
+      "cli": "queue reopen",
+      "mcp": "events_queue_reopen",
+      "status": "both",
+      "operation": "queueReopen",
+      "argv": ["qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"],
+      "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" },
+      "expect": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" }
+    },
+    {
+      "id": "events-daemon.queue.clear",
+      "package": "events-daemon",
+      "cli": "queue clear",
+      "mcp": null,
+      "status": "exception",
+      "operation": "queueClear",
+      "reason": "an agent must not be able to make the person's queue disappear"
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

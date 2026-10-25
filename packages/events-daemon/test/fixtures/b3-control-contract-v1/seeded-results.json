@@ -164,5 +164,101 @@
         "representation": "plain"
       }
     }
+  },
+  {
+    "name": "queue-show-result",
+    "request": {
+      "operation": "queue-show",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    },
+    "result": {
+      "item": {
+        "id": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D",
+        "state": "open",
+        "stateAt": "2026-10-25T12:00:01.000Z",
+        "arrivedAt": "2026-10-25T12:00:00.000Z",
+        "expiresAt": "2026-11-01T12:00:01.000Z",
+        "rule": {
+          "id": "rule-1",
+          "version": 1,
+          "name": "rule-1"
+        },
+        "channel": "gmail",
+        "account": {
+          "id": "ibx_AAAAAAAAAAAAAAAA",
+          "alias": "work/gmail"
+        },
+        "from": {
+          "name": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-name\">\nA Sender\n</untrusted-content boundary=\"BOUNDARY\">",
+          "address": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-address\">\nsender@example.test\n</untrusted-content boundary=\"BOUNDARY\">"
+        },
+        "subject": "<untrusted-content boundary=\"BOUNDARY\" field=\"subject\">\nQuarterly numbers\n</untrusted-content boundary=\"BOUNDARY\">",
+        "text": "<untrusted-content boundary=\"BOUNDARY\" field=\"text\">\nCan you look at these by Friday?\n</untrusted-content boundary=\"BOUNDARY\">",
+        "link": {
+          "kind": "gmail",
+          "url": "https://mail.google.com/mail/?authuser=me%40example.test#all/18c0ffee0123abcd"
+        },
+        "judge": {
+          "state": "answered",
+          "id": "judge-1",
+          "kind": "typesafe",
+          "model": "jev-1.13.0",
+          "question": "Does this need a reply from me?",
+          "answer": "yes",
+          "confidence": 0.86,
+          "uncalibrated": false
+        }
+      }
+    }
+  },
+  {
+    "name": "queue-done-result",
+    "request": {
+      "operation": "queue-done",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    },
+    "result": {
+      "item": {
+        "id": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D",
+        "state": "done",
+        "stateAt": "2026-10-25T13:00:00.000Z"
+      }
+    }
+  },
+  {
+    "name": "queue-dismiss-result",
+    "request": {
+      "operation": "queue-dismiss",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    },
+    "result": {
+      "item": {
+        "id": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D",
+        "state": "dismissed",
+        "stateAt": "2026-10-25T13:00:00.000Z"
+      }
+    }
+  },
+  {
+    "name": "queue-reopen-result",
+    "request": {
+      "operation": "queue-reopen",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    },
+    "result": {
+      "item": {
+        "id": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D",
+        "state": "open",
+        "stateAt": "2026-10-25T13:01:00.000Z"
+      }
+    }
   }
 ]

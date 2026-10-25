@@ -5,11 +5,14 @@ import { productLabel, readApprovals, When } from '../components/ApprovalCard.ts
 import { Gated } from '../components/NeedsNewerCli.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
-import { COPY, type Screen } from '../copy.ts';
+import { COPY, needsLine, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
+import { GATES } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { PRODUCTS } from '../ipc.ts';
+import { noQueueYet } from '../queue.ts';
 import { NOTHING_WAITING } from './Approvals.tsx';
+import { QUEUE_COPY } from './Queue.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -235,6 +238,31 @@ function ApprovalsWaiting() {
   );
 }
 
+/**
+ * How many items wait in the queue (design 2026-10-25-action-queue §4.6), from the counts the app shares: the count, and
+ * the Queue screen's own empty lines when there are none; or what the events service needs first.
+ */
+function QueueWaiting() {
+  const { queueCounts, eventsVersion } = useAppData();
+  if (queueCounts === 'absent') return null;
+  if (queueCounts === 'unsupported') {
+    const version = eventsVersion !== 'absent' && eventsVersion.state === 'ready' ? eventsVersion.value : null;
+    return <Caption>{needsLine(GATES.queue, version)}</Caption>;
+  }
+  return (
+    <TileState value={queueCounts}>
+      {(counts) => (
+        <>
+          <Reading>{counts.open}</Reading>
+          {counts.open > 0 ? null : (
+            <Caption>{noQueueYet(counts) ? QUEUE_COPY.noQueue : QUEUE_COPY.nothingWaiting}</Caption>
+          )}
+        </>
+      )}
+    </TileState>
+  );
+}
+
 /** Where a standing approval holds, in a few words: its conversations' ids, or the threads the account is in. */
 function placesWords(places: unknown): ReactNode {
   if (!isRecord(places)) return null;
@@ -328,8 +356,9 @@ function EventsReading() {
 
 /**
  * The version, the update status, each doctor, what waits, standing approvals and the events service (DA5.1), from
- * the data the app shares. Only the standing approvals are read here, once. The three readings a person looks for
- * first are tiles; the rest are quiet lists under them.
+ * the data the app shares. Only the standing approvals are read here, once. The readings a person looks for first are
+ * tiles — the approvals waiting and, with the events service, the queue beside them (0.30.0, §4.6) — and the rest are
+ * quiet lists under them.
  */
 export function Overview({ onScreen }: { onScreen?: (screen: Screen) => void }) {
   const { installation } = useAppData();
@@ -341,7 +370,7 @@ export function Overview({ onScreen }: { onScreen?: (screen: Screen) => void }) 
   return (
     <ScreenFrame title="Overview">
       <div className="flex flex-col gap-(--cue-space-6)">
-        <Grid cols={events ? 3 : 2} gap={4}>
+        <Grid cols={events ? 4 : 2} gap={4}>
           <Tile
             label="Approvals waiting"
             action={
@@ -354,6 +383,20 @@ export function Overview({ onScreen }: { onScreen?: (screen: Screen) => void }) 
           >
             <ApprovalsWaiting />
           </Tile>
+          {events ? (
+            <Tile
+              label="Queue"
+              action={
+                onScreen === undefined ? undefined : (
+                  <Button variant="secondary" size="sm" onClick={() => onScreen('queue')}>
+                    Open Queue
+                  </Button>
+                )
+              }
+            >
+              <QueueWaiting />
+            </Tile>
+          ) : null}
           {events ? (
             <Tile label="Event service">
               <EventsReading />

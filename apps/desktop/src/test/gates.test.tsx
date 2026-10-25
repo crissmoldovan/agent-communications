@@ -14,6 +14,7 @@ async function advance(ms: number): Promise<void> {
 
 const LABELS: Record<Screen, string> = {
   overview: 'Overview',
+  queue: 'Queue',
   accounts: 'Accounts',
   approvals: 'Approvals',
   activity: 'Activity',
@@ -41,7 +42,14 @@ describe('what each CLI version supports', () => {
       layaJudge: '0.25.0',
       judges: '0.17.0',
       activity: '0.29.0',
+      queue: '0.30.0',
     });
+    // The queue is the event service's from 0.30.0, read from its own version, a pull request's build of it included.
+    expect(supports('0.29.0', 'queue')).toBe(false);
+    expect(supports('0.29.9', 'queue')).toBe(false);
+    expect(supports('0.30.0', 'queue')).toBe(true);
+    expect(supports('0.30.0-feat-0.30', 'queue')).toBe(true);
+    expect(supports(null, 'queue')).toBe(false);
     // The activity log is core's from 0.29.0, a pull request's build of it included.
     expect(supports('0.28.0', 'activity')).toBe(false);
     expect(supports('0.29.0', 'activity')).toBe(true);
@@ -87,6 +95,8 @@ describe('the gated sections', () => {
       ['agent', ['Needs 0.22.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.']],
       ['updates', ['Needs 0.24.0 or later; this machine has 0.21.0.']],
       ['activity', ['Needs 0.29.0 or later; this machine has 0.21.0.']],
+      // The queue is gated on the events service's own version, which the fake bridge gives as 0.24.0.
+      ['queue', ['Needs 0.30.0 or later; this machine has 0.24.0.']],
     ];
     for (const [name, lines] of expectations) {
       const main = await open(name);
@@ -107,6 +117,12 @@ describe('the gated sections', () => {
       'updateStatus',
       'activitySessions',
       'activityShow',
+      'queueList',
+      'queueCounts',
+      'queueDone',
+      'queueDismiss',
+      'queueReopen',
+      'queueClear',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.
