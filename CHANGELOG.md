@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.28.0
 
 **The desktop app, `desktop-v0.28.0`, has a new look: calm, soft and quiet, in the way of Linear and QuotaMate.** The
 owner asked for it after using 0.26: the old look was clunky, its fonts big and its monospaced labels terminal-like.
