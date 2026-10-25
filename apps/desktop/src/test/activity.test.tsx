@@ -237,7 +237,11 @@ describe('Activity', () => {
     expect(within(timeline).getByText('the target answered 503')).toBeTruthy();
   });
 
-  it('filters by channel, account, kind and outcome, each a closed choice passed on as it is', async () => {
+  // Four filters chosen in turn, each read again: past Vitest's 5 s on the slower macOS Intel runner (5.4 s on 0.29.0's
+  // second dry run), so it has 20 s.
+  it('filters by channel, account, kind and outcome, each a closed choice passed on as it is', {
+    timeout: 20_000,
+  }, async () => {
     const bridge = bridgeAt();
     renderApp(bridge, { screen: 'activity' });
     await openSession(WINDOW);
