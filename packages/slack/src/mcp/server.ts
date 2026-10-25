@@ -18,6 +18,18 @@ import {
 } from '@agentcomms/core';
 import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import {
+  describeChannels,
+  describeDeletedDraft,
+  describeDownload,
+  describeFiles,
+  describeHistory,
+  describeIcon,
+  describePeople,
+  describeSearch,
+  describeThread,
+  recordSlack,
+} from '../activity.ts';
 import type { FetchLike } from '../api/guard.ts';
 import { exitAfterRefreshes, settleBeforeExit, type WarningSink } from '../auth/exit.ts';
 import { BROADCASTS } from '../compose/blocks.ts';
@@ -209,7 +221,9 @@ function listOf(names: readonly string[]): string {
 }
 
 export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promise<SlackMcpServer> {
-  const context = new SlackContext({ ...options, surface: 'mcp' });
+  // What the client said it is, once one has connected: the activity log's session names it (design 2026-10-25-activity).
+  const client: { info?: () => { name: string; version?: string } | undefined } = {};
+  const context = new SlackContext({ ...options, surface: 'mcp', clientInfo: () => client.info?.() });
   const pinned = options.workspace;
   /*
    * Resolved now, and the id kept, so a pinned server fails loudly at start-up rather than on the first call —
@@ -221,6 +235,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     { name: 'agent-slack', version: VERSION },
     { instructions: await buildInstructions(context, pinned) },
   );
+  client.info = () => server.server.getClientVersion();
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text
@@ -525,8 +540,17 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const { call } = await session(await resolve(args.workspace));
-        return reply(await listChannels(call, { all: args.all ?? false, limit: args.limit ?? 100 }));
+        const name = await resolve(args.workspace);
+        // Recorded from the opening of the workspace on, so a sign-in that has lapsed is a failed read too.
+        const result = await recordSlack(
+          context,
+          name,
+          'slack.channels',
+          'read',
+          async () => listChannels((await session(name)).call, { all: args.all ?? false, limit: args.limit ?? 100 }),
+          describeChannels,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -551,16 +575,25 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const { call, name, teamId } = await session(await resolve(args.workspace));
-        return reply(
-          await readChannel(call, name, args.channel, {
-            limit: args.limit ?? 50,
-            oldest: args.oldest,
-            latest: args.latest,
-            cursor: args.cursor,
-            ourTeamId: teamId,
-          }),
+        const workspace = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          workspace,
+          'slack.read',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(workspace);
+            return readChannel(call, name, args.channel, {
+              limit: args.limit ?? 50,
+              oldest: args.oldest,
+              latest: args.latest,
+              cursor: args.cursor,
+              ourTeamId: teamId,
+            });
+          },
+          describeHistory(args.channel),
         );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -583,14 +616,23 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const { call, name, teamId } = await session(await resolve(args.workspace));
-        return reply(
-          await readThread(call, name, args.channel, args.ts, {
-            limit: args.limit ?? 100,
-            cursor: args.cursor,
-            ourTeamId: teamId,
-          }),
+        const workspace = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          workspace,
+          'slack.thread',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(workspace);
+            return readThread(call, name, args.channel, args.ts, {
+              limit: args.limit ?? 100,
+              cursor: args.cursor,
+              ourTeamId: teamId,
+            });
+          },
+          describeThread,
         );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -620,8 +662,19 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
         // The numbers before the workspace: opening it reads the secret store and may renew a token with Slack, and a
         // refusal that needs nothing but the number should cost neither — see `searchPaging`. `search` does the same.
         const { limit, page } = searchPaging({ limit: args.limit, page: args.page, surface: 'mcp' });
-        const { call, name, teamId } = await session(await resolve(args.workspace));
-        return reply(await searchMessages(call, name, args.query, { limit, page, ourTeamId: teamId, surface: 'mcp' }));
+        const workspace = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          workspace,
+          'slack.search',
+          'read',
+          async () => {
+            const { call, name, teamId } = await session(workspace);
+            return searchMessages(call, name, args.query, { limit, page, ourTeamId: teamId, surface: 'mcp' });
+          },
+          describeSearch,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -639,8 +692,16 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const { call } = await session(await resolve(args.workspace));
-        return reply(await listPeople(call, { limit: args.limit ?? 200 }));
+        const name = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          name,
+          'slack.people',
+          'read',
+          async () => listPeople((await session(name)).call, { limit: args.limit ?? 200 }),
+          describePeople,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -660,7 +721,15 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     async (args, ctx) => {
       try {
         const name = await resolve(args.workspace);
-        return reply(await makeAgentIcon(context, await session(name), { signal: ctx.mcpReq.signal }));
+        const result = await recordSlack(
+          context,
+          name,
+          'slack.icon.make',
+          'read',
+          async () => makeAgentIcon(context, await session(name), { signal: ctx.mcpReq.signal }),
+          describeIcon,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -685,8 +754,16 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
       try {
         // The numbers before the workspace, as `slack_search` checks them — see `filesPaging`. `files` does the same.
         const { limit, page } = filesPaging({ limit: args.limit, page: args.page, surface: 'mcp' });
-        const { call } = await session(await resolve(args.workspace));
-        return reply(await listFiles(call, { channel: args.channel, limit, page, surface: 'mcp' }));
+        const name = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          name,
+          'slack.files',
+          'read',
+          async () => listFiles((await session(name)).call, { channel: args.channel, limit, page, surface: 'mcp' }),
+          describeFiles,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -751,12 +828,21 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
          * download went on fetching until the file was whole or its own limit ran out — thirty seconds of a host gone
          * silent — and then fetched and saved the files after it. The command has no signal: Ctrl-C ends the process.
          */
-        return reply(
-          await downloadFiles(context, await session(name), request, {
-            download: options.fileDownload,
-            signal: ctx.mcpReq.signal,
-          }),
+        // Two rows, one operation: the first call asks where to save — an approval the person answers — and the call with
+        // the `choiceId` saves, a read of Slack.
+        const result = await recordSlack(
+          context,
+          name,
+          request.choiceId === undefined ? 'slack.files.download' : 'slack.files.download.answer',
+          request.choiceId === undefined ? 'approval' : 'read',
+          async () =>
+            downloadFiles(context, await session(name), request, {
+              download: options.fileDownload,
+              signal: ctx.mcpReq.signal,
+            }),
+          describeDownload,
         );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
@@ -1002,8 +1088,19 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
     async (args) => {
       try {
-        const { account } = requireWorkspace(await context.config(), await resolve(args.workspace), context.handoffs);
-        return reply(await deleteOwnDraft(drafts(), account.id, args.draftId));
+        const name = await resolve(args.workspace);
+        const result = await recordSlack(
+          context,
+          name,
+          'slack.draft.delete',
+          'approval',
+          async () => {
+            const { account } = requireWorkspace(await context.config(), name, context.handoffs);
+            return deleteOwnDraft(drafts(), account.id, args.draftId);
+          },
+          describeDeletedDraft,
+        );
+        return reply(result);
       } catch (error) {
         return fail(error);
       }
