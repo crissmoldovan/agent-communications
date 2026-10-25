@@ -90,7 +90,13 @@
             "version": { "$ref": "#/$defs/positive" },
             "kind": { "const": "queue" },
             "retentionMs": { "$ref": "#/$defs/queueRetention" },
-            "show": { "enum": ["summary", "minimal"] }
+            "show": { "enum": ["summary", "minimal"] },
+            "lane": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["name"],
+              "properties": { "name": { "$ref": "#/$defs/laneName" } }
+            }
           }
         },
         {
@@ -1117,6 +1123,7 @@
       }
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
     "queueRetention": { "type": "integer", "minimum": 86400000, "maximum": 2592000000 },
     "queueState": { "enum": ["open", "done", "dismissed"] },
     "queueStateFilter": { "enum": ["open", "done", "dismissed", "all"] },

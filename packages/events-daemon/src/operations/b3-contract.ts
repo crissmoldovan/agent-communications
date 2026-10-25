@@ -1410,8 +1410,19 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
     typeof value.challenge.expiresAt !== 'number'
   )
     throw new TypeError('a ready approval preview is malformed');
-  normaliseActivationDocument(value.preview as ActivationDocumentV1);
+  const document = normaliseActivationDocument(value.preview as ActivationDocumentV1);
   const laya = Object.hasOwn(value, 'layaJudge') ? renderLayaJudgePreviewV3(value.layaJudge) : [];
+  // Routing B2: a lane's reading is part of the approved target, so the preview says who may read it.
+  const lanes =
+    document.kind === 'rule'
+      ? [
+          ...new Set(
+            document.rule.targets.flatMap((target) =>
+              target.kind === 'queue' && target.lane !== undefined ? [target.lane.name] : [],
+            ),
+          ),
+        ].map((name) => `Items in lane ${name} can be read by the agent window you bind to it.`)
+      : [];
   const structured = {
     approvalId: value.approvalId,
     digest: value.digest,
@@ -1431,6 +1442,7 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
+      ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,
       `Expires ${new Date(value.challenge.expiresAt).toISOString()}`,

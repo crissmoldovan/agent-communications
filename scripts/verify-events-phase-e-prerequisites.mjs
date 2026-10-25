@@ -15,10 +15,13 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.30.0 (the action queue) is one such change, and only additive: the schema, the desktop request vectors and the
  * ordinary and seeded result vectors gain the eight `queue-*` owner wires, the `queue` target document, a rule's
  * optional `retention.queueMs` and a rule version's optional tightening preview. No existing branch changed.
+ *
+ * 0.31.0 (routing's lanes) is another, also only additive: the `queue` target document gains its optional
+ * `lane: { name }`, and the schema and vectors gain the person's three `lane-*` owner wires (list, bind, unbind).
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '2dcb4794a542b022b8d04e517906df5a873be41d055c1374383baab351b0958f',
+    '90a4e968087d074c19c0180b82d203aee1a6de4697bf7350877bf97df22154e6',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':

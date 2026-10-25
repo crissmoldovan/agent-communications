@@ -251,6 +251,24 @@ function canonicalRuleSource(value: unknown): CanonicalRuleSource {
   }
 }
 
+/**
+ * A lane is its name (routing design B5): within one rule, two different queue targets cannot carry the same lane. The
+ * activation check (`ImmutableVersions.prepareRule`) holds the same across every active rule.
+ */
+function assertOneTargetPerLane(targets: readonly TargetDocument[]): void {
+  const carriers = new Map<string, string>();
+  for (const target of targets) {
+    if (target.kind !== 'queue' || target.lane === undefined) continue;
+    const carrier = carriers.get(target.lane.name);
+    if (carrier !== undefined && carrier !== target.targetId)
+      fail(
+        `lane ${target.lane.name} is carried by two queue targets of this rule; a lane is its name, so one target carries it`,
+        'LANE_NAME_IN_USE',
+      );
+    carriers.set(target.lane.name, target.targetId);
+  }
+}
+
 /** Validates a Phase-D full rule shape and returns its canonical data-only form. */
 export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocument {
   const rule = cloneJsonRecord(value, 'a rule document');
@@ -286,6 +304,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
 
   const targets = Array.isArray(rule.targets) ? rule.targets.map(canonicalTarget) : fail('rule targets are an array');
   if (targets.length === 0) return fail('a B1 rule has at least one dry-run target');
+  assertOneTargetPerLane(targets);
   const subscribers = Array.isArray(rule.subscribers)
     ? rule.subscribers.map(canonicalSubscriber)
     : fail('rule subscribers are an array');
