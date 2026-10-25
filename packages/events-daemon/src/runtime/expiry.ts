@@ -3,6 +3,7 @@ import { fixedDeadline } from '../store/retention.ts';
 import { expireHeldDecisionsInTransaction } from './holds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeExpiredB2StreamRecords } from './phase-d-b2-retention.ts';
+import { expireQueueItems } from './queue-retention.ts';
 import { degradeResetBarrier } from './system-reset-outbox.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
@@ -47,6 +48,10 @@ export interface ExpirySweepResult {
   readonly projections: number;
   readonly decisionMetadata: number;
   readonly sourceStages: number;
+  /** Queue items whose content expired in this sweep; their content-free rows stay one retention more. */
+  readonly queueContent: number;
+  /** Content-free queue rows that reached their own end in this sweep. */
+  readonly queueRows: number;
 }
 
 /** Source-specific expiry that needs to decrypt a staged record before it can derive content-free terminal keys. */
@@ -207,6 +212,7 @@ export class EventExpiry {
       }
       const localRecords = Number(database.prepare('DELETE FROM dryrun_log WHERE expires_at <= ?').run(now).changes);
       const streamRecords = purgeExpiredB2StreamRecords(database, now);
+      const queue = expireQueueItems(database, now);
       // D8: an expired projection ends with its content-free terminal outcome, recorded in the same transaction as
       // the purge, so a sweep never makes an outcome disappear. Evaluation records the same outcome when it gets
       // there first; the unique (event, rule, version) decision keeps them one.
@@ -256,7 +262,16 @@ export class EventExpiry {
           .run(now, now).changes,
       );
       const sourceStages = this.#expireSourceStages(database, now);
-      return { deliveries, localRecords, streamRecords, projections, decisionMetadata, sourceStages };
+      return {
+        deliveries,
+        localRecords,
+        streamRecords,
+        projections,
+        decisionMetadata,
+        sourceStages,
+        queueContent: queue.content,
+        queueRows: queue.rows,
+      };
     });
   }
 

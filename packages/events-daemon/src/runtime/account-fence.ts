@@ -4,6 +4,7 @@ import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
+import { purgeQueueItemsForAccount } from './queue-retention.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
 
 export interface EventAccountScope {
@@ -162,6 +163,7 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
   database.prepare(`DELETE FROM dryrun_log WHERE ${ownedBy('dryrun_log')}`).run(...owned);
+  purgeQueueItemsForAccount(database, { source, accountId });
   database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
   database
     .prepare(

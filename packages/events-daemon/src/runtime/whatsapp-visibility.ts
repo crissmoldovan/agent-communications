@@ -3,6 +3,7 @@ import { chatKindOf } from '@agentcomms/whatsapp';
 import type { EventDatabase } from '../store/database.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import type { WhatsAppVisibilityRecheck } from './phase-d-whatsapp-seam.ts';
+import { purgeQueueItemsForWhatsAppMessages } from './queue-retention.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
 
 export interface CurrentWhatsAppEventVisibility {
@@ -265,6 +266,7 @@ export class WhatsAppVisibilityFence {
       this.#store.database
         .prepare(`DELETE FROM dryrun_log WHERE account_id = ? AND whatsapp_message_id IN (${marks})`)
         .run(accountId, ...newlyHidden);
+      purgeQueueItemsForWhatsAppMessages(this.#store.database, { accountId, whatsappMessageIds: newlyHidden });
       this.#store.database
         .prepare(
           `UPDATE deliveries
