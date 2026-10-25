@@ -170,6 +170,11 @@ async function withQueue(
            VALUES (?, ?, 1, ?, ?, 'active', 'approval', 'activation', 1)`,
         )
         .run(`${ruleId}@1`, ruleId, document, sha256Hex(document));
+      store.database
+        .prepare(
+          "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', ?, 1, 'activation', 1)",
+        )
+        .run(ruleId);
     }
     const fenced: string[] = [];
     // Item content as the boundary seals it: this cipher's seal is the plain bytes, so tests can read the row.
@@ -451,6 +456,7 @@ test('QUEUE-A: queue items is content-free, and queue counts gives the open, don
       done: 1,
       dismissed: 1,
       byRule: [
+        { ruleId: 'rule-judged', name: 'rule-judged', open: 0 },
         { ruleId: 'rule-mail', name: 'rule-mail', open: 1 },
         { ruleId: 'rule-slack', name: 'rule-slack', open: 1 },
       ],
@@ -557,4 +563,56 @@ test('QUEUE-A: a content read repeats its fence after decrypting, so expiry, a t
       'removed meanwhile: a show refuses',
     );
   }, removal);
+});
+
+test('QUEUE-A: queue counts names every active queue rule, with none open until its first match', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withQueue(async ({ store, queue }) => {
+    const insertRule = (ruleId: string, document: Record<string, unknown>, state: 'active' | 'revoked' | null) => {
+      const text = canonicalJson(document);
+      store.database
+        .prepare(
+          `INSERT INTO rule_versions
+             (id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, activated_at)
+           VALUES (?, ?, 1, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          `${ruleId}@1`,
+          ruleId,
+          text,
+          sha256Hex(text),
+          state,
+          state === null ? null : 'approval',
+          state === null ? null : 'activation',
+          state === null ? null : 1,
+        );
+      if (state === 'active')
+        store.database
+          .prepare(
+            "INSERT INTO active_versions (kind, object_id, version, current_cutover_id, activated_at) VALUES ('rule', ?, 1, 'activation', 1)",
+          )
+          .run(ruleId);
+    };
+    const dryRunOnly = {
+      ...ruleDocument('rule-dry-run'),
+      targets: [{ targetId: 'log', version: 1, kind: 'dry-run', retentionMs: DAY }],
+    };
+    insertRule('rule-new-queue', ruleDocument('rule-new-queue'), 'active');
+    insertRule('rule-dry-run', dryRunOnly, 'active');
+    insertRule('rule-inert-queue', ruleDocument('rule-inert-queue'), null);
+    insertRule('rule-revoked-queue', ruleDocument('rule-revoked-queue'), 'revoked');
+    seed(store, { ruleId: 'rule-mail', arrivedAt: NOW - DAY, state: 'done' });
+    assert.deepEqual(queue.counts(), {
+      open: 0,
+      done: 1,
+      dismissed: 0,
+      byRule: [
+        { ruleId: 'rule-judged', name: 'rule-judged', open: 0 },
+        { ruleId: 'rule-mail', name: 'rule-mail', open: 0 },
+        { ruleId: 'rule-new-queue', name: 'rule-new-queue', open: 0 },
+        { ruleId: 'rule-slack', name: 'rule-slack', open: 0 },
+      ],
+    });
+  });
 });

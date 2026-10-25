@@ -298,10 +298,22 @@ export class QueueStore {
     const totals = this.#store.database
       .prepare('SELECT state, COUNT(*) AS count FROM queue_items GROUP BY state')
       .all() as Array<{ state: QueueState; count: number }>;
+    // Every rule with items, and every active rule with a queue target even before its first match, so a new
+    // queue rule is listed with none open rather than looking as if nothing sent to the queue.
     const byRule = this.#store.database
       .prepare(
-        `SELECT rule_id, SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open
-           FROM queue_items GROUP BY rule_id ORDER BY rule_id`,
+        `SELECT rule_id, SUM(open) AS open FROM (
+           SELECT rule_id, CASE WHEN state = 'open' THEN 1 ELSE 0 END AS open FROM queue_items
+           UNION ALL
+           SELECT rule.rule_id, 0 AS open
+             FROM active_versions AS pointer
+             JOIN rule_versions AS rule ON rule.rule_id = pointer.object_id AND rule.version = pointer.version
+            WHERE pointer.kind = 'rule' AND rule.state = 'active'
+              AND EXISTS (
+                SELECT 1 FROM json_each(rule.document, '$.targets') AS target
+                 WHERE json_extract(target.value, '$.kind') = 'queue'
+              )
+         ) GROUP BY rule_id ORDER BY rule_id`,
       )
       .all() as Array<{ rule_id: string; open: number }>;
     const total = (state: QueueState) => totals.find((row) => row.state === state)?.count ?? 0;
