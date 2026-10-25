@@ -44,6 +44,7 @@ operation's exact wording without asking for, reading, typing or relaying secret
 |---|---|---|
 | dry-run record list | A person selects retained dry-run records at a terminal/app. | Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer. |
 | dry-run record show | A person reads one retained dry-run record at a terminal/app. | Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context. |
+| queue item list and show | A person reads what their queue's items say, at a terminal or in the app. | Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says. |
 | retained rule test | A person tests a rule against retained sender content. | Retained sender content may be selected only by a person outside model context. |
 | target resume | A person decides whether to reopen a degraded target reset barrier. | A person, not model context, decides to reopen a degraded target reset barrier. |
 | held decision | A person resolves a held model decision at a terminal/app. | A held model decision can be resolved only by a person at terminal/app, never by model context. |

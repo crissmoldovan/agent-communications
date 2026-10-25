@@ -2602,7 +2602,7 @@
       "mcp": null,
       "status": "exception",
       "operation": "queueList",
-      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says (action queue design Q1)."
+      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says."
     },
     {
       "id": "events-daemon.queue.show",
@@ -2613,7 +2613,7 @@
       "operation": "queueShow",
       "argv": ["qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"],
       "expect": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" },
-      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says (action queue design Q1)."
+      "reason": "Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says."
     },
     {
       "id": "events-daemon.queue.items",
