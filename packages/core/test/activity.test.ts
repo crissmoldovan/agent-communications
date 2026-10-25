@@ -15,8 +15,10 @@ import {
   type ProcessProbe,
   parsePsLine,
   recordActivity,
+  SessionIdentityCache,
   sessionIdentity,
   sharedFolder,
+  warmSessionIdentity,
   withActivity,
 } from '../src/activity.ts';
 import { readActivitySettings } from '../src/activity-settings.ts';
@@ -613,6 +615,7 @@ test('comms_activity answers only for the calling session: it takes no session, 
       'since',
     ]);
     assert.match(tool.description ?? '', /the latest 50 lines of the last 24 hours/);
+    assert.match(tool.description ?? '', /grouping could not be read — always on Windows.*shows nothing here/);
     const tooMany = (await client.callTool({ name: 'comms_activity', arguments: { limit: 201 } })) as {
       isError?: boolean;
     };
@@ -1042,4 +1045,73 @@ test('a process in /, the home folder or a system folder is never grouped, so on
   }
   assert.equal(sharedFolder('C:\\Users\\jo\\work\\acme', 'C:\\Users\\jo', 'win32'), false);
   assert.equal(sharedFolder('/tmp/acme', '/Users/jo', 'linux'), false, 'a project in a temporary folder is one');
+});
+
+// ── Grouping is worked out in the background, and a timeout is not kept (0.29.0 review) ─────────────────────────
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const CLAUDE = { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'claude' };
+
+test('a timeout working out the session is not kept: a call a minute later reads again, and groups', async () => {
+  const cache = new SessionIdentityCache();
+  let clock = Date.parse('2026-10-25T10:00:00.000Z');
+  let asked = 0;
+  let answers = false;
+  const probe: ProcessProbe = () => {
+    asked += 1;
+    return answers ? Promise.resolve(CLAUDE) : new Promise(() => undefined);
+  };
+  const options = {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+    cache,
+    now: () => clock,
+    budgetMs: 40,
+    waitMs: 5,
+  };
+  const first = await sessionIdentity('mcp', undefined, options);
+  assert.equal(first.grouped, false, 'not read yet: on its own for now');
+  assert.equal(first.folder, '/work/acme');
+  await pause(100); // the background read gives up
+  answers = true;
+  clock += 30_000;
+  const soon = await sessionIdentity('mcp', undefined, options);
+  assert.equal(soon.grouped, false);
+  assert.equal(asked, 1, 'not read again within the minute');
+  assert.equal(soon.key, first.key, 'on its own, one key for the process');
+  clock += 31_000;
+  const later = await sessionIdentity('mcp', undefined, options);
+  assert.equal(asked, 2, 'read again after a minute');
+  assert.equal(later.grouped, true, 'and grouped');
+  const again = await sessionIdentity('mcp', undefined, options);
+  assert.equal(again.key, later.key);
+  assert.equal(asked, 2, 'a read that worked is kept');
+});
+
+test('warming starts the read when the server starts; the event service waits for the whole budget', async () => {
+  const slow: ProcessProbe = async () => {
+    await pause(60);
+    return CLAUDE;
+  };
+  const base = {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe: slow,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+  };
+  const warmed = new SessionIdentityCache();
+  warmSessionIdentity('mcp', { ...base, cache: warmed, budgetMs: 2000 });
+  await pause(120);
+  assert.equal((await sessionIdentity('mcp', undefined, { ...base, cache: warmed, waitMs: 0 })).grouped, true);
+  // Not warmed, a server's first call waits only a little and goes on alone; the service waits for the answer.
+  const cold = await sessionIdentity('mcp', undefined, { ...base, cache: new SessionIdentityCache(), waitMs: 5 });
+  assert.equal(cold.grouped, false);
+  const service = await sessionIdentity('daemon', undefined, { ...base, cache: new SessionIdentityCache(), waitMs: 5 });
+  assert.equal(service.grouped, true);
 });

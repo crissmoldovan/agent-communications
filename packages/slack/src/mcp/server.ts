@@ -15,6 +15,7 @@ import {
   updateToolNotice,
   waitCallOptions,
   waitForApproval,
+  warmSessionIdentity,
 } from '@agentcomms/core';
 import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -235,6 +236,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     { name: 'agent-slack', version: VERSION },
     { instructions: await buildInstructions(context, pinned) },
   );
+  // Which agent window started this server, read in the background now, so its first calls find it done (S2).
+  warmSessionIdentity('mcp');
   client.info = () => server.server.getClientVersion();
 
   /*

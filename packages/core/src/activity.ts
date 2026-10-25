@@ -1031,8 +1031,12 @@ export const psProbe: ProcessProbe = (pid, timeoutMs) =>
     }
   });
 
-/** About how long working out a session may take, at most: it is done once per process. */
+/** How long a call waits for its session to be worked out: no longer, and it goes on alone for now. */
 export const SESSION_IDENTITY_BUDGET_MS = 200;
+/** How long a server's or the event service's read of its parent may take, in the background. */
+export const SESSION_IDENTITY_BACKGROUND_MS = 2000;
+/** How soon after a read that did not finish another is tried: no more than once a minute. */
+export const SESSION_IDENTITY_RETRY_MS = 60_000;
 
 export interface SessionIdentityOptions {
   /**
@@ -1045,20 +1049,26 @@ export interface SessionIdentityOptions {
    * the key, so two connections through one parent are two sessions.
    */
   connection?: string | undefined;
-  /** For a test: this process's id, its parent's, its folder, how processes are read, the system, the bound, home. */
+  /**
+   * Where what was worked out is kept: this process's own when left out — or, when any test seam below is given, nowhere,
+   * unless a test hands one in.
+   */
+  cache?: SessionIdentityCache | undefined;
+  /**
+   * For a test: this process's id, its parent's, its folder, how processes are read, the system, how long the read
+   * may take (`SESSION_IDENTITY_BACKGROUND_MS` in the background, `SESSION_IDENTITY_BUDGET_MS` for a CLI call), how
+   * long a call waits for it, the home folder, and the clock a retry is timed by.
+   */
   pid?: number | undefined;
   ppid?: number | undefined;
   cwd?: (() => string) | undefined;
   probe?: ProcessProbe | undefined;
   platform?: NodeJS.Platform | undefined;
   budgetMs?: number | undefined;
+  waitMs?: number | undefined;
   home?: string | undefined;
+  now?: (() => number) | undefined;
 }
-
-/** A random id this process made when it started (§4.3). */
-const PROCESS_ID = randomBytes(6).toString('hex');
-/** The key of this process's own session, when it is not grouped with others. */
-const OWN_KEY = randomBytes(8).toString('hex');
 
 function randomKey(): string {
   return randomBytes(8).toString('hex');
@@ -1069,17 +1079,52 @@ interface Ancestry {
   readonly folder: string | null;
   /** Nearest first; each with the parent it names in turn. */
   readonly chain: readonly (ActivityParent & { readonly ppid: number })[];
+  /**
+   * True when the read ended for good: it reached its depth, a process with no parent of its own, or a system it does
+   * not ask. False when it ran out of time or a read failed — tried again, at most once a minute.
+   */
+  readonly complete: boolean;
 }
 
-/** The ancestry of this process, read once per depth and kept: the parent cannot change while a process lives. */
-const ANCESTRY = new Map<number, Promise<Ancestry>>();
-/** A CLI call's identity, worked out once per log it was asked against. */
-const CLI_IDENTITY = new Map<string, Promise<ActivitySession>>();
+/** One background read of a process's parent: when it began, and what it found once it has finished. */
+interface AncestryRead {
+  readonly at: number;
+  readonly promise: Promise<Ancestry>;
+  settled: Ancestry | null;
+}
 
+/**
+ * What a process has worked out of its session: its random ids, its background reads of its parent, and a CLI call's
+ * identity. One per process (`sessionIdentity` keeps its own); a test makes its own.
+ */
+export class SessionIdentityCache {
+  /** A random id this process made when it started (§4.3). */
+  readonly processId: string = randomBytes(6).toString('hex');
+  /** The key of this process's own session, when it is not grouped with others. */
+  readonly ownKey: string = randomKey();
+}
+
+/** Each cache's background reads, and its CLI identity by log: held here, so the class shows only its ids. */
+const READS = new WeakMap<SessionIdentityCache, Map<string, AncestryRead>>();
+const CLI_IDENTITIES = new WeakMap<SessionIdentityCache, Map<string, Promise<ActivitySession>>>();
+
+function heldIn<V>(map: WeakMap<SessionIdentityCache, Map<string, V>>, cache: SessionIdentityCache): Map<string, V> {
+  let held = map.get(cache);
+  if (held === undefined) {
+    held = new Map();
+    map.set(cache, held);
+  }
+  return held;
+}
+
+const PROCESS_CACHE = new SessionIdentityCache();
+/** This process's own random id: a line handed in without one names this process. */
+const PROCESS_ID = PROCESS_CACHE.processId;
+
+/** `promise`, or null after `ms`. Its timer is not unref'd: whoever awaits it keeps the process alive till then. */
 function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), Math.max(0, ms));
-    timer.unref?.();
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -1093,31 +1138,87 @@ function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
   });
 }
 
-async function readAncestry(options: SessionIdentityOptions, depth: number, initIsParent: boolean): Promise<Ancestry> {
+function folderOf(options: SessionIdentityOptions): string | null {
+  try {
+    return (options.cwd ?? (() => process.cwd()))();
+  } catch {
+    return null;
+  }
+}
+
+async function readAncestry(
+  options: SessionIdentityOptions,
+  depth: number,
+  initIsParent: boolean,
+  budgetMs: number,
+): Promise<Ancestry> {
   const platform = options.platform ?? process.platform;
   const pid = options.pid ?? process.pid;
-  let folder: string | null;
-  try {
-    folder = (options.cwd ?? (() => process.cwd()))();
-  } catch {
-    folder = null;
-  }
+  const folder = folderOf(options);
   const chain: (ActivityParent & { ppid: number })[] = [];
-  if (platform === 'win32') return { pid, folder, chain };
+  if (platform === 'win32') return { pid, folder, chain, complete: true };
   const probe = options.probe ?? psProbe;
-  const deadline = Date.now() + (options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS);
+  const deadline = Date.now() + budgetMs;
   let next = options.ppid ?? process.ppid;
   // Process 1 adopts a process whose parent has gone: it is no window, except to the event service, which it starts.
   while (chain.length < depth && (next > 1 || (initIsParent && next === 1 && chain.length === 0))) {
     const left = deadline - Date.now();
-    if (left <= 0) break;
+    if (left <= 0) return { pid, folder, chain, complete: false };
     const facts = await within(probe(next, left), left);
-    if (facts === null) break;
+    if (facts === null) return { pid, folder, chain, complete: false };
     chain.push({ pid: next, startedAt: facts.startedAt, name: facts.name, ppid: facts.ppid });
     if (next === 1) break;
     next = facts.ppid;
   }
-  return { pid, folder, chain };
+  return { pid, folder, chain, complete: true };
+}
+
+/**
+ * The background read of this process's parent, begun if none is under way or kept: a read that finished is kept for
+ * good, one under way is waited on, and one that ran out of time is begun again once a minute has passed.
+ */
+function ancestryRead(
+  cache: SessionIdentityCache,
+  options: SessionIdentityOptions,
+  initIsParent: boolean,
+): AncestryRead {
+  const id = initIsParent ? 'daemon' : 'server';
+  const now = (options.now ?? Date.now)();
+  const reads = heldIn(READS, cache);
+  const held = reads.get(id);
+  if (
+    held !== undefined &&
+    (held.settled === null || held.settled.complete || now - held.at < SESSION_IDENTITY_RETRY_MS)
+  ) {
+    return held;
+  }
+  const read: AncestryRead = {
+    at: now,
+    settled: null,
+    promise: readAncestry(options, 1, initIsParent, options.budgetMs ?? SESSION_IDENTITY_BACKGROUND_MS),
+  };
+  read.promise.then(
+    (ancestry) => {
+      read.settled = ancestry;
+    },
+    () => undefined,
+  );
+  reads.set(id, read);
+  return read;
+}
+
+/**
+ * Begins working out this process's session in the background, as an MCP server or the event service starts, so its
+ * first calls find it done: a read of its parent of up to `SESSION_IDENTITY_BACKGROUND_MS`. Returns at once; never
+ * throws. A CLI call reads its own, and is not warmed.
+ */
+export function warmSessionIdentity(surface: ActivitySurface = 'mcp', options: SessionIdentityOptions = {}): void {
+  if (surface === 'cli') return;
+  try {
+    ancestryRead(options.cache ?? PROCESS_CACHE, options, surface === 'daemon');
+  } catch {
+    // Worked out on the first call instead.
+  }
 }
 
 function windowKey(parent: ActivityParent, folder: string, connection: string | undefined): string {
@@ -1171,15 +1272,20 @@ export function sharedFolder(folder: string, home: string, platform: NodeJS.Plat
 }
 
 /**
- * Which session this process's calls belong to (S2), worked out once per process and kept: its id, its parent's id,
- * start and name, its folder and the session key. Bounded to about 200 ms; never throws.
+ * Which session this process's calls belong to (S2): its id, its parent's id, start and name, its folder and the
+ * session key. Never throws.
  *
  * - **An MCP server** (`mcp`) is grouped with every other server its parent started in the same folder: one agent
- *   window. When its parent cannot be read in time, or has gone, it is ungrouped, with a key of its own.
- * - **A CLI call** (`cli`) reads up to three processes above it. When one of them is the parent of a server process
- *   that recorded a line today (or yesterday) in `options.log`, the call joins that window's session; otherwise it is
- *   a session of its own. Its `ancestors` name those processes either way.
+ *   window. Its parent is read in the background — begun by `warmSessionIdentity` as the server starts, or by its first
+ *   call — for up to two seconds; a call waits for it about 200 ms and, when it is not done, goes on alone for now. A
+ *   read that ran out of time is not kept: one a minute or more later tries again. A parent that has gone, a folder
+ *   that cannot be read, and a folder that cannot tell projects apart (`sharedFolder`: `/`, the home folder, a system
+ *   folder) leave it ungrouped, with a key of its own.
+ * - **A CLI call** (`cli`) reads up to three processes above it, within about 200 ms. When one of them is the parent
+ *   of a server process that recorded a line today (or yesterday) in `options.log`, the call joins that window's
+ *   session; otherwise it is a session of its own. Its `ancestors` name those processes either way.
  * - **The event service** (`daemon`) is grouped by its parent too, process 1 included: one session since it started.
+ *   It waits for the whole read: it records on a timer, and keeps what it is given.
  * - **On Windows** no process is grouped: a query of a process's parent and start does not answer within the bound.
  *
  * `clientInfo` is what an MCP client said it is; it is stored as that, and nothing depends on it.
@@ -1196,24 +1302,28 @@ export async function sessionIdentity(
     options.probe !== undefined ||
     options.platform !== undefined ||
     options.budgetMs !== undefined ||
-    options.home !== undefined;
+    options.waitMs !== undefined ||
+    options.home !== undefined ||
+    options.now !== undefined;
+  const cache = options.cache ?? (seams ? null : PROCESS_CACHE);
   const client = clientOf(clientInfo);
   try {
-    if (surface === 'cli' && !seams) {
+    if (surface === 'cli' && cache !== null) {
       const directory = (options.log as { directory?: string } | undefined)?.directory ?? '';
-      let held = CLI_IDENTITY.get(directory);
+      const identities = heldIn(CLI_IDENTITIES, cache);
+      let held = identities.get(directory);
       if (held === undefined) {
-        held = identityOf(surface, options, false);
-        CLI_IDENTITY.set(directory, held);
+        held = identityOf(surface, options, cache);
+        identities.set(directory, held);
       }
       return { ...(await held), ...(client === undefined ? {} : { client }) };
     }
-    const session = await identityOf(surface, options, seams);
+    const session = await identityOf(surface, options, cache);
     return { ...session, ...(client === undefined ? {} : { client }) };
   } catch {
     return {
-      key: seams ? randomKey() : OWN_KEY,
-      process: PROCESS_ID,
+      key: cache?.ownKey ?? randomKey(),
+      process: cache?.processId ?? PROCESS_ID,
       pid: options.pid ?? process.pid,
       ...(client === undefined ? {} : { client }),
       folder: null,
@@ -1226,33 +1336,55 @@ export async function sessionIdentity(
 async function identityOf(
   surface: ActivitySurface,
   options: SessionIdentityOptions,
-  seams: boolean,
+  cache: SessionIdentityCache | null,
 ): Promise<ActivitySession> {
-  const depth = surface === 'cli' ? 3 : 1;
-  const initIsParent = surface === 'daemon';
-  let ancestry: Promise<Ancestry>;
-  if (seams) ancestry = readAncestry(options, depth, initIsParent);
-  else {
-    const cached = ANCESTRY.get(depth * 2 + (initIsParent ? 1 : 0));
-    ancestry = cached ?? readAncestry(options, depth, initIsParent);
-    if (cached === undefined) ANCESTRY.set(depth * 2 + (initIsParent ? 1 : 0), ancestry);
-  }
-  const { pid, folder, chain } = await ancestry;
-  const own = seams ? randomKey() : OWN_KEY;
-  const parentOfChain = (index: number): ActivityParent | undefined => {
+  const own = cache?.ownKey ?? randomKey();
+  const processId = cache?.processId ?? randomBytes(6).toString('hex');
+  const parentOfChain = (chain: Ancestry['chain'], index: number): ActivityParent | undefined => {
     const held = chain[index];
     return held === undefined ? undefined : { pid: held.pid, startedAt: held.startedAt, name: held.name };
   };
-  const base = { process: seams ? randomBytes(6).toString('hex') : PROCESS_ID, pid, folder, surface };
   if (surface === 'cli') {
+    // A command is short: it reads its own, within the call's bound, and has no later call to try again on.
+    const { pid, folder, chain } = await readAncestry(
+      options,
+      3,
+      false,
+      options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS,
+    );
+    const base = { process: processId, pid, folder, surface };
     const ancestors = chain.map((held) => held.name);
-    const parents = chain.map((_, index) => parentOfChain(index) as ActivityParent);
+    const parents = chain.map((_, index) => parentOfChain(chain, index) as ActivityParent);
     const joined = parents.length > 0 && options.log ? await options.log.sessionOfAncestor(parents) : null;
     if (joined !== null) return { key: joined.key, ...base, parent: joined.parent, ancestors, grouped: true };
-    const parent = parentOfChain(0);
+    const parent = parentOfChain(chain, 0);
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), ancestors, grouped: false };
   }
-  const parent = parentOfChain(0);
+  const initIsParent = surface === 'daemon';
+  let ancestry: Ancestry | null;
+  if (cache === null) {
+    ancestry = await readAncestry(options, 1, initIsParent, options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS);
+  } else {
+    const read = ancestryRead(cache, options, initIsParent);
+    const wait = initIsParent
+      ? (options.budgetMs ?? SESSION_IDENTITY_BACKGROUND_MS)
+      : (options.waitMs ?? SESSION_IDENTITY_BUDGET_MS);
+    ancestry = read.settled ?? (await within(read.promise, wait));
+  }
+  if (ancestry === null) {
+    // Not worked out yet: alone for now, under this process's own key; a later call finds it done.
+    return {
+      key: own,
+      process: processId,
+      pid: options.pid ?? process.pid,
+      folder: folderOf(options),
+      grouped: false,
+      surface,
+    };
+  }
+  const { pid, folder, chain } = ancestry;
+  const base = { process: processId, pid, folder, surface };
+  const parent = parentOfChain(chain, 0);
   const home = options.home ?? homedir();
   if (parent === undefined || folder === null || sharedFolder(folder, home, options.platform ?? process.platform)) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };

@@ -4,6 +4,7 @@ import {
   toCommsError,
   UNTRUSTED_NOTICE,
   updateToolNotice,
+  warmSessionIdentity,
 } from '@agentcomms/core';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -91,6 +92,8 @@ export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}):
     { name: 'agent-whatsapp', version: VERSION },
     { instructions: await buildInstructions(context) },
   );
+  // Which agent window started this server, read in the background now, so its first calls find it done (S2).
+  warmSessionIdentity('mcp');
   client.info = () => server.server.getClientVersion();
 
   /*
