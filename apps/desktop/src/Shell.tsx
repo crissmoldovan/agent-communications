@@ -4,6 +4,7 @@ import {
   Bot,
   CheckCheck,
   History,
+  Inbox,
   LayoutDashboard,
   RefreshCw,
   Settings,
@@ -12,11 +13,13 @@ import {
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { AppearanceMenu } from './components/AppearanceMenu.tsx';
+import { QueueBadge } from './components/QueueBadge.tsx';
 import { COPY, type Screen, SECTIONS, SETTINGS } from './copy.ts';
 import { isMac } from './platform.ts';
 
 const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
+  queue: Inbox,
   accounts: Users,
   approvals: CheckCheck,
   activity: History,
@@ -28,8 +31,9 @@ const ICONS: Record<Screen, ComponentType> = {
 };
 
 /**
- * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the eight
- * sections with Settings at its foot. On macOS the header leaves the traffic lights their room.
+ * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the nine
+ * sections with Settings at its foot, Queue's with its open count. On macOS the header leaves the traffic lights their
+ * room.
  *
  * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns
  * under it, the brand over the sidebar's ground and the menu over the page's, and text the screens leave unsized is the
@@ -47,7 +51,14 @@ export function Shell({
   children: ReactNode;
 }) {
   const item = (target: Screen, label: string) => (
-    <Sidebar.Item key={target} icon={ICONS[target]} active={screen === target} onClick={() => onScreen(target)}>
+    <Sidebar.Item
+      key={target}
+      icon={ICONS[target]}
+      active={screen === target}
+      onClick={() => onScreen(target)}
+      // The queue's open count, once there is one (0.30.0): nothing else in the sidebar carries a badge.
+      {...(target === 'queue' ? { badge: <QueueBadge /> } : {})}
+    >
       {label}
     </Sidebar.Item>
   );
