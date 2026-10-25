@@ -253,8 +253,12 @@ function Sessions({
               <span className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
                 <Folder session={session} />
                 <span className="flex flex-wrap gap-x-(--cue-space-2) text-(length:--cue-text-label) text-fg-muted">
-                  <Runner session={session} />
-                  <span aria-hidden="true">·</span>
+                  {isService(session) ? null : (
+                    <>
+                      <Runner session={session} />
+                      <span aria-hidden="true">·</span>
+                    </>
+                  )}
                   <span>{session.grouped ? ACTIVITY_COPY.oneWindow : ACTIVITY_COPY.onItsOwn}</span>
                 </span>
               </span>
@@ -276,12 +280,18 @@ function Sessions({
 
 /** A session's folder, with the home as `~`, in mono: a path. */
 function Folder({ session }: { session: SessionView }) {
+  if (isService(session)) return <span className="text-fg">{runnerOf(session).said}</span>;
   if (session.folder === null) return <span className="text-fg-muted">{ACTIVITY_COPY.folderUnknown}</span>;
   return (
     <span className="truncate font-mono text-fg" title={session.folder}>
       {session.folder}
     </span>
   );
+}
+
+/** The event service's own session: it has no folder, and is named where one would be. */
+function isService(session: SessionView): boolean {
+  return session.folder === null && session.surfaces.includes('daemon');
 }
 
 /** Who ran it: its client as the client says, the event service, or a command. */
@@ -387,21 +397,27 @@ function SessionHead({ session }: { session: SessionView }) {
   return (
     <section aria-label="Session" className="flex flex-col gap-(--cue-space-2)">
       <h2 className="min-w-0 text-(length:--cue-text-emphasis) font-semibold text-fg">
-        {session.folder === null ? (
+        {isService(session) ? (
+          runner.said
+        ) : session.folder === null ? (
           <span className="text-fg-muted">{ACTIVITY_COPY.folderUnknown}</span>
         ) : (
           <span className="break-all font-mono">{session.folder}</span>
         )}
       </h2>
       <p className="flex flex-wrap items-center gap-x-(--cue-space-2) gap-y-(--cue-space-1) text-fg-muted">
-        <span>{runner.said}</span>
-        {runner.asTheClientSays ? (
-          <span className="flex items-center gap-(--cue-space-1) text-fg-subtle">
-            {ACTIVITY_COPY.asTheClientSays}
-            <InfoTip label="About the client's name" text={ACTIVITY_COPY.clientHint} />
-          </span>
-        ) : null}
-        <span aria-hidden="true">·</span>
+        {isService(session) ? null : (
+          <>
+            <span>{runner.said}</span>
+            {runner.asTheClientSays ? (
+              <span className="flex items-center gap-(--cue-space-1) text-fg-subtle">
+                {ACTIVITY_COPY.asTheClientSays}
+                <InfoTip label="About the client's name" text={ACTIVITY_COPY.clientHint} />
+              </span>
+            ) : null}
+            <span aria-hidden="true">·</span>
+          </>
+        )}
         <span className="flex items-center gap-(--cue-space-1)">
           {session.grouped ? ACTIVITY_COPY.oneWindow : ACTIVITY_COPY.onItsOwn}
           {session.processes > 1 ? `, ${session.processes} processes` : ''}

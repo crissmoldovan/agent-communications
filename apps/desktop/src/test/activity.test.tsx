@@ -96,8 +96,9 @@ describe('Activity', () => {
     expect(agent.querySelector('time[datetime="2026-10-25T09:40:12.000Z"]')).not.toBeNull();
 
     const service = daemon as HTMLElement;
-    expect(within(service).getByText(ACTIVITY_COPY.folderUnknown)).toBeTruthy();
-    expect(within(service).getByText('The event service')).toBeTruthy();
+    // The event service has no folder: it is named where a folder would be, once.
+    expect(within(service).queryByText(ACTIVITY_COPY.folderUnknown)).toBeNull();
+    expect(within(service).getAllByText('The event service')).toHaveLength(1);
     expect(within(service).getByText(ACTIVITY_COPY.onItsOwn)).toBeTruthy();
     expect(within(service).getByText('Told 2')).toBeTruthy();
     expect(service.textContent).not.toContain('as the client says');
@@ -205,6 +206,9 @@ describe('Activity', () => {
   it("the event service's session says what it delivered, from which rule, to which target (S1)", async () => {
     renderApp(bridgeAt(), { screen: 'activity' });
     const timeline = await openSession(DAEMON);
+    const head = within(main()).getByRole('region', { name: 'Session' });
+    expect(within(head).getByRole('heading', { level: 2 }).textContent).toBe('The event service');
+    expect(head.textContent).not.toContain(ACTIVITY_COPY.folderUnknown);
     expect(await within(timeline).findByText('Delivered 3 events from ‘David on Slack’ to webhook')).toBeTruthy();
     expect(within(timeline).getByText('Could not deliver 1 event from ‘Mail subjects’ to dry-run log')).toBeTruthy();
     expect(within(timeline).getByText('the target answered 503')).toBeTruthy();
