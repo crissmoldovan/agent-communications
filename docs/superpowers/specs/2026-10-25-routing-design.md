@@ -117,3 +117,65 @@ The owner, 2026-10-24: "when David is messaging me on Slack…", route it to "th
 
 ## 5. Release
 **0.31.0, a minor:** the event service and the desktop.
+
+## 6. Settled after the builder check (the lead's calls, 2026-10-26)
+
+Each answer overrides the section it names. Every call takes the more cautious side.
+
+### B1. Binding is the person's act at a terminal, not an approval an agent asks for (overrides §3.2 and §3.7)
+- **There is no `events_lane_bind` MCP tool.** The person binds with
+  `agent-events lane bind <lane> --window <id> --json`, where the id is a Claude Code session id (a UUID) or an
+  activity session key (16 hex).
+  - It refuses inside the event service's MCP server (0.30.0's marker), as `queue show` does.
+  - It needs no approval record, because the person runs it.
+- **The app's Lanes panel** lists recent agent windows from core's `activity sessions`: folder, client, last seen.
+  Its **Bind in Terminal** opens the person's terminal with that command, through the existing terminal allow-list. The
+  app never binds by itself (DA10).
+- **An agent can learn its own window id** with `events_lane_whoami`, which is content-free, to tell the person what to
+  bind.
+- **Unbind** (`lane unbind <lane>`) is a tightening. The app and the CLI apply it at once. Over MCP, a bound window may
+  unbind only its own lane.
+
+### B2. Letting a bound window read is part of the approved target (overrides §3.1 and §3.5)
+- **The `queue` target document gains `lane: { name }`.** Its canonical form and digest include it, so the rule
+  activation's D2 preview says "items in lane <name> can be read by the agent window you bind to it".
+- **Making an existing queue a lane** is a new target version, approved through a new rule activation.
+- **0.30.0's Q1 still holds for queues without a lane.** Only a lane's bound window may read its items, and only
+  through `events_lane_item`.
+
+### B3. A bound window reads only what arrives after it was bound (overrides §3.4)
+- `events_watch` and `events_wait` complete only on items whose `arrivedAt` is after the binding's `since`.
+- `events_lane_item` refuses older items.
+- Unbinding and binding again starts a new `since`.
+
+### B4. Windows that aren't bound don't see lane items over MCP (adds to §3.5)
+- **0.30.0's MCP queue tools** (`events_queue_items`, `_counts`, `_done`, `_dismiss`, `_reopen`) leave out every item in
+  a lane the caller isn't bound to. A bound caller sees its own lane's items there.
+- **The CLI and the app** (the person) still see everything.
+- **`lane list` over MCP** shows lane names and "bound to this window" as a boolean. It never names another window.
+
+### B5. A lane is its name (adds to §3.1)
+- **Unique among the queue targets of active rules.** Activating a rule whose queue target uses a lane name already used
+  by a different target id is refused, naming the lane.
+- **A binding is keyed by the lane name.** It follows the name across target versions the person approves, and ends
+  when no active rule's queue target carries the name, or on Unbind.
+
+### B6. Only identifiable windows can bind (overrides §2's Cursor/Codex fallback for this slice)
+- A window can bind only if it has a Claude Code session id, or a grouped activity key: not Windows, and not a server
+  started in `/` or the home folder.
+- `events_wait` stays, for identifiable windows whose client lacks the tasks extension.
+- Other clients get a refusal that says why.
+- The event service's MCP server computes its identity with core's `sessionIdentity` and `CLAUDE_CODE_SESSION_ID`.
+
+### B7. No tasks extension means no task
+`events_watch` answers with a task only when the request declares the tasks extension. Otherwise it refuses and names
+`events_wait`.
+
+### The CLI's JSON (the two builders' contract)
+- **`lane list --json`** (CLI; the person) gives `{ lanes: [{ name, rules: [{ id }], channels: string[], open,
+  binding: null | { window: { sessionId: string|null, activityKey: string|null, folder: string|null, client: { name,
+  version } | null }, since } }] }`.
+- **`lane bind <lane> --window <id> --json`** gives `{ lane, binding }`. It refuses inside MCP and for an
+  unidentifiable window.
+- **`lane unbind <lane> --json`** gives `{ lane, unbound: true }`.
+- **Exit codes:** 66 for an unknown lane, 64 for a bad name or id, 10 inside MCP.
