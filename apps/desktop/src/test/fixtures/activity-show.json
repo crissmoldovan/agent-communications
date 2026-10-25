@@ -2,9 +2,7 @@
   "session": {
     "key": "3f9a1c2e7b4d5a60",
     "grouped": true,
-    "surfaces": [
-      "mcp"
-    ],
+    "surfaces": ["mcp"],
     "folder": "/example/home/work/acme-site",
     "client": {
       "name": "claude-code",
@@ -18,16 +16,8 @@
     "firstSeen": "2026-10-25T09:12:03.000Z",
     "lastSeen": "2026-10-25T09:40:12.000Z",
     "processes": 2,
-    "channels": [
-      "gmail",
-      "slack",
-      "whatsapp"
-    ],
-    "accounts": [
-      "example/gmail",
-      "example/slack",
-      "example/whatsapp"
-    ],
+    "channels": ["gmail", "slack", "whatsapp"],
+    "accounts": ["example/gmail", "example/slack", "example/whatsapp"],
     "counts": {
       "kind": {
         "read": 7,
@@ -267,9 +257,7 @@
         }
       ],
       "count": 1,
-      "recipients": [
-        "jo@example.com"
-      ],
+      "recipients": ["jo@example.com"],
       "approvalId": "ap_7M2K9Q4R8T1V5W3X6Y0Z2A4B6C"
     },
     {
@@ -307,9 +295,7 @@
         }
       ],
       "count": 1,
-      "recipients": [
-        "jo@example.com"
-      ],
+      "recipients": ["jo@example.com"],
       "approvalId": "ap_7M2K9Q4R8T1V5W3X6Y0Z2A4B6C"
     },
     {
