@@ -78,7 +78,22 @@ export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
  */
 export type ActivitySince = '7d' | '30d' | { today: number };
 
-/** Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. */
+/** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
+export type ActivityShowCall = {
+  kind: 'activityShow';
+  session: string;
+  since: ActivitySince;
+  activityKind?: ActivityKind;
+  channel?: ActivityChannel;
+  account?: string;
+  outcome?: ActivityOutcome;
+};
+
+/**
+ * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
+ * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
+ * union up to the first line that ends in `;`, and anchors on its disable as that line.
+ */
 export type Call =
   | { kind: 'version'; product: Product }
   | { kind: 'approvalsPending' }
@@ -110,16 +125,7 @@ export type Call =
   | { kind: 'judgeKindDisable'; judgeKind: EndpointJudgeKind }
   | { kind: 'approvalsFinished'; state: FinishedApprovalState }
   | { kind: 'activitySessions'; since: ActivitySince }
-  | {
-      kind: 'activityShow';
-      session: string;
-      since: ActivitySince;
-      activityKind?: ActivityKind;
-      channel?: ActivityChannel;
-      account?: string;
-      outcome?: ActivityOutcome;
-    }
-  // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
+  | ActivityShowCall
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
 
