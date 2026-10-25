@@ -7,7 +7,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { run } from '../src/cli/program.ts';
 import { createEventsMcpServer } from '../src/mcp/server.ts';
 import { MCP_SERVER_MARKER } from '../src/targets/queue.ts';
-import { shortTempDir } from './support/short-temp.ts';
+import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 const ITEM = 'qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D';
 
@@ -35,7 +35,10 @@ async function cli(argv: readonly string[], env: NodeJS.ProcessEnv) {
   return { code, out, err };
 }
 
-test('QUEUE-A: queue list, show and clear refuse inside the event service’s MCP server, before they ask the owner (Q1)', async () => {
+// The no-such-item exit (66) needs the owner to answer, and the owner refuses Windows (78) by design (B1-G).
+test('QUEUE-A: queue list, show and clear refuse inside the event service’s MCP server, before they ask the owner (Q1)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const stateDir = await shortTempDir('events-queue-gate-');
   try {
     const base = ['--state-dir', stateDir];
