@@ -46,10 +46,16 @@ async function calls(page: Page): Promise<Recorded[]> {
   return page.evaluate(() => (window as unknown as { __calls: Recorded[] }).__calls);
 }
 
-/** Opens Agent, and fills the rule form for example/slack with `acts` ticked. */
-async function fillRule(page: Page, acts: string[]): Promise<void> {
+/** Opens Agent on the view its tab `name` shows. */
+async function openView(page: Page, name: RegExp): Promise<void> {
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Agent' }).click();
+  await page.getByRole('tablist', { name: 'Agent' }).getByRole('tab', { name }).click();
+}
+
+/** Opens Agent's behaviour rules, and fills the rule form for example/slack with `acts` ticked. */
+async function fillRule(page: Page, acts: string[]): Promise<void> {
+  await openView(page, /^Behaviour rules/);
   const form = page.getByRole('form', { name: 'Add or change a rule' });
   await form.getByRole('combobox', { name: 'Account' }).click();
   await page.getByRole('option', { name: 'example/slack' }).click();
@@ -120,4 +126,23 @@ test('a loosening is sent to Terminal', async ({ page }) => {
   // Revoked by Rust as part of that one command: the app sent no revoke of its own, and never approved.
   expect(recorded.some((call) => call.args.call?.kind === 'approvalRevoke')).toBe(false);
   expect(recorded.filter((call) => call.args.call?.kind === 'behaviourAllow')).toHaveLength(1);
+});
+
+test('the views are tabs, the label first, each counting what it holds', async ({ page }) => {
+  await installMockIpc(page, scenario({}, {}));
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Agent' }).click();
+  const tabs = page.getByRole('tablist', { name: 'Agent' }).getByRole('tab');
+  await expect(tabs).toHaveCount(3);
+  await expect(tabs.nth(0)).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('region', { name: 'The label' })).toContainText('Jo Example');
+  // One rule: its count on its tab, said in full.
+  await expect(tabs.nth(1)).toHaveAccessibleName('Behaviour rules 1 rule');
+  await expect(tabs.nth(2)).toHaveAccessibleName('Standing approvals');
+  await tabs.nth(1).click();
+  await expect(page.getByRole('region', { name: 'Behaviour rules' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'The label' })).toBeHidden();
+  // The hint beside the conversation's label, on a pointer resting on it.
+  await page.getByRole('button', { name: 'About the conversation' }).hover();
+  await expect(page.getByRole('tooltip')).toHaveText('A Slack channel or person id, or an address or @domain.');
 });
