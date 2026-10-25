@@ -211,3 +211,63 @@ A builder read this cold and asked five questions. Each answer below overrides t
   existing `approvals list` with a finished state. The desktop's allow-list gains exactly those states.
 - **What follows:** it works the day the upgrade lands, shows expiries (which no call ever records), and doesn't
   depend on the activity switch.
+
+## 8. Build plan (the lead's, 2026-10-25)
+
+**Status:** built under the owner's standing directive "continue until all is implemented" (given with `/goal`,
+2026-10-25: do not pause to ask). This is not an explicit approval of this design. The owner reviews it with the
+release, and installing the desktop app stays their click.
+
+### Task 1: core (first; every other task builds on it)
+- **The log:** `packages/core/src/activity.ts`.
+  - **`ActivityLog`:**
+    - `append(line)` writes the daily private file with `appendPrivateLine`, and never throws into the caller: it
+      reports once and records the problem for `doctor`.
+    - `sessions({since})` and `show(sessionKey, filters)`.
+    - `prune(retentionDays)`.
+  - **`ActivityLine`:** the type in §4.2, with S1, S2 and S4.
+  - **`sessionIdentity(kind: 'mcp' | 'cli' | 'daemon', clientInfo?)`:** works out the process id, the parent's id,
+    start time and name, the folder and the session key (S2). Done once per process, bounded to about 200 ms, and on
+    failure it gives "ungrouped".
+- **Config:** `activity: { record: 'on' | 'off', retentionDays: 1..365 }`, default on and 30.
+  - **Under the change policy:** off and a lower retention are tightenings, so they apply at once. On and a higher
+    retention are loosenings.
+- **Daily maintenance** prunes old days.
+- **`doctor`** gains the `activity` check (§4.6).
+- **One operation, `operations/activity.ts`, in three modes,** each with a `capabilities.json` row:
+  - `sessions`;
+  - `show`;
+  - `mine`: the MCP view, limited to the calling session (S3).
+- **The surfaces:** the CLI `agentcomms activity sessions|show` and the MCP tool `comms_activity` (mine only).
+- **Exports for the channels:** `recordActivity(core, line)`, plus a wrapper `withActivity(operationId, kind, fn,
+  describe)` that times the call, catches its outcome and records the line from `describe(result)`.
+
+### Task 2a: Gmail and Resend record
+Every capability row whose operation reads or writes account data records one line, through `withActivity`.
+- **Reads:** ids, counts, subjects, the sender's name and address, and the query.
+- **Writes:** what the audit records, plus the subject.
+- **Downloads:** the file name and size.
+
+Each MCP server passes `clientInfo` into `sessionIdentity`.
+
+### Task 2b: Slack and WhatsApp record
+- **Slack:** as 2a, with channel names, message ids, and the poster's name.
+- **WhatsApp:** counts only (S4).
+
+### Task 2c: the event service records "told" lines (S1)
+One line per delivery outcome: rule, account, count, target, outcome. No payload, no sender, no subject.
+
+### Task 3: the desktop app
+- **The Activity screen,** as §4.5 says, read through new allow-listed calls to `activity sessions` and `activity
+  show`.
+- **Approvals → Recent** (S5), through `approvals list` with finished states.
+- **Copy:** in the 0.28 soft look, with every sender-written string as untrusted plain text.
+
+### Tests that must exist
+- A failed append never fails the call, and `doctor` reports it.
+- Retention prunes whole days.
+- The MCP view never returns another session's line; a test calls it from two sessions.
+- No line ever holds a message body: a test feeds a message with a body and asserts it isn't in the file.
+- WhatsApp lines hold no chat id, name or number.
+- Session grouping: two server processes with one parent are one session.
+- Parity, in `pnpm verify:parity`.
