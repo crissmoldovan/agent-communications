@@ -88,7 +88,32 @@ export type QueueState = 'open' | 'done' | 'dismissed' | 'all';
 export const QUEUE_CHANNELS = ['gmail', 'slack', 'resend', 'whatsapp'] as const;
 export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
 
-/** Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. */
+/** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
+export type ActivityShowCall = {
+  kind: 'activityShow';
+  session: string;
+  since: ActivitySince;
+  activityKind?: ActivityKind;
+  channel?: ActivityChannel;
+  account?: string;
+  outcome?: ActivityOutcome;
+};
+
+/** `queue list` (0.30.0): one state's items, the rule a checked id, the channel a closed word, the limit 1 to 200. */
+export type QueueListCall = {
+  kind: 'queueList';
+  state: QueueState;
+  rule?: string;
+  channel?: QueueChannel;
+  since?: ActivitySince;
+  limit?: number;
+};
+
+/**
+ * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
+ * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
+ * union up to the first line that ends in `;`, and anchors on its disable as that line.
+ */
 export type Call =
   | { kind: 'version'; product: Product }
   | { kind: 'approvalsPending' }
@@ -118,37 +143,20 @@ export type Call =
   | { kind: 'judgeKindsList' }
   | { kind: 'judgesList' }
   | { kind: 'judgeKindDisable'; judgeKind: EndpointJudgeKind }
-  | { kind: 'eventsJudgeModelStatus' }
-  | { kind: 'eventsJudgeKindDisable' }
   | { kind: 'approvalsFinished'; state: FinishedApprovalState }
   | { kind: 'activitySessions'; since: ActivitySince }
-  | {
-      kind: 'activityShow';
-      session: string;
-      since: ActivitySince;
-      activityKind?: ActivityKind;
-      channel?: ActivityChannel;
-      account?: string;
-      outcome?: ActivityOutcome;
-    }
-  /**
-   * The event service's queue (0.30.0): its items and its counts, read; done, dismiss, reopen and clear, which change
-   * only the person's own list, applied by the app itself (DA10). The item is `qi_` and 26 of Crockford's letters, the
-   * rule a checked id, the limit 1 to 200.
-   */
-  | {
-      kind: 'queueList';
-      state: QueueState;
-      rule?: string;
-      channel?: QueueChannel;
-      since?: ActivitySince;
-      limit?: number;
-    }
+  | ActivityShowCall
+  // The event service's queue (0.30.0): its items and its counts, read; done, dismiss, reopen and clear, which change
+  // only the person's own list, applied by the app itself (DA10). The item is `qi_` and 26 of Crockford's letters.
+  | QueueListCall
   | { kind: 'queueCounts' }
   | { kind: 'queueDone'; itemId: string }
   | { kind: 'queueDismiss'; itemId: string }
   | { kind: 'queueReopen'; itemId: string }
-  | { kind: 'queueClear' };
+  | { kind: 'queueClear' }
+  // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
+  | { kind: 'eventsJudgeModelStatus' }
+  | { kind: 'eventsJudgeKindDisable' };
 
 /** What one CLI call came to (`runner::parse_output`). */
 export type CliResult =
