@@ -433,6 +433,13 @@ function countOf(each: HTMLElement): { shown: string; tone: string | null; says:
   };
 }
 
+/** A tab's mark for a view this CLI is too old for: its tone, and its words for a screen reader. */
+function gateOf(each: HTMLElement): { tone: string | null; says: string } | null {
+  const mark = each.querySelector<HTMLElement>('[data-slot="tab-gate"]');
+  if (mark === null) return null;
+  return { tone: mark.getAttribute('data-tone'), says: mark.textContent ?? '' };
+}
+
 /** Opens the hint beside a label, as a pointer resting on it does, and gives its text. */
 async function hintOf(trigger: HTMLElement): Promise<string> {
   fireEvent.pointerEnter(trigger, { pointerType: 'mouse' });
@@ -591,10 +598,39 @@ describe('Agent: the tabs (D7)', () => {
     const standing = await section('Standing approvals');
     expect(await within(standing).findByText(COPY.updateToUse)).toBeTruthy();
     expect(within(standing).getByText('Needs 0.23.0 or later; this machine has 0.22.0.')).toBeTruthy();
-    expect(countOf(await tab(/^Standing approvals/))).toBeNull();
-    // The rules, which 0.22.0 has, are read and counted.
+    // Its tab is marked, so the line is not hidden behind it: a warn dot, said as "needs an update".
+    const standingTab = await tab(/^Standing approvals/);
+    expect(countOf(standingTab)).toBeNull();
+    expect(gateOf(standingTab)).toEqual({ tone: 'warn', says: 'needs an update' });
+    expect(standingTab.textContent).toBe('Standing approvals needs an update');
+    // The rules, which 0.22.0 has, are read and counted, and their tab is not marked.
     await waitFor(() => expect(countOf(screen.getByRole('tab', { name: /^Behaviour rules/ }))?.shown).toBe('2'));
+    expect(gateOf(screen.getByRole('tab', { name: /^Behaviour rules/ }))).toBeNull();
     expect(cliKinds(bridge)).not.toContain('standingList');
+  });
+
+  it('on a CLI too old for both, each gated tab is marked "needs an update", and the label tab is not', async () => {
+    const bridge = createFakeBridge({
+      installation: async () => ({ ...(await createFakeBridge().installation()), version: '0.21.0' }),
+    });
+    renderApp(bridge, { screen: 'agent' });
+    // The label, which every version has, is read; its tab carries no mark.
+    await waitFor(() => expect(count(bridge, 'label')).toBe(1));
+    expect(gateOf(await tab(/^Label/))).toBeNull();
+    for (const [name, line] of [
+      [/^Behaviour rules/, 'Needs 0.22.0 or later; this machine has 0.21.0.'],
+      [/^Standing approvals/, 'Needs 0.23.0 or later; this machine has 0.21.0.'],
+    ] as const) {
+      const each = await tab(name);
+      expect(gateOf(each)).toEqual({ tone: 'warn', says: 'needs an update' });
+      expect(countOf(each)).toBeNull();
+      // What the mark points at, behind the tab.
+      fireEvent.click(each);
+      expect(await screen.findByText(line)).toBeTruthy();
+    }
+    expect(screen.getByRole('tab', { name: 'Behaviour rules needs an update' })).toBeTruthy();
+    expect(screen.getByRole('tab', { name: 'Standing approvals needs an update' })).toBeTruthy();
+    expect(cliKinds(bridge).filter((kind) => kind === 'behaviour' || kind === 'standingList')).toEqual([]);
   });
 });
 
