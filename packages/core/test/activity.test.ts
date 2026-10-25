@@ -666,15 +666,39 @@ function applied<T>(outcome: GatedOutcome<T>): T {
   return outcome.result;
 }
 
-test('settings read on and 30 days by default, and a value this release cannot read as the stricter one', () => {
+test('settings read on and 30 days by default; one this release cannot read records nothing and deletes nothing', () => {
   assert.deepEqual(readActivitySettings({}), { record: 'on', retentionDays: 30, problems: [] });
   assert.deepEqual(readActivitySettings({ activity: { record: 'off', retentionDays: 7 } }).retentionDays, 7);
   const odd = readActivitySettings({ activity: { record: 'sometimes', retentionDays: 9000 } });
   assert.equal(odd.record, 'off');
   assert.equal(odd.retentionDays, 365);
   assert.equal(odd.problems.length, 2);
-  assert.equal(readActivitySettings({ activity: { retentionDays: 'forever' } }).retentionDays, 1);
-  assert.equal(readActivitySettings({ activity: 'yes' }).record, 'off');
+  // A retention it cannot read is the longest, and nothing is recorded under it: never a day, which deletes the rest.
+  for (const retentionDays of ['forever', 0, -3, 7.5, null, 9000]) {
+    const read = readActivitySettings({ activity: { record: 'on', retentionDays } });
+    assert.equal(read.retentionDays, 365, `${JSON.stringify(retentionDays)} keeps the most`);
+    assert.equal(read.record, 'off', `${JSON.stringify(retentionDays)} records nothing`);
+    assert.equal(read.problems.length, 1);
+  }
+  assert.deepEqual(readActivitySettings({ activity: 'yes' }).record, 'off');
+  assert.deepEqual(readActivitySettings({ activity: 'yes' }).retentionDays, 365);
+  // A word it cannot read for `record` alone leaves a retention it can read as it is.
+  assert.equal(readActivitySettings({ activity: { record: 'sometimes', retentionDays: 3 } }).retentionDays, 3);
+});
+
+test('an unreadable retention deletes no day, records nothing, and doctor says why', async () => {
+  const m = machine({ activity: { record: 'on', retentionDays: 'forever' } });
+  const state = m.core.paths.stateDir;
+  const old = new Date(Date.now() - 40 * DAY_MS).toISOString();
+  dayFile(state, old, '9999999999999999');
+  assert.equal(await m.core.activity.append(line()), false, 'nothing recorded under a retention it cannot read');
+  await m.core.activity.sessions();
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${old.slice(0, 10)}.jsonl`], 'the 40-day-old day is kept');
+  const check = await activityDoctorCheck(m.core);
+  assert.equal(check.ok, true);
+  assert.equal(check.warn, true);
+  assert.match(check.detail, /^off/);
+  assert.match(check.detail, /activity\.retentionDays is "forever"/);
 });
 
 test('turning recording off and keeping less apply at once; on and keeping more wait for the person', async () => {
