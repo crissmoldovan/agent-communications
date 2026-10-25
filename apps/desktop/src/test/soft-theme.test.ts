@@ -112,7 +112,7 @@ describe('the soft theme', () => {
         4.5,
       );
       expect(contrastRatio(c['fg-muted'], c['surface-3']), `${mode} fg-muted on surface-3`).toBeGreaterThanOrEqual(4.5);
-      // The active sidebar item and pressed segment draw accent ink on accent-soft, the accent at 14% on its ground.
+      // cue-ui's own default for an active item and a pressed segment: accent ink on accent-soft, the accent at 14%.
       for (const ground of ['bg', 'surface-1'] as const) {
         const soft14 = over(c.accent, c[ground], 0.14);
         expect(contrastRatio(c.accent, soft14), `${mode} accent on accent-soft over ${ground}`).toBeGreaterThanOrEqual(
