@@ -253,6 +253,8 @@ pub enum EventServiceStatus {
     /// Started, or about to be restarted, and not answering yet.
     Starting,
     Running,
+    /// The switch was turned off, or Quit's Stop it answered, and the service has not stopped yet.
+    Stopping,
     /// It stopped 5 times in 10 minutes, so the app stopped restarting it.
     GaveUp,
 }
@@ -332,6 +334,7 @@ mod tests {
             EventServiceStatus::Stopped,
             EventServiceStatus::Starting,
             EventServiceStatus::Running,
+            EventServiceStatus::Stopping,
             EventServiceStatus::GaveUp,
         ]
         .into_iter()
@@ -344,6 +347,7 @@ mod tests {
                 json!("stopped"),
                 json!("starting"),
                 json!("running"),
+                json!("stopping"),
                 json!("gaveUp")
             ]
         );

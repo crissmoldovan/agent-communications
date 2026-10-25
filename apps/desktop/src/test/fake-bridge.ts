@@ -67,6 +67,8 @@ export const EVENT_SERVICE = {
   starting: { ...SERVICE_RUNNING, status: 'starting', since: null, version: null },
   /** Switched off in the app. */
   stopped: { ...SERVICE_RUNNING, ...NOT_RUNNING, wanted: false },
+  /** Switched off, and the supervisor's watchdog not done stopping it yet. */
+  stopping: { ...SERVICE_RUNNING, ...NOT_RUNNING, wanted: false, status: 'stopping' },
   /** A clean stop the app did not ask for, at a terminal or through the events tools: the switch turned off (D4). */
   stoppedFromOutside: {
     ...SERVICE_RUNNING,

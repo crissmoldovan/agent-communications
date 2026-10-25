@@ -9,6 +9,7 @@ import {
   type Call,
   type DeepLinkTarget,
   type EventServiceState,
+  type EventServiceStatus,
   errorMessage,
   type Installation,
 } from './ipc.ts';
@@ -32,12 +33,27 @@ export interface AppData {
   eventService: Loadable<EventServiceState> | 'absent';
   /** Shows a state the supervisor answered a command with, over any read that started before it. */
   showEventService(state: EventServiceState): void;
+  /**
+   * Why the last command the window sent the supervisor failed, or null: the Events screen's service section says it,
+   * since the first-start question it may come from has closed by then.
+   */
+  eventServiceProblem: string | null;
+  showEventServiceProblem(problem: string | null): void;
+  /**
+   * How many times the supervisor has said the service started or stopped running. Each time, the reads that show
+   * whether it runs are read again, here and on the screens (`useReloadOnServiceTurn`), so none goes on saying "not
+   * running" once it is up.
+   */
+  eventServiceTurns: number;
   /** The approval an `agentcomms://` link asked for, until the screen that showed it clears it. */
   deepLink: DeepLinkTarget | null;
   refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation'): Promise<void>;
   runDoctors(products: DoctorProduct[]): Promise<void>;
   clearDeepLink(): void;
 }
+
+/** Whether a service in `status` runs: running, or still stopping. */
+const runs = (status: EventServiceStatus): boolean => status === 'running' || status === 'stopping';
 
 /** How often the local reads run while the window is visible (DA4, DA14). */
 export const POLL_MS = 15_000;
@@ -105,6 +121,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<Loadable<unknown> | 'absent'>({ state: 'loading' });
   const [doctors, setDoctors] = useState<Partial<Record<DoctorProduct, Loadable<DoctorView>>>>({});
   const [eventService, setEventServiceState] = useState<Loadable<EventServiceState> | 'absent'>({ state: 'loading' });
+  const [eventServiceProblem, showEventServiceProblem] = useState<string | null>(null);
+  const [eventServiceTurns, setEventServiceTurns] = useState(0);
   const [deepLink, setDeepLink] = useState<DeepLinkTarget | null>(null);
   const visible = useVisible(bridge);
 
@@ -257,6 +275,22 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     };
   }, [bridge, showEventService]);
 
+  // When the supervisor says the service started or stopped running, the reads that say whether it runs are read again
+  // at once: the events service's status (Overview, the Events screen) and its doctor (Overview, Doctor), rather than at
+  // the next poll, or never. Only its doctor: core's writes to the keychain, and Gmail's calls Google. A service that is
+  // stopping still runs, so it is read again once it has stopped.
+  const lastStatus = useRef<EventServiceStatus | null>(null);
+  useEffect(() => {
+    if (eventService === 'absent' || eventService.state !== 'ready') return;
+    const before = lastStatus.current;
+    const now = eventService.value.status;
+    lastStatus.current = now;
+    if (before === null || runs(before) === runs(now)) return;
+    setEventServiceTurns((turns) => turns + 1);
+    void refresh('events');
+    if (eventsPresent) void runDoctors(['events-daemon']);
+  }, [eventService, eventsPresent, refresh, runDoctors]);
+
   const clearDeepLink = useCallback(() => setDeepLink(null), []);
 
   const value = useMemo<AppData>(
@@ -268,6 +302,9 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       doctors,
       eventService,
       showEventService,
+      eventServiceProblem,
+      showEventServiceProblem,
+      eventServiceTurns,
       deepLink,
       refresh,
       runDoctors,
@@ -281,6 +318,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       doctors,
       eventService,
       showEventService,
+      eventServiceProblem,
+      eventServiceTurns,
       deepLink,
       refresh,
       runDoctors,

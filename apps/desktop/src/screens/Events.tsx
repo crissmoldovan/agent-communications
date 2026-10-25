@@ -1,4 +1,4 @@
-import { Button, DescriptionList, EmptyState, Row as Line, Panel, Switch, Table } from '@cueplusplus/ui';
+import { Button, DescriptionList, EmptyState, Row as Line, Panel, Spinner, Switch, Table } from '@cueplusplus/ui';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
@@ -11,7 +11,7 @@ import { useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
-import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
+import { useReloadOnReturn, useReloadOnServiceTurn } from '../hooks/use-reload-on-return.ts';
 import {
   type Call,
   type EventServiceState,
@@ -257,6 +257,8 @@ const SERVICE_TITLE = 'Event service';
 /** The section's words, as the plan's Global Constraints give them. */
 export const SERVICE_COPY = {
   switch: 'Run the event service',
+  starting: 'Starting the event service…',
+  stopping: 'Stopping the event service…',
   windows: "The event service doesn't run on Windows yet.",
   restarted: 'Restarted',
   stoppedFromOutside: 'Stopped from outside at',
@@ -272,14 +274,18 @@ export function newerServiceLine(version: string): string {
   return `A newer event service is installed (${version}).`;
 }
 
-/** Where the service stands, in a word. Giving up is said in full beneath it. */
+/** Where the service stands, in a word. Giving up is said in full beneath it; starting and stopping, by a spinner. */
 const SERVICE_WORDS: Readonly<Record<EventServiceStatus, string>> = {
   unavailable: 'Not available',
   stopped: 'Stopped',
-  starting: 'Starting…',
+  starting: SERVICE_COPY.starting,
   running: 'Running',
+  stopping: SERVICE_COPY.stopping,
   gaveUp: 'Stopped',
 };
+
+/** The states that are on their way to another, shown with a spinner beside their words. */
+const UNDER_WAY: ReadonlySet<EventServiceStatus> = new Set(['starting', 'stopping']);
 
 /** Asks the supervisor something; what it answers with is the state shown next. */
 type Ask = (command: () => Promise<EventServiceState | null>) => Promise<void>;
@@ -309,7 +315,17 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
       />
       <div>
         <Line>
-          <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+          {UNDER_WAY.has(state.status) ? (
+            <>
+              {/* The spinner says it to a screen reader; the words beside it are for the eye, so it is said once. */}
+              <Spinner size="sm" label={SERVICE_WORDS[state.status]} />
+              <span className="text-fg" aria-hidden="true">
+                {SERVICE_WORDS[state.status]}
+              </span>
+            </>
+          ) : (
+            <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+          )}
           {running && state.since !== null ? (
             <span className="text-fg-muted">
               since <When at={state.since} />
@@ -407,12 +423,17 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
 
 /**
  * The event service's section: what its supervisor last said, read once and then sent on each change (`data.tsx`),
- * and what each command answered with. A command that fails says why, and the state stays as the supervisor last said.
+ * and what each command answered with. A command that fails says why, and the state stays as the supervisor last said:
+ * the first-start question's answer too, since that question has closed by then (`EventServiceQuestions.tsx`).
  */
 function Service() {
-  const { eventService, showEventService } = useAppData();
+  const {
+    eventService,
+    showEventService,
+    eventServiceProblem: problem,
+    showEventServiceProblem: setProblem,
+  } = useAppData();
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
 
   const ask: Ask = async (command) => {
     setBusy(true);
@@ -443,8 +464,10 @@ function Service() {
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };
 
+/** The rules, read when the screen opens, and again when the service starts or stops running: they come from it. */
 function Rules() {
-  const { result } = useCall<unknown>(RULES);
+  const { result, reload } = useCall<unknown>(RULES);
+  useReloadOnServiceTurn(reload);
   return (
     <SectionPanel title="Rules">
       <ScreenState value={result}>
@@ -454,8 +477,10 @@ function Rules() {
   );
 }
 
+/** The recent deliveries, read as the rules are. */
 function Deliveries() {
-  const { result } = useCall<unknown>(DELIVERIES);
+  const { result, reload } = useCall<unknown>(DELIVERIES);
+  useReloadOnServiceTurn(reload);
   return (
     <SectionPanel title="Recent deliveries">
       <ScreenState value={result}>
@@ -690,8 +715,9 @@ function LayaView({ read }: { read: LayaRead }) {
 /**
  * Laya's section. Nothing is read until the events service's own `--version` says it has the calls (DA12); then its
  * status is read when the screen opens, again when the window comes back (the person may have approved in the
- * terminal), and with the screen's poll while its bytes are moving (DA14). Only the latest-started read is kept
- * (`useCall`, DA16). Enable opens the terminal; Disable applies at once and reads the status again.
+ * terminal), when the service starts or stops running, and with the screen's poll while its bytes are moving (DA14).
+ * Only the latest-started read is kept (`useCall`, DA16). Enable opens the terminal; Disable applies at once and reads
+ * the status again.
  */
 function Laya() {
   const bridge = useBridge();
@@ -701,6 +727,7 @@ function Laya() {
   const supported = version.state === 'ready' && supports(version.value, 'layaJudge');
   const { result, reload } = useCall<unknown>(supported ? LAYA_STATUS : null);
   useReloadOnReturn(reload);
+  useReloadOnServiceTurn(reload);
   const read = supported && result.state === 'ready' ? readLaya(result.value) : null;
   const status = read?.kind === 'status' ? read.status : null;
   const action = status === null ? null : actionFor(status.state);

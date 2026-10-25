@@ -144,7 +144,7 @@ export interface UpdaterState {
 }
 
 /** Where the event service the app runs stands (`event_service.rs`, `EventServiceStatus`). */
-export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'gaveUp';
+export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'stopping' | 'gaveUp';
 
 /** Whether the service the app starts may read WhatsApp's database (D6): only asked when a WhatsApp account exists. */
 export type FullDiskAccess = 'granted' | 'missing' | 'not-needed';
@@ -208,7 +208,10 @@ export interface Bridge {
   installUpdate(): Promise<void>;
   takeDeepLink(): Promise<DeepLinkTarget | null>;
   eventServiceState(): Promise<EventServiceState>;
-  /** The switch: on starts the service (or adopts a running one), off stops it through the events CLI's stop. */
+  /**
+   * The switch: on starts the service (or adopts a running one), off stops it through the events CLI's stop. Each
+   * answers at once, with what the supervisor recorded: on is `starting` until the watchdog has it running.
+   */
   setEventService(on: boolean): Promise<EventServiceState>;
   /** Try again, after the app gave up restarting it. */
   eventServiceRetry(): Promise<EventServiceState>;

@@ -1,7 +1,17 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Bridge, Call, CliResult } from '../ipc.ts';
-import { createFakeBridge, EXAMPLE_INSTALLATION, FIXTURES, type Fixture, failed } from './fake-bridge.ts';
+import {
+  cliKinds,
+  createFakeBridge,
+  doctorsRun,
+  EVENT_SERVICE,
+  EXAMPLE_INSTALLATION,
+  FIXTURES,
+  type Fixture,
+  failed,
+} from './fake-bridge.ts';
+import doctorEvents from './fixtures/doctor-events-daemon.json';
 import { renderApp } from './render.tsx';
 
 /** A bridge whose CLI reads all wait until `release`, then answer from the fixtures. */
@@ -135,6 +145,40 @@ describe('Overview', () => {
     expect(toneOf(doctorRow('agent-communications'))).toBe('warn');
     expect(toneOf(doctorRow('WhatsApp'))).toBe('ok');
     expect(toneOf(doctorRow('Events'))).toBe('ok');
+  });
+
+  it("the events block and the events service's doctor follow the supervisor: read again once it says it runs", async () => {
+    let up = false;
+    const bridge = createFakeBridge(
+      { eventServiceState: async () => EVENT_SERVICE.starting },
+      {
+        eventsStatus: () => (up ? { owner: 'running', enabled: true, paused: false } : { owner: 'not-running' }),
+        doctor: (call: Call) =>
+          (call as Extract<Call, { kind: 'doctor' }>).product === 'events-daemon'
+            ? { ...doctorEvents, owner: { ...doctorEvents.owner, status: up ? 'running' : 'not-running' } }
+            : doctorFixture(call),
+      },
+    );
+    renderApp(bridge);
+    expect(await within(await screen.findByRole('region', { name: 'Events' })).findByText('Not running')).toBeTruthy();
+    await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('danger'));
+
+    up = true;
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
+    expect(await within(region('Events')).findByText('Running')).toBeTruthy();
+    await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('ok'));
+    // Only the events service's doctor runs again: core's writes to the keychain, and Gmail's calls Google.
+    expect(doctorsRun(bridge).filter((product) => product === 'events-daemon')).toHaveLength(2);
+    expect(doctorsRun(bridge).filter((product) => product === 'core')).toHaveLength(1);
+
+    // Switched off: while it stops it still runs, so nothing is read again until it has stopped; then they say so too.
+    const reads = cliKinds(bridge).length;
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopping));
+    expect(cliKinds(bridge)).toHaveLength(reads);
+    up = false;
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopped));
+    expect(await within(region('Events')).findByText('Not running')).toBeTruthy();
+    await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('danger'));
   });
 
   it('shows no events block without the events launcher, and asks it nothing', async () => {
