@@ -52,6 +52,9 @@ export interface AppData {
   clearDeepLink(): void;
 }
 
+/** Whether a service in `status` runs: running, or still stopping. */
+const runs = (status: EventServiceStatus): boolean => status === 'running' || status === 'stopping';
+
 /** How often the local reads run while the window is visible (DA4, DA14). */
 export const POLL_MS = 15_000;
 
@@ -274,14 +277,15 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
 
   // When the supervisor says the service started or stopped running, the reads that say whether it runs are read again
   // at once: the events service's status (Overview, the Events screen) and its doctor (Overview, Doctor), rather than at
-  // the next poll, or never. Only its doctor: core's writes to the keychain, and Gmail's calls Google.
+  // the next poll, or never. Only its doctor: core's writes to the keychain, and Gmail's calls Google. A service that is
+  // stopping still runs, so it is read again once it has stopped.
   const lastStatus = useRef<EventServiceStatus | null>(null);
   useEffect(() => {
     if (eventService === 'absent' || eventService.state !== 'ready') return;
     const before = lastStatus.current;
     const now = eventService.value.status;
     lastStatus.current = now;
-    if (before === null || (before === 'running') === (now === 'running')) return;
+    if (before === null || runs(before) === runs(now)) return;
     setEventServiceTurns((turns) => turns + 1);
     void refresh('events');
     if (eventsPresent) void runDoctors(['events-daemon']);

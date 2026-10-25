@@ -1089,6 +1089,8 @@ pub struct Supervisor {
     quitting: bool,
     /// What the person asked for, which the watchdog's next look does.
     requested: Requested,
+    /// Set from Quit's Stop it until its stop is done, so the window says it is stopping.
+    stopping_for_quit: bool,
 }
 
 impl Supervisor {
@@ -1117,6 +1119,7 @@ impl Supervisor {
             full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
             quitting: false,
             requested,
+            stopping_for_quit: false,
         }
     }
 
@@ -1476,11 +1479,13 @@ impl Supervisor {
         }
         let process = self.process();
         let status = match self.requested {
+            // Quit's Stop it, under way: stopping until it has stopped.
+            _ if self.stopping_for_quit => EventServiceStatus::Stopping,
             // Restart to use it: starting from the press until the new one answers.
             Requested::Restart => EventServiceStatus::Starting,
+            // The switch off: stopping, never running, until the watchdog has stopped whatever runs.
+            Requested::Stop => EventServiceStatus::Stopping,
             _ if self.owner == Owner::Running => EventServiceStatus::Running,
-            // The switch off: stopped, once whatever runs has stopped; never starting.
-            Requested::Stop => EventServiceStatus::Stopped,
             // A start asked for: starting from the press until it answers, or its start fails and waits, or gives up.
             Requested::Start => EventServiceStatus::Starting,
             Requested::Nothing if process == Process::Alive || self.restart_due.is_some() => {
@@ -1640,12 +1645,19 @@ impl Supervisor {
         self.restart_due = None;
     }
 
+    /// The app is quitting, and stops the service first (`stop_for_quit`): from now on nothing is started, and while
+    /// there is something to stop the window is told it is stopping. Published before the stop, which takes seconds.
+    pub fn begin_stop_for_quit(&mut self) {
+        self.begin_quit();
+        self.stopping_for_quit = self.requested == Requested::Stop || self.app_service_running();
+    }
+
     /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
     /// The switch stays on, so the app starts it again when it next runs (D2): it stops for this run only. A stop the
     /// switch asked for that the watchdog has yet to do is done instead: whatever runs is stopped, as the switch's off
     /// stops it.
     pub fn stop_for_quit(&mut self, ctx: &RunContext) {
-        self.begin_quit();
+        self.begin_stop_for_quit();
         if std::mem::take(&mut self.requested) == Requested::Stop {
             self.stop_as_asked(ctx);
         } else if self.app_service_running() {
@@ -1653,6 +1665,7 @@ impl Supervisor {
             self.record = forget(&self.record);
             self.save();
         }
+        self.stopping_for_quit = false;
     }
 }
 
@@ -1891,8 +1904,8 @@ fn command(app: &AppHandle, request: Request) -> EventServiceState {
 
 /// What a request comes to, from the state the window was last told: what `Supervisor::state` says once it is
 /// recorded, before the watchdog has done it. The question is answered; on, it is wanted, and starting unless it runs
-/// (Restart to use it is starting even then), with its failures and any stop from outside forgotten; off, it is stopped
-/// unless it still runs.
+/// (Restart to use it is starting even then), with its failures and any stop from outside forgotten; off, it is
+/// stopping until the watchdog has stopped whatever runs.
 fn requested_state(shown: &EventServiceState, request: Request) -> EventServiceState {
     if !shown.available {
         return shown.clone();
@@ -1904,12 +1917,12 @@ fn requested_state(shown: &EventServiceState, request: Request) -> EventServiceS
     let running = shown.status == EventServiceStatus::Running;
     let status = if request == Request::Restart {
         EventServiceStatus::Starting
+    } else if !on {
+        EventServiceStatus::Stopping
     } else if running {
         EventServiceStatus::Running
-    } else if on {
-        EventServiceStatus::Starting
     } else {
-        EventServiceStatus::Stopped
+        EventServiceStatus::Starting
     };
     let still_running = status == EventServiceStatus::Running;
     EventServiceState {
@@ -2108,6 +2121,7 @@ pub fn on_quit(app: &AppHandle) -> QuitRoute {
         QuitStep::StopThenQuit => {
             let app = app.clone();
             thread::spawn(move || {
+                with_supervisor(&app, |supervisor, _| supervisor.begin_stop_for_quit());
                 with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
                 quit(&app);
             });
@@ -2136,16 +2150,23 @@ pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), Ap
     } else {
         QuitAnswer::Stop
     };
-    with_supervisor(app, |supervisor, ctx| {
+    // First what the answer is, published, so the window says the service is stopping while it stops; then the stop.
+    let stopping = with_supervisor(app, |supervisor, _| {
         supervisor.begin_quit();
         if remember {
             supervisor.remember_quit(answer);
         }
         // Keep running keeps what the switch wants: a stop it asked for is still done.
-        if !keep || supervisor.stop_pending() {
-            supervisor.stop_for_quit(ctx);
+        let stopping = !keep || supervisor.stop_pending();
+        if stopping {
+            supervisor.begin_stop_for_quit();
         }
-    });
+        stopping
+    })
+    .is_some_and(|(stopping, _)| stopping);
+    if stopping {
+        with_supervisor(app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
+    }
     quit(app);
     Ok(())
 }
@@ -3668,9 +3689,10 @@ exit 64
         assert!(!state.wanted);
         assert_eq!(
             state.status,
-            EventServiceStatus::Running,
-            "until it has stopped"
+            EventServiceStatus::Stopping,
+            "stopping, never running, until it has stopped"
         );
+        assert_eq!(state.since, None);
         assert!(supervisor.stop_pending());
         supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(!fake.has("running"));
@@ -3861,7 +3883,7 @@ exit 64
                 );
             }
         }
-        // And what each comes to, in words: a start is starting, unless it runs; off is stopped, unless it still runs.
+        // And what each comes to, in words: a start is starting, unless it runs; off is stopping until it has stopped.
         let stopped = made("stopped").state(&ctx);
         let running = made("adopted, older").state(&ctx);
         assert_eq!(running.status, EventServiceStatus::Running);
@@ -3880,11 +3902,11 @@ exit 64
         );
         assert_eq!(
             after(&running, Request::Switch(false)),
-            EventServiceStatus::Running
+            EventServiceStatus::Stopping
         );
         assert_eq!(
-            after(&stopped, Request::Switch(false)),
-            EventServiceStatus::Stopped
+            after(&stopped, Request::FirstStart(false)),
+            EventServiceStatus::Stopping
         );
     }
 
@@ -3913,8 +3935,17 @@ exit 64
         eventually("it runs", || fake.has("running"));
         supervisor.set_wanted(false);
         assert!(supervisor.stop_pending());
+        supervisor.begin_stop_for_quit();
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopping
+        );
         supervisor.stop_for_quit(&fake.ctx);
         assert!(!fake.has("running"), "stopped before quitting");
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopped
+        );
         assert!(!supervisor.stop_pending());
         let kept = load_record(&fake.app);
         assert!(!kept.wanted);
@@ -3932,8 +3963,13 @@ exit 64
         // The next run's supervisor finishes it at its first look, through the events CLI's `stop`.
         let mut next = fake.supervisor(load_record(&fake.app));
         assert!(next.stop_pending());
-        assert_eq!(next.state(&fake.ctx).status, EventServiceStatus::Stopped);
+        assert_eq!(
+            next.state(&fake.ctx).status,
+            EventServiceStatus::Stopping,
+            "a stop not done yet"
+        );
         next.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(next.state(&fake.ctx).status, EventServiceStatus::Stopped);
         assert!(!fake.has("running"));
         assert_eq!(load_record(&fake.app).pid, None);
         assert!(pid.is_some());
@@ -4436,6 +4472,17 @@ exit 0
         assert!(supervisor.app_service_running());
         supervisor.remember_quit(QuitAnswer::Stop);
         assert_eq!(load_record(&fake.app).quit_answer, Some(QuitAnswer::Stop));
+        // Stop it says it is stopping before the stop is done, never running.
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Running
+        );
+        supervisor.begin_stop_for_quit();
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopping
+        );
         supervisor.stop_for_quit(&fake.ctx);
         assert!(fake.has("stop-argv"), "through the events CLI's stop");
         assert!(!fake.has("running"));

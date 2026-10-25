@@ -438,6 +438,27 @@ describe('The event service', () => {
     expect(cliKinds(bridge)).toHaveLength(reads);
   });
 
+  it('switched off, the section says "Stopping the event service…" with a spinner, never Running, until it stops', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.running, {
+      setEventService: async (on) => (on ? EVENT_SERVICE.starting : EVENT_SERVICE.stopping),
+    });
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    fireEvent.click(within(section).getByRole('switch', { name: SWITCH }));
+    expect(await within(region(SERVICE)).findByRole('status', { name: 'Stopping the event service…' })).toBeTruthy();
+    expect(within(region(SERVICE)).getByText('Stopping the event service…')).toBeTruthy();
+    expect(within(region(SERVICE)).queryByText('Running')).toBeNull();
+    const toggle = within(region(SERVICE)).getByRole('switch', { name: SWITCH });
+    expect(toggle.getAttribute('aria-checked')).toBe('false');
+    await waitFor(() =>
+      expect(within(region(SERVICE)).getByRole('switch', { name: SWITCH }).hasAttribute('data-disabled')).toBe(false),
+    );
+    // Once the supervisor says it has stopped, the spinner goes.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopped));
+    expect(await within(region(SERVICE)).findByText('Stopped')).toBeTruthy();
+    expect(within(region(SERVICE)).queryByRole('status', { name: 'Stopping the event service…' })).toBeNull();
+  });
+
   it('Full Disk Access missing shows the line and Open System Settings', async () => {
     const bridge = serviceBridge(EVENT_SERVICE.fullDiskAccessMissing);
     const first = renderApp(bridge, { screen: 'events' });

@@ -144,7 +144,7 @@ export interface UpdaterState {
 }
 
 /** Where the event service the app runs stands (`event_service.rs`, `EventServiceStatus`). */
-export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'gaveUp';
+export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'stopping' | 'gaveUp';
 
 /** Whether the service the app starts may read WhatsApp's database (D6): only asked when a WhatsApp account exists. */
 export type FullDiskAccess = 'granted' | 'missing' | 'not-needed';

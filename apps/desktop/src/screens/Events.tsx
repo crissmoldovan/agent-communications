@@ -258,6 +258,7 @@ const SERVICE_TITLE = 'Event service';
 export const SERVICE_COPY = {
   switch: 'Run the event service',
   starting: 'Starting the event service…',
+  stopping: 'Stopping the event service…',
   windows: "The event service doesn't run on Windows yet.",
   restarted: 'Restarted',
   stoppedFromOutside: 'Stopped from outside at',
@@ -273,14 +274,18 @@ export function newerServiceLine(version: string): string {
   return `A newer event service is installed (${version}).`;
 }
 
-/** Where the service stands, in a word. Giving up is said in full beneath it; starting, beside a spinner. */
+/** Where the service stands, in a word. Giving up is said in full beneath it; starting and stopping, by a spinner. */
 const SERVICE_WORDS: Readonly<Record<EventServiceStatus, string>> = {
   unavailable: 'Not available',
   stopped: 'Stopped',
   starting: SERVICE_COPY.starting,
   running: 'Running',
+  stopping: SERVICE_COPY.stopping,
   gaveUp: 'Stopped',
 };
+
+/** The states that are on their way to another, shown with a spinner beside their words. */
+const UNDER_WAY: ReadonlySet<EventServiceStatus> = new Set(['starting', 'stopping']);
 
 /** Asks the supervisor something; what it answers with is the state shown next. */
 type Ask = (command: () => Promise<EventServiceState | null>) => Promise<void>;
@@ -310,12 +315,12 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
       />
       <div>
         <Line>
-          {state.status === 'starting' ? (
+          {UNDER_WAY.has(state.status) ? (
             <>
               {/* The spinner says it to a screen reader; the words beside it are for the eye, so it is said once. */}
-              <Spinner size="sm" label={SERVICE_COPY.starting} />
+              <Spinner size="sm" label={SERVICE_WORDS[state.status]} />
               <span className="text-fg" aria-hidden="true">
-                {SERVICE_COPY.starting}
+                {SERVICE_WORDS[state.status]}
               </span>
             </>
           ) : (

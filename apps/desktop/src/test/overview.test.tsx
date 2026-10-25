@@ -2,6 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it } from 'vitest';
 import type { Bridge, Call, CliResult } from '../ipc.ts';
 import {
+  cliKinds,
   createFakeBridge,
   doctorsRun,
   EVENT_SERVICE,
@@ -170,7 +171,10 @@ describe('Overview', () => {
     expect(doctorsRun(bridge).filter((product) => product === 'events-daemon')).toHaveLength(2);
     expect(doctorsRun(bridge).filter((product) => product === 'core')).toHaveLength(1);
 
-    // And when it stops, they say so too.
+    // Switched off: while it stops it still runs, so nothing is read again until it has stopped; then they say so too.
+    const reads = cliKinds(bridge).length;
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopping));
+    expect(cliKinds(bridge)).toHaveLength(reads);
     up = false;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopped));
     expect(await within(region('Events')).findByText('Not running')).toBeTruthy();
