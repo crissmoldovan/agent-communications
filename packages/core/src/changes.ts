@@ -539,6 +539,8 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'agentLabel.slackIcons': 'the icon of the agent’s Slack posts',
   'agentLabel.slackStyles': 'how the agent’s Slack messages look',
   'behaviour.rules': 'what an agent may do',
+  'activity.record': 'recording what agent sessions read and send',
+  'activity.retentionDays': 'how many days the activity log keeps',
 };
 
 /**
@@ -605,6 +607,10 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
       return 'every agent message there goes out as you, labelled in its words, even where the app could post: it trades Slack’s own APP tag, which no one can fake, for words in the message';
     case 'behaviour.rules':
       return 'where it allows more, an agent may start those acts; each one still waits for your yes';
+    case 'activity.record':
+      return 'every call an agent session makes to your accounts will be recorded on this machine again: the subjects and senders it read, what it searched for, what it sent and to whom — never a message body';
+    case 'activity.retentionDays':
+      return 'what agent sessions read and sent — subjects, senders, searches, recipients — will be kept on this machine for longer';
     default:
       return '';
   }
