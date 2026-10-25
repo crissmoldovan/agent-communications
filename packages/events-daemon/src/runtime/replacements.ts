@@ -528,10 +528,15 @@ function changedRetentions(
     ['dry-run', 'dryrunMs'],
     ['sse-replay', 'sseReplayMs'],
     ['decision-metadata', 'decisionMetadataMs'],
+    ['queue', 'queueMs'],
   ];
-  return fields.flatMap(([retention, field]) =>
-    child[field] < parent[field] ? [{ retention, durationMs: child[field] }] : [],
-  );
+  return fields.flatMap(([retention, field]) => {
+    const shortened = child[field];
+    const prior = parent[field];
+    return shortened !== undefined && prior !== undefined && shortened < prior
+      ? [{ retention, durationMs: shortened }]
+      : [];
+  });
 }
 
 /**
