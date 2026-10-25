@@ -333,3 +333,41 @@ have this one as a dedicated new theme"):
 - a new cue-ui theme preset, like `quotamate`, built from the mockup's colours, type, radii and soft shadows;
 - the values are listed in CUE-571, item 6;
 - 0.28.0 uses that preset.
+
+## 9. 0.28.0 starts now, on cue-ui 0.30.0 (the owner, 2026-10-25)
+
+cue-ui 0.30.0 shipped on 2026-10-25 with cue-ui-81: two movement curves and a pace a Look can set. cue-ui-77, 78, 79,
+80 and 82 are not built yet. Asked how to move the redesign forward, **the owner chose "Start now, upgrade later"**:
+build 0.28.0 now on cue-ui 0.30.0, and swap in cue-ui's pieces as each ships.
+
+**What that means (the lead's calls):**
+- **cue-ui 0.30.0,** with `@cueplusplus/tokens` at the same version, from the public npm registry.
+- **The look is a theme of the app's own, `soft`,** built the way cue-ui's theme packages are (a theme object for
+  the provider, and its CSS). It uses the mockup's colours in dark and light, its radii (surfaces about 14 px,
+  controls about 8 px) and a one-pixel soft shadow in place of rims. `soft` becomes the default. `cue` and `terminal`
+  stay in the appearance menu. When cue-ui ships its own soft preset (cue-ui-82), the app moves to it and drops
+  its own.
+- **Type:** cue-ui's sans font pairing (the system face on macOS, Inter elsewhere), and the style settings that set
+  labels, headings and chips in the label face, not mono. Mono stays only for literal values.
+- **Gaps until cue-ui ships them, each closed with the least app CSS, marked for removal, and never by forking a
+  component:**
+  - components that ignore the label face (cue-ui-77), e.g. `Sidebar.Item`: set the face on their slot;
+  - the panel's own rim (cue-ui-78): transparent on panels only.
+- **No glide and no swipe yet** (cue-ui-79, 80). Tab bars are cue-ui's `Tabs` as they are. The highlight moves without
+  gliding.
+- **Everything else in D3, D7 and D10 is built now:**
+  - every screen reworked;
+  - tab bars where a screen has distinct views, each with count badges;
+  - copy halved;
+  - Settings' "Change folders…";
+  - the updater and the login item at the top of Settings.
+- **Behaviour and information do not change.** Every status, warning, number and action stays, and the tests that pin
+  them keep their assertions, with only their selectors updated.
+- **Before the tag**, the owner sees every screen in dark and light (§7.6: "Build it all, then show me").
+
+**The mockup's tokens.** The artifact was gone on 2026-10-25. The files are kept at
+`~/work/cue++/backups/agentcomms-0.28-mockup-2026-10-25/`, and CUE-571 item 6 lists the values:
+- **Dark:** ground #0E0E10; surfaces #18181B, #1F1F23, #28282D; ink #EDEDF0, #A1A1AA, #8B8B94; accent #8A90F8.
+- **Light:** ground #F7F7F8; surfaces #FFFFFF, #F3F3F5, #E8E8EC; ink #18181B, #52525B, #6B6B74; accent #5157E0.
+- **Status:** ok #4ADE80 / #15803D; warn #F5B454 / #A15C07; danger #F87171 / #C2410C (dark / light).
+- cue-ui-82 lists three text pairs just under 4.5:1 and the smallest changes that fix them. Use those changes.
