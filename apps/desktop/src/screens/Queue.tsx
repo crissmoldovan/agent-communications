@@ -126,14 +126,17 @@ function useQueueList(call: Call): { read: Loadable<QueueListView>; reload: () =
 }
 
 /**
- * Reads `reload` again every 30 seconds while the window is visible, at once when it is visible again, and when it has
- * the focus again or Rust says something changed (§4.5).
+ * Reads the list again every 30 seconds while the window is visible, with the counts (`withCounts`), so a tab's count
+ * never lags its list; and the list alone at once when the window is visible again, has the focus again or Rust says
+ * something changed (§4.5), when the reads the screens share read the counts themselves.
  */
-function useQueuePoll(reload: () => Promise<void>): void {
+function useQueuePoll(reload: () => Promise<void>, withCounts: () => Promise<void>): void {
   const { visible } = useAppData();
   const latest = useRef(reload);
+  const latestWithCounts = useRef(withCounts);
   useEffect(() => {
     latest.current = reload;
+    latestWithCounts.current = withCounts;
   });
   const wasVisible = useRef(visible);
   useEffect(() => {
@@ -141,7 +144,7 @@ function useQueuePoll(reload: () => Promise<void>): void {
     wasVisible.current = visible;
     if (!visible) return;
     if (!before) void latest.current().catch(() => undefined);
-    const timer = setInterval(() => void latest.current().catch(() => undefined), QUEUE_POLL_MS);
+    const timer = setInterval(() => void latestWithCounts.current().catch(() => undefined), QUEUE_POLL_MS);
     return () => clearInterval(timer);
   }, [visible]);
   useReloadOnReturn(reload);
@@ -227,7 +230,7 @@ function QueueViews() {
   const again = useCallback(async () => {
     await Promise.all([reload(), refresh('queue')]);
   }, [reload, refresh]);
-  useQueuePoll(reload);
+  useQueuePoll(reload, again);
 
   const counts = typeof queueCounts === 'string' || queueCounts.state !== 'ready' ? null : queueCounts.value;
 

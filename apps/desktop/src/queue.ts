@@ -237,56 +237,49 @@ export function judgeWords(judge: QueueJudge): string | null {
 
 // ── Links ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** Gmail on the web, and Slack's web app: the hosts a queue item's link opens on (`links.rs`). */
-const GMAIL_WEB_HOST = 'mail.google.com';
-const SLACK_WEB_HOST = 'app.slack.com';
-
 /** The longest link the app opens (`links.rs`, `LINK_LIMIT`). */
 const LINK_LIMIT = 2048;
 
-/** What a link never holds as it is: printable ASCII only, and none of these, which a URL writes as `%XX`. */
-const NEVER_IN_A_LINK = new Set(['"', '<', '>', '\\', '`', '{', '}']);
-
-/** A host label: letters, digits and inner hyphens, at most 63 of them. */
-const LABEL = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+/**
+ * A queue item's Gmail link, as the event service makes it (`queueItemLink`, in
+ * `packages/events-daemon/src/domain/queue-target.ts`): `/mail/u/<n>/` or `/mail/?authuser=<the account's address,
+ * percent-encoded>`, then `#all/<message id>` (`links.rs`, `GMAIL_QUEUE_LINK`).
+ */
+const GMAIL_QUEUE_LINK =
+  /^https:\/\/mail\.google\.com\/mail\/(?:u\/[0-9]{1,2}\/|\?authuser=((?:[A-Za-z0-9._~!*'()-]|%[0-9A-F]{2})+))#all\/[0-9A-Za-z_-]{1,128}$/;
 
 /**
- * Whether the app may open `url` for a queue item, as Rust's `links::queue_link` decides it again before anything
- * opens, and in the same steps: `https://`, at most 2048 characters of printable ASCII with nothing a URL would have
- * encoded, a host with no user, password or port whose every label is letters, digits and inner hyphens, never
- * Google's `/url` redirect — and the host Gmail's web host, Slack's web app or one workspace's `<workspace>.slack.com`,
- * never an internationalised one.
+ * A queue item's Slack link, as the event service makes it: `/client/<team>/<channel>`, then, for a thread,
+ * `/thread/<the same channel>-<ts>` (`links.rs`, `SLACK_QUEUE_LINK`).
  */
+const SLACK_QUEUE_LINK =
+  /^https:\/\/app\.slack\.com\/client\/[0-9A-Z]{1,32}\/([0-9A-Z]{1,32})(?:\/thread\/([0-9A-Z]{1,32})-[0-9]+\.[0-9]{6})?$/;
+
+/**
+ * Whether `url` is a queue item's Gmail link (`'gmail'`), its Slack link (`'slack'`), or neither (`null`): exactly one of
+ * the two shapes the event service makes, as Rust's `links::queue_link` decides it again before anything opens. Nothing
+ * else on Gmail's or Slack's hosts — not Gmail's compose page, not a workspace's own host, not Slack's admin. A Gmail
+ * account is a percent-encoded address, with its `@`; a thread is the link's own channel's.
+ */
+function queueLinkKind(url: string): 'gmail' | 'slack' | null {
+  if (url.length > LINK_LIMIT) return null;
+  const gmail = GMAIL_QUEUE_LINK.exec(url);
+  if (gmail !== null) return gmail[1] === undefined || gmail[1].includes('%40') ? 'gmail' : null;
+  const slack = SLACK_QUEUE_LINK.exec(url);
+  if (slack === null) return null;
+  return slack[2] === undefined || slack[2] === slack[1] ? 'slack' : null;
+}
+
+/** Whether the app may open `url` for a queue item (`queueLinkKind`). */
 export function queueLink(url: string): boolean {
-  if (url.length > LINK_LIMIT || !url.startsWith('https://')) return false;
-  const rest = url.slice('https://'.length);
-  for (const character of rest) {
-    const code = character.charCodeAt(0);
-    if (character.length !== 1 || code < 0x21 || code > 0x7e || NEVER_IN_A_LINK.has(character)) return false;
-  }
-  const end = rest.search(/[/?#]/);
-  const host = (end === -1 ? rest : rest.slice(0, end)).toLowerCase();
-  if (!host.split('.').every((label) => LABEL.test(label))) return false;
-  const after = rest.slice(host.length);
-  const pathEnd = after.search(/[?#]/);
-  const path = (pathEnd === -1 ? after : after.slice(0, pathEnd)).toLowerCase();
-  if (path === '/url' || path.startsWith('/url/')) return false;
-  if (host === GMAIL_WEB_HOST || host === SLACK_WEB_HOST) return true;
-  if (!host.endsWith('.slack.com')) return false;
-  const workspace = host.slice(0, -'.slack.com'.length);
-  return !workspace.includes('.') && !workspace.startsWith('xn--');
+  return queueLinkKind(url) !== null;
 }
 
 /**
- * What an item's link opens, when the app may open it: "Open in Gmail" for a Gmail link on Gmail's host, "Open in
- * Slack" for a Slack link on Slack's, each the URL exactly as checked, so what opens is what was checked. A link of one
- * kind on the other's host, or on any other host, is none.
+ * What an item's link opens, when the app may open it: "Open in Gmail" for a Gmail link in Gmail's shape, "Open in
+ * Slack" for a Slack link in Slack's, each the URL exactly as checked. A link of one kind in the other's shape is none.
  */
 export function openableLink(link: QueueItem['link']): { label: string; url: string } | null {
-  if (link === null || !queueLink(link.url)) return null;
-  // `queueLink` took it, so its host is Gmail's or one of Slack's.
-  const host = link.url.slice('https://'.length).split(/[/?#]/)[0]?.toLowerCase() ?? '';
-  if (link.kind === 'gmail' && host === GMAIL_WEB_HOST) return { label: 'Open in Gmail', url: link.url };
-  if (link.kind === 'slack' && host !== GMAIL_WEB_HOST) return { label: 'Open in Slack', url: link.url };
-  return null;
+  if (link === null || queueLinkKind(link.url) !== link.kind) return null;
+  return { label: link.kind === 'gmail' ? 'Open in Gmail' : 'Open in Slack', url: link.url };
 }

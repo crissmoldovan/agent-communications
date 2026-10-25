@@ -1,5 +1,6 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import queueTargetSource from '../../../../packages/events-daemon/src/domain/queue-target.ts?raw';
 import { COPY } from '../copy.ts';
 import type { Call, CliResult } from '../ipc.ts';
 import { judgeWords, openableLink, type QueueJudge, queueLink, readQueueCounts, readQueueList } from '../queue.ts';
@@ -13,7 +14,9 @@ import {
   QUEUE_COUNTS,
   QUEUE_INSTALLATION,
   QUEUE_LISTS,
+  queueListAnswer,
 } from './fake-bridge.ts';
+import queueLinks from './fixtures/queue-links.json';
 import { renderApp } from './render.tsx';
 
 /** A screen that reads under a loaded machine: each test is given room. */
@@ -406,7 +409,10 @@ describe('Queue', () => {
       fireEvent.click(within(card(view, OPEN[1] as string)).getByRole('button', { name: 'Open in Slack' }));
       expect(bridge.calls.filter((call) => call.command === 'openLink')).toEqual([
         { command: 'openLink', args: 'https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5' },
-        { command: 'openLink', args: 'https://example.slack.com/archives/C0123ABCD/p1792921860000100' },
+        {
+          command: 'openLink',
+          args: 'https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1792921860.000100',
+        },
       ]);
       // The hostile item's "Gmail" link is on another host: no button. WhatsApp's and Resend's items have no link.
       for (const id of [OPEN[2], OPEN[3], OPEN[4]] as string[]) {
@@ -417,54 +423,60 @@ describe('Queue', () => {
     },
   );
 
-  it('queueLink takes Gmail and Slack on the web, and nothing else', () => {
-    for (const url of [
-      'https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5',
-      'https://MAIL.GOOGLE.COM/mail/u/1/#inbox/x',
-      'https://app.slack.com/client/T0123ABCD/C0123ABCD',
-      'https://example.slack.com/archives/C0123ABCD/p1792921860000100',
-      'https://acme-team.slack.com/archives/C0123ABCD/p1?thread_ts=1.2&cid=C0123ABCD',
-    ]) {
+  it('queueLink opens exactly the links the event service makes, and nothing else on their hosts', () => {
+    // The same file Rust's `links::queue_link` is tested against (`links.rs`).
+    expect(queueLinks.opens.length).toBeGreaterThanOrEqual(10);
+    for (const { kind, url } of queueLinks.opens) {
       expect(queueLink(url), url).toBe(true);
+      expect(openableLink({ kind: kind as 'gmail' | 'slack', url }), url).toEqual({
+        label: kind === 'gmail' ? 'Open in Gmail' : 'Open in Slack',
+        url,
+      });
+    }
+    expect(queueLinks.refused.length).toBeGreaterThanOrEqual(40);
+    for (const url of queueLinks.refused) {
+      expect(queueLink(url), url).toBe(false);
+      expect(openableLink({ kind: 'gmail', url }), url).toBeNull();
+      expect(openableLink({ kind: 'slack', url }), url).toBeNull();
     }
     for (const url of [
-      'https://google.com/',
-      'https://www.google.com/',
-      'https://accounts.google.com/',
-      'https://gmail.com/',
-      'https://slack.com/',
-      'https://slack.com/archives/C0123ABCD',
-      'https://a.b.slack.com/',
-      'https://example.enterprise.slack.com/archives/C1',
-      'https://xn--slck-loa.slack.com/',
-      'https://släck.slack.com/',
-      'https://mail.google.com.evil.example/',
-      'https://evilmail.google.com/',
-      'https://app.slack.com.evil.example/',
-      'https://evilslack.com/',
-      'https://evil.example/#.slack.com',
-      'https://mail.google.com@evil.example/',
-      'https://user:pass@app.slack.com/',
-      'https://mail.google.com:443/',
-      'https://mail.google.com/url?q=https://evil.example/',
-      'https://mail.google.com/URL?q=x',
-      'http://mail.google.com/',
-      'slack://channel?team=T1&id=C1',
-      'javascript:alert(1)//https://mail.google.com/',
-      'file:///etc/passwd',
-      'mail.google.com',
-      '',
+      'https://mail.google.com/mail/?view=cm&body=hello%20there&to=someone%40example.com',
+      'https://example.slack.com/signout',
+      'https://app.slack.com/admin',
     ]) {
-      expect(queueLink(url), url).toBe(false);
+      expect(queueLinks.refused, url).toContain(url);
     }
-    // A link of one kind on the other's host is none, and each opens as the URL parser writes it.
+    // A link of one kind on the other's host is none.
     expect(openableLink({ kind: 'slack', url: 'https://mail.google.com/mail/u/0/#all/x' })).toBeNull();
     expect(openableLink({ kind: 'gmail', url: 'https://app.slack.com/client/T1/C1' })).toBeNull();
-    expect(openableLink({ kind: 'gmail', url: 'https://MAIL.google.com/mail/u/0/#all/x' })).toEqual({
-      label: 'Open in Gmail',
-      url: 'https://MAIL.google.com/mail/u/0/#all/x',
-    });
     expect(openableLink(null)).toBeNull();
+  });
+
+  it("the shapes are the event service's own: its id patterns and its two URL templates", () => {
+    // Read from its source, as grammar.test.ts reads core's: a change there fails here, and the allow-list follows it.
+    const source = queueTargetSource;
+    expect(queueLinks.producer).toHaveLength(7);
+    for (const line of queueLinks.producer) {
+      expect(source, line).toContain(line);
+    }
+    // Every link those templates write from ids their patterns take opens.
+    const gmail = (account: string | undefined, id: string) =>
+      `https://mail.google.com/mail/${account === undefined ? 'u/0/' : `?authuser=${encodeURIComponent(account)}`}#all/${encodeURIComponent(id)}`;
+    for (const account of [undefined, 'someone@example.com', 'first.last+tag@example.co.uk', "o'brien@example.com"]) {
+      for (const id of ['1', '18c2f0a1b2c3d4e5', 'a-b_C', 'Z'.repeat(128)]) {
+        expect(queueLink(gmail(account, id)), gmail(account, id)).toBe(true);
+      }
+    }
+    for (const [team, channel, ts] of [
+      ['T0123ABCD', 'C0123ABCD', undefined],
+      ['E0123', 'G0123ABCD', '1792921860.000100'],
+      ['T1', 'D2', '0.000000'],
+      ['T'.repeat(32), 'C'.repeat(32), '1.123456'],
+    ] as const) {
+      const base = `https://app.slack.com/client/${team}/${channel}`;
+      const url = ts === undefined ? base : `${base}/thread/${channel}-${ts}`;
+      expect(queueLink(url), url).toBe(true);
+    }
   });
 
   it('with no queue target, says how to add one; with nothing open, that nothing is waiting', SLOW, async () => {
@@ -571,6 +583,52 @@ describe('Queue', () => {
       for (const call of lists(bridge)) expect(call).toEqual({ kind: 'queueList', state: 'open', limit: QUEUE_LIMIT });
     },
   );
+
+  it('each 30-second read of the list reads the counts with it, so a tab never lags its list', SLOW, async () => {
+    vi.useFakeTimers();
+    const advance = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+    // An item arrives between two reads: the list and the counts answer with it from then on.
+    const [first] = QUEUE_LISTS.open.items;
+    const arrived = { ...first, id: 'qi_01JBH7Z3K90000000000000009', arrivedAt: '2026-10-25T11:59:00.000Z' };
+    let here = false;
+    const bridge = bridgeAt('0.30.0', {
+      queueList: (call: Call) => {
+        const answer = queueListAnswer(call);
+        return here && (call as Extract<Call, { kind: 'queueList' }>).state === 'open'
+          ? { ...answer, items: [arrived, ...answer.items] }
+          : answer;
+      },
+      queueCounts: () => ({ ...QUEUE_COUNTS, open: QUEUE_COUNTS.open + (here ? 1 : 0) }),
+    });
+    // The app opens on Overview, whose shared reads poll every 15 seconds from now; the Queue opens 5 seconds later, so
+    // its own 30 seconds fall between theirs.
+    renderApp(bridge);
+    for (let round = 0; round < 6; round += 1) await advance(0);
+    await advance(5_000);
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('button', { name: /^Queue/ }),
+    );
+    for (let round = 0; round < 6; round += 1) await advance(0);
+    const openTab = () => within(main()).getByRole('tab', { name: /^Open/ });
+    const cardsShown = () => main().querySelectorAll('li[data-item]').length;
+    expect(cardsShown()).toBe(OPEN.length);
+    expect(openTab().textContent).toContain(`${OPEN.length} waiting`);
+    // Just after the shared read at 30 seconds, the item arrives; the Queue's own read is at 35.
+    await advance(26_000);
+    here = true;
+    const counted = () => queueCalls(bridge).filter((call) => call.kind === 'queueCounts').length;
+    const before = { lists: lists(bridge).length, counts: counted() };
+    await advance(4_000);
+    expect(lists(bridge).length).toBe(before.lists + 1);
+    expect(counted()).toBe(before.counts + 1);
+    // The list and its tab say the same at once, not 10 seconds apart.
+    expect(cardsShown()).toBe(OPEN.length + 1);
+    expect(openTab().textContent).toContain(`${OPEN.length + 1} waiting`);
+  });
 
   it('calls nothing but the queue reads and the changes the person asked for', SLOW, async () => {
     const bridge = bridgeAt();

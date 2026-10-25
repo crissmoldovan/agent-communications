@@ -142,7 +142,7 @@ test('Done, Dismiss, Reopen and Clear make exactly their calls, and links open t
     .poll(async () => (await recorded(page)).filter((call) => call.cmd === 'open_link').map((call) => call.args.url))
     .toEqual([
       'https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5',
-      'https://example.slack.com/archives/C0123ABCD/p1792921860000100',
+      'https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1792921860.000100',
     ]);
   await card(open, OPEN[0] as string)
     .getByRole('button', { name: 'Done', exact: true })

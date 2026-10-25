@@ -57,7 +57,7 @@
       "text": "<untrusted-content boundary=\"q7Tn2bXa\" field=\"text\">\nCan you look at the deploy before 5? It fails on the second step.\n</untrusted-content boundary=\"q7Tn2bXa\">",
       "link": {
         "kind": "slack",
-        "url": "https://example.slack.com/archives/C0123ABCD/p1792921860000100"
+        "url": "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1792921860.000100"
       },
       "judge": {
         "state": "answered",

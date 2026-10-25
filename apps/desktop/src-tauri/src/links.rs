@@ -6,8 +6,10 @@
 use crate::allowlist::{AccountName, Call, ConversationId};
 use crate::ipc::{AppError, CliResult, ProfileOpened};
 use crate::runner::{run, RunContext};
+use regex::Regex;
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
 use tauri::AppHandle;
 use tauri_plugin_opener::OpenerExt;
 
@@ -31,13 +33,6 @@ const LINK_LIMIT: usize = 2048;
 
 /// What a link never holds as it is: a URL writes each of these, and anything outside printable ASCII, as `%XX`.
 const NEVER_IN_A_LINK: &[u8] = b"\"<>\\`{}";
-
-/// Gmail on the web, where a queue item's "Open in Gmail" goes (0.30.0): this host exactly.
-pub const GMAIL_WEB_HOST: &str = "mail.google.com";
-
-/// Slack's web app, where a queue item's "Open in Slack" goes (0.30.0): this host, or one workspace's own
-/// `<workspace>.slack.com`.
-pub const SLACK_WEB_HOST: &str = "app.slack.com";
 
 /// What every link the app opens is first: `https://`, then a host with no user, password or port, every label letters,
 /// digits and inner hyphens, then, if anything, a path, a query or a fragment of printable ASCII with nothing a URL would
@@ -79,17 +74,41 @@ pub fn allowed_link(url: &str) -> bool {
     checked_host(url).is_some_and(|host| LINK_HOSTS.contains(&host.as_str()))
 }
 
-/// Whether `url` is a queue item's link the app may open (0.30.0, design 2026-10-25-action-queue §8): `checked_host`'s
-/// link on Gmail's web host, on Slack's web app, or on one workspace's `<workspace>.slack.com` — a single label of
-/// letters, digits and inner hyphens before `.slack.com`, never an internationalised one. No other host of Google's or
-/// Slack's, and no deeper subdomain. The UI checks the same before it offers the link (`queueLink`, `src/queue.ts`).
+/// A queue item's Gmail link, as the event service makes it (`queueItemLink`, in
+/// `packages/events-daemon/src/domain/queue-target.ts`): `/mail/u/<n>/` or `/mail/?authuser=<the account's address,
+/// percent-encoded>`, then `#all/<message id>`, the id as its `GMAIL_ID` takes one.
+static GMAIL_QUEUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^https://mail\.google\.com/mail/(?:u/[0-9]{1,2}/|\?authuser=((?:[A-Za-z0-9._~!*'()-]|%[0-9A-F]{2})+))#all/[0-9A-Za-z_-]{1,128}$",
+    )
+    .expect("a pattern")
+});
+
+/// A queue item's Slack link, as the event service makes it: `/client/<team>/<channel>`, then, for a thread,
+/// `/thread/<the same channel>-<ts>`, each id as its `SLACK_ID` takes one and the ts as its `SLACK_TS`.
+static SLACK_QUEUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^https://app\.slack\.com/client/[0-9A-Z]{1,32}/([0-9A-Z]{1,32})(?:/thread/([0-9A-Z]{1,32})-[0-9]+\.[0-9]{6})?$")
+        .expect("a pattern")
+});
+
+/// Whether `url` is a queue item's link the app may open (0.30.0, design 2026-10-25-action-queue §8): exactly one of
+/// the two shapes the event service makes, and nothing else on Gmail's or Slack's hosts — not Gmail's compose page,
+/// not a workspace's own `<workspace>.slack.com`, not Slack's admin. A Gmail account is a percent-encoded address, with
+/// its `@`; a thread is the link's own channel's. The UI checks the same before it offers one (`queueLink`,
+/// `src/queue.ts`).
 pub fn queue_link(url: &str) -> bool {
-    checked_host(url).is_some_and(|host| {
-        if host == GMAIL_WEB_HOST || host == SLACK_WEB_HOST {
-            return true;
-        }
-        host.strip_suffix(".slack.com")
-            .is_some_and(|workspace| !workspace.contains('.') && !workspace.starts_with("xn--"))
+    if url.len() > LINK_LIMIT {
+        return false;
+    }
+    if let Some(gmail) = GMAIL_QUEUE_LINK.captures(url) {
+        return gmail
+            .get(1)
+            .is_none_or(|account| account.as_str().contains("%40"));
+    }
+    SLACK_QUEUE_LINK.captures(url).is_some_and(|slack| {
+        slack.get(2).is_none_or(|thread| {
+            Some(thread.as_str()) == slack.get(1).map(|channel| channel.as_str())
+        })
     })
 }
 
@@ -102,7 +121,7 @@ pub fn may_open(url: &str) -> bool {
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
     if !may_open(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, and a queue item's message on mail.google.com, app.slack.com or a workspace's slack.com",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, and a queue item's message as the event service links it, on mail.google.com or app.slack.com",
         ));
     }
     app.opener()
@@ -325,106 +344,89 @@ mod tests {
         }
     }
 
-    /// A queue item's "Open in Gmail" and "Open in Slack" (0.30.0): Gmail's web host, Slack's web app and a workspace's
-    /// own host, and no other host at all. A doctor fix still opens none of them.
+    /// A queue item's links as the event service makes them, and the near misses on the same hosts
+    /// (`src/test/fixtures/queue-links.json`, which `src/test/queue.test.tsx` holds the TypeScript port to as well).
+    const QUEUE_LINKS: &str = include_str!("../../src/test/fixtures/queue-links.json");
+
+    fn queue_links() -> (Vec<(String, String)>, Vec<String>) {
+        let fixture: serde_json::Value =
+            serde_json::from_str(QUEUE_LINKS).expect("queue-links.json");
+        let opens = fixture["opens"]
+            .as_array()
+            .expect("opens")
+            .iter()
+            .map(|link| {
+                (
+                    link["kind"].as_str().expect("a kind").to_string(),
+                    link["url"].as_str().expect("a url").to_string(),
+                )
+            })
+            .collect();
+        let refused = fixture["refused"]
+            .as_array()
+            .expect("refused")
+            .iter()
+            .map(|url| url.as_str().expect("a url").to_string())
+            .collect();
+        (opens, refused)
+    }
+
+    /// A queue item's "Open in Gmail" and "Open in Slack" (0.30.0) open exactly the two shapes the event service makes
+    /// (`queueItemLink`): Gmail's `/mail/u/<n>/#all/<id>` or `/mail/?authuser=<encoded address>#all/<id>`, and Slack's
+    /// `/client/<team>/<channel>` with, if anything, `/thread/<channel>-<ts>`. A doctor fix still opens none of them.
     #[test]
-    fn queue_links_allow_gmail_and_slack_on_the_web_and_refuse_any_other_host() {
-        let allowed = [
-            "https://mail.google.com/mail/u/0/#all/18c2f0a1b2c3d4e5",
-            "https://mail.google.com/mail/u/1/#inbox/FMfcgzQXJWbMnPqRsTtVvWxZ",
-            "https://mail.google.com/mail/?authuser=someone@example.com#all/18c2f0a1b2c3d4e5",
-            "https://MAIL.GOOGLE.COM/mail/u/0/#all/18c2",
-            "https://app.slack.com/client/T0123ABCD/C0123ABCD",
-            "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-1712345678.123456",
-            "https://example.slack.com/archives/C0123ABCD/p1712345678123456",
-            "https://acme-team.slack.com/archives/C0123ABCD/p1712345678123456?thread_ts=1712345678.000100&cid=C0123ABCD",
-            "https://Example.Slack.com/archives/C0123ABCD",
-            "https://w1.slack.com/",
-        ];
-        for url in allowed {
-            assert!(queue_link(url), "{url} was refused");
-            assert!(may_open(url), "{url} would not open");
-            // A doctor fix sends nobody there (DA16): its own check is unchanged.
+    fn queue_links_open_exactly_the_shapes_the_event_service_makes() {
+        let (opens, _) = queue_links();
+        assert!(opens.len() >= 10);
+        for (kind, url) in &opens {
+            assert!(queue_link(url), "{kind}: {url} was refused");
+            assert!(may_open(url), "{kind}: {url} would not open");
             assert!(!allowed_link(url), "{url} is a doctor fix's link");
         }
-        for url in [
-            // Google's and Slack's other hosts.
-            "https://google.com/",
-            "https://www.google.com/",
-            "https://accounts.google.com/",
-            "https://drive.google.com/drive/my-drive",
-            "https://gmail.com/",
-            "https://www.gmail.com/",
-            "https://inbox.google.com/",
-            "https://slack.com/",
-            "https://slack.com/archives/C0123ABCD",
-            "https://example.enterprise.slack.com/archives/C0123ABCD",
-            "https://a.b.slack.com/",
-            "https://xn--slck-loa.slack.com/",
-            "https://slack-redir.net/link?url=https://evil.example/",
-            "https://slack.co/",
-            "https://example.slack.co/",
-            "https://slack-edge.com/",
-            // Lookalikes, and hosts that only end or start like them.
-            "https://mail.google.com.evil.example/",
-            "https://mail-google.com/",
-            "https://evilmail.google.com/",
-            "https://mail.google.co/",
-            "https://mailgoogle.com/",
-            "https://app.slack.com.evil.example/",
-            "https://example.slack.com.evil.example/",
-            "https://evilslack.com/",
-            "https://slack.com.evil.example/",
-            "https://evil.example/",
-            "https://evil.example/mail.google.com",
-            "https://evil.example/#.slack.com",
-            "https://evil.example?.slack.com",
-            "https://evil.example\\@mail.google.com/",
-            "https://mail.google.com@evil.example/",
-            "https://app.slack.com@evil.example/",
-            // Google's redirect, on Gmail's own host.
-            "https://mail.google.com/url?q=https://evil.example/",
-            "https://mail.google.com/URL?q=https://evil.example/",
-            "https://mail.google.com/url/?q=x",
-            // No user, password or port; https, and only https.
-            "https://user@mail.google.com/mail/u/0/",
-            "https://user:pass@app.slack.com/client",
-            "https://mail.google.com:443/mail/u/0/",
-            "https://app.slack.com:8443/client",
-            "http://mail.google.com/mail/u/0/",
-            "http://app.slack.com/client",
-            "HTTPS://mail.google.com/",
-            "https:mail.google.com",
-            "https:/app.slack.com/client",
-            "slack://channel?team=T0123ABCD&id=C0123ABCD",
-            "googlegmail:///co?to=someone@example.com",
-            "javascript:alert(1)//https://mail.google.com/",
-            "file:///etc/passwd",
-            "",
-            // Malformed hosts and paths.
-            "https://.slack.com/",
-            "https://-a.slack.com/",
-            "https://a-.slack.com/",
-            "https://a..slack.com/",
-            "https://mail.google.com./",
-            "https://app.slack.com./client",
-            "https://%61pp.slack.com/",
-            "https://[::1]/",
-            "https://127.0.0.1/",
-            "https://app.slack.com/ client",
-            "https://app.slack.com/\nclient",
-            "https://app.slack.com/\u{202E}tneilc",
-            "https://app.slack.com/\"onclick",
-            "https://app.slack.com/<script>",
-            "https://mail.google.com/mail/u/0/#all/`x`",
-            "https://sl\u{e4}ck.slack.com/",
-        ] {
-            assert!(!queue_link(url), "{url:?} was allowed");
-            assert!(!may_open(url), "{url:?} would open");
+        // A Gmail link of every account number and every id the event service writes, and every Slack shape.
+        for account in ["u/0/", "u/9/", "u/42/", "?authuser=someone%40example.com"] {
+            for id in ["1", "18c2f0a1b2c3d4e5", "a-b_C", &"Z".repeat(128)] {
+                let url = format!("https://mail.google.com/mail/{account}#all/{id}");
+                assert!(queue_link(&url), "{url}");
+            }
         }
-        let long = format!("https://mail.google.com/mail/u/0/#all/{}", "a".repeat(4096));
+        for thread in [
+            "",
+            "/thread/C0123ABCD-1792921860.000100",
+            "/thread/C0123ABCD-0.000000",
+        ] {
+            let url = format!("https://app.slack.com/client/T0123ABCD/C0123ABCD{thread}");
+            assert!(queue_link(&url), "{url}");
+        }
+    }
+
+    /// Anything else on those hosts is refused: Gmail's compose page, a Slack workspace's own host, Slack's admin, and
+    /// each real shape with anything added or taken away.
+    #[test]
+    fn queue_links_refuse_everything_else_on_gmail_and_slack() {
+        let (_, refused) = queue_links();
+        assert!(refused.len() >= 40);
+        for url in &refused {
+            assert!(!queue_link(url), "{url:?} was allowed");
+            // Opening takes it only when it is a doctor fix's own link.
+            assert_eq!(may_open(url), allowed_link(url), "{url:?}");
+        }
+        for url in [
+            "https://mail.google.com/mail/?view=cm&body=hello%20there&to=someone%40example.com",
+            "https://example.slack.com/signout",
+            "https://app.slack.com/admin",
+        ] {
+            assert!(
+                refused.iter().any(|each| each == url),
+                "{url} is in the fixture"
+            );
+            assert!(!may_open(url), "{url} would open");
+        }
+        let long = format!(
+            "https://app.slack.com/client/T0123ABCD/C0123ABCD/thread/C0123ABCD-{}.000100",
+            "1".repeat(4096)
+        );
         assert!(!queue_link(&long));
-        assert!(!may_open(&long));
         // Opening still takes what it took before: the doctor fixes' hosts and the Judges README.
         for url in [
             "https://api.slack.com/apps",
@@ -433,6 +435,7 @@ mod tests {
             JUDGES_HELP,
         ] {
             assert!(may_open(url), "{url}");
+            assert!(!queue_link(url), "{url}");
         }
     }
 
