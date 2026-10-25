@@ -46,16 +46,16 @@ importers:
         version: 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@cueplusplus/theme-cue':
         specifier: 1.1.2
-        version: 1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.29.0))
+        version: 1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.30.0))
       '@cueplusplus/theme-terminal':
         specifier: 1.1.2
-        version: 1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.29.0))
+        version: 1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.30.0))
       '@cueplusplus/tokens':
-        specifier: 0.29.0
-        version: 0.29.0
+        specifier: 0.30.0
+        version: 0.30.0
       '@cueplusplus/ui':
-        specifier: 0.29.0
-        version: 0.29.0(@base-ui/react@1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.3)
+        specifier: 0.30.0
+        version: 0.30.0(@base-ui/react@1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.3)
       '@tauri-apps/api':
         specifier: 2.12.4
         version: 2.12.4
@@ -542,12 +542,12 @@ packages:
     peerDependencies:
       '@cueplusplus/theme-base': ^1
 
-  '@cueplusplus/tokens@0.29.0':
-    resolution: {integrity: sha512-iIINSkV7jT0h/BjiDODilk/2HDCi6gKkazv46qUBwd42T3T1rloPqyxa/541O2ucN5SR9m6cEpqfUrpKQ8LwEg==}
+  '@cueplusplus/tokens@0.30.0':
+    resolution: {integrity: sha512-xvmbzZPfKYVDvlDbbqHyhW347NcOvh6oIV4NLXXYEw1kePxWaIKs8Th1cy6xSi0EIFKBJyKR6CNlebaxhQpqHQ==}
     engines: {node: '>=22'}
 
-  '@cueplusplus/ui@0.29.0':
-    resolution: {integrity: sha512-8ZZSQQILXR2PQU4Tz8G8atAgnirYqjqzrK3G9kB1HnRUbfBqX4B79Nr+xlOqX74e5GHWI/QNrycOyk/EHL2AdQ==}
+  '@cueplusplus/ui@0.30.0':
+    resolution: {integrity: sha512-ViZgJPJlSDC5FK2rktTDct9SfUFYaOCQcQqscV9BDJgsPuclUAuq83Opj2mpCGFXEnMUn4XlD6nRcAjS13E/RA==}
     engines: {node: '>=22'}
     peerDependencies:
       '@assistant-ui/react': ^0.15.16
@@ -2648,26 +2648,26 @@ snapshots:
 
   '@csstools/css-tokenizer@4.0.2': {}
 
-  '@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.29.0)':
+  '@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.30.0)':
     dependencies:
-      '@cueplusplus/tokens': 0.29.0
+      '@cueplusplus/tokens': 0.30.0
       culori: 4.0.2
 
-  '@cueplusplus/theme-cue@1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.29.0))':
+  '@cueplusplus/theme-cue@1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.30.0))':
     dependencies:
-      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.29.0)
+      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.30.0)
 
-  '@cueplusplus/theme-terminal@1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.29.0))':
+  '@cueplusplus/theme-terminal@1.1.2(@cueplusplus/theme-base@1.4.0(@cueplusplus/tokens@0.30.0))':
     dependencies:
-      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.29.0)
+      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.30.0)
 
-  '@cueplusplus/tokens@0.29.0': {}
+  '@cueplusplus/tokens@0.30.0': {}
 
-  '@cueplusplus/ui@0.29.0(@base-ui/react@1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.3)':
+  '@cueplusplus/ui@0.30.0(@base-ui/react@1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(lucide-react@1.61.0(@types/react@19.3.0)(react@19.3.1))(react-dom@19.3.1(react@19.3.1))(react@19.3.1)(tailwindcss@4.3.3)':
     dependencies:
       '@base-ui/react': 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
-      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.29.0)
-      '@cueplusplus/tokens': 0.29.0
+      '@cueplusplus/theme-base': 1.4.0(@cueplusplus/tokens@0.30.0)
+      '@cueplusplus/tokens': 0.30.0
       clsx: 2.1.1
       culori: 4.0.2
       react: 19.3.1
