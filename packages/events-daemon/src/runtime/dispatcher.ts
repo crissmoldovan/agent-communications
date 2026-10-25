@@ -87,6 +87,8 @@ export interface DeliveryDispatcherOptions {
   readonly dryrun: DeliveryDispatchHandler;
   readonly webhook: DeliveryDispatchHandler;
   readonly sse: DeliveryDispatchHandler;
+  /** The action queue's local adapter; a queue delivery is refused, never claimed by another, when it is absent. */
+  readonly queue?: DeliveryDispatchHandler | undefined;
   readonly now?: (() => number) | undefined;
   /** B3 exact-slot gate, checked before the handler claims or renders a delivery. */
   readonly assertObjectSecretReady?:
@@ -109,6 +111,7 @@ export class DeliveryDispatcher {
   readonly #dryrun: DeliveryDispatchHandler;
   readonly #webhook: DeliveryDispatchHandler;
   readonly #sse: DeliveryDispatchHandler;
+  readonly #queue: DeliveryDispatchHandler | undefined;
   readonly #now: () => number;
   readonly #assertObjectSecretReady: DeliveryDispatcherOptions['assertObjectSecretReady'];
 
@@ -117,6 +120,7 @@ export class DeliveryDispatcher {
     this.#dryrun = options.dryrun;
     this.#webhook = options.webhook;
     this.#sse = options.sse;
+    this.#queue = options.queue;
     this.#now = options.now ?? Date.now;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
   }
@@ -161,6 +165,11 @@ export class DeliveryDispatcher {
     if (targetKey.startsWith('dryrun:')) return this.#dryrun;
     if (targetKey.startsWith('webhook:')) return this.#webhook;
     if (targetKey.startsWith('sse:')) return this.#sse;
+    if (targetKey.startsWith('queue:')) {
+      if (this.#queue === undefined)
+        throw new CommsError('CONFIG', 'this owner has no queue adapter for a queue delivery');
+      return this.#queue;
+    }
     throw new CommsError('BAD_DATA', 'the persisted delivery has an unknown target kind');
   }
 }
