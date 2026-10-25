@@ -401,6 +401,43 @@ describe('The event service', () => {
     expect(within(region(SERVICE)).queryByRole('status', { name: 'Starting the event service…' })).toBeNull();
   });
 
+  it("the screen's own reads of the service are read again when the supervisor says it runs", async () => {
+    let up = false;
+    const down = failed('NOT_FOUND', 'the local event service is not running');
+    const inner = createFakeBridge(
+      {},
+      {
+        eventsStatus: () => (up ? running : { owner: 'not-running' }),
+        eventsRules: rules,
+        eventsDeliveries: deliveries,
+      },
+    );
+    const bridge = createFakeBridge({
+      eventServiceState: async () => EVENT_SERVICE.starting,
+      cli: async (call) =>
+        !up && (call.kind === 'eventsRules' || call.kind === 'eventsDeliveries') ? down : inner.cli(call),
+    });
+    renderApp(bridge, { screen: 'events' });
+    expect(await within(await screen.findByRole('region', { name: 'Status' })).findByText('not running')).toBeTruthy();
+    await waitFor(() =>
+      expect(within(region('Rules')).getByText('the local event service is not running')).toBeTruthy(),
+    );
+    await waitFor(() =>
+      expect(within(region('Recent deliveries')).getByText('the local event service is not running')).toBeTruthy(),
+    );
+
+    up = true;
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
+    expect(await within(region('Status')).findByText('running')).toBeTruthy();
+    expect(await screen.findByRole('table', { name: 'Rules' })).toBeTruthy();
+    expect(await screen.findByRole('table', { name: 'Recent deliveries' })).toBeTruthy();
+
+    // A word that changes nothing of whether it runs reads nothing again.
+    const reads = cliKinds(bridge).length;
+    await act(async () => bridge.emit('event-service:changed', { ...EVENT_SERVICE.running, restarts: 1 }));
+    expect(cliKinds(bridge)).toHaveLength(reads);
+  });
+
   it('Full Disk Access missing shows the line and Open System Settings', async () => {
     const bridge = serviceBridge(EVENT_SERVICE.fullDiskAccessMissing);
     const first = renderApp(bridge, { screen: 'events' });

@@ -11,7 +11,7 @@ import { useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
-import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
+import { useReloadOnReturn, useReloadOnServiceTurn } from '../hooks/use-reload-on-return.ts';
 import {
   type Call,
   type EventServiceState,
@@ -459,8 +459,10 @@ function Service() {
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };
 
+/** The rules, read when the screen opens, and again when the service starts or stops running: they come from it. */
 function Rules() {
-  const { result } = useCall<unknown>(RULES);
+  const { result, reload } = useCall<unknown>(RULES);
+  useReloadOnServiceTurn(reload);
   return (
     <SectionPanel title="Rules">
       <ScreenState value={result}>
@@ -470,8 +472,10 @@ function Rules() {
   );
 }
 
+/** The recent deliveries, read as the rules are. */
 function Deliveries() {
-  const { result } = useCall<unknown>(DELIVERIES);
+  const { result, reload } = useCall<unknown>(DELIVERIES);
+  useReloadOnServiceTurn(reload);
   return (
     <SectionPanel title="Recent deliveries">
       <ScreenState value={result}>
@@ -706,8 +710,9 @@ function LayaView({ read }: { read: LayaRead }) {
 /**
  * Laya's section. Nothing is read until the events service's own `--version` says it has the calls (DA12); then its
  * status is read when the screen opens, again when the window comes back (the person may have approved in the
- * terminal), and with the screen's poll while its bytes are moving (DA14). Only the latest-started read is kept
- * (`useCall`, DA16). Enable opens the terminal; Disable applies at once and reads the status again.
+ * terminal), when the service starts or stops running, and with the screen's poll while its bytes are moving (DA14).
+ * Only the latest-started read is kept (`useCall`, DA16). Enable opens the terminal; Disable applies at once and reads
+ * the status again.
  */
 function Laya() {
   const bridge = useBridge();
@@ -717,6 +722,7 @@ function Laya() {
   const supported = version.state === 'ready' && supports(version.value, 'layaJudge');
   const { result, reload } = useCall<unknown>(supported ? LAYA_STATUS : null);
   useReloadOnReturn(reload);
+  useReloadOnServiceTurn(reload);
   const read = supported && result.state === 'ready' ? readLaya(result.value) : null;
   const status = read?.kind === 'status' ? read.status : null;
   const action = status === null ? null : actionFor(status.state);
