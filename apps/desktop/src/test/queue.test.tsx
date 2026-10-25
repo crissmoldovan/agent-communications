@@ -14,6 +14,7 @@ import {
   QUEUE_COUNTS,
   QUEUE_INSTALLATION,
   QUEUE_LISTS,
+  queueListAnswer,
 } from './fake-bridge.ts';
 import queueLinks from './fixtures/queue-links.json';
 import { renderApp } from './render.tsx';
@@ -582,6 +583,52 @@ describe('Queue', () => {
       for (const call of lists(bridge)) expect(call).toEqual({ kind: 'queueList', state: 'open', limit: QUEUE_LIMIT });
     },
   );
+
+  it('each 30-second read of the list reads the counts with it, so a tab never lags its list', SLOW, async () => {
+    vi.useFakeTimers();
+    const advance = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    };
+    // An item arrives between two reads: the list and the counts answer with it from then on.
+    const [first] = QUEUE_LISTS.open.items;
+    const arrived = { ...first, id: 'qi_01JBH7Z3K90000000000000009', arrivedAt: '2026-10-25T11:59:00.000Z' };
+    let here = false;
+    const bridge = bridgeAt('0.30.0', {
+      queueList: (call: Call) => {
+        const answer = queueListAnswer(call);
+        return here && (call as Extract<Call, { kind: 'queueList' }>).state === 'open'
+          ? { ...answer, items: [arrived, ...answer.items] }
+          : answer;
+      },
+      queueCounts: () => ({ ...QUEUE_COUNTS, open: QUEUE_COUNTS.open + (here ? 1 : 0) }),
+    });
+    // The app opens on Overview, whose shared reads poll every 15 seconds from now; the Queue opens 5 seconds later, so
+    // its own 30 seconds fall between theirs.
+    renderApp(bridge);
+    for (let round = 0; round < 6; round += 1) await advance(0);
+    await advance(5_000);
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('button', { name: /^Queue/ }),
+    );
+    for (let round = 0; round < 6; round += 1) await advance(0);
+    const openTab = () => within(main()).getByRole('tab', { name: /^Open/ });
+    const cardsShown = () => main().querySelectorAll('li[data-item]').length;
+    expect(cardsShown()).toBe(OPEN.length);
+    expect(openTab().textContent).toContain(`${OPEN.length} waiting`);
+    // Just after the shared read at 30 seconds, the item arrives; the Queue's own read is at 35.
+    await advance(26_000);
+    here = true;
+    const counted = () => queueCalls(bridge).filter((call) => call.kind === 'queueCounts').length;
+    const before = { lists: lists(bridge).length, counts: counted() };
+    await advance(4_000);
+    expect(lists(bridge).length).toBe(before.lists + 1);
+    expect(counted()).toBe(before.counts + 1);
+    // The list and its tab say the same at once, not 10 seconds apart.
+    expect(cardsShown()).toBe(OPEN.length + 1);
+    expect(openTab().textContent).toContain(`${OPEN.length + 1} waiting`);
+  });
 
   it('calls nothing but the queue reads and the changes the person asked for', SLOW, async () => {
     const bridge = bridgeAt();
