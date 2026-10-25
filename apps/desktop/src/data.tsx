@@ -200,20 +200,23 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   }, [bridge, eventsPresent, eventsVersionRead]);
 
   // The queue's counts, once the events service's own version says it has the queue (0.30.0); nothing is asked before.
-  const queueSupported =
-    eventsVersion !== 'absent' && eventsVersion.state === 'ready' && supports(eventsVersion.value, 'queue');
+  // The version is read through a ref, so the loader, and `refresh` with it, stays one function: the listeners that
+  // call it are not taken down and set up again each time the version is read.
+  const knownEventsVersion = useRef(eventsVersion);
+  knownEventsVersion.current = eventsVersion;
   const loadQueueCounts = useCallback(async () => {
     const latest = queueCountsRead();
     if (!eventsPresent) {
       setQueueCounts('absent');
       return;
     }
-    if (eventsVersion === 'absent' || eventsVersion.state === 'loading') return;
-    if (eventsVersion.state === 'error') {
-      setQueueCounts(eventsVersion);
+    const version = knownEventsVersion.current;
+    if (version === 'absent' || version.state === 'loading') return;
+    if (version.state === 'error') {
+      setQueueCounts(version);
       return;
     }
-    if (!queueSupported) {
+    if (!supports(version.value, 'queue')) {
       setQueueCounts('unsupported');
       return;
     }
@@ -229,7 +232,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       counts = result;
     }
     if (latest()) setQueueCounts(counts);
-  }, [bridge, eventsPresent, eventsVersion, queueSupported, queueCountsRead]);
+  }, [bridge, eventsPresent, queueCountsRead]);
 
   const ready = installed !== null;
   const refresh = useCallback(
@@ -253,11 +256,13 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     void loadEventsVersion();
   }, [ready, loadEventsVersion]);
 
-  // The counts, as soon as the version says whether the queue is there: the poll then keeps them current.
+  // The counts, as soon as the version says whether the queue is there, and each time it is read again: the poll then
+  // keeps them current.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new reading of the version is what asks for the counts.
   useEffect(() => {
     if (!ready) return;
     void loadQueueCounts();
-  }, [ready, loadQueueCounts]);
+  }, [ready, eventsVersion, loadQueueCounts]);
 
   const runDoctors = useCallback(
     async (products: DoctorProduct[]) => {
