@@ -46,6 +46,12 @@ const fromOutside = (card: HTMLElement): (string | null)[] =>
 
 const main = (): HTMLElement => screen.getByRole('main');
 
+/** The Waiting view, and the count its header shows. */
+function waiting(): { view: HTMLElement; count: string | null } {
+  const view = within(main()).getByRole('region', { name: 'Waiting' });
+  return { view, count: view.querySelector('[data-slot="section-header-count"]')?.textContent ?? null };
+}
+
 /** The page, once the shell is up: the installation is read before anything else shows. */
 const opened = (): Promise<HTMLElement> => screen.findByRole('main');
 
@@ -128,6 +134,7 @@ describe('Approvals', () => {
     );
     renderApp(bridge, { screen: 'approvals' });
     const card = await cardOf(GMAIL);
+    expect(waiting().count).toBe('3');
     const before = bridge.calls.length;
     fireEvent.click(within(card).getByRole('button', { name: COPY.revoke }));
     await waitFor(() => expect(screen.queryByText(GMAIL)).toBeNull());
@@ -137,6 +144,7 @@ describe('Approvals', () => {
       { command: 'cli', args: { kind: 'approvalsPending' } },
     ]);
     expect(within(main()).getAllByRole('article')).toHaveLength(2);
+    expect(waiting().count).toBe('2');
   });
 
   it('a revoke that fails says why and keeps the card', async () => {
@@ -222,6 +230,40 @@ describe('Approvals', () => {
     const other = await cardOf(unknown.approvalId);
     expect(within(other).getByText('Change · teams')).toBeTruthy();
     expect(within(other).queryByRole('button', { name: COPY.approveInTerminal })).toBeNull();
+  });
+
+  it('Waiting is the one view, with its count, and nothing stands for a Recent the app cannot read', async () => {
+    const bridge = createFakeBridge();
+    renderApp(bridge, { screen: 'approvals' });
+    await cardOf(GMAIL);
+    const { view, count } = waiting();
+    expect(count).toBe('3');
+    expect(within(view).getAllByRole('article')).toHaveLength(3);
+    // No tab bar: the app reads only what waits, so there is no Recent to show and none is made up.
+    expect(within(main()).queryByRole('tablist')).toBeNull();
+    expect(within(main()).queryByText('Recent')).toBeNull();
+    expect(new Set(cliKinds(bridge).filter((kind) => kind.startsWith('approval')))).toEqual(
+      new Set(['approvalsPending']),
+    );
+  });
+
+  it('nothing waiting says so under a count of none', async () => {
+    renderApp(createFakeBridge({}, { approvalsPending: [] }), { screen: 'approvals' });
+    expect(await within(await opened()).findByText('Nothing is waiting for you.')).toBeTruthy();
+    expect(waiting().count).toBe('0');
+  });
+
+  it("a card's buttons come after everything it shows, Revoke first and Approve in Terminal last", async () => {
+    renderApp(createFakeBridge(), { screen: 'approvals' });
+    const send = await cardOf(GMAIL);
+    const buttons = within(send).getAllByRole('button');
+    expect(buttons.map((button) => button.textContent)).toEqual([COPY.revoke, COPY.approveInTerminal]);
+    // What a sender wrote, and the times, are all read before either button is reached.
+    const last = Array.from(send.querySelectorAll('[data-slot="from-outside"], time')).at(-1);
+    expect(last).toBeTruthy();
+    expect(last?.compareDocumentPosition(buttons[0] as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    // The id stays as it came, in mono beside the title.
+    expect(within(send).getByText(GMAIL).className).toContain('font-mono');
   });
 
   it('an answer in no shape the app knows is an error, not a crash', async () => {
