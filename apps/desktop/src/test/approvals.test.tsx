@@ -46,10 +46,11 @@ const fromOutside = (card: HTMLElement): (string | null)[] =>
 
 const main = (): HTMLElement => screen.getByRole('main');
 
-/** The Waiting view, and the count its header shows. */
+/** The Waiting view, and the count its tab shows (0.29.0: Waiting and Recent are tabs, the count on Waiting's). */
 function waiting(): { view: HTMLElement; count: string | null } {
   const view = within(main()).getByRole('region', { name: 'Waiting' });
-  return { view, count: view.querySelector('[data-slot="section-header-count"]')?.textContent ?? null };
+  const tab = within(main()).getByRole('tab', { name: /^Waiting/ });
+  return { view, count: tab.querySelector('[data-slot="tab-count"] [aria-hidden="true"]')?.textContent ?? null };
 }
 
 /** The page, once the shell is up: the installation is read before anything else shows. */
@@ -232,22 +233,29 @@ describe('Approvals', () => {
     expect(within(other).queryByRole('button', { name: COPY.approveInTerminal })).toBeNull();
   });
 
-  it('Waiting is the one view, with its count, and nothing stands for a Recent the app cannot read', async () => {
+  it('Waiting comes first, with its count on its tab; Recent is read only when it is opened', async () => {
     const bridge = createFakeBridge();
     renderApp(bridge, { screen: 'approvals' });
     await cardOf(GMAIL);
+    const tabs = within(main()).getByRole('tablist', { name: 'Approvals' });
+    expect(
+      within(tabs)
+        .getAllByRole('tab')
+        .map((tab) => [tab.textContent, tab.getAttribute('aria-selected')]),
+    ).toEqual([
+      ['Waiting 33 waiting', 'true'],
+      ['Recent', 'false'],
+    ]);
     const { view, count } = waiting();
     expect(count).toBe('3');
     expect(within(view).getAllByRole('article')).toHaveLength(3);
-    // No tab bar: the app reads only what waits, so there is no Recent to show and none is made up.
-    expect(within(main()).queryByRole('tablist')).toBeNull();
-    expect(within(main()).queryByText('Recent')).toBeNull();
+    // Until Recent is opened, only what waits is read.
     expect(new Set(cliKinds(bridge).filter((kind) => kind.startsWith('approval')))).toEqual(
       new Set(['approvalsPending']),
     );
   });
 
-  it('nothing waiting says so under a count of none', async () => {
+  it('nothing waiting says so beside a count of none', async () => {
     renderApp(createFakeBridge({}, { approvalsPending: [] }), { screen: 'approvals' });
     expect(await within(await opened()).findByText('Nothing is waiting for you.')).toBeTruthy();
     expect(waiting().count).toBe('0');
@@ -278,6 +286,123 @@ describe('Approvals', () => {
     expect((await within(await opened()).findByRole('alert')).textContent).toBe(
       'The approvals list could not be read.',
     );
+  });
+});
+
+/** Opens Recent, as a person would, and waits for what it read. */
+async function openRecent(): Promise<HTMLElement> {
+  fireEvent.click(await within(await opened()).findByRole('tab', { name: 'Recent' }));
+  const view = await within(main()).findByRole('region', { name: 'Recent' });
+  await waitFor(() => expect(within(view).queryByRole('status', { name: COPY.loading })).toBeNull());
+  return view;
+}
+
+/** The rows Recent shows, by id. */
+const recentRows = (view: HTMLElement): HTMLElement[] =>
+  Array.from(view.querySelectorAll<HTMLElement>('[data-approval]'));
+
+describe('Approvals → Recent (S5)', () => {
+  // Only the clock is held, at noon on the fixtures' last day: the 30 days are counted back from it.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-25T12:00:00.000Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('lists what no longer waits from the last 30 days, newest first: kind, channel, account, decision, when, id', async () => {
+    const bridge = createFakeBridge();
+    renderApp(bridge, { screen: 'approvals' });
+    const view = await openRecent();
+    // One list for each finished state, and no other state, read only once Recent is open.
+    const asked = bridge.calls
+      .filter((call) => call.command === 'cli' && (call.args as Call).kind === 'approvalsFinished')
+      .map((call) => (call.args as Extract<Call, { kind: 'approvalsFinished' }>).state);
+    expect(asked).toEqual(['approved', 'used', 'failed', 'unknown', 'expired', 'revoked']);
+    const rows = recentRows(view);
+    // The one decided in September is past the 30 days.
+    expect(rows.map((row) => [row.dataset.approval, row.dataset.state])).toEqual([
+      ['ap_01RECENT000000000000000004', 'approved'],
+      ['ap_01RECENT000000000000000001', 'used'],
+      ['ap_01RECENT000000000000000002', 'revoked'],
+      ['ap_01RECENT000000000000000003', 'expired'],
+      ['ap_01RECENT000000000000000005', 'failed'],
+      ['ap_01RECENT000000000000000006', 'unknown'],
+    ]);
+    const decision = (row: HTMLElement | undefined) =>
+      row?.querySelector('[data-slot="decision"]')?.textContent ?? null;
+    expect(rows.map(decision)).toEqual(['Approved', 'Sent', 'Revoked', 'Expired', 'Failed', 'Outcome unknown']);
+    const sent = rows[1] as HTMLElement;
+    expect(within(sent).getByText('Send · Gmail')).toBeTruthy();
+    expect(within(sent).getByText('ap_01RECENT000000000000000001').className).toContain('font-mono');
+    expect(within(sent).getByText('in_01EXAMPLE0000000000000000').className).toContain('font-mono');
+    expect(sent.querySelector('time[datetime="2026-10-25T09:24:02.000Z"]')).not.toBeNull();
+    expect(within(rows[2] as HTMLElement).getByText('Change · agent-communications')).toBeTruthy();
+    expect(within(rows[2] as HTMLElement).getByText('revoked by the user')).toBeTruthy();
+    expect(rows[3]?.querySelector('time[datetime="2026-10-23T11:30:00.000Z"]')).not.toBeNull();
+    expect(within(rows[4] as HTMLElement).getByText('Send · Resend')).toBeTruthy();
+    expect(within(rows[4] as HTMLElement).getByText(/the domain is not verified/)).toBeTruthy();
+    expect(rows[5]?.querySelector('time[datetime="2026-10-21T19:05:00.000Z"]')).not.toBeNull();
+    // Read-only: no button anywhere in it, and nothing a sender wrote — no subject, no recipient — and no markup.
+    expect(within(view).queryAllByRole('button')).toEqual([]);
+    expect(view.textContent).not.toContain('The figures you asked for');
+    expect(view.textContent).not.toContain('jo@example.com');
+    expect(view.querySelector('img,script,iframe,[data-slot="from-outside"]')).toBeNull();
+    // Nothing but reads went to the CLI.
+    for (const kind of cliKinds(bridge)) {
+      expect(['approvalsPending', 'approvalsFinished', 'updateStatus', 'eventsStatus', 'doctor']).toContain(kind);
+    }
+  });
+
+  it('nothing finished says so; a list that fails is said beside what the others found', async () => {
+    const empty = renderApp(createFakeBridge({}, { approvalsFinished: [] }), { screen: 'approvals' });
+    expect(await within(await openRecent()).findByText('Nothing finished in the last 30 days.')).toBeTruthy();
+    empty.unmount();
+
+    const answers = createFakeBridge();
+    renderApp(
+      createFakeBridge({
+        cli: async (call: Call) =>
+          call.kind === 'approvalsFinished' && call.state === 'expired'
+            ? failed('IO', 'the approvals folder could not be read')
+            : answers.cli(call),
+      }),
+      { screen: 'approvals' },
+    );
+    const view = await openRecent();
+    expect((await within(view).findByRole('alert')).textContent).toBe(
+      'Some finished approvals could not be read: the approvals folder could not be read',
+    );
+    expect(recentRows(view).map((row) => row.dataset.state)).toEqual([
+      'approved',
+      'used',
+      'revoked',
+      'failed',
+      'unknown',
+    ]);
+  });
+
+  it('every list failing is an error, as text', async () => {
+    renderApp(createFakeBridge({}, { approvalsFinished: { approvals: 'none' } }), { screen: 'approvals' });
+    const view = await openRecent();
+    expect((await within(view).findByRole('alert')).textContent).toBe('The approvals list could not be read.');
+  });
+
+  it('a deep link opens Waiting again, over Recent', async () => {
+    const bridge = createFakeBridge();
+    renderApp(bridge, { screen: 'approvals' });
+    await openRecent();
+    await act(async () => bridge.emit('deep-link', { approvalId: SLACK }));
+    await waitFor(() =>
+      expect(
+        within(main())
+          .getByRole('tab', { name: /^Waiting/ })
+          .getAttribute('aria-selected'),
+      ).toBe('true'),
+    );
+    const card = await cardOf(SLACK);
+    await waitFor(() => expect(card.getAttribute('aria-current')).toBe('true'));
   });
 });
 
