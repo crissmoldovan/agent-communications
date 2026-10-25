@@ -45,9 +45,11 @@ test('Overview shows the version, approvals waiting and each doctor', async ({ p
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1, name: 'Overview' })).toBeVisible();
 
-  await expect(page.getByRole('region', { name: 'Version' })).toContainText('agent-communications 0.24.0');
+  // The three readings a person looks for first are tiles: each its label, then its reading.
+  const reading = (name: string) => page.getByRole('region', { name }).locator('[data-slot="tile-reading"]');
+  await expect(reading('agent-communications')).toHaveText('0.24.0');
   const waiting = page.getByRole('region', { name: 'Approvals waiting' });
-  await expect(waiting).toContainText('3 approvals are waiting.');
+  await expect(reading('Approvals waiting')).toHaveText('3');
 
   // A row per doctor, each with its state.
   const doctor = page.getByRole('region', { name: 'Doctor' });
@@ -64,7 +66,14 @@ test('Overview shows the version, approvals waiting and each doctor', async ({ p
 
   await expect(page.getByRole('region', { name: 'Updates' })).toContainText('every-14-days');
   await expect(page.getByRole('region', { name: 'Standing approvals' })).toContainText('example/slack');
-  await expect(page.getByRole('region', { name: 'Events' })).toContainText('Running');
+  await expect(page.getByRole('region', { name: 'Event service' })).toContainText('Running');
+
+  // Gmail's row says it waits to be asked; why is in a hint the pointer reaches.
+  const gmail = doctor.locator('[data-product="gmail"]');
+  await expect(gmail).toContainText('Only when you ask');
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+  await gmail.getByRole('button', { name: "Why Gmail's doctor waits" }).hover();
+  await expect(page.getByRole('tooltip')).toHaveText('Runs only when you ask, from Doctor, because it calls Google.');
 
   // The approvals waiting open Approvals.
   await waiting.getByRole('button', { name: 'Open Approvals' }).click();

@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Bridge, Call, CliResult } from '../ipc.ts';
+import { GMAIL_WAITS } from '../screens/Overview.tsx';
 import {
   cliKinds,
   createFakeBridge,
@@ -32,6 +33,10 @@ function heldBridge(): { bridge: Bridge; release: () => void } {
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
 
+/** A tile's reading: the large figure under its label. */
+const reading = (name: string): string | null =>
+  region(name).querySelector('[data-slot="tile-reading"]')?.textContent ?? null;
+
 /** The Doctor block's row for a product, by the name it shows. */
 function doctorRow(name: string): HTMLElement {
   const row = within(region('Doctor')).getByText(name).closest<HTMLElement>('[data-product]');
@@ -52,9 +57,9 @@ describe('Overview', () => {
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
 
     // The version comes with the installation, before any CLI read answers.
-    expect(within(region('Version')).getByText('agent-communications 0.24.0')).toBeTruthy();
+    expect(reading('agent-communications')).toBe('0.24.0');
     // Every block that waits on a read says it is loading.
-    for (const name of ['Updates', 'Approvals waiting', 'Standing approvals', 'Events']) {
+    for (const name of ['Updates', 'Approvals waiting', 'Standing approvals', 'Event service']) {
       expect(within(region(name)).getByRole('status', { name: 'Loading…' })).toBeTruthy();
     }
     // The doctors that run at start are checking; Gmail's waits to be asked.
@@ -83,7 +88,7 @@ describe('Overview', () => {
     expect(rows).toEqual(['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events-daemon']);
 
     // The approvals waiting.
-    expect(within(region('Approvals waiting')).getByText('3 approvals are waiting.')).toBeTruthy();
+    expect(reading('Approvals waiting')).toBe('3');
 
     // The active standing approvals.
     const standing = region('Standing approvals');
@@ -93,8 +98,8 @@ describe('Overview', () => {
     expect(within(standing).getByText(/used 2 times today/)).toBeTruthy();
 
     // The events service.
-    expect(within(region('Events')).getByText('Running')).toBeTruthy();
-    expect(toneOf(region('Events'))).toBe('ok');
+    expect(within(region('Event service')).getByText('Running')).toBeTruthy();
+    expect(toneOf(region('Event service'))).toBe('ok');
 
     // The approvals waiting link to Approvals.
     fireEvent.click(within(region('Approvals waiting')).getByRole('button', { name: 'Open Approvals' }));
@@ -160,12 +165,14 @@ describe('Overview', () => {
       },
     );
     renderApp(bridge);
-    expect(await within(await screen.findByRole('region', { name: 'Events' })).findByText('Not running')).toBeTruthy();
+    expect(
+      await within(await screen.findByRole('region', { name: 'Event service' })).findByText('Not running'),
+    ).toBeTruthy();
     await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('danger'));
 
     up = true;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
-    expect(await within(region('Events')).findByText('Running')).toBeTruthy();
+    expect(await within(region('Event service')).findByText('Running')).toBeTruthy();
     await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('ok'));
     // Only the events service's doctor runs again: core's writes to the keychain, and Gmail's calls Google.
     expect(doctorsRun(bridge).filter((product) => product === 'events-daemon')).toHaveLength(2);
@@ -177,7 +184,7 @@ describe('Overview', () => {
     expect(cliKinds(bridge)).toHaveLength(reads);
     up = false;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stopped));
-    expect(await within(region('Events')).findByText('Not running')).toBeTruthy();
+    expect(await within(region('Event service')).findByText('Not running')).toBeTruthy();
     await waitFor(() => expect(toneOf(doctorRow('Events'))).toBe('danger'));
   });
 
@@ -187,8 +194,8 @@ describe('Overview', () => {
     });
     renderApp(bridge);
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
-    await within(region('Approvals waiting')).findByText('3 approvals are waiting.');
-    expect(screen.queryByRole('region', { name: 'Events' })).toBeNull();
+    await waitFor(() => expect(reading('Approvals waiting')).toBe('3'));
+    expect(screen.queryByRole('region', { name: 'Event service' })).toBeNull();
     // Only the products that are here have a doctor row.
     const rows = Array.from(region('Doctor').querySelectorAll('[data-product]')).map((row) =>
       row.getAttribute('data-product'),
@@ -204,8 +211,9 @@ describe('Overview', () => {
     renderApp(bridge);
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(await within(region('Approvals waiting')).findByText('Nothing is waiting for you.')).toBeTruthy();
+    expect(reading('Approvals waiting')).toBe('0');
     expect(await within(region('Standing approvals')).findByText('No standing approval is active.')).toBeTruthy();
-    expect(await within(region('Events')).findByText('Not running')).toBeTruthy();
+    expect(await within(region('Event service')).findByText('Not running')).toBeTruthy();
   });
 
   it("reads standing list's approvals, and shows only the active ones", async () => {
@@ -281,5 +289,43 @@ describe('Overview', () => {
     );
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
     expect(await within(region('Updates')).findByText(reason)).toBeTruthy();
+  });
+
+  it("Gmail's row says it waits to be asked, and why, in a hint a person can reach", async () => {
+    renderApp(createFakeBridge());
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    const gmail = doctorRow('Gmail');
+    expect(within(gmail).getByText('Only when you ask')).toBeTruthy();
+    // The sentence that explains it is behind the hint, which the keyboard reaches (the e2e hovers it).
+    expect(screen.queryByText(GMAIL_WAITS)).toBeNull();
+    const hint = within(gmail).getByRole('button', { name: "Why Gmail's doctor waits" });
+    await act(async () => hint.focus());
+    expect((await screen.findByRole('tooltip')).textContent).toBe(GMAIL_WAITS);
+  });
+
+  it('one approval waiting reads 1, and a list in no shape the CLI prints says it could not be read', async () => {
+    const one = createFakeBridge({}, { approvalsPending: (FIXTURES.approvalsPending as unknown[]).slice(0, 1) });
+    const first = renderApp(one);
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    await waitFor(() => expect(reading('Approvals waiting')).toBe('1'));
+    first.unmount();
+
+    renderApp(createFakeBridge({}, { approvalsPending: { approvals: 'no' } }));
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    expect(await within(region('Approvals waiting')).findByText('The approvals list could not be read.')).toBeTruthy();
+    expect(reading('Approvals waiting')).toBeNull();
+  });
+
+  it("the version tile says when the version could not be read, and the installation's problem", async () => {
+    renderApp(
+      createFakeBridge({
+        installation: async () => ({ ...EXAMPLE_INSTALLATION, version: null, problem: 'core printed no version' }),
+      }),
+    );
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    const tile = region('agent-communications');
+    expect(within(tile).getByText('at a version the app could not read')).toBeTruthy();
+    expect(within(tile).getByText('core printed no version')).toBeTruthy();
+    expect(reading('agent-communications')).toBeNull();
   });
 });
