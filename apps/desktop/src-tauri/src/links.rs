@@ -1,5 +1,6 @@
 //! What the app opens outside itself, besides the terminal (DA7, DA15, DA16): `https://` links to the pages doctor fixes
-//! send a person to, and a writing profile in `<config>/compose/`, in the default editor. Both go through the opener
+//! send a person to, and the events service's README at its Judges section (0.27.1); and a writing profile in
+//! `<config>/compose/`, in the default editor. Both go through the opener
 //! plugin from Rust: the capability file grants the webview none of its commands.
 
 use crate::allowlist::{AccountName, Call, ConversationId};
@@ -19,6 +20,12 @@ pub const LINK_HOSTS: [&str; 3] = [
     "console.cloud.google.com",
 ];
 
+/// The one page besides those the app opens (0.27.1): the events service's README at its Judges section, where the
+/// Judges section's "How to set it up" sends a person to add a judge and its key at the terminal. Exactly this URL:
+/// nothing else of GitHub's, and not this page another way.
+pub const JUDGES_HELP: &str =
+    "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges";
+
 /// The longest link the app opens.
 const LINK_LIMIT: usize = 2048;
 
@@ -28,8 +35,12 @@ const NEVER_IN_A_LINK: &[u8] = b"\"<>\\`{}";
 /// Whether the app may open `url`: `https://`, then one of `LINK_HOSTS` — with no user, password or port, and every
 /// label letters, digits and inner hyphens — then, if anything, a path, a query or a fragment of printable ASCII with
 /// nothing a URL would have encoded, and never Google's `/url` redirect, which would open anywhere. The UI checks the
-/// same before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it.
+/// same before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
+/// those, `JUDGES_HELP` exactly.
 pub fn allowed_link(url: &str) -> bool {
+    if url == JUDGES_HELP {
+        return true;
+    }
     if url.len() > LINK_LIMIT {
         return false;
     }
@@ -62,7 +73,7 @@ pub fn allowed_link(url: &str) -> bool {
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
     if !allowed_link(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name: api.slack.com, myaccount.google.com and console.cloud.google.com",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com) and the events service's README at its Judges section",
         ));
     }
     app.opener()
@@ -249,6 +260,40 @@ mod tests {
         }
         let long = format!("https://slack.com/{}", "a".repeat(4096));
         assert!(!allowed_link(&long));
+    }
+
+    /// The Judges section's "How to set it up" (0.27.1) opens one fixed page: the events service's README at its
+    /// Judges section. Nothing else of GitHub's opens, not even the same page another way.
+    #[test]
+    fn links_allow_the_judges_readme_and_nothing_else_on_github() {
+        assert_eq!(
+            JUDGES_HELP,
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges"
+        );
+        assert!(allowed_link(JUDGES_HELP));
+        for url in [
+            "https://github.com/",
+            "https://github.com/crissmoldovan/agent-communications",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges-x",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#Judges",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md?x=1#judges",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges/",
+            "https://github.com/crissmoldovan/agent-communications/blob/dev/packages/events-daemon/README.md#judges",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/core/README.md#judges",
+            "https://github.com/someone/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "https://GitHub.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "https://github.com.evil.example/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "https://gist.github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "https://github.com:443/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "http://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            " https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges ",
+            "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges\n",
+            "https://github.com/login?return_to=/crissmoldovan/agent-communications",
+        ] {
+            assert!(!allowed_link(url), "{url:?} was allowed");
+        }
     }
 
     #[test]

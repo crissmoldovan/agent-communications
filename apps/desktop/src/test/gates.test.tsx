@@ -38,7 +38,11 @@ describe('what each CLI version supports', () => {
       standing: '0.23.0',
       updateStatus: '0.24.0',
       layaJudge: '0.25.0',
+      judges: '0.17.0',
     });
+    // The Judges section reads the events service's own version: 0.17.0 is the first with judges at all.
+    expect(supports('0.16.0', 'judges')).toBe(false);
+    expect(supports('0.17.0', 'judges')).toBe(true);
     expect(supports('0.21.0', 'behaviour')).toBe(false);
     expect(supports('0.22.0', 'behaviour')).toBe(true);
     expect(supports('0.22.0', 'profiles')).toBe(true);

@@ -35,6 +35,8 @@ on:
       # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
       # runner, fragments and every module the runner imports, which the Laya Rust mutants step runs.
       - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
+      # The daemon's half of the Judges section's contract (0.27.1), which the app's tests and Rust tests read too.
+      - 'packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json'
       - 'packages/events-daemon/test/fixtures/laya/cases/**'
       - 'packages/events-daemon/test/support/laya-mutants.ts'
       - 'packages/events-daemon/test/support/mutation-runner-exit.ts'
@@ -65,6 +67,8 @@ on:
       # The events daemon's half of the Laya contract (E2 Task 11), which the app's tests and Rust tests read, and the
       # runner, fragments and every module the runner imports, which the Laya Rust mutants step runs.
       - 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json'
+      # The daemon's half of the Judges section's contract (0.27.1), which the app's tests and Rust tests read too.
+      - 'packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json'
       - 'packages/events-daemon/test/fixtures/laya/cases/**'
       - 'packages/events-daemon/test/support/laya-mutants.ts'
       - 'packages/events-daemon/test/support/mutation-runner-exit.ts'

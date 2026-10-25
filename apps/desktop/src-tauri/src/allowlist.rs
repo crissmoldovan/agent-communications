@@ -125,6 +125,34 @@ impl UpdateLevel {
     }
 }
 
+/// A judge kind whose judges name an endpoint, which the Judges section turns on (in the terminal) and off by name
+/// (0.27.1): TypeSafe's hosted Jev, and a model server on this machine. Closed: nothing else is a kind here. Laya is not
+/// one of them: its calls take no argument (`EventsJudgeModelStatus`, `EventsJudgeKindDisable`, and the terminal's
+/// `EventsJudgeKindEnable`), so no word the webview sends ever names it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndpointJudgeKind {
+    #[serde(rename = "typesafe")]
+    Typesafe,
+    #[serde(rename = "local-endpoint")]
+    LocalEndpoint,
+}
+
+impl EndpointJudgeKind {
+    #[cfg(test)]
+    pub const ALL: [EndpointJudgeKind; 2] = [
+        EndpointJudgeKind::Typesafe,
+        EndpointJudgeKind::LocalEndpoint,
+    ];
+
+    /// The kind as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            EndpointJudgeKind::Typesafe => "typesafe",
+            EndpointJudgeKind::LocalEndpoint => "local-endpoint",
+        }
+    }
+}
+
 /// Every call the app may make: the plan's allow-list table, row by row. A row without arguments is written `{}` so
 /// that an unknown field is refused there too.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -208,11 +236,25 @@ pub enum Call {
     /// The events service's `judge kind disable laya` (E2): a tightening, applied at once. It takes no argument: the
     /// kind is Laya's, and no other kind is disabled from the app.
     EventsJudgeKindDisable {},
+    /// The events service's `judge kinds list` (0.27.1's Judges section): each kind's state, read-only. It takes no
+    /// argument. The judge calls are named outside `EventsJudge…`, which E2's static boundary keeps for Laya's two.
+    JudgeKindsList {},
+    /// The events service's `judges list`: each judge's id, version, kind, provider and model, content-free and
+    /// read-only. It takes no argument.
+    JudgesList {},
+    /// The events service's `judge kind disable <kind>` for Jev or a local model server: a tightening, applied at once,
+    /// as Laya's disable is. The kind is closed; turning one on is the terminal's (`TerminalCommand::JudgeKindEnable`).
+    JudgeKindDisable { judge_kind: EndpointJudgeKind },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
 /// agent-communications to use this".
 pub const LAYA_JUDGE_VERSION: &str = "0.25.0";
+
+/// The first release of the events service with judges (Phase E, CHANGELOG 0.17.0): its `judge kinds list` answers the
+/// typesafe and local-endpoint kinds and `judges list` the inventory, where 0.16.0 answered each with Phase E's typed
+/// placeholder. An older one says "Update agent-communications to use this" (DA12).
+pub const JUDGE_KINDS_VERSION: &str = "0.17.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -383,6 +425,11 @@ impl Call {
             Call::EventsStop {} => events(&["stop"]),
             Call::EventsJudgeModelStatus { .. } => events(&["judge", "model", "status"]),
             Call::EventsJudgeKindDisable { .. } => events(&["judge", "kind", "disable", "laya"]),
+            Call::JudgeKindsList {} => events(&["judge", "kinds", "list"]),
+            Call::JudgesList {} => events(&["judges", "list"]),
+            Call::JudgeKindDisable { judge_kind } => {
+                events(&["judge", "kind", "disable", judge_kind.word()])
+            }
         })
     }
 
@@ -413,6 +460,9 @@ impl Call {
             Call::UpdateStatus {} => Some("0.24.0"),
             Call::EventsJudgeModelStatus { .. } | Call::EventsJudgeKindDisable { .. } => {
                 Some(LAYA_JUDGE_VERSION)
+            }
+            Call::JudgeKindsList {} | Call::JudgesList {} | Call::JudgeKindDisable { .. } => {
+                Some(JUDGE_KINDS_VERSION)
             }
             _ => None,
         }
@@ -475,6 +525,10 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsStop" }),
         json!({ "kind": "eventsJudgeModelStatus" }),
         json!({ "kind": "eventsJudgeKindDisable" }),
+        json!({ "kind": "judgeKindsList" }),
+        json!({ "kind": "judgesList" }),
+        json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
+        json!({ "kind": "judgeKindDisable", "judgeKind": "local-endpoint" }),
     ];
     values
         .into_iter()
@@ -505,6 +559,37 @@ pub(crate) fn desktop_contract_words(call: &str) -> (Vec<String>, bool) {
         .iter()
         .find(|entry| entry["call"] == call)
         .unwrap_or_else(|| panic!("the daemon's contract names {call}"));
+    let words = entry["words"]
+        .as_array()
+        .expect("its words")
+        .iter()
+        .map(|word| word.as_str().expect("a word").to_string())
+        .collect();
+    (words, entry["json"] == serde_json::Value::Bool(true))
+}
+
+/// The events daemon's half of the Judges section's contract (0.27.1): `judge-desktop-judges-contract.test.ts` runs
+/// each of these words through the events CLI against the real owner. Laya's stay in `DESKTOP_CONTRACT`.
+#[cfg(test)]
+const DESKTOP_JUDGES_CONTRACT: &str = include_str!(
+    "../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json"
+);
+
+/// The words the daemon's judges contract names for `call` (`judgeKindsList`, `judgesList`, `judgeKindDisable`, or the
+/// terminal's `judgeKindEnable`) and, for the last two, `judge_kind`; and whether it gives them `--json`.
+#[cfg(test)]
+pub(crate) fn desktop_judges_contract_words(
+    call: &str,
+    judge_kind: Option<&str>,
+) -> (Vec<String>, bool) {
+    let contract: serde_json::Value =
+        serde_json::from_str(DESKTOP_JUDGES_CONTRACT).expect("the daemon's judges contract");
+    let entry = contract["calls"]
+        .as_array()
+        .expect("its calls")
+        .iter()
+        .find(|entry| entry["call"] == call && entry["judgeKind"].as_str() == judge_kind)
+        .unwrap_or_else(|| panic!("the daemon's judges contract names {call} {judge_kind:?}"));
     let words = entry["words"]
         .as_array()
         .expect("its words")
@@ -961,6 +1046,42 @@ mod tests {
                 true,
                 thirty,
             ),
+            (
+                json!({"kind":"judgeKindsList"}),
+                EventsDaemon,
+                &["judge", "kinds", "list"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"judgesList"}),
+                EventsDaemon,
+                &["judges", "list"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"judgeKindDisable","judgeKind":"typesafe"}),
+                EventsDaemon,
+                &["judge", "kind", "disable", "typesafe"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"judgeKindDisable","judgeKind":"local-endpoint"}),
+                EventsDaemon,
+                &["judge", "kind", "disable", "local-endpoint"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
         ];
         for (value, product, expected, shape, pins, quiet, timeout) in rows {
             let words = call(value.clone())
@@ -1301,5 +1422,201 @@ mod tests {
         assert_eq!(Call::StandingOff {}.needs(), Some("0.23.0"));
         assert_eq!(Call::Label {}.needs(), None);
         assert_eq!(Call::ApprovalsPending {}.needs(), None);
+    }
+
+    /// The Judges section's calls (0.27.1): the events service's two reads, and the disable of a kind whose judges
+    /// name an endpoint. Each is the launcher, its words, `--json` and the four pins, and its words are the ones the
+    /// events daemon's judges contract runs through its CLI.
+    #[test]
+    fn judge_calls_build_exactly_the_launcher_words_json_and_pins() {
+        let folders = crate::paths::Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let launcher = "/home/example/.local/share/agent-communications/launch/events-daemon";
+        let program = crate::launchers::Program {
+            program: launcher.into(),
+            leading: vec![],
+        };
+        for (value, name, kind, words) in [
+            (
+                json!({ "kind": "judgeKindsList" }),
+                "judgeKindsList",
+                None,
+                &["judge", "kinds", "list"][..],
+            ),
+            (
+                json!({ "kind": "judgesList" }),
+                "judgesList",
+                None,
+                &["judges", "list"][..],
+            ),
+            (
+                json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
+                "judgeKindDisable",
+                Some("typesafe"),
+                &["judge", "kind", "disable", "typesafe"][..],
+            ),
+            (
+                json!({ "kind": "judgeKindDisable", "judgeKind": "local-endpoint" }),
+                "judgeKindDisable",
+                Some("local-endpoint"),
+                &["judge", "kind", "disable", "local-endpoint"][..],
+            ),
+        ] {
+            let built = call(value.clone()).words().expect("words");
+            assert_eq!(built.product, Product::EventsDaemon, "{value}");
+            assert_eq!(built.words, words, "{value}");
+            assert_eq!(built.shape, Shape::Bare, "{value}");
+            assert!(built.pins, "{value}");
+            assert!(built.quiet_updates, "{value}");
+            assert_eq!(built.timeout, Duration::from_secs(30), "{value}");
+            let mut expected = vec![launcher.to_string()];
+            expected.extend(words.iter().map(|word| word.to_string()));
+            expected.push("--json".into());
+            expected.extend(folders.pins());
+            assert_eq!(
+                crate::runner::argv(&built, &program, &folders, true),
+                expected
+            );
+            assert_eq!(
+                desktop_judges_contract_words(name, kind),
+                (built.words.clone(), true),
+                "{value}"
+            );
+            // A judge call never names Laya, which keeps its own zero-argument calls, and never approves.
+            assert!(!built.words.iter().any(|word| word == "laya"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+    }
+
+    /// The kind is a closed enum: TypeSafe's hosted Jev or a local model server, by its exact word. A free string,
+    /// Laya, another spelling, a missing kind and any other field are refused before a word is built.
+    #[test]
+    fn judge_calls_refuse_a_free_kind_laya_and_any_other_field() {
+        for kind in [
+            json!("laya"),
+            json!("Typesafe"),
+            json!("TYPESAFE"),
+            json!("typesafe "),
+            json!(" typesafe"),
+            json!("local_endpoint"),
+            json!("localEndpoint"),
+            json!("local"),
+            json!("jev"),
+            json!(""),
+            json!("--json"),
+            json!("typesafe --approval ap_0123456789ABCDEFGHJKMNPQRS"),
+            json!("typesafe\nlaya"),
+            json!(7),
+            json!(null),
+            json!(true),
+            json!(["typesafe"]),
+            json!({ "kind": "typesafe" }),
+        ] {
+            refused(json!({ "kind": "judgeKindDisable", "judgeKind": kind }));
+        }
+        for bad in [
+            json!({ "kind": "judgeKindDisable" }),
+            json!({ "kind": "judgeKindDisable", "kindName": "typesafe" }),
+            json!({ "kind": "judgeKindDisable", "judge": "typesafe" }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe", "approval": ID }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe", "approvalId": ID }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe", "words": ["--force"] }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe", "json": false }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe", "judgeKinds": ["laya"] }),
+            json!({ "kind": "judgeKindsList", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgeKindsList", "args": ["--all"] }),
+            json!({ "kind": "judgesList", "judgeId": "jev" }),
+            json!({ "kind": "judgesList", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgesList", "product": "core" }),
+            // Turning a kind on is the terminal's, and a judge, its key and a model are the CLI's and MCP's.
+            json!({ "kind": "judgeKindEnable", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgeKindEnable", "judgeKind": "local-endpoint" }),
+            json!({ "kind": "judgeAdd" }),
+            json!({ "kind": "judgeRemove", "judgeId": "jev" }),
+            json!({ "kind": "judgeKeySet", "judgeId": "jev" }),
+            json!({ "kind": "judgeTest", "judgeId": "jev" }),
+        ] {
+            refused(bad);
+        }
+    }
+
+    /// Laya's two calls stay as Task 11 made them beside the judge calls: no argument, Laya's words, and no kind of
+    /// another's. The judge calls are new variants, never a looser Laya call.
+    #[test]
+    fn laya_calls_are_unchanged_beside_the_judge_calls() {
+        assert_eq!(
+            call(json!({ "kind": "eventsJudgeKindDisable" }))
+                .words()
+                .expect("words")
+                .words,
+            ["judge", "kind", "disable", "laya"]
+        );
+        assert_eq!(
+            call(json!({ "kind": "eventsJudgeModelStatus" }))
+                .words()
+                .expect("words")
+                .words,
+            ["judge", "model", "status"]
+        );
+        for kind in ["typesafe", "local-endpoint", "laya"] {
+            refused(json!({ "kind": "eventsJudgeKindDisable", "judgeKind": kind }));
+            refused(json!({ "kind": "eventsJudgeModelStatus", "judgeKind": kind }));
+        }
+        // Built from the webview's JSON, never as a Rust literal, so this crate still builds when E2's mutants give
+        // Laya's disable a field (`e2-t11-rust-disable-takes-a-kind`).
+        assert_eq!(
+            serde_json::to_value(call(json!({ "kind": "eventsJudgeKindDisable" }))).expect("json"),
+            json!({ "kind": "eventsJudgeKindDisable" })
+        );
+        assert_eq!(
+            serde_json::to_value(Call::JudgeKindDisable {
+                judge_kind: EndpointJudgeKind::LocalEndpoint
+            })
+            .expect("json"),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "local-endpoint" })
+        );
+    }
+
+    /// The judge calls need the first events service with judges (Phase E, 0.17.0): before it, `judge kinds list`
+    /// and `judges list` answered only Phase E's typed placeholder. Laya's still need 0.25.0.
+    #[test]
+    fn judge_calls_need_the_release_that_ships_judges() {
+        for value in [
+            json!({ "kind": "judgeKindsList" }),
+            json!({ "kind": "judgesList" }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgeKindDisable", "judgeKind": "local-endpoint" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.17.0"), "{value}");
+        }
+        assert_eq!(JUDGE_KINDS_VERSION, "0.17.0");
+        assert!(!crate::version::at_least("0.16.0", JUDGE_KINDS_VERSION));
+        assert!(crate::version::at_least("0.17.0", JUDGE_KINDS_VERSION));
+        assert!(crate::version::at_least("0.27.1", JUDGE_KINDS_VERSION));
+        assert_eq!(
+            call(json!({ "kind": "eventsJudgeKindDisable" })).needs(),
+            Some(LAYA_JUDGE_VERSION)
+        );
+    }
+
+    #[test]
+    fn endpoint_judge_kinds_are_exactly_typesafe_and_local_endpoint() {
+        assert_eq!(EndpointJudgeKind::Typesafe.word(), "typesafe");
+        assert_eq!(EndpointJudgeKind::LocalEndpoint.word(), "local-endpoint");
+        for kind in EndpointJudgeKind::ALL {
+            assert_eq!(
+                serde_json::to_value(kind).expect("json"),
+                json!(kind.word())
+            );
+            assert_eq!(
+                serde_json::from_value::<EndpointJudgeKind>(json!(kind.word())).expect("a kind"),
+                kind
+            );
+        }
+        assert!(serde_json::from_value::<EndpointJudgeKind>(json!("laya")).is_err());
     }
 }
