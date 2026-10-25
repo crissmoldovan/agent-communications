@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { ACTIVITY_KINDS, ACTIVITY_OUTCOMES } from '../activity.ts';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
 import { BEHAVIOUR_ACTS } from '../behaviour.ts';
@@ -11,6 +12,7 @@ import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
+import { activityMine, activitySettingsChange, activitySettingsReport } from '../operations/activity.ts';
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
 import {
@@ -315,6 +317,45 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     async (args) => read(async () => ({ records: await auditTail(core, args) })),
   );
 
+  /*
+   * What this agent session read, was told, did and sent (design 2026-10-25-activity, S3): its own calls only. The
+   * session is this server's own — the agent window that started it — worked out here, never named by an argument, so
+   * no tool hands one project's mail subjects to another project's agent. The full view is the CLI's.
+   */
+  server.registerTool(
+    'comms_activity',
+    {
+      title: 'What this session did',
+      description: `What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (${ACTIVITY_KINDS.join(', ')}), its outcome (${ACTIVITY_OUTCOMES.join(', ')}) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts. Filter by kind, channel, account, outcome and time. Reads only.`,
+      inputSchema: {
+        kind: z
+          .enum(ACTIVITY_KINDS as unknown as [string, ...string[]])
+          .optional()
+          .describe('only calls of this kind'),
+        channel: z.string().optional().describe('only this channel: `gmail`, `slack`, `resend`, `whatsapp`, `events`'),
+        account: z.string().optional().describe('only this account, by its name — `organisation/platform` — or its id'),
+        outcome: z
+          .enum(ACTIVITY_OUTCOMES as unknown as [string, ...string[]])
+          .optional()
+          .describe('only calls that ended so'),
+        since: z
+          .string()
+          .optional()
+          .describe('only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`'),
+      },
+      annotations: readsLocal,
+    },
+    async (args) =>
+      read(() => {
+        const client = server.server.getClientVersion();
+        return activityMine(core, {
+          surface: 'mcp',
+          ...args,
+          ...(client?.name ? { clientInfo: { name: client.name, version: client.version } } : {}),
+        });
+      }),
+  );
+
   server.registerTool(
     'comms_approvals_list',
     {
@@ -467,6 +508,60 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       }
       const [kind] = asked as [(typeof ATTACH_CHANGE_KINDS)[number]];
       return change(() => attachChange(core, env, { kind, path: String(args[kind]) }, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── The activity log's settings ──────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Whether this machine records what agent sessions do, and for how many days (design 2026-10-25-activity §4.1):
+   * `agentcomms activity settings|record|retention` and this, one operation. Off and fewer days apply at once; on and
+   * more days are loosenings, shown first and approved.
+   */
+  server.registerTool(
+    'comms_activity_settings',
+    {
+      title: 'Activity recording',
+      description:
+        'Report or change whether this machine records what agent sessions read, were told, did and sent — the activity log, private to this machine: ids, subjects, senders, searches and recipients, never a message body — and for how many days. With no change it only reports. Otherwise exactly one of `record` or `retentionDays`. Turning recording off, or keeping fewer days, applies at once, and fewer days deletes the older ones at once. Turning it back on, or keeping more days, is a change the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.',
+      inputSchema: {
+        record: z
+          .enum(['on', 'off'])
+          .optional()
+          .describe('`off` stops recording at once; `on` records again — approved first'),
+        retentionDays: z
+          .number()
+          .int()
+          .min(1)
+          .max(365)
+          .optional()
+          .describe('how many days the log keeps, 1 to 365: fewer applies at once, more is approved first'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      if (args.record === undefined && args.retentionDays === undefined) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `record` or `retentionDays` — with it.',
+          });
+          return activitySettingsReport(core);
+        });
+      }
+      if (args.record !== undefined && args.retentionDays !== undefined) {
+        return fail(
+          new CommsError('USAGE', 'one change at a time: this call asks for record and retentionDays', {
+            hint: 'Call comms_activity_settings once for each change; each is shown, and approved when it loosens, on its own.',
+          }),
+        );
+      }
+      const request =
+        args.record !== undefined
+          ? { record: args.record as 'on' | 'off' }
+          : { retentionDays: args.retentionDays as number };
+      return change(() => activitySettingsChange(core, request, 'mcp'), args.approvalId);
     },
   );
 

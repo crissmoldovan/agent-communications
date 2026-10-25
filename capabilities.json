@@ -26,6 +26,63 @@
       "operation": "auditTail"
     },
     {
+      "id": "core.activity.sessions",
+      "package": "core",
+      "cli": "activity sessions",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every agent session on this machine, every project and account among them, is the person's view — the CLI's and the desktop app's through it. An MCP tool that listed them would hand one project's mail subjects to another project's agent, so over MCP comms_activity answers only for the session it is called from (design 2026-10-25-activity S3)."
+    },
+    {
+      "id": "core.activity.show",
+      "package": "core",
+      "cli": "activity show",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Any session's calls, by its key, is the person's view. Over MCP no argument names a session: comms_activity shows the calling session's own, worked out by the server itself, so an agent cannot read another window's subjects and senders by guessing or copying a key (design 2026-10-25-activity S3)."
+    },
+    {
+      "id": "core.activity.mine",
+      "package": "core",
+      "cli": "activity mine",
+      "mcp": "comms_activity",
+      "status": "both",
+      "operation": "activityMine",
+      "reason": "The calling session's own calls and counts: an MCP server answers for the agent window that started it, a command for the window it runs in or for itself alone — the session read from the process, never from an argument (design 2026-10-25-activity S3)."
+    },
+    {
+      "id": "core.activity.settings",
+      "package": "core",
+      "cli": "activity settings",
+      "mcp": "comms_activity_settings",
+      "status": "both",
+      "operation": "activitySettingsReport"
+    },
+    {
+      "id": "core.activity.record",
+      "package": "core",
+      "cli": "activity record",
+      "mcp": "comms_activity_settings",
+      "status": "both",
+      "operation": "activitySettingsChange",
+      "argv": ["off"],
+      "args": { "record": "off" },
+      "expect": { "request.record": "off", "request.retentionDays": null },
+      "reason": "Recording off applies at once; recording again is a loosening the person approves (design 2026-10-25-activity §4.1)."
+    },
+    {
+      "id": "core.activity.retention",
+      "package": "core",
+      "cli": "activity retention",
+      "mcp": "comms_activity_settings",
+      "status": "both",
+      "operation": "activitySettingsChange",
+      "argv": ["7"],
+      "args": { "retentionDays": 7 },
+      "expect": { "request.record": null, "request.retentionDays": 7 },
+      "reason": "Fewer days kept applies at once and deletes the older days; more days is a loosening the person approves (design 2026-10-25-activity §4.1)."
+    },
+    {
       "id": "core.approvals.list",
       "package": "core",
       "cli": "approvals list",

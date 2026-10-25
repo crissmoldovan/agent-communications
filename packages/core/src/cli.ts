@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
+import type { ActivityLine } from './activity.ts';
 import { approveAndWaitSentence } from './approval-handoffs.ts';
 import type { PublicApprovalView } from './approval-outcome.ts';
 import { kindOf } from './approval-stored.ts';
@@ -32,6 +33,20 @@ import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
+import {
+  type ActivityMineResult,
+  type ActivitySessionsResult,
+  type ActivitySettingsReport,
+  type ActivitySettingsRequest,
+  type ActivitySettingsResult,
+  type ActivityShowResult,
+  activityMine,
+  activitySessions,
+  activitySettingsChange,
+  activitySettingsReport,
+  activityShow,
+  type ShownActivitySession,
+} from './operations/activity.ts';
 import { MAX_WAIT_SECONDS, waitForApproval } from './operations/approval-wait.ts';
 import {
   type AttachChangeKind,
@@ -116,7 +131,7 @@ import {
 } from './render.ts';
 import { type ExactPlace, parseExpiry } from './standing.ts';
 import { approveStandingAtTerminal } from './standing-flow.ts';
-import { neutralise } from './untrusted.ts';
+import { neutralise, wrapUntrusted } from './untrusted.ts';
 import {
   type BackgroundDeps,
   type BackgroundOutcome,
@@ -150,6 +165,23 @@ Usage — run these with this CLI, each as the words after its program:
   doctor                        check this machine: Node, directories, secret store, and which MCP
                                 clients start each server
   audit tail [--inbox <alias>] [--since <ISO time>] [--limit <n>]
+  activity sessions [--since <ISO time|7d|12h>]
+                                every agent session with activity: its folder, its client, when it was
+                                first and last seen, and its calls by kind and outcome
+  activity show <session> [--kind <kind>] [--channel <channel>] [--account <name>] [--outcome <outcome>]
+                                [--since <ISO time|7d|12h>]
+                                one session's calls, newest first: what each touched — ids, and subjects
+                                and senders as their senders wrote them — and how it ended; never a body
+  activity mine [--kind <kind>] [--channel <channel>] [--account <name>] [--outcome <outcome>]
+                                [--since <ISO time|7d|12h>]
+                                the calls of the session this command runs in: its agent window's, or
+                                its own
+  activity settings             whether activity is recorded, how many days are kept, and what is held
+  activity record on|off [--approval <id>]
+                                off stops recording at once; on records again, and is approved first
+  activity retention <days> [--approval <id>]
+                                keep 1 to 365 days: fewer applies at once and deletes the older days;
+                                more is approved first
   approvals list [--inbox <alias>] [--state <state>]
   approvals revoke <approvalId>
   approval wait <approvalId> [--wait-seconds <n>]
@@ -258,11 +290,12 @@ Usage — run these with this CLI, each as the words after its program:
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
 install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
-rule add --as me, label rule remove --as agent and label style labelled — is shown before it happens. At a terminal
-you approve it there; anything else gets the preview and an approval id (exit 10), and runs the command again with
---approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with \`approve\` under
-\`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule
-remove --as me, label style app — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
+rule add --as me, label rule remove --as agent, label style labelled, activity record on and a longer activity
+retention — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
+approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
+the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach
+deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off and a shorter
+activity retention — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
 may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
 once when it only narrows.
 
@@ -379,6 +412,10 @@ function parse(argv: string[]) {
       'per-day': { type: 'string' },
       'per-sender': { type: 'string' },
       expires: { type: 'string' },
+      // `activity show` and `activity mine`; refused on every other command (`refuseActivityOptionsElsewhere`).
+      kind: { type: 'string' },
+      channel: { type: 'string' },
+      outcome: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -432,6 +469,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
     case 'label':
     case 'behaviour':
       return sub !== undefined;
+    case 'activity':
+      return sub === 'record' || sub === 'retention';
     default:
       return false;
   }
@@ -452,7 +491,7 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
@@ -537,6 +576,28 @@ function refuseStandingOptionsElsewhere(
   throw new CommsError(
     'USAGE',
     `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the standing narrow command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+/** `activity show`'s and `activity mine`'s own filters, as typed. `--account` and `--since` are shared with others. */
+const ACTIVITY_OPTIONS = ['kind', 'channel', 'outcome'] as const;
+
+/**
+ * Refuses `activity`'s own filters on any other command, as USAGE, before anything runs — as `label`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseActivityOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof ACTIVITY_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'activity') return;
+  const given = ACTIVITY_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the activity show and activity mine commands only`,
     { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
   );
 }
@@ -633,6 +694,7 @@ export async function main(
     refuseOrgOptionsElsewhere(command, values, help);
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
+    refuseActivityOptionsElsewhere(command, values, help);
   } catch (error) {
     return writeError(error as CommsError, output);
   }
@@ -713,6 +775,77 @@ export async function main(
             : 'no audit records',
         );
         return;
+      }
+      case 'activity': {
+        const [, , target, ...extra] = positionals;
+        // The filters this subcommand reads; any other given is refused, as every command refuses one it does not read.
+        const taking = (taken: readonly string[]) => {
+          const given = (['kind', 'channel', 'account', 'outcome', 'since'] as const).filter(
+            (flag) => values[flag] !== undefined && !taken.includes(flag),
+          );
+          if (given.length > 0) throw usage(`the activity ${sub} command takes no --${given.join(', --')}`);
+        };
+        const filters = {
+          ...(values.kind === undefined ? {} : { kind: values.kind }),
+          ...(values.channel === undefined ? {} : { channel: values.channel }),
+          ...(values.account === undefined ? {} : { account: values.account }),
+          ...(values.outcome === undefined ? {} : { outcome: values.outcome }),
+          ...(values.since === undefined ? {} : { since: values.since }),
+        };
+        const shown = { env, platform };
+        if (sub === 'sessions') {
+          if (target !== undefined) throw usage('usage: activity sessions [--since <ISO time|7d|12h>]');
+          taking(['since']);
+          writeResult(await activitySessions(core, { ...filters, ...shown }), output, renderActivitySessions);
+          return;
+        }
+        if (sub === 'show') {
+          if (target === undefined || extra.length > 0) {
+            throw usage(
+              'usage: activity show <session> [--kind <kind>] [--channel <channel>] [--account <name>] [--outcome <outcome>] [--since <ISO time|7d|12h>]',
+            );
+          }
+          taking(['kind', 'channel', 'account', 'outcome', 'since']);
+          writeResult(await activityShow(core, target, { ...filters, ...shown }), output, renderActivityShow);
+          return;
+        }
+        if (sub === 'mine') {
+          if (target !== undefined) {
+            throw usage(
+              'usage: activity mine [--kind <kind>] [--channel <channel>] [--account <name>] [--outcome <outcome>] [--since <ISO time|7d|12h>]',
+            );
+          }
+          taking(['kind', 'channel', 'account', 'outcome', 'since']);
+          writeResult(await activityMine(core, { surface: 'cli', ...filters }, shown), output, renderActivityMine);
+          return;
+        }
+        if (sub === 'settings') {
+          if (target !== undefined) throw usage('usage: activity settings');
+          taking([]);
+          writeResult(await activitySettingsReport(core), output, renderActivitySettings);
+          return;
+        }
+        if (sub === 'record' || sub === 'retention') {
+          taking([]);
+          if (target === undefined || extra.length > 0) {
+            throw usage(sub === 'record' ? 'usage: activity record on|off' : 'usage: activity retention <days>');
+          }
+          let request: ActivitySettingsRequest;
+          if (sub === 'record') {
+            if (target !== 'on' && target !== 'off') throw usage(`recording is on or off, not "${target}"`);
+            request = { record: target };
+          } else {
+            const days = wholeNumber(target, { name: 'the days kept', min: 1, max: 365 }) as number;
+            request = { retentionDays: days };
+          }
+          const result = await gatedChangeAtTerminal(core, activitySettingsChange(core, request, 'cli'), {
+            ...approval,
+            rerun: ['activity', sub, target],
+          });
+          writeResult(result, output, renderActivitySettingsChange);
+          return;
+        }
+        throw usage('usage: activity sessions|show|mine|settings|record|retention');
       }
       case 'approvals': {
         if (sub === 'list') {
@@ -1541,6 +1674,143 @@ function renderStandingList(report: StandingReport, handoffs: CliHandoffs): stri
 }
 
 /** The label as a person reads it: the word and the name, then each account and who its messages appear from. */
+// ── activity ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A count with its noun: `1 day`, `3 days`. */
+function counted(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/** Who ran a session, in a few words: its client as the client said it, the event service, or a command. */
+function activityRunner(session: ShownActivitySession): string {
+  if (session.client !== null) {
+    const said = `${session.client.name}${session.client.version ? ` ${session.client.version}` : ''}`;
+    return `${truncateDisplay(said, 60)} (as the client says)`;
+  }
+  if (session.surfaces.includes('daemon')) return 'the event service';
+  if (session.surfaces.every((surface) => surface === 'cli')) return 'a command';
+  return 'no client named';
+}
+
+function activityWhere(session: ShownActivitySession): string {
+  return session.folderShown === null ? '(folder unknown)' : truncateDisplay(session.folderShown, 120);
+}
+
+function activityCounts(session: ShownActivitySession): string {
+  const { kind, outcome } = session.counts;
+  return `read ${kind.read} · write ${kind.write} · told ${kind.told} · approval ${kind.approval} — ok ${outcome.ok} · refused ${outcome.refused} · failed ${outcome.failed}`;
+}
+
+/** One session, as `activity sessions` and the head of `activity show` print it. */
+function activitySessionBlock(session: ShownActivitySession): string {
+  return [
+    `${session.key}  ${session.lastSeen}  ${activityWhere(session)}  ${activityRunner(session)}`,
+    `  ${session.grouped ? 'one agent window' : 'on its own'} · first seen ${session.firstSeen} · ${session.processes} ${
+      session.processes === 1 ? 'process' : 'processes'
+    }`,
+    `  ${activityCounts(session)}`,
+  ].join('\n');
+}
+
+function renderActivitySessions(result: ActivitySessionsResult): string {
+  if (result.sessions.length === 0) {
+    return result.since === null ? 'no activity recorded' : `no activity recorded since ${result.since}`;
+  }
+  return result.sessions.map(activitySessionBlock).join('\n\n');
+}
+
+/** What an envelope holds, for a line that puts one line's sender-written text inside one envelope of its own. */
+function envelopeText(text: string): string {
+  const held = /^<untrusted-content [^>]*>\n([\s\S]*)\n<\/untrusted-content boundary="[^"]+">$/.exec(text);
+  return held === null ? text : (held[1] as string);
+}
+
+/**
+ * One call: a line of what it was, and what it touched — every item a sender wrote any part of inside one envelope
+ * for that call, as a search's results are.
+ */
+function activityLineText(line: ActivityLine): string {
+  const head = [
+    line.at,
+    line.kind.padEnd(8),
+    line.operation,
+    truncateDisplay(line.account.alias || line.account.id || '-', 60),
+    line.outcome,
+    `${line.ms} ms`,
+    ...(line.count === undefined ? [] : [counted(line.count, 'item')]),
+    ...(line.counts === undefined
+      ? []
+      : [
+          Object.entries(line.counts)
+            .map(([name, count]) => `${name} ${count}`)
+            .join(', '),
+        ]),
+    ...(line.query === undefined ? [] : [`query: ${truncateDisplay(line.query, 120)}`]),
+    ...(line.told === undefined
+      ? []
+      : [`rule ${truncateDisplay(line.told.rule, 60)} to ${truncateDisplay(line.told.target, 60)}`]),
+    ...(line.reason === undefined ? [] : [`(${truncateDisplay(line.reason, 200)})`]),
+  ].join('  ');
+  const items = (line.items ?? []).map((item) => {
+    const name = item.from?.name === undefined ? undefined : envelopeText(item.from.name);
+    const address = item.from?.address === undefined ? undefined : `<${envelopeText(item.from.address)}>`;
+    const from = [name, address].filter((part): part is string => part !== undefined).join(' ');
+    return [
+      item.id,
+      ...(item.subject === undefined ? [] : [`"${envelopeText(item.subject)}"`]),
+      ...(from ? [`from ${from}`] : []),
+      ...(item.name === undefined ? [] : [envelopeText(item.name)]),
+      ...(item.size === undefined ? [] : [`${item.size} bytes`]),
+      ...(item.conversation === undefined ? [] : [`in ${envelopeText(item.conversation)}`]),
+    ].join('  ');
+  });
+  const recipients = (line.recipients ?? []).map(envelopeText);
+  const touched = [...items, ...(recipients.length > 0 ? [`to ${recipients.join(', ')}`] : [])];
+  return touched.length === 0 ? head : `${head}\n${wrapUntrusted(touched.join('\n'), { field: 'activity' })}`;
+}
+
+function activityLinesText(lines: readonly ActivityLine[], more: boolean): string {
+  if (lines.length === 0) return 'no calls match';
+  return [
+    ...lines.map(activityLineText),
+    ...(more ? ['', 'More calls matched than are listed: narrow them with --since or a filter.'] : []),
+  ].join('\n');
+}
+
+function renderActivityShow(result: ActivityShowResult): string {
+  return [activitySessionBlock(result.session), '', activityLinesText(result.lines, result.more)].join('\n');
+}
+
+function renderActivityMine(result: ActivityMineResult): string {
+  const where =
+    result.session.folderShown === null ? '(folder unknown)' : truncateDisplay(result.session.folderShown, 120);
+  const head = `this session: ${result.session.key}  ${where}  ${
+    result.session.grouped ? 'the agent window this command runs in' : 'this command on its own'
+  }`;
+  return [
+    head,
+    ...(result.summary === null ? [] : [`  ${activityCounts(result.summary)}`]),
+    '',
+    activityLinesText(result.lines, result.more),
+  ].join('\n');
+}
+
+function renderActivitySettings(report: ActivitySettingsReport): string {
+  return [
+    `recording   ${report.record}`,
+    `kept        ${counted(report.retentionDays, 'day')}`,
+    `held        ${report.days === 0 ? 'nothing yet' : `${counted(report.days, 'day')}, ${report.oldest} to ${report.newest}`}`,
+    `folder      ${report.directory}`,
+    ...report.problems.map((problem) => `note        ${problem}`),
+  ].join('\n');
+}
+
+function renderActivitySettingsChange(result: ActivitySettingsResult): string {
+  const now = `Recording is ${result.record}, and the activity log keeps ${counted(result.retentionDays, 'day')}.`;
+  const pruned = result.pruned.length > 0 ? ` ${counted(result.pruned.length, 'older day')} deleted.` : '';
+  return result.changed ? `${now}${pruned}` : `Already so: nothing was changed. ${now}`;
+}
+
 function renderLabel(report: LabelReport): string {
   const lines = [
     `Word: ${report.word}  (one of ${report.words.join(', ')})`,
