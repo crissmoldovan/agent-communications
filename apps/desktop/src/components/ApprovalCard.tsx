@@ -137,10 +137,14 @@ function Pair({ term, children }: { term: string; children: ReactNode }) {
   );
 }
 
-/** Strings a sender controls, one to a line, each as plain text. */
-function SenderText({ texts }: { texts: string[] }) {
+/**
+ * Strings a sender controls, one to a line, each as plain text. An address or a file name is a literal value the
+ * person checks letter by letter before approving, so it is set in mono, where `rn` and `m`, or `l` and `I`, differ; a
+ * subject or a summary is prose.
+ */
+function SenderText({ texts, literal = false }: { texts: string[]; literal?: boolean }) {
   return (
-    <div className="flex flex-col gap-(--cue-space-1)">
+    <div className={literal ? 'flex flex-col gap-(--cue-space-1) font-mono' : 'flex flex-col gap-(--cue-space-1)'}>
       {texts.map((text, index) => (
         // The same address may appear twice; its place in the list is what tells them apart.
         // biome-ignore lint/suspicious/noArrayIndexKey: the list is never reordered.
@@ -260,17 +264,17 @@ export function ApprovalCard({
             <DescriptionList.Root>
               {approval.to.length === 0 ? null : (
                 <Pair term="To">
-                  <SenderText texts={approval.to} />
+                  <SenderText texts={approval.to} literal />
                 </Pair>
               )}
               {approval.cc.length === 0 ? null : (
                 <Pair term="Cc">
-                  <SenderText texts={approval.cc} />
+                  <SenderText texts={approval.cc} literal />
                 </Pair>
               )}
               {approval.bcc.length === 0 ? null : (
                 <Pair term="Bcc">
-                  <SenderText texts={approval.bcc} />
+                  <SenderText texts={approval.bcc} literal />
                 </Pair>
               )}
               {approval.subject === null || approval.subject === '' ? null : (
@@ -280,7 +284,7 @@ export function ApprovalCard({
               )}
               {approval.files.length === 0 ? null : (
                 <Pair term="Files">
-                  <SenderText texts={approval.files} />
+                  <SenderText texts={approval.files} literal />
                 </Pair>
               )}
               {approval.said === null ? null : <Pair term="Where it stands">{approval.said}</Pair>}

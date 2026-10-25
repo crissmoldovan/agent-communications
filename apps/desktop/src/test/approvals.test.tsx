@@ -264,6 +264,13 @@ describe('Approvals', () => {
     expect(last?.compareDocumentPosition(buttons[0] as Node)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     // The id stays as it came, in mono beside the title.
     expect(within(send).getByText(GMAIL).className).toContain('font-mono');
+    // An address, and a file name, are checked letter by letter, so they are in mono; a subject is prose. (The
+    // detail's own `font-mono` is the face soft sets back to sans; the screen marks a literal on what it holds.)
+    const lettered = (text: HTMLElement): boolean | undefined =>
+      text.closest('dd')?.firstElementChild?.classList.contains('font-mono');
+    expect(lettered(within(send).getByText('jo@example.com'))).toBe(true);
+    expect(lettered(within(send).getByText('The figures you asked for'))).toBe(false);
+    expect(lettered(within(await cardOf(SLACK)).getByText('plan.pdf'))).toBe(true);
   });
 
   it('an answer in no shape the app knows is an error, not a crash', async () => {
