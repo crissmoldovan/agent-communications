@@ -54,6 +54,7 @@ import {
   updateVerdict,
 } from '../update-state.ts';
 import { VERSION } from '../version.ts';
+import { activityDoctorCheck } from './activity.ts';
 import { orphanedBehaviourRules } from './behaviour.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
 import { type StandingReport, standingReport } from './standing.ts';
@@ -306,6 +307,8 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
     ok: true,
     detail: config.secrets?.store ?? 'not chosen yet (keychain by default)',
   });
+  // The activity log (design 2026-10-25-activity §4.6): recording, private, writable, retention in force, last failure.
+  checks.push(await activityDoctorCheck(core, platform));
   checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
