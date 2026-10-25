@@ -106,6 +106,12 @@ says the queue is "a rule target that puts each match in a list in the app, with
   - Through MCP, an agent may mark an item done (a step toward routing) but never read its content.
 - **Content-free counts:** `queue counts`, for the sidebar badge and an agent's "is there anything waiting".
 
+**Note, 2026-10-25 (0.30.0 review).** `queue clear` is terminal and app only, not MCP: an agent must not be able to
+make the person's queue disappear. Its `capabilities.json` row is a CLI-only exception with that reason, and the CLI
+refuses it inside the event service's MCP server as it refuses the content reads. Done, dismiss and reopen stay on
+MCP: a done or dismissed item stays in the person's Done or Dismissed tab for its retention, so marking one takes
+nothing away. The §8 contract's `queue clear --json` shape is unchanged; only its MCP tool is gone.
+
 ### 4.5 The Queue screen
 - **A sidebar section, Queue, first after Overview,** with the open count as a badge.
 - **Each item is a card** in the soft look:
@@ -194,6 +200,13 @@ Each answer overrides the section it names.
     removed";
   - the Queue screen says the same beside the rule's filter when a tightening is pending.
 - Keeping items across a revocation would change D2's security model. It is not done here.
+- **Follow-up, recorded 2026-10-25 (0.30.0 review), not built in 0.30.0:**
+  - **The Queue screen does not yet show a pending tightening's notice.** The count reaches the person only in the
+    `tightening` preview of `rule create` and `rule update` (`openQueueItemsRemoved`, with its `notice`); §8's
+    `queue counts` carries no pending-tightening field for the screen to show beside the rule's filter.
+  - **The count is taken when the version is created, not when `rule enable` applies it.** Items that arrive, or that
+    the person marks done or dismissed, in between change what enabling it removes. The tightening itself is
+    unchanged: it removes the revoked version's items as they stand at enable.
 
 ## 8. Build plan (the lead's, 2026-10-25)
 

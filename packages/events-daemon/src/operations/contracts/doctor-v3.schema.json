@@ -78,6 +78,17 @@
         "$ref": "https://agentcomms.local/events-doctor-v1.schema.json#/$defs/whatsapp"
       }
     },
+    "queue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unreadableDeliveries"],
+      "properties": {
+        "unreadableDeliveries": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
     "judge": {
       "type": "object",
       "additionalProperties": false,

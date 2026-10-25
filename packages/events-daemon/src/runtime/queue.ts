@@ -298,10 +298,22 @@ export class QueueStore {
     const totals = this.#store.database
       .prepare('SELECT state, COUNT(*) AS count FROM queue_items GROUP BY state')
       .all() as Array<{ state: QueueState; count: number }>;
+    // Every rule with items, and every active rule with a queue target even before its first match, so a new
+    // queue rule is listed with none open rather than looking as if nothing sent to the queue.
     const byRule = this.#store.database
       .prepare(
-        `SELECT rule_id, SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open
-           FROM queue_items GROUP BY rule_id ORDER BY rule_id`,
+        `SELECT rule_id, SUM(open) AS open FROM (
+           SELECT rule_id, CASE WHEN state = 'open' THEN 1 ELSE 0 END AS open FROM queue_items
+           UNION ALL
+           SELECT rule.rule_id, 0 AS open
+             FROM active_versions AS pointer
+             JOIN rule_versions AS rule ON rule.rule_id = pointer.object_id AND rule.version = pointer.version
+            WHERE pointer.kind = 'rule' AND rule.state = 'active'
+              AND EXISTS (
+                SELECT 1 FROM json_each(rule.document, '$.targets') AS target
+                 WHERE json_extract(target.value, '$.kind') = 'queue'
+              )
+         ) GROUP BY rule_id ORDER BY rule_id`,
       )
       .all() as Array<{ rule_id: string; open: number }>;
     const total = (state: QueueState) => totals.find((row) => row.state === state)?.count ?? 0;
@@ -405,13 +417,20 @@ export class QueueStore {
       await this.#readFence(row, rule);
       content = await this.#open(row);
       if (content === null) return { ...base, from: {}, judge };
-      const visible = await this.#withWhatsAppVisibility(
+      // The decrypt awaited: a revocation, an expiry, a tightening or an account removal may have committed since.
+      // The fence runs again, and the commit step requires the content still kept and still within its deadline.
+      await this.#readFence(row, rule);
+      const kept = await this.#withWhatsAppVisibility(
         row,
         () => this.#readFence(row, rule),
-        () =>
-          this.#store.database.prepare('SELECT 1 AS present FROM queue_items WHERE id = ?').get(row.id) !== undefined,
+        () => this.#contentStillKept(row.id),
       );
-      if (visible !== true) return surface === 'show' ? noSuchItem() : undefined;
+      if (kept === undefined || kept === 'gone') return surface === 'show' ? noSuchItem() : undefined;
+      if (kept === 'content-gone') {
+        const current = this.#row(row.id);
+        if (current === undefined) return surface === 'show' ? noSuchItem() : undefined;
+        return { ...summary(current, config), from: {}, judge };
+      }
     } catch (error) {
       if (surface === 'list' && error instanceof CommsError) return undefined;
       throw error;
@@ -429,6 +448,15 @@ export class QueueStore {
       ...(link === undefined ? {} : { link }),
       judge,
     };
+  }
+
+  /** The commit step of a content read: the row still there, its content still kept, and before its deadline. */
+  #contentStillKept(id: string): 'kept' | 'content-gone' | 'gone' {
+    const row = this.#store.database
+      .prepare('SELECT encrypted_record IS NOT NULL AS kept, expires_at FROM queue_items WHERE id = ?')
+      .get(id) as { kept: number; expires_at: number } | undefined;
+    if (row === undefined) return 'gone';
+    return row.kept === 1 && row.expires_at > this.#now() ? 'kept' : 'content-gone';
   }
 
   async #readFence(row: QueueRow, rule: CanonicalFullRuleDocument): Promise<void> {
@@ -521,11 +549,11 @@ export class QueueStore {
     };
   }
 
-  async #withWhatsAppVisibility(
+  async #withWhatsAppVisibility<T>(
     row: QueueRow,
     recheck: () => Promise<void>,
-    commit: () => boolean,
-  ): Promise<boolean | undefined> {
+    commit: () => T,
+  ): Promise<T | undefined> {
     if (row.whatsapp_message_id === null) return commit();
     if (this.#whatsappVisibilityFence === undefined)
       throw new CommsError(

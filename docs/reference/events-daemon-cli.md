@@ -752,7 +752,7 @@ agent-events queue reopen [options] <item-id>
 
 ### `agent-events queue clear`
 
-remove done and dismissed queue items now; open items stay
+remove done and dismissed queue items now; open items stay (a person at a terminal or in the app)
 
 ```
 agent-events queue clear [options]

@@ -22,7 +22,7 @@ import {
   updateJudge,
 } from '../operations/judges.ts';
 import { pause, resume } from '../operations/pause.ts';
-import { queueClear, queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
+import { queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
 import { ruleTest } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -472,6 +472,7 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
 
   // The action queue (action queue design Q1, Q5): an agent can find an item and mark it, never read what it says.
   // No tool here returns a sender, subject, text or link; `queue list` and `queue show` are the person's, at the CLI.
+  // Nor can an agent clear the queue: `queue clear` would make the person's done and dismissed items disappear.
   const queueFilters = {
     state: z.enum(['open', 'done', 'dismissed', 'all']).optional().describe('Which items: open (the default) or all.'),
     rule: z.string().min(1).max(256).optional().describe("Only this rule's items, by rule id."),
@@ -528,14 +529,6 @@ export async function createEventsMcpServer(options: EventsMcpOptions = {}): Pro
       async (args) => reply(await operation(args.itemId as string, options)),
     );
   }
-  strictControlTool(
-    'events_queue_clear',
-    'Clear done and dismissed queue items',
-    'Removes every done and dismissed queue item now; open items stay.',
-    {},
-    () => queueClear(options),
-    true,
-  );
 
   return {
     server,

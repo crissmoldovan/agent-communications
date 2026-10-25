@@ -1243,7 +1243,9 @@ target (D2).
   `queue_items` row and marks the delivery `delivered`.
 - **The promise is "kept for the person to work through within the approved window".** It is never receipt or
   action. An item's content is read only by a person, at a terminal or in the app, through the same fences as a
-  dry-run read. `queue list` and `queue show` refuse inside an MCP server's process. No MCP tool returns a sender,
+  dry-run read. `queue list` and `queue show` refuse inside the event service's MCP server (`agent-events mcp` marks
+  its own process, and every program it starts inherits the mark); core's and the channels' MCP servers don't run the
+  event service's CLI. No MCP tool returns a sender,
   subject, text or link.
 - **The judge's part is read from the item's decision while its metadata lives, never copied.** A held decision the
   person let through shows that instead of an answer.

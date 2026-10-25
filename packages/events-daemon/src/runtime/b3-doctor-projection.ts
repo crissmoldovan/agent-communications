@@ -698,6 +698,12 @@ export async function projectE2Doctor(
       kinds: report.judge.kinds.map((entry) => (entry.kind === JUDGE_KIND_LAYA ? input.laya.kindEntry() : entry)),
       laya: await input.laya.doctor(),
     },
+    queue: {
+      unreadableDeliveries: count(
+        input.database,
+        "SELECT count(*) AS count FROM deliveries WHERE target_kind = 'queue' AND state = 'content-unreadable'",
+      ),
+    },
   });
 }
 

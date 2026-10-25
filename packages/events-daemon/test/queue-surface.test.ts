@@ -35,7 +35,7 @@ async function cli(argv: readonly string[], env: NodeJS.ProcessEnv) {
   return { code, out, err };
 }
 
-test('QUEUE-A: queue list and show refuse inside an MCP server’s process, before they ask the owner (Q1)', async () => {
+test('QUEUE-A: queue list, show and clear refuse inside the event service’s MCP server, before they ask the owner (Q1)', async () => {
   const stateDir = await shortTempDir('events-queue-gate-');
   try {
     const base = ['--state-dir', stateDir];
@@ -43,10 +43,16 @@ test('QUEUE-A: queue list and show refuse inside an MCP server’s process, befo
       [...base, 'queue', 'list', '--json'],
       [...base, 'queue', 'show', ITEM, '--json'],
       [...base, 'queue', 'list'],
+      [...base, 'queue', 'clear', '--json'],
     ]) {
       const refused = await cli(argv, { [MCP_SERVER_MARKER]: 'events' });
       assert.equal(refused.code, 10, `${argv.join(' ')}: ${refused.err}`);
-      assert.match(refused.err, /an MCP server cannot read it/u);
+      assert.match(
+        refused.err,
+        argv.includes('clear')
+          ? /the event service's MCP server cannot clear it/u
+          : /the event service's MCP server cannot read it/u,
+      );
       assert.equal(refused.out, '', 'nothing is printed');
     }
     // The server marks its own process, so every program it starts is refused too.
@@ -108,7 +114,6 @@ test('QUEUE-A: MCP has the content-free queue tools only, and none of them takes
     await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
     const tools = (await client.listTools()).tools.filter((tool) => tool.name.startsWith('events_queue'));
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
-      'events_queue_clear',
       'events_queue_counts',
       'events_queue_dismiss',
       'events_queue_done',
@@ -124,7 +129,11 @@ test('QUEUE-A: MCP has the content-free queue tools only, and none of them takes
     const done = tools.find((tool) => tool.name === 'events_queue_done');
     assert.equal(done?.annotations?.readOnlyHint, false);
     assert.equal(done?.annotations?.destructiveHint, false);
-    assert.equal(tools.find((tool) => tool.name === 'events_queue_clear')?.annotations?.destructiveHint, true);
+    assert.equal(
+      tools.some((tool) => tool.name === 'events_queue_clear'),
+      false,
+      'an agent must not be able to make the person’s queue disappear: clear is the terminal’s and the app’s',
+    );
     const refused = (await client.callTool({ name: 'events_queue_done', arguments: { itemId: 'nope' } })) as {
       readonly isError?: boolean;
     };

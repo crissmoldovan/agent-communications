@@ -112,7 +112,7 @@ agent-events target add '{"targetId":"inbox-queue","version":1,"kind":"queue","r
 agent-events queue list              # open items, newest first, with what they say: add --json for the app's shape
 agent-events queue show <item-id>
 agent-events queue done <item-id>    # or: dismiss, reopen
-agent-events queue clear             # remove done and dismissed items now
+agent-events queue clear             # remove done and dismissed items now (yours alone: no MCP tool clears)
 ```
 
 - **What a rule needs:** a queue target, `retention.queueMs` (1 to 30 days; a queue target's own retention is 1 to 30
@@ -126,10 +126,12 @@ agent-events queue clear             # remove done and dismissed items now
   records removes its queue items too: disabling or tightening the rule, removing its target or judge, turning its
   judge's kind off, `disable-all`, removing the account, or a WhatsApp chat your lists now hide. A tighter version's
   `rule update` result says how many open items enabling it will remove.
-- **Who can read it:** you. `queue list` and `queue show` refuse inside an MCP server's process. Over MCP an agent gets
-  `events_queue_items` and `events_queue_counts`, which never carry a sender, subject, text or link, and can mark an
-  item done, dismissed or reopened, or clear the done ones, without reading it. A queue target makes no network
-  connection.
+- **Who can read it:** you. `queue list`, `queue show` and `queue clear` refuse inside the event service's MCP server
+  (`agent-events mcp`) and every program it starts; core's and the channels' MCP servers don't run the event service's
+  CLI. Over MCP an agent gets `events_queue_items` and `events_queue_counts`, which never carry a sender, subject,
+  text or link, and can mark an item done, dismissed or reopened without reading it; a done or dismissed item stays
+  in your Done or Dismissed tab for its retention. Clearing the queue is yours alone, at your terminal or in the app:
+  no MCP tool does it, so an agent cannot make your queue disappear. A queue target makes no network connection.
 
 ## What you can do with it
 

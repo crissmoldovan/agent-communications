@@ -296,9 +296,16 @@ test('QUEUE-A: a real owner puts a matched mail in the queue; the CLI reads it, 
     await control.request('rule-enable', { ruleId: RULE, version: 2 });
     assert.equal(((await tool('events_queue_counts')) as { open: number }).open, 0, 'enabling it removed the item');
 
-    const cleared = await tool('events_queue_clear');
-    t.diagnostic(`events_queue_clear: ${JSON.stringify(cleared)}`);
-    assert.deepEqual(cleared, { cleared: 0 });
+    // Clear is the person's: the terminal's and the app's, never an agent's.
+    await assert.rejects(
+      mcp.callTool({ name: 'events_queue_clear', arguments: {} }),
+      /not found/u,
+      'no MCP tool clears the queue',
+    );
+    const cleared = await cli(stateDir, ['queue', 'clear', '--json']);
+    assert.equal(cleared.code, 0, cleared.err);
+    t.diagnostic(`queue clear --json: ${cleared.out.trim()}`);
+    assert.deepEqual(JSON.parse(cleared.out), { cleared: 0 });
 
     const everything = mcpOutput.join('\n');
     for (const content of [SUBJECT, SENDER, SENDER_NAME, SNIPPET, MESSAGE_ID, 'mail.google.com', 'untrusted-content'])

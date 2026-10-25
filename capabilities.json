@@ -2668,9 +2668,10 @@
       "id": "events-daemon.queue.clear",
       "package": "events-daemon",
       "cli": "queue clear",
-      "mcp": "events_queue_clear",
-      "status": "both",
-      "operation": "queueClear"
+      "mcp": null,
+      "status": "exception",
+      "operation": "queueClear",
+      "reason": "an agent must not be able to make the person's queue disappear"
     },
     {
       "id": "events-daemon.mcp.serve",
