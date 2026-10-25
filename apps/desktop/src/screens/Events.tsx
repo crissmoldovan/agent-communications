@@ -345,13 +345,24 @@ const UNDER_WAY: ReadonlySet<EventServiceStatus> = new Set(['starting', 'stoppin
 /** Asks the supervisor something; what it answers with is the state shown next. */
 type Ask = (command: () => Promise<EventServiceState | null>) => Promise<void>;
 
+/** A dot in a well's tone, beside its line: the tint and the dot say the tone, the line stays in the page's ink. */
+function ToneDot({ tone }: { tone: 'warn' | 'danger' }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`size-(--cue-space-2) shrink-0 rounded-full ${tone === 'warn' ? 'bg-warn' : 'bg-danger'}`}
+    />
+  );
+}
+
 /** A line, and the one button that acts on it, on a well tinted by what the line is: news, or a caution. */
 function Offer({ line, tone, action }: { line: string; tone: 'fg' | 'warn'; action: ReactNode }) {
   return (
     <div
-      className={`flex flex-wrap items-center gap-(--cue-space-3) rounded-control px-(--cue-space-3) py-(--cue-space-2) ${tone === 'warn' ? 'bg-warn-soft' : 'bg-surface-2'}`}
+      className={`flex flex-wrap items-center gap-(--cue-space-3) rounded-control px-(--cue-space-3) py-(--cue-space-2) ${tone === 'warn' ? 'bg-(color:--cue-warn-soft)' : 'bg-surface-2'}`}
     >
-      <p className={`min-w-0 flex-1 ${tone === 'warn' ? 'text-warn' : 'text-fg'}`}>{line}</p>
+      {tone === 'warn' ? <ToneDot tone="warn" /> : null}
+      <p className="min-w-0 flex-1 text-fg">{line}</p>
       {action}
     </div>
   );
@@ -459,10 +470,11 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
       {state.status === 'gaveUp' ? (
         <div
           role="alert"
-          className="flex flex-col gap-(--cue-space-3) rounded-control bg-danger-soft px-(--cue-space-3) py-(--cue-space-3)"
+          className="flex flex-col gap-(--cue-space-3) rounded-control bg-(color:--cue-danger-soft) px-(--cue-space-3) py-(--cue-space-3)"
         >
           <div className="flex flex-wrap items-center gap-(--cue-space-3)">
-            <p className="min-w-0 flex-1 text-danger">{SERVICE_COPY.gaveUp}</p>
+            <ToneDot tone="danger" />
+            <p className="min-w-0 flex-1 text-fg">{SERVICE_COPY.gaveUp}</p>
             <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.eventServiceRetry())}>
               {SERVICE_COPY.tryAgain}
             </Button>
@@ -862,7 +874,9 @@ function LayaView({ read }: { read: LayaRead }) {
         <>
           <DescriptionList.Term>Model</DescriptionList.Term>
           <DescriptionList.Detail>
-            <UntrustedText text={status.manifestId} />
+            <span className="font-mono">
+              <UntrustedText text={status.manifestId} />
+            </span>
           </DescriptionList.Detail>
         </>
       )}
@@ -1119,11 +1133,15 @@ function KindJudges({ kind, on, judges }: { kind: KindName; on: boolean; judges:
             {live.map((judge) => (
               <Table.Row key={JSON.stringify([judge.judgeId, judge.version])}>
                 <Table.Cell>
-                  <UntrustedText text={judge.judgeId} />
+                  <span className="font-mono">
+                    <UntrustedText text={judge.judgeId} />
+                  </span>
                 </Table.Cell>
                 <Table.Cell numeric>{String(judge.version)}</Table.Cell>
                 <Table.Cell>
-                  <UntrustedText text={judge.model} />
+                  <span className="font-mono">
+                    <UntrustedText text={judge.model} />
+                  </span>
                 </Table.Cell>
               </Table.Row>
             ))}
@@ -1491,7 +1509,7 @@ function EventsTabs() {
   );
   return (
     <Tabs.Root defaultValue={'service' satisfies EventsTab}>
-      <Tabs.List aria-label="Events" className="self-start">
+      <Tabs.List aria-label="Events">
         {tab('service', <Attention count={serviceAttention(eventService)} />)}
         {tab('judges', <Attention count={judgesWaiting(judgeReads)} />)}
         {tab('rules', <Count count={ruleCount(rules.result)} />)}

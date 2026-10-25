@@ -460,7 +460,7 @@ export function Settings() {
             </Panel>
           </SectionHeader>
         </section>
-        <section aria-label={SETTINGS_COPY.folders} className="flex flex-col gap-(--cue-space-2)">
+        <section aria-label={SETTINGS_COPY.folders} className="flex flex-col gap-(--cue-space-3)">
           {settings.state === 'ready' ? (
             <FolderSettings settings={settings.value} onChange={changed} />
           ) : (
