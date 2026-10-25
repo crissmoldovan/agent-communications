@@ -105,9 +105,10 @@ test('Approve in Terminal sends open_in_terminal with the approval', async ({ pa
   expect(opened).toEqual([
     { cmd: 'open_in_terminal', args: { command: { kind: 'approve', product: 'gmail', approvalId: GMAIL } } },
   ]);
-  // The app ran no change and no approve of its own: only reads went to the CLI.
+  // The app ran no change and no approve of its own: only reads went to the CLI — the events service's version among
+  // them, which says whether it has the queue (0.30.0).
   for (const call of (await recorded(page)).filter((each) => each.cmd === 'cli')) {
-    expect(['approvalsPending', 'updateStatus', 'standingList', 'eventsStatus', 'doctor']).toContain(
+    expect(['approvalsPending', 'updateStatus', 'standingList', 'eventsStatus', 'doctor', 'version']).toContain(
       (call.args.call as { kind: string }).kind,
     );
   }
