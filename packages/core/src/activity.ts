@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { access, constants, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   type ActivitySettings,
@@ -1039,13 +1040,19 @@ export interface SessionIdentityOptions {
    * a CLI call is always a session of its own.
    */
   log?: Pick<ActivityLog, 'sessionOfAncestor'> | undefined;
-  /** For a test: this process's id, its parent's, its folder, how processes are read, the system, the bound. */
+  /**
+   * The MCP connection's own session id, where its transport has one (`ctx.sessionId`; stdio has none): mixed into
+   * the key, so two connections through one parent are two sessions.
+   */
+  connection?: string | undefined;
+  /** For a test: this process's id, its parent's, its folder, how processes are read, the system, the bound, home. */
   pid?: number | undefined;
   ppid?: number | undefined;
   cwd?: (() => string) | undefined;
   probe?: ProcessProbe | undefined;
   platform?: NodeJS.Platform | undefined;
   budgetMs?: number | undefined;
+  home?: string | undefined;
 }
 
 /** A random id this process made when it started (§4.3). */
@@ -1113,8 +1120,54 @@ async function readAncestry(options: SessionIdentityOptions, depth: number, init
   return { pid, folder, chain };
 }
 
-function windowKey(parent: ActivityParent, folder: string): string {
-  return createHash('sha256').update(`${parent.pid}\0${parent.startedAt}\0${folder}`).digest('hex').slice(0, 16);
+function windowKey(parent: ActivityParent, folder: string, connection: string | undefined): string {
+  const named = connection === undefined || connection === '' ? '' : `\0${connection}`;
+  return createHash('sha256')
+    .update(`${parent.pid}\0${parent.startedAt}\0${folder}${named}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** System folders, each with everything under it: no project is started there. */
+const POSIX_SYSTEM_TREES = [
+  '/System',
+  '/Library',
+  '/Applications',
+  '/usr',
+  '/bin',
+  '/sbin',
+  '/etc',
+  '/dev',
+  '/proc',
+  '/sys',
+  '/boot',
+];
+/** Folders that hold everyone's projects, or anyone's temporary files — only the folder itself, not what is in it. */
+const POSIX_SHARED = ['/tmp', '/var', '/private', '/private/tmp', '/private/var', '/opt', '/Volumes', '/mnt', '/media'];
+const WINDOWS_SYSTEM_TREES = ['\\windows', '\\program files', '\\program files (x86)', '\\programdata'];
+
+/**
+ * Whether a folder is one that cannot tell projects apart (S3): a filesystem's root, the home folder or a folder above
+ * it, a system folder or anything in one, or a shared one such as `/tmp`. A client that starts every server from one
+ * process there — a desktop app started in `/`, say — would otherwise make every project it serves one session.
+ */
+export function sharedFolder(folder: string, home: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === 'win32') {
+    const plain = (path: string) => path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    const at = plain(folder);
+    const homeAt = plain(home);
+    if (/^[a-z]:$/.test(at) || at === '') return true;
+    if (homeAt !== '' && (at === homeAt || homeAt.startsWith(`${at}\\`))) return true;
+    const rest = at.replace(/^[a-z]:/, '');
+    return rest === '\\users' || WINDOWS_SYSTEM_TREES.some((tree) => rest === tree || rest.startsWith(`${tree}\\`));
+  }
+  const plain = (path: string) => (path.length > 1 ? path.replace(/\/+$/, '') : path) || '/';
+  const at = plain(folder);
+  const homeAt = plain(home);
+  if (at === '/') return true;
+  if (homeAt !== '/' && (at === homeAt || homeAt.startsWith(`${at}/`))) return true;
+  if (POSIX_SHARED.includes(at)) return true;
+  return POSIX_SYSTEM_TREES.some((tree) => at === tree || at.startsWith(`${tree}/`));
 }
 
 /**
@@ -1142,7 +1195,8 @@ export async function sessionIdentity(
     options.cwd !== undefined ||
     options.probe !== undefined ||
     options.platform !== undefined ||
-    options.budgetMs !== undefined;
+    options.budgetMs !== undefined ||
+    options.home !== undefined;
   const client = clientOf(clientInfo);
   try {
     if (surface === 'cli' && !seams) {
@@ -1199,10 +1253,11 @@ async function identityOf(
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), ancestors, grouped: false };
   }
   const parent = parentOfChain(0);
-  if (parent === undefined || folder === null) {
+  const home = options.home ?? homedir();
+  if (parent === undefined || folder === null || sharedFolder(folder, home, options.platform ?? process.platform)) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
   }
-  return { key: windowKey(parent, folder), ...base, parent, grouped: true };
+  return { key: windowKey(parent, folder, options.connection), ...base, parent, grouped: true };
 }
 
 // ── For the channels ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1234,6 +1289,11 @@ export interface ActivityContext {
   readonly clientInfo?: ClientInfo | (() => ClientInfo | undefined) | undefined;
   /** The session, when the caller has worked it out already; otherwise `sessionIdentity(surface, clientInfo)`. */
   readonly session?: ActivitySession | undefined;
+  /**
+   * The MCP connection's own session id, where its transport has one — a tool handler's `ctx.sessionId`; stdio has
+   * none — mixed into the session key (`SessionIdentityOptions.connection`).
+   */
+  readonly connection?: string | (() => string | undefined) | undefined;
   /** A search's words, known before it runs. */
   readonly query?: string | undefined;
 }
@@ -1291,6 +1351,7 @@ async function recordCall(
       context.session ??
       (await sessionIdentity(context.surface, clientInfo, {
         log: context.core.activity as Pick<ActivityLog, 'sessionOfAncestor'>,
+        connection: typeof context.connection === 'function' ? context.connection() : context.connection,
       }));
     const query = detail.query ?? context.query;
     await recordActivity(context.core, {

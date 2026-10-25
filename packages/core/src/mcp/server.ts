@@ -362,13 +362,15 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       },
       annotations: readsLocal,
     },
-    async (args) =>
+    async (args, ctx) =>
       read(() => {
         const client = server.server.getClientVersion();
         return activityMine(core, {
           surface: 'mcp',
           ...args,
           ...(client?.name ? { clientInfo: { name: client.name, version: client.version } } : {}),
+          // A transport's own session id, where it has one (stdio has none): one connection, one session.
+          ...(ctx.sessionId ? { connection: ctx.sessionId } : {}),
         });
       }),
   );

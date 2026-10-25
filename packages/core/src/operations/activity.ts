@@ -85,6 +85,8 @@ export interface ActivityMineRequest extends ActivityShowRequest {
   readonly clientInfo?: ClientInfo | undefined;
   /** The most lines to return, newest first: `MINE_DEFAULT_LIMIT` when left out, `MINE_MAX_LIMIT` at most. */
   readonly limit?: number | undefined;
+  /** The MCP connection's own session id, where its transport has one: part of the session key. */
+  readonly connection?: string | undefined;
 }
 
 /** How many lines `mine` returns when asked for no number, and the most it returns at all. */
@@ -260,7 +262,10 @@ export async function activityMine(
   const filters = { ...filtersOf({ ...request, since: request.since ?? MINE_DEFAULT_SINCE }, now), limit };
   const identity =
     deps.identity === undefined
-      ? await sessionIdentity(request.surface, request.clientInfo, { log: core.activity })
+      ? await sessionIdentity(request.surface, request.clientInfo, {
+          log: core.activity,
+          connection: request.connection,
+        })
       : await deps.identity();
   const shown = await core.activity.show(identity.key, filters);
   const boundary = newBoundary();

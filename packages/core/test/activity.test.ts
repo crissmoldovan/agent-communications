@@ -16,6 +16,7 @@ import {
   parsePsLine,
   recordActivity,
   sessionIdentity,
+  sharedFolder,
   withActivity,
 } from '../src/activity.ts';
 import { readActivitySettings } from '../src/activity-settings.ts';
@@ -989,4 +990,56 @@ test('activity mine takes --limit, and the other activity commands refuse it', a
   const refused = cli(m, ['activity', 'sessions', '--limit', '5']);
   assert.equal(refused.status, 64);
   assert.match(refused.stderr, /takes no --limit/);
+});
+
+// ── No grouping where projects cannot be told apart (0.29.0 review, S3) ────────────────────────────────────────
+
+test('a process in /, the home folder or a system folder is never grouped, so one client cannot merge projects', async () => {
+  const facts = { 900: { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'Claude' } };
+  const probe: ProcessProbe = async (pid) => facts[pid as 900] ?? null;
+  const identity = (folder: string, pid: number, extra: Record<string, unknown> = {}) =>
+    sessionIdentity('mcp', undefined, {
+      pid,
+      ppid: 900,
+      cwd: () => folder,
+      probe,
+      platform: 'darwin',
+      home: '/Users/jo',
+      ...extra,
+    });
+  for (const folder of [
+    '/',
+    '/Users/jo',
+    '/Users/jo/',
+    '/Users',
+    '/usr/local/bin',
+    '/Applications/Claude.app/Contents',
+    '/tmp',
+  ]) {
+    const one = await identity(folder, 101);
+    const two = await identity(folder, 102);
+    assert.equal(one.grouped, false, `${folder}: not grouped`);
+    assert.notEqual(one.key, two.key, `${folder}: each process a key of its own`);
+    assert.equal(one.folder, folder, 'it still says where it ran');
+  }
+  // A project folder under the home is grouped, as before.
+  const project = await identity('/Users/jo/work/acme', 103);
+  const sibling = await identity('/Users/jo/work/acme', 104);
+  assert.equal(project.grouped, true);
+  assert.equal(project.key, sibling.key);
+  // A connection's own session id, where the transport has one, is part of the key.
+  const viaA = await identity('/Users/jo/work/acme', 105, { connection: 'conn-a' });
+  const viaB = await identity('/Users/jo/work/acme', 106, { connection: 'conn-b' });
+  assert.equal(viaA.grouped, true);
+  assert.notEqual(viaA.key, viaB.key, 'two connections are two sessions');
+  assert.notEqual(viaA.key, project.key);
+  assert.equal((await identity('/Users/jo/work/acme', 107, { connection: 'conn-a' })).key, viaA.key);
+  // On Windows the same folders, by their Windows names, would be refused too.
+  const windows = await identity('C:\\Users\\jo', 108, { platform: 'win32' });
+  assert.equal(windows.grouped, false);
+  for (const folder of ['C:\\', 'c:\\users\\jo\\', 'C:\\Users', 'C:\\Windows\\System32', 'C:\\Program Files\\Claude']) {
+    assert.equal(sharedFolder(folder, 'C:\\Users\\jo', 'win32'), true, folder);
+  }
+  assert.equal(sharedFolder('C:\\Users\\jo\\work\\acme', 'C:\\Users\\jo', 'win32'), false);
+  assert.equal(sharedFolder('/tmp/acme', '/Users/jo', 'linux'), false, 'a project in a temporary folder is one');
 });
