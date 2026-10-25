@@ -27,8 +27,16 @@ function applied(note: string | null = null): CliResult {
   return ok({ change: 'setRule', changed: true, note, ...(behaviour as BehaviourReport) });
 }
 
-/** The section of the Agent screen called `name`. */
-async function section(name: string): Promise<HTMLElement> {
+/** Each section of the Agent screen, and the tab that shows it (D7): its name, then any count. */
+const TABS = {
+  'The label': /^Label/,
+  'Behaviour rules': /^Behaviour rules/,
+  'Standing approvals': /^Standing approvals/,
+} as const;
+
+/** The section of the Agent screen called `name`, shown by choosing its tab. */
+async function section(name: keyof typeof TABS): Promise<HTMLElement> {
+  fireEvent.click(await screen.findByRole('tab', { name: TABS[name] }));
   return screen.findByRole('region', { name });
 }
 
@@ -333,7 +341,7 @@ describe('Agent: what the grammar refuses', () => {
     fireEvent.click(within(rule).getByRole('button', { name: 'Remove' }));
     expect(await within(rules).findByText('This rule names a place that cannot be passed on safely.')).toBeTruthy();
     const standing = await section('Standing approvals');
-    const approval = (await within(standing).findByText('ap_; rm -rf ~')).closest('tr') as HTMLElement;
+    const approval = (await within(standing).findByText('ap_; rm -rf ~')).closest('li') as HTMLElement;
     fireEvent.click(within(approval).getByRole('button', { name: COPY.revoke }));
     expect(
       await within(standing).findByText('This standing approval has an id that cannot be passed on safely.'),
@@ -347,8 +355,8 @@ describe('Agent: standing approvals', () => {
     const bridge = createFakeBridge({}, { standingRevoke: { approvals: [] }, standingOff: { approvals: [] } });
     renderApp(bridge, { screen: 'agent' });
     const standing = await section('Standing approvals');
-    const table = await within(standing).findByRole('table', { name: 'Standing approvals' });
-    const active = within(table).getByText(STANDING).closest('tr') as HTMLElement;
+    const table = await within(standing).findByRole('list', { name: 'Standing approvals' });
+    const active = within(table).getByText(STANDING).closest('li') as HTMLElement;
     // What it allows, where, how often, and until when.
     expect(within(active).getByText('example/slack')).toBeTruthy();
     expect(within(active).getByText('active')).toBeTruthy();
@@ -357,7 +365,7 @@ describe('Agent: standing approvals', () => {
     expect(within(active).getByText('general (C0EXAMPLE1)')).toBeTruthy();
     expect(within(active).getByText('2 today')).toBeTruthy();
     // An ended one is shown with why, and has nothing to revoke.
-    const ended = within(table).getByText('ap_7F6E5D4C3B2A1Z0Y9X8W7V6T5S').closest('tr') as HTMLElement;
+    const ended = within(table).getByText('ap_7F6E5D4C3B2A1Z0Y9X8W7V6T5S').closest('li') as HTMLElement;
     expect(within(ended).getByText('revoked by the person')).toBeTruthy();
     expect(within(ended).getByText('threads I am in')).toBeTruthy();
     expect(within(ended).queryByRole('button', { name: COPY.revoke })).toBeNull();
@@ -388,7 +396,7 @@ describe('Agent: standing approvals', () => {
     const bridge = createFakeBridge({}, { standingOff: { approvals: [], partial: [note] } });
     renderApp(bridge, { screen: 'agent' });
     const standing = await section('Standing approvals');
-    await within(standing).findByRole('table', { name: 'Standing approvals' });
+    await within(standing).findByRole('list', { name: 'Standing approvals' });
     fireEvent.click(within(standing).getByRole('button', { name: COPY.endEveryStanding }));
     const said = await within(standing).findByRole('status');
     expect(said.textContent).toContain('Every standing approval has ended.');
@@ -401,8 +409,8 @@ describe('Agent: standing approvals', () => {
     );
     renderApp(bridge, { screen: 'agent' });
     const standing = await section('Standing approvals');
-    const table = await within(standing).findByRole('table', { name: 'Standing approvals' });
-    const active = within(table).getByText(STANDING).closest('tr') as HTMLElement;
+    const table = await within(standing).findByRole('list', { name: 'Standing approvals' });
+    const active = within(table).getByText(STANDING).closest('li') as HTMLElement;
     fireEvent.click(within(active).getByRole('button', { name: COPY.revoke }));
     expect(await within(standing).findByText('there is no standing approval with that id')).toBeTruthy();
   });

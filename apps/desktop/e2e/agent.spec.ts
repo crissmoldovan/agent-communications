@@ -46,10 +46,16 @@ async function calls(page: Page): Promise<Recorded[]> {
   return page.evaluate(() => (window as unknown as { __calls: Recorded[] }).__calls);
 }
 
-/** Opens Agent, and fills the rule form for example/slack with `acts` ticked. */
-async function fillRule(page: Page, acts: string[]): Promise<void> {
+/** Opens Agent on the view its tab `name` shows. */
+async function openView(page: Page, name: RegExp): Promise<void> {
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Agent' }).click();
+  await page.getByRole('tablist', { name: 'Agent' }).getByRole('tab', { name }).click();
+}
+
+/** Opens Agent's behaviour rules, and fills the rule form for example/slack with `acts` ticked. */
+async function fillRule(page: Page, acts: string[]): Promise<void> {
+  await openView(page, /^Behaviour rules/);
   const form = page.getByRole('form', { name: 'Add or change a rule' });
   await form.getByRole('combobox', { name: 'Account' }).click();
   await page.getByRole('option', { name: 'example/slack' }).click();
