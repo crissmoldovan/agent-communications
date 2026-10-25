@@ -405,13 +405,20 @@ export class QueueStore {
       await this.#readFence(row, rule);
       content = await this.#open(row);
       if (content === null) return { ...base, from: {}, judge };
-      const visible = await this.#withWhatsAppVisibility(
+      // The decrypt awaited: a revocation, an expiry, a tightening or an account removal may have committed since.
+      // The fence runs again, and the commit step requires the content still kept and still within its deadline.
+      await this.#readFence(row, rule);
+      const kept = await this.#withWhatsAppVisibility(
         row,
         () => this.#readFence(row, rule),
-        () =>
-          this.#store.database.prepare('SELECT 1 AS present FROM queue_items WHERE id = ?').get(row.id) !== undefined,
+        () => this.#contentStillKept(row.id),
       );
-      if (visible !== true) return surface === 'show' ? noSuchItem() : undefined;
+      if (kept === undefined || kept === 'gone') return surface === 'show' ? noSuchItem() : undefined;
+      if (kept === 'content-gone') {
+        const current = this.#row(row.id);
+        if (current === undefined) return surface === 'show' ? noSuchItem() : undefined;
+        return { ...summary(current, config), from: {}, judge };
+      }
     } catch (error) {
       if (surface === 'list' && error instanceof CommsError) return undefined;
       throw error;
@@ -429,6 +436,15 @@ export class QueueStore {
       ...(link === undefined ? {} : { link }),
       judge,
     };
+  }
+
+  /** The commit step of a content read: the row still there, its content still kept, and before its deadline. */
+  #contentStillKept(id: string): 'kept' | 'content-gone' | 'gone' {
+    const row = this.#store.database
+      .prepare('SELECT encrypted_record IS NOT NULL AS kept, expires_at FROM queue_items WHERE id = ?')
+      .get(id) as { kept: number; expires_at: number } | undefined;
+    if (row === undefined) return 'gone';
+    return row.kept === 1 && row.expires_at > this.#now() ? 'kept' : 'content-gone';
   }
 
   async #readFence(row: QueueRow, rule: CanonicalFullRuleDocument): Promise<void> {
@@ -521,11 +537,11 @@ export class QueueStore {
     };
   }
 
-  async #withWhatsAppVisibility(
+  async #withWhatsAppVisibility<T>(
     row: QueueRow,
     recheck: () => Promise<void>,
-    commit: () => boolean,
-  ): Promise<boolean | undefined> {
+    commit: () => T,
+  ): Promise<T | undefined> {
     if (row.whatsapp_message_id === null) return commit();
     if (this.#whatsappVisibilityFence === undefined)
       throw new CommsError(

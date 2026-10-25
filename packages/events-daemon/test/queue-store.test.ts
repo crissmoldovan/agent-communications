@@ -3,6 +3,7 @@ import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { CommsError, canonicalJson, sha256Hex } from '@agentcomms/core';
 import { QueueStore } from '../src/runtime/queue.ts';
+import { purgeQueueItemsForRuleVersions, shortenQueueItemDeadlines } from '../src/runtime/queue-retention.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
@@ -56,16 +57,6 @@ function ruleDocument(ruleId: string, input: { readonly judged?: boolean; readon
     retention: { decisionMetadataMs: 90 * DAY, queueMs: 10 * DAY },
   };
 }
-
-/** Item content as the boundary seals it; this cipher's seal is the plain bytes, so tests can read the row. */
-const cipher = {
-  async encrypt(_location: unknown, bytes: Uint8Array) {
-    return Buffer.from(bytes);
-  },
-  async decrypt(_location: unknown, bytes: Uint8Array) {
-    return Buffer.from(bytes);
-  },
-};
 
 let sequence = 0;
 
@@ -146,12 +137,21 @@ function seed(
   return id;
 }
 
+interface QueueHooks {
+  /** Runs inside the item decrypt, between the first fence and the commit: what a concurrent writer could do. */
+  onDecrypt?: (store: EventDatabase) => void;
+  /** Refuses the fence once set, as the production fence refuses a removed account. */
+  accountRemoved?: { value: boolean };
+  clock?: { value: number };
+}
+
 async function withQueue(
   work: (input: {
     readonly store: EventDatabase;
     readonly queue: QueueStore;
     readonly fenced: string[];
   }) => Promise<void>,
+  hooks: QueueHooks = {},
 ): Promise<void> {
   const stateDir = await shortTempDir('events-queue-store-');
   const store = await openEventDatabase({ stateDir });
@@ -172,9 +172,16 @@ async function withQueue(
         .run(`${ruleId}@1`, ruleId, document, sha256Hex(document));
     }
     const fenced: string[] = [];
+    // Item content as the boundary seals it: this cipher's seal is the plain bytes, so tests can read the row.
+    const hooked = {
+      async decrypt(location: { readonly table: string }, bytes: Uint8Array) {
+        if (location.table === 'queue_items') hooks.onDecrypt?.(store);
+        return Buffer.from(bytes);
+      },
+    };
     const queue = new QueueStore({
       store,
-      cipher,
+      cipher: hooked,
       approvals: { get: async () => null },
       config: {
         load: async () => ({
@@ -184,9 +191,13 @@ async function withQueue(
       } as never,
       fence: async (request) => {
         fenced.push(`${request.boundary}:${request.ruleId}`);
+        if (hooks.accountRemoved?.value)
+          throw new CommsError('NOT_FOUND', 'the account bound to this rule is no longer connected', {
+            details: { reason: 'ACCOUNT_REMOVED', accountId: request.accountId },
+          });
         return { switchGeneration: 3 };
       },
-      now: () => NOW,
+      now: () => hooks.clock?.value ?? NOW,
     });
     await work({ store, queue, fenced });
   } finally {
@@ -256,7 +267,11 @@ test('QUEUE-A: queue list gives items newest first, every sender-written field i
     assert.equal(unwrap(slack.text).boundary, unwrap(mail.subject).boundary, 'one boundary per answer');
     assert.deepEqual(slack.link, { kind: 'slack', url: 'https://app.slack.com/client/T1/C1' });
     assert.deepEqual(slack.account, { id: SLACK, alias: 'team/slack' });
-    assert.deepEqual(fenced.sort(), ['read:rule-mail', 'read:rule-slack'], 'every content read passes the fence');
+    assert.deepEqual(
+      fenced.sort(),
+      ['read:rule-mail', 'read:rule-mail', 'read:rule-slack', 'read:rule-slack'],
+      'every content read passes the fence before it decrypts and again after',
+    );
   });
 });
 
@@ -477,4 +492,69 @@ test('QUEUE-A: done, dismiss and reopen change only the item’s state; clear pu
     );
     assert.deepEqual(queue.clear(), { cleared: 0 });
   });
+});
+
+test('QUEUE-A: a content read repeats its fence after decrypting, so expiry, a tightening or an account removal meanwhile returns no content', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const content = { from: { name: 'Racing Sender' }, subject: 'Racing subject' };
+
+  // Expiry between the read and the commit: the content's deadline passes while it is being decrypted.
+  const expiry: QueueHooks = { clock: { value: NOW } };
+  await withQueue(async ({ store, queue }) => {
+    const id = seed(store, { ruleId: 'rule-mail', arrivedAt: NOW - DAY, content });
+    const { expires_at: expiresAt } = store.database
+      .prepare('SELECT expires_at FROM queue_items WHERE id = ?')
+      .get(id) as { expires_at: number };
+    expiry.onDecrypt = () => {
+      if (expiry.clock) expiry.clock.value = expiresAt;
+    };
+    const shown = await queue.show(id);
+    assert.deepEqual(shown.item.from, {}, 'expired meanwhile: no sender');
+    assert.equal(shown.item.subject, undefined, 'expired meanwhile: no subject');
+  }, expiry);
+
+  // A tightening between the read and the commit: the shortened retention purges the content in its transaction,
+  // and its revocation removes another version's item outright.
+  const tightening: QueueHooks = {};
+  await withQueue(async ({ store, queue }) => {
+    // Shortened to a day, its content is past due but its content-free row, one day more, is not.
+    seed(store, { ruleId: 'rule-mail', arrivedAt: NOW - 1.5 * DAY, content });
+    tightening.onDecrypt = (racing) =>
+      shortenQueueItemDeadlines(racing.database, { ruleId: 'rule-mail', queueMs: DAY, now: NOW });
+    const listed = await queue.list({});
+    assert.equal(listed.items.length, 1);
+    assert.deepEqual(listed.items[0]?.from, {}, 'tightened meanwhile: no sender');
+    assert.equal(listed.items[0]?.subject, undefined, 'tightened meanwhile: no subject');
+    const revoked = seed(store, { ruleId: 'rule-slack', accountId: SLACK, channel: 'slack', arrivedAt: NOW, content });
+    tightening.onDecrypt = (racing) =>
+      purgeQueueItemsForRuleVersions(racing.database, { ruleId: 'rule-slack', ruleVersions: [1] });
+    await assert.rejects(
+      queue.show(revoked),
+      (error: unknown) => error instanceof CommsError && error.exitCode === 66,
+      'revoked meanwhile: no such item',
+    );
+  }, tightening);
+
+  // An account removal between the read and the commit: the second fence refuses, and the account's work is purged.
+  const removal: QueueHooks = { accountRemoved: { value: false } };
+  await withQueue(async ({ store, queue }) => {
+    const listedId = seed(store, { ruleId: 'rule-mail', arrivedAt: NOW - DAY, content });
+    removal.onDecrypt = () => {
+      if (removal.accountRemoved) removal.accountRemoved.value = true;
+    };
+    assert.deepEqual((await queue.list({})).items, [], 'removed meanwhile: the list leaves it out');
+    assert.equal(
+      store.database.prepare('SELECT 1 FROM queue_items WHERE id = ?').get(listedId),
+      undefined,
+      'the removed account’s item is purged',
+    );
+    if (removal.accountRemoved) removal.accountRemoved.value = false;
+    const shownId = seed(store, { ruleId: 'rule-mail', arrivedAt: NOW - DAY, content });
+    await assert.rejects(
+      queue.show(shownId),
+      (error: unknown) => error instanceof CommsError,
+      'removed meanwhile: a show refuses',
+    );
+  }, removal);
 });
