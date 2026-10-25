@@ -78,6 +78,16 @@ export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
  */
 export type ActivitySince = '7d' | '30d' | { today: number };
 
+/**
+ * Which of the queue's items `queue list --state` reads (`allowlist.rs`, `QueueState`): one tab's, or all of them.
+ * Closed.
+ */
+export type QueueState = 'open' | 'done' | 'dismissed' | 'all';
+
+/** The channels a queue item comes from, as `queue list --channel` takes them (`allowlist.rs`, `QueueChannel`). */
+export const QUEUE_CHANNELS = ['gmail', 'slack', 'resend', 'whatsapp'] as const;
+export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
+
 /** Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. */
 export type Call =
   | { kind: 'version'; product: Product }
@@ -120,7 +130,25 @@ export type Call =
       channel?: ActivityChannel;
       account?: string;
       outcome?: ActivityOutcome;
-    };
+    }
+  /**
+   * The event service's queue (0.30.0): its items and its counts, read; done, dismiss, reopen and clear, which change
+   * only the person's own list, applied by the app itself (DA10). The item is `qi_` and 26 of Crockford's letters, the
+   * rule a checked id, the limit 1 to 200.
+   */
+  | {
+      kind: 'queueList';
+      state: QueueState;
+      rule?: string;
+      channel?: QueueChannel;
+      since?: ActivitySince;
+      limit?: number;
+    }
+  | { kind: 'queueCounts' }
+  | { kind: 'queueDone'; itemId: string }
+  | { kind: 'queueDismiss'; itemId: string }
+  | { kind: 'queueReopen'; itemId: string }
+  | { kind: 'queueClear' };
 
 /** What one CLI call came to (`runner::parse_output`). */
 export type CliResult =

@@ -10,8 +10,8 @@ use std::fmt;
 
 pub use crate::allowlist::{
     AccountName, ActivityChannel, ActivityKind, ActivityOutcome, ActivitySince, Acts, ApprovalId,
-    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, PauseDays, SessionKey,
-    StartOfToday, UpdateLevel,
+    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, PauseDays, QueueChannel,
+    QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday, UpdateLevel,
 };
 pub use crate::launchers::Product;
 pub use crate::paths::{FolderOverrides, Folders};

@@ -31,5 +31,7 @@
   "slackConversation": "^[CGDUW][A-Z0-9]{2,}$",
   "mailConversation": "^(?:[^\\s@<>(),;:\"\\\\]+)?@[^\\s@<>(),;:\"\\\\]+$",
   "acts": ["post", "reply", "reaction", "edit", "delete", "file", "send"],
-  "sessionKey": "^[0-9a-f]{16}$"
+  "sessionKey": "^[0-9a-f]{16}$",
+  "queueItemId": "^qi_[0-9A-HJKMNP-TV-Z]{26}$",
+  "ruleId": "^[A-Za-z0-9][A-Za-z0-9._:@-]{0,127}$"
 }

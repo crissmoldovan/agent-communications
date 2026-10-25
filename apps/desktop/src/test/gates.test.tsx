@@ -41,7 +41,14 @@ describe('what each CLI version supports', () => {
       layaJudge: '0.25.0',
       judges: '0.17.0',
       activity: '0.29.0',
+      queue: '0.30.0',
     });
+    // The queue is the event service's from 0.30.0, read from its own version, a pull request's build of it included.
+    expect(supports('0.29.0', 'queue')).toBe(false);
+    expect(supports('0.29.9', 'queue')).toBe(false);
+    expect(supports('0.30.0', 'queue')).toBe(true);
+    expect(supports('0.30.0-feat-0.30', 'queue')).toBe(true);
+    expect(supports(null, 'queue')).toBe(false);
     // The activity log is core's from 0.29.0, a pull request's build of it included.
     expect(supports('0.28.0', 'activity')).toBe(false);
     expect(supports('0.29.0', 'activity')).toBe(true);
