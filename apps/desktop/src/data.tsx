@@ -32,6 +32,12 @@ export interface AppData {
   eventService: Loadable<EventServiceState> | 'absent';
   /** Shows a state the supervisor answered a command with, over any read that started before it. */
   showEventService(state: EventServiceState): void;
+  /**
+   * Why the last command the window sent the supervisor failed, or null: the Events screen's service section says it,
+   * since the first-start question it may come from has closed by then.
+   */
+  eventServiceProblem: string | null;
+  showEventServiceProblem(problem: string | null): void;
   /** The approval an `agentcomms://` link asked for, until the screen that showed it clears it. */
   deepLink: DeepLinkTarget | null;
   refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation'): Promise<void>;
@@ -105,6 +111,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [events, setEvents] = useState<Loadable<unknown> | 'absent'>({ state: 'loading' });
   const [doctors, setDoctors] = useState<Partial<Record<DoctorProduct, Loadable<DoctorView>>>>({});
   const [eventService, setEventServiceState] = useState<Loadable<EventServiceState> | 'absent'>({ state: 'loading' });
+  const [eventServiceProblem, showEventServiceProblem] = useState<string | null>(null);
   const [deepLink, setDeepLink] = useState<DeepLinkTarget | null>(null);
   const visible = useVisible(bridge);
 
@@ -268,6 +275,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       doctors,
       eventService,
       showEventService,
+      eventServiceProblem,
+      showEventServiceProblem,
       deepLink,
       refresh,
       runDoctors,
@@ -281,6 +290,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       doctors,
       eventService,
       showEventService,
+      eventServiceProblem,
       deepLink,
       refresh,
       runDoctors,

@@ -265,7 +265,7 @@ describe('The event service', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
     await waitFor(() => expect(commands(bridge, 'eventServiceRetry')).toHaveLength(1));
     await waitFor(() => expect(within(region(SERVICE)).queryByRole('alert')).toBeNull());
-    expect(within(region(SERVICE)).getByText('Starting…')).toBeTruthy();
+    expect(within(region(SERVICE)).getByRole('status', { name: 'Starting the event service…' })).toBeTruthy();
   });
 
   it('an older adopted version offers Restart to use it', async () => {
@@ -343,6 +343,62 @@ describe('The event service', () => {
     await screen.findByRole('heading', { level: 1, name: 'Overview' });
     await waitFor(() => expect(quiet.calls.map((call) => call.command)).toContain('eventServiceState'));
     expect(screen.queryByRole('alertdialog', { name: 'Start the event service?' })).toBeNull();
+  });
+
+  it('the first-start question closes the moment Start is pressed, before its answer comes back', async () => {
+    let answer: (state: EventServiceState) => void = () => undefined;
+    const bridge = serviceBridge(EVENT_SERVICE.firstStart, {
+      answerFirstStart: () =>
+        new Promise<EventServiceState>((resolve) => {
+          answer = resolve;
+        }),
+    });
+    renderApp(bridge, { screen: 'events' });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Start the event service?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start' }));
+    // Closed while the answer is still on its way.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(commands(bridge, 'answerFirstStart')).toEqual([{ command: 'answerFirstStart', args: true }]);
+    // The supervisor's word, still asking, asks nothing again.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.firstStart));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    // Its answer, when it comes, is shown: starting.
+    await act(async () => answer(EVENT_SERVICE.starting));
+    expect(await within(region(SERVICE)).findByText('Starting the event service…')).toBeTruthy();
+    expect(commands(bridge, 'answerFirstStart')).toHaveLength(1);
+  });
+
+  it("a first-start answer that fails is said in the Events screen's service section, not in a dialog", async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.firstStart, {
+      answerFirstStart: async () => {
+        throw { code: 'APP_IO', message: 'the answer could not be kept' };
+      },
+    });
+    renderApp(bridge, { screen: 'events' });
+    const dialog = await screen.findByRole('alertdialog', { name: 'Start the event service?' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    const problem = await within(region(SERVICE)).findByText('the answer could not be kept');
+    expect(problem.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(commands(bridge, 'answerFirstStart')).toHaveLength(1);
+  });
+
+  it('while the service starts, a spinner says "Starting the event service…" and the switch stays on', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.starting);
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByRole('status', { name: 'Starting the event service…' })).toBeTruthy();
+    expect(within(section).getByText('Starting the event service…')).toBeTruthy();
+    expect(within(section).queryByText('Starting…')).toBeNull();
+    const toggle = within(section).getByRole('switch', { name: SWITCH });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.hasAttribute('disabled') || toggle.hasAttribute('data-disabled')).toBe(false);
+    expect(toggle.getAttribute('aria-disabled')).not.toBe('true');
+    // Once the supervisor says it runs, the spinner goes.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
+    expect(await within(region(SERVICE)).findByText('Running')).toBeTruthy();
+    expect(within(region(SERVICE)).queryByRole('status', { name: 'Starting the event service…' })).toBeNull();
   });
 
   it('Full Disk Access missing shows the line and Open System Settings', async () => {

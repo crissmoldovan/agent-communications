@@ -1,4 +1,4 @@
-import { Button, DescriptionList, EmptyState, Row as Line, Panel, Switch, Table } from '@cueplusplus/ui';
+import { Button, DescriptionList, EmptyState, Row as Line, Panel, Spinner, Switch, Table } from '@cueplusplus/ui';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
@@ -257,6 +257,7 @@ const SERVICE_TITLE = 'Event service';
 /** The section's words, as the plan's Global Constraints give them. */
 export const SERVICE_COPY = {
   switch: 'Run the event service',
+  starting: 'Starting the event service…',
   windows: "The event service doesn't run on Windows yet.",
   restarted: 'Restarted',
   stoppedFromOutside: 'Stopped from outside at',
@@ -272,11 +273,11 @@ export function newerServiceLine(version: string): string {
   return `A newer event service is installed (${version}).`;
 }
 
-/** Where the service stands, in a word. Giving up is said in full beneath it. */
+/** Where the service stands, in a word. Giving up is said in full beneath it; starting, beside a spinner. */
 const SERVICE_WORDS: Readonly<Record<EventServiceStatus, string>> = {
   unavailable: 'Not available',
   stopped: 'Stopped',
-  starting: 'Starting…',
+  starting: SERVICE_COPY.starting,
   running: 'Running',
   gaveUp: 'Stopped',
 };
@@ -309,7 +310,17 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
       />
       <div>
         <Line>
-          <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+          {state.status === 'starting' ? (
+            <>
+              {/* The spinner says it to a screen reader; the words beside it are for the eye, so it is said once. */}
+              <Spinner size="sm" label={SERVICE_COPY.starting} />
+              <span className="text-fg" aria-hidden="true">
+                {SERVICE_COPY.starting}
+              </span>
+            </>
+          ) : (
+            <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+          )}
           {running && state.since !== null ? (
             <span className="text-fg-muted">
               since <When at={state.since} />
@@ -407,12 +418,17 @@ function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boo
 
 /**
  * The event service's section: what its supervisor last said, read once and then sent on each change (`data.tsx`),
- * and what each command answered with. A command that fails says why, and the state stays as the supervisor last said.
+ * and what each command answered with. A command that fails says why, and the state stays as the supervisor last said:
+ * the first-start question's answer too, since that question has closed by then (`EventServiceQuestions.tsx`).
  */
 function Service() {
-  const { eventService, showEventService } = useAppData();
+  const {
+    eventService,
+    showEventService,
+    eventServiceProblem: problem,
+    showEventServiceProblem: setProblem,
+  } = useAppData();
   const [busy, setBusy] = useState(false);
-  const [problem, setProblem] = useState<string | null>(null);
 
   const ask: Ask = async (command) => {
     setBusy(true);
