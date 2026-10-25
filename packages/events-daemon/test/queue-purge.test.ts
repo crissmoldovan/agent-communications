@@ -11,6 +11,7 @@ import { JudgeKinds } from '../src/runtime/judge-kinds.ts';
 import { EventLifecycle } from '../src/runtime/lifecycle.ts';
 import { createB2RetainedContentParticipants } from '../src/runtime/phase-d-b2-retention.ts';
 import { createPhaseDWhatsAppOwnerComposition } from '../src/runtime/phase-d-whatsapp-owner-composition.ts';
+import { tighteningPreviewFor } from '../src/runtime/queue-tightening.ts';
 import { applyDerivedTightening } from '../src/runtime/replacements.ts';
 import { disableRule, removeTarget } from '../src/runtime/revocations.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
@@ -448,5 +449,36 @@ test('QUEUE-A: a queueMs tightening revokes the wider version and its items, and
       .get(gone) as { encrypted_record: unknown; expires_at: number };
     assert.equal(due.encrypted_record, null, 'an item already past its shorter deadline loses its content at once');
     assert.equal(due.expires_at, NOW - 3 * DAY + 2 * DAY);
+  });
+});
+
+test('QUEUE-A: a tightening’s preview names the count of open queue items its enablement will remove (Q6)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withStore(async (store) => {
+    const active = rule({ ruleId: 'rule-preview', version: 1, queueMs: 20 * DAY });
+    activate(store, active);
+    seedItem(store, { ruleId: 'rule-preview', ruleVersion: 1 });
+    seedItem(store, { ruleId: 'rule-preview', ruleVersion: 1 });
+    seedItem(store, { ruleId: 'rule-preview', ruleVersion: 1, state: 'done' });
+    seedItem(store, { ruleId: 'rule-elsewhere' });
+    const versions = new ImmutableVersions(store.database);
+    const tighter = versions.createRule(rule({ ruleId: 'rule-preview', version: 2, queueMs: 2 * DAY }));
+    assert.deepEqual(tighteningPreviewFor(store.database, tighter.document), {
+      editKind: 'shorten-retention',
+      appliesWhen: 'rule enable',
+      openQueueItemsRemoved: 2,
+      notice: '2 open queue items under this rule will be removed',
+    });
+    const looser = versions.createRule(rule({ ruleId: 'rule-preview', version: 3, queueMs: 25 * DAY }));
+    assert.equal(tighteningPreviewFor(store.database, looser.document), undefined, 'a loosening waits for approval');
+    const first = versions.createRule(rule({ ruleId: 'rule-new', version: 1 }));
+    assert.equal(tighteningPreviewFor(store.database, first.document), undefined, 'no active version, no tightening');
+    store.database.prepare("UPDATE queue_items SET state = 'dismissed' WHERE rule_id = 'rule-preview'").run();
+    assert.deepEqual(tighteningPreviewFor(store.database, tighter.document), {
+      editKind: 'shorten-retention',
+      appliesWhen: 'rule enable',
+      openQueueItemsRemoved: 0,
+    });
   });
 });

@@ -84,6 +84,18 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["targetId", "version", "kind", "retentionMs", "show"],
+          "properties": {
+            "targetId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "queue" },
+            "retentionMs": { "$ref": "#/$defs/queueRetention" },
+            "show": { "enum": ["summary", "minimal"] }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": ["targetId", "version", "kind", "subscriberId", "subscriberVersion", "representation"],
           "properties": {
             "targetId": { "$ref": "#/$defs/id" },
@@ -302,7 +314,8 @@
         "dryrunMs": { "type": "integer", "minimum": 1, "maximum": 86400000 },
         "sseReplayMs": { "$ref": "#/$defs/positive" },
         "deadLetterMs": { "$ref": "#/$defs/positive" },
-        "decisionMetadataMs": { "$ref": "#/$defs/positive" }
+        "decisionMetadataMs": { "$ref": "#/$defs/positive" },
+        "queueMs": { "$ref": "#/$defs/queueRetention" }
       }
     },
     "ruleDocument": {
@@ -489,7 +502,9 @@
                 "removeJudgeModel",
                 "deliveriesList",
                 "heldList",
-                "dryrun-list"
+                "dryrun-list",
+                "queue-counts",
+                "queue-clear"
               ]
             },
             "args": { "$ref": "#/$defs/emptyArgs" },
@@ -779,6 +794,60 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "enum": ["queue-show", "queue-done", "queue-dismiss", "queue-reopen"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["itemId"],
+              "properties": { "itemId": { "$ref": "#/$defs/queueItemId" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "queue-list" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": { "$ref": "#/$defs/queueStateFilter" },
+                "rule": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "channel": { "$ref": "#/$defs/queueChannel" },
+                "since": { "type": "string", "minLength": 1 },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "queue-items" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "state": { "$ref": "#/$defs/queueStateFilter" },
+                "rule": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "channel": { "$ref": "#/$defs/queueChannel" },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -1047,6 +1116,166 @@
         "replacementOfVersion": { "$ref": "#/$defs/id" }
       }
     },
+    "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
+    "queueRetention": { "type": "integer", "minimum": 86400000, "maximum": 2592000000 },
+    "queueState": { "enum": ["open", "done", "dismissed"] },
+    "queueStateFilter": { "enum": ["open", "done", "dismissed", "all"] },
+    "queueChannel": { "enum": ["gmail", "slack", "resend", "whatsapp"] },
+    "isoTime": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$" },
+    "untrustedText": { "type": "string", "pattern": "^<untrusted-content " },
+    "queueItemSummary": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "stateAt", "arrivedAt", "expiresAt", "rule", "channel", "account"],
+      "properties": {
+        "id": { "$ref": "#/$defs/queueItemId" },
+        "state": { "$ref": "#/$defs/queueState" },
+        "stateAt": { "$ref": "#/$defs/isoTime" },
+        "arrivedAt": { "$ref": "#/$defs/isoTime" },
+        "expiresAt": { "$ref": "#/$defs/isoTime" },
+        "rule": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "version", "name"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "name": { "$ref": "#/$defs/id" }
+          }
+        },
+        "channel": { "$ref": "#/$defs/queueChannel" },
+        "account": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "alias"],
+          "properties": {
+            "id": { "$ref": "#/$defs/id" },
+            "alias": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
+          }
+        }
+      }
+    },
+    "queueJudge": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state"],
+          "properties": { "state": { "const": "none" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "id", "kind", "model", "question"],
+          "properties": {
+            "state": { "enum": ["expired", "released"] },
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "question": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["state", "id", "kind", "model", "question", "answer", "confidence", "uncalibrated"],
+          "properties": {
+            "state": { "const": "answered" },
+            "id": { "$ref": "#/$defs/id" },
+            "kind": { "$ref": "#/$defs/id" },
+            "model": { "$ref": "#/$defs/id" },
+            "question": { "type": "string" },
+            "answer": { "enum": ["yes", "no"] },
+            "confidence": { "type": "number" },
+            "uncalibrated": { "type": "boolean" }
+          }
+        }
+      ]
+    },
+    "queueItem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "state", "stateAt", "arrivedAt", "expiresAt", "rule", "channel", "account", "from", "judge"],
+      "properties": {
+        "id": { "$ref": "#/$defs/queueItemId" },
+        "state": { "$ref": "#/$defs/queueState" },
+        "stateAt": { "$ref": "#/$defs/isoTime" },
+        "arrivedAt": { "$ref": "#/$defs/isoTime" },
+        "expiresAt": { "$ref": "#/$defs/isoTime" },
+        "rule": { "$ref": "#/$defs/queueItemSummary/properties/rule" },
+        "channel": { "$ref": "#/$defs/queueChannel" },
+        "account": { "$ref": "#/$defs/queueItemSummary/properties/account" },
+        "from": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/$defs/untrustedText" },
+            "address": { "$ref": "#/$defs/untrustedText" }
+          }
+        },
+        "subject": { "$ref": "#/$defs/untrustedText" },
+        "text": { "$ref": "#/$defs/untrustedText" },
+        "link": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "url"],
+              "properties": {
+                "kind": { "const": "gmail" },
+                "url": { "type": "string", "pattern": "^https://mail\\.google\\.com/" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "url"],
+              "properties": {
+                "kind": { "const": "slack" },
+                "url": { "type": "string", "pattern": "^https://app\\.slack\\.com/" }
+              }
+            }
+          ]
+        },
+        "judge": { "$ref": "#/$defs/queueJudge" }
+      }
+    },
+    "queueStateChange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["item"],
+      "properties": {
+        "item": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["id", "state", "stateAt"],
+          "properties": {
+            "id": { "$ref": "#/$defs/queueItemId" },
+            "state": { "$ref": "#/$defs/queueState" },
+            "stateAt": { "$ref": "#/$defs/isoTime" }
+          }
+        }
+      }
+    },
+    "tighteningPreview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["editKind", "appliesWhen", "openQueueItemsRemoved"],
+      "properties": {
+        "editKind": {
+          "enum": [
+            "remove-target",
+            "remove-output-field",
+            "lower-rate-cap",
+            "shorten-retention",
+            "narrow-source-options"
+          ]
+        },
+        "appliesWhen": { "const": "rule enable" },
+        "openQueueItemsRemoved": { "type": "integer", "minimum": 0 },
+        "notice": { "$ref": "#/$defs/id" }
+      }
+    },
     "dryrunRecord": {
       "type": "object",
       "additionalProperties": false,
@@ -1188,7 +1417,8 @@
             "version": { "$ref": "#/$defs/positive" },
             "document": { "$ref": "#/$defs/ruleDocument" },
             "digest": { "$ref": "#/$defs/id" },
-            "state": { "type": "null" }
+            "state": { "type": "null" },
+            "tightening": { "$ref": "#/$defs/tighteningPreview" }
           }
         },
         "rule-update": {
@@ -1202,7 +1432,8 @@
             "version": { "$ref": "#/$defs/positive" },
             "document": { "$ref": "#/$defs/ruleDocument" },
             "digest": { "$ref": "#/$defs/id" },
-            "state": { "type": "null" }
+            "state": { "type": "null" },
+            "tightening": { "$ref": "#/$defs/tighteningPreview" }
           }
         },
         "rule-enable": { "$ref": "#/$defs/preparedActivation" },
@@ -1379,6 +1610,62 @@
         "migrateSecrets": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "dryrun-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
         "dryrun-show": { "$ref": "#/$defs/dryrunRecord" },
+        "queue-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["items", "more"],
+          "properties": {
+            "items": { "type": "array", "items": { "$ref": "#/$defs/queueItem" } },
+            "more": { "type": "boolean" }
+          }
+        },
+        "queue-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["item"],
+          "properties": { "item": { "$ref": "#/$defs/queueItem" } }
+        },
+        "queue-items": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["items", "more"],
+          "properties": {
+            "items": { "type": "array", "items": { "$ref": "#/$defs/queueItemSummary" } },
+            "more": { "type": "boolean" }
+          }
+        },
+        "queue-counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["open", "done", "dismissed", "byRule"],
+          "properties": {
+            "open": { "type": "integer", "minimum": 0 },
+            "done": { "type": "integer", "minimum": 0 },
+            "dismissed": { "type": "integer", "minimum": 0 },
+            "byRule": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ruleId", "name", "open"],
+                "properties": {
+                  "ruleId": { "$ref": "#/$defs/id" },
+                  "name": { "$ref": "#/$defs/id" },
+                  "open": { "type": "integer", "minimum": 0 }
+                }
+              }
+            }
+          }
+        },
+        "queue-done": { "$ref": "#/$defs/queueStateChange" },
+        "queue-dismiss": { "$ref": "#/$defs/queueStateChange" },
+        "queue-reopen": { "$ref": "#/$defs/queueStateChange" },
+        "queue-clear": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["cleared"],
+          "properties": { "cleared": { "type": "integer", "minimum": 0 } }
+        },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -1469,7 +1756,15 @@
                     "retryDelivery",
                     "dropDelivery",
                     "dryrun-list",
-                    "dryrun-show"
+                    "dryrun-show",
+                    "queue-list",
+                    "queue-show",
+                    "queue-items",
+                    "queue-counts",
+                    "queue-done",
+                    "queue-dismiss",
+                    "queue-reopen",
+                    "queue-clear"
                   ]
                 }
               }
@@ -1615,6 +1910,38 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "dryrun-show" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dryrun-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-items" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-items" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-counts" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-counts" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-done" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-done" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-dismiss" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-dismiss" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-reopen" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-reopen" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-clear" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-clear" } } }
             }
           ]
         },

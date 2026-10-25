@@ -83,6 +83,15 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'migrateSecrets', wireOperation: 'migrateSecrets', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'dryrunList', wireOperation: 'dryrun-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'dryrunShow', wireOperation: 'dryrun-show', desktopCallable: true, family: 'owner' },
+  // The action queue (0.30.0). list and show carry item content and are CLI-only; the rest are content-free.
+  { capabilityOperation: 'queueList', wireOperation: 'queue-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueShow', wireOperation: 'queue-show', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueItems', wireOperation: 'queue-items', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueCounts', wireOperation: 'queue-counts', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueDone', wireOperation: 'queue-done', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueDismiss', wireOperation: 'queue-dismiss', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueReopen', wireOperation: 'queue-reopen', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'queueClear', wireOperation: 'queue-clear', desktopCallable: true, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

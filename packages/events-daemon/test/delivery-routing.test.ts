@@ -60,7 +60,8 @@ test('B2-T2: generic dispatch selects exactly one target handler and refuses an 
     setup.insert('delivery-dryrun', 'dryrun:target-1:1');
     setup.insert('delivery-webhook', 'webhook:target-1:1');
     setup.insert('delivery-sse', 'sse:target-1:1:subscriber-1:1');
-    setup.insert('delivery-unknown', 'queue:target-1:1');
+    // `queue:` is a known kind from 0.30.0; a persisted kind no adapter knows is still refused.
+    setup.insert('delivery-unknown', 'broker:target-1:1');
     const calls: string[] = [];
     const dispatcher = new DeliveryDispatcher({
       store: setup.store,

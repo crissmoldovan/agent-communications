@@ -97,6 +97,18 @@ const EXPECTED_B3_ROWS = [
   ['events-daemon.secrets.migrate', 'secrets migrate', null, 'exception', 'migrateSecrets'],
 ] as const;
 
+/** The action queue (0.30.0): content reads are terminal/app exceptions (Q1); the rest are paired and content-free. */
+const EXPECTED_QUEUE_ROWS = [
+  ['events-daemon.queue.list', 'queue list', null, 'exception', 'queueList'],
+  ['events-daemon.queue.show', 'queue show', null, 'exception', 'queueShow'],
+  ['events-daemon.queue.items', 'queue items', 'events_queue_items', 'both', 'queueItems'],
+  ['events-daemon.queue.counts', 'queue counts', 'events_queue_counts', 'both', 'queueCounts'],
+  ['events-daemon.queue.done', 'queue done', 'events_queue_done', 'both', 'queueDone'],
+  ['events-daemon.queue.dismiss', 'queue dismiss', 'events_queue_dismiss', 'both', 'queueDismiss'],
+  ['events-daemon.queue.reopen', 'queue reopen', 'events_queue_reopen', 'both', 'queueReopen'],
+  ['events-daemon.queue.clear', 'queue clear', 'events_queue_clear', 'both', 'queueClear'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -117,7 +129,9 @@ const shapedRows = (source: readonly (readonly [string, string, string | null, s
 const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
   ...shapedRows(EXPECTED_B3_ROWS),
-  ...shapedRows(EXPECTED_B1_ROWS.slice(27)),
+  ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
+  ...shapedRows(EXPECTED_QUEUE_ROWS),
+  ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
 /** Copy the production parity inputs, leaving package manager state immutable. The copied source is what the
@@ -236,6 +250,8 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.approve',
     'events-daemon.dryrun.list',
     'events-daemon.dryrun.show',
+    'events-daemon.queue.list',
+    'events-daemon.queue.show',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

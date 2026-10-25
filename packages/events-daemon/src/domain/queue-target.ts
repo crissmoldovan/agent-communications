@@ -62,6 +62,41 @@ export function canonicalQueueTarget(target: Record<string, unknown>): QueueTarg
   };
 }
 
+/** The action queue's closed vocabularies (the §8 CLI contract). */
+export const QUEUE_STATES: readonly ['open', 'done', 'dismissed'] = Object.freeze([
+  'open',
+  'done',
+  'dismissed',
+] as const);
+export type QueueState = (typeof QUEUE_STATES)[number];
+export const QUEUE_CHANNELS: readonly ['gmail', 'slack', 'resend', 'whatsapp'] = Object.freeze([
+  'gmail',
+  'slack',
+  'resend',
+  'whatsapp',
+] as const);
+export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
+
+/** `--state` takes an item state or `all`. */
+export const QUEUE_STATE_FILTERS: readonly ['open', 'done', 'dismissed', 'all'] = Object.freeze([
+  'open',
+  'done',
+  'dismissed',
+  'all',
+] as const);
+export type QueueStateFilter = (typeof QUEUE_STATE_FILTERS)[number];
+export const QUEUE_JUDGE_STATES: readonly ['answered', 'expired', 'released', 'none'] = Object.freeze([
+  'answered',
+  'expired',
+  'released',
+  'none',
+] as const);
+export type QueueJudgeState = (typeof QUEUE_JUDGE_STATES)[number];
+export const QUEUE_JUDGE_ANSWERS: readonly ['yes', 'no'] = Object.freeze(['yes', 'no'] as const);
+export type QueueJudgeAnswer = (typeof QUEUE_JUDGE_ANSWERS)[number];
+export const QUEUE_LINK_KINDS: readonly ['gmail', 'slack'] = Object.freeze(['gmail', 'slack'] as const);
+export type QueueLinkKind = (typeof QUEUE_LINK_KINDS)[number];
+
 // Item ids (the CLI contract): `qi_` and 26 Crockford base32 characters, a 48-bit time and 80 random bits.
 const CROCKFORD = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const QUEUE_ITEM_ID = /^qi_[0-9A-HJKMNP-TV-Z]{26}$/;

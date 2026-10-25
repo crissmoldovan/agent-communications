@@ -1,6 +1,35 @@
 import { type ApprovalStore, CommsError, type ConfigStore, newBoundary, wrapUntrusted } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { isQueueItemId, parseQueueItemContent, type QueueItemContent, queueItemLink } from '../domain/queue-target.ts';
+import {
+  isQueueItemId,
+  parseQueueItemContent,
+  QUEUE_CHANNELS,
+  QUEUE_STATE_FILTERS,
+  type QueueChannel,
+  type QueueItemContent,
+  type QueueJudgeAnswer,
+  type QueueJudgeState,
+  type QueueLinkKind,
+  type QueueState,
+  type QueueStateFilter,
+  queueItemLink,
+} from '../domain/queue-target.ts';
+
+export {
+  QUEUE_CHANNELS,
+  QUEUE_JUDGE_ANSWERS,
+  QUEUE_JUDGE_STATES,
+  QUEUE_LINK_KINDS,
+  QUEUE_STATE_FILTERS,
+  QUEUE_STATES,
+  type QueueChannel,
+  type QueueJudgeAnswer,
+  type QueueJudgeState,
+  type QueueLinkKind,
+  type QueueState,
+  type QueueStateFilter,
+} from '../domain/queue-target.ts';
+
 import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
@@ -15,31 +44,17 @@ import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
  * `counts` are content-free, and `done`, `dismiss`, `reopen` and `clear` change only the person's own list.
  */
 
-export const QUEUE_STATES: readonly ['open', 'done', 'dismissed'] = Object.freeze([
-  'open',
-  'done',
-  'dismissed',
-] as const);
-export type QueueState = (typeof QUEUE_STATES)[number];
-export const QUEUE_CHANNELS: readonly ['gmail', 'slack', 'resend', 'whatsapp'] = Object.freeze([
-  'gmail',
-  'slack',
-  'resend',
-  'whatsapp',
-] as const);
-export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
-
 export const QUEUE_LIST_DEFAULT_LIMIT = 50;
 export const QUEUE_LIST_MAX_LIMIT = 500;
 
 /** The judge's part of an item, read from its decision at the moment it is shown, never copied (Q3). */
 export interface QueueJudgeV1 {
-  readonly state: 'answered' | 'expired' | 'released' | 'none';
+  readonly state: QueueJudgeState;
   readonly id?: string;
   readonly kind?: string;
   readonly model?: string;
   readonly question?: string;
-  readonly answer?: 'yes' | 'no';
+  readonly answer?: QueueJudgeAnswer;
   readonly confidence?: number;
   readonly uncalibrated?: boolean;
 }
@@ -61,7 +76,7 @@ export interface QueueItemV1 extends QueueItemSummaryV1 {
   readonly from: { readonly name?: string; readonly address?: string };
   readonly subject?: string;
   readonly text?: string;
-  readonly link?: { readonly kind: 'gmail' | 'slack'; readonly url: string };
+  readonly link?: { readonly kind: QueueLinkKind; readonly url: string };
   readonly judge: QueueJudgeV1;
 }
 
@@ -91,7 +106,7 @@ export interface QueueClearResultV1 {
 }
 
 export interface QueueQuery {
-  readonly state: QueueState | 'all';
+  readonly state: QueueStateFilter;
   readonly ruleId?: string;
   readonly channel?: QueueChannel;
   readonly since?: number;
@@ -122,16 +137,19 @@ export function parseQueueQuery(
   now: number,
   options: { readonly since: boolean } = { since: true },
 ): QueueQuery {
+  const allowed = options.since
+    ? ['state', 'rule', 'channel', 'since', 'limit']
+    : ['state', 'rule', 'channel', 'limit'];
+  for (const key of Object.keys(args))
+    if (!allowed.includes(key)) usage(`queue ${options.since ? 'list' : 'items'} takes no ${key.slice(0, 40)}`);
   const state = args.state ?? 'open';
-  if (state !== 'all' && !(QUEUE_STATES as readonly unknown[]).includes(state))
-    usage('--state is open, done, dismissed or all');
+  if (!(QUEUE_STATE_FILTERS as readonly unknown[]).includes(state)) usage('--state is open, done, dismissed or all');
   const ruleId = args.rule;
   if (ruleId !== undefined && (typeof ruleId !== 'string' || ruleId.length === 0 || ruleId.length > 256))
     usage('--rule takes a rule id');
   const channel = args.channel;
   if (channel !== undefined && !(QUEUE_CHANNELS as readonly unknown[]).includes(channel))
     usage('--channel is gmail, slack, resend or whatsapp');
-  if (!options.since && args.since !== undefined) usage('queue items takes no --since');
   const since = args.since === undefined ? undefined : queueSince(args.since, now);
   const limit = args.limit ?? QUEUE_LIST_DEFAULT_LIMIT;
   if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > QUEUE_LIST_MAX_LIMIT)
