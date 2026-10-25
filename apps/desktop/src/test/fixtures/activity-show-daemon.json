@@ -1,0 +1,92 @@
+{
+  "session": {
+    "key": "a1b2c3d4e5f60718",
+    "grouped": false,
+    "surfaces": [
+      "daemon"
+    ],
+    "folder": null,
+    "client": null,
+    "parent": null,
+    "firstSeen": "2026-10-25T09:15:00.000Z",
+    "lastSeen": "2026-10-25T09:45:00.000Z",
+    "processes": 1,
+    "channels": [
+      "gmail",
+      "slack"
+    ],
+    "accounts": [
+      "example/gmail",
+      "example/slack"
+    ],
+    "counts": {
+      "kind": {
+        "read": 0,
+        "write": 0,
+        "told": 2,
+        "approval": 0
+      },
+      "outcome": {
+        "ok": 1,
+        "refused": 0,
+        "failed": 1
+      }
+    },
+    "folderShown": null
+  },
+  "since": null,
+  "lines": [
+    {
+      "at": "2026-10-25T09:45:00.000Z",
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "operation": "events-daemon.deliver",
+      "kind": "told",
+      "outcome": "failed",
+      "reason": "the target answered 503",
+      "session": {
+        "key": "a1b2c3d4e5f60718",
+        "process": "pdaemon1",
+        "pid": 3000,
+        "folder": null,
+        "grouped": false,
+        "surface": "daemon"
+      },
+      "ms": 2100,
+      "count": 1,
+      "told": {
+        "rule": "Mail subjects",
+        "target": "dry-run log"
+      }
+    },
+    {
+      "at": "2026-10-25T09:15:00.000Z",
+      "channel": "slack",
+      "account": {
+        "id": "T0EXAMPLE",
+        "alias": "example/slack"
+      },
+      "operation": "events-daemon.deliver",
+      "kind": "told",
+      "outcome": "ok",
+      "session": {
+        "key": "a1b2c3d4e5f60718",
+        "process": "pdaemon1",
+        "pid": 3000,
+        "folder": null,
+        "grouped": false,
+        "surface": "daemon"
+      },
+      "ms": 95,
+      "count": 3,
+      "told": {
+        "rule": "David on Slack",
+        "target": "webhook"
+      }
+    }
+  ],
+  "more": false
+}
