@@ -10,8 +10,9 @@ Both came from the owner's first run of 0.27.0.
 - **Start answers at once.** Clicking **Start** in "Start the event service?" used to leave the question on screen,
   its buttons greyed, for several seconds: the app asked the service for its status before starting it, which took
   3.7 s on the owner's Mac. Now the question closes as soon as you answer, and the start happens in the background.
-  Events shows "Starting the event service…" with a spinner until the service answers. Every screen that shows
-  whether the service runs updates when it does.
+  Events shows "Starting the event service…" with a spinner until the service answers, and "Stopping the event
+  service…" from the moment you switch it off until it has stopped. Every screen that shows whether the service runs
+  updates when that changes.
 - **A Judges section on Events.** It lists the event service's three kinds of judge, says where each sends what it
   reads, and shows whether each is off, on or unavailable, with the judges of each kind:
   - **Jev, by TypeSafe:** a hosted judge. The fields a rule names are sent to TypeSafe, with your TypeSafe API key.
