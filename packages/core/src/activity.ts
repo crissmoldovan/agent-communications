@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { access, constants, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { access, constants, open, readdir, readFile, rm, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -13,7 +13,7 @@ import {
 } from './activity-settings.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
-import { appendPrivateLine, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
+import { appendPrivateLine, ensurePrivateDir, FILE_MODE, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
 
 /**
  * The activity log (design 2026-10-25-activity, §4 with S1–S5): one line for every call an agent session makes that
@@ -641,6 +641,11 @@ export interface ActivityLogOptions {
 
 const FAILURE_FILE = 'activity-failure.json';
 const INDEX_DIR = '.index';
+/**
+ * Each day's server windows: one small line for each server process's window on that day — its key, parent and
+ * folder — so a CLI call finds the window it runs in without reading the day (`sessionOfAncestor`).
+ */
+const PARENTS_DIR = '.parents';
 const DEFAULT_SHOW_LIMIT = 1000;
 const ON_BY_DEFAULT: ActivitySettings = Object.freeze({
   record: 'on',
@@ -676,6 +681,9 @@ export class ActivityLog {
   #failureWrittenAt = 0;
   #warned = false;
   #prunedDay: string | null = null;
+  /** The days this process has made sure of a parents file for, and the windows it has noted there, by day. */
+  readonly #parentsReady = new Set<string>();
+  readonly #parentsNoted = new Set<string>();
 
   constructor(stateDir: string, options: ActivityLogOptions = {}) {
     this.directory = join(stateDir, 'activity');
@@ -703,6 +711,7 @@ export class ActivityLog {
     try {
       const line = activityLineOf(input, this.#now());
       await appendPrivateLine(join(this.directory, `${line.at.slice(0, 10)}.jsonl`), JSON.stringify(line));
+      await this.#noteParent(line);
       if (this.#failure !== null) {
         // Recording again: what this process recorded of its failure is no longer true.
         this.#failure = null;
@@ -736,6 +745,56 @@ export class ActivityLog {
     if (now.getTime() - this.#failureWrittenAt < 60_000) return;
     this.#failureWrittenAt = now.getTime();
     await writeFileAtomic(this.#failureFile, `${JSON.stringify(failure)}\n`).catch(() => undefined);
+  }
+
+  /**
+   * The day's parents file, made on a process's first line of the day — so a reader can tell a day with no window
+   * from one an earlier build wrote, with no index — and a grouped server's window noted in it once a day. Best
+   * effort: without it a CLI call reads the day itself.
+   */
+  async #noteParent(line: ActivityLine): Promise<void> {
+    const day = line.at.slice(0, 10);
+    const path = join(this.directory, PARENTS_DIR, `${day}.jsonl`);
+    try {
+      if (!this.#parentsReady.has(day)) {
+        await ensurePrivateDir(join(this.directory, PARENTS_DIR));
+        await (await open(path, 'a', FILE_MODE)).close();
+        this.#parentsReady.add(day);
+      }
+      const { session } = line;
+      if (session.surface !== 'mcp' || !session.grouped || session.parent === undefined) return;
+      const noted = `${day}\0${session.key}`;
+      if (this.#parentsNoted.has(noted)) return;
+      await appendPrivateLine(
+        path,
+        JSON.stringify({ key: session.key, parent: session.parent, folder: session.folder }),
+      );
+      this.#parentsNoted.add(noted);
+    } catch {
+      // The day is still read the old way.
+    }
+  }
+
+  /** The windows noted on `day`, or null when the day has no parents file (an earlier build wrote it, or none). */
+  async #parentsOf(day: string): Promise<{ key: string; parent: ActivityParent; folder: string | null }[] | null> {
+    let text: string;
+    try {
+      text = await readFile(join(this.directory, PARENTS_DIR, `${day}.jsonl`), 'utf8');
+    } catch {
+      return null;
+    }
+    return text.split('\n').flatMap((raw) => {
+      if (!raw) return [];
+      try {
+        const held = own<Record<string, unknown>>(JSON.parse(raw));
+        const parent = parentOf(held?.parent);
+        const key = held?.key;
+        if (typeof key !== 'string' || !SESSION_KEY.test(key) || parent === undefined) return [];
+        return [{ key, parent, folder: typeof held?.folder === 'string' ? held.folder : null }];
+      } catch {
+        return [];
+      }
+    });
   }
 
   /** The settings in force, read afresh; a reader that throws reads as `UNREADABLE` — off, and every day kept. */
@@ -796,6 +855,7 @@ export class ActivityLog {
       if (day >= cutoff) continue;
       await rm(join(this.directory, `${day}.jsonl`), { force: true });
       await rm(join(this.directory, INDEX_DIR, `${day}.json`), { force: true }).catch(() => undefined);
+      await rm(join(this.directory, PARENTS_DIR, `${day}.jsonl`), { force: true }).catch(() => undefined);
       deleted.push(day);
     }
     return { deleted };
@@ -918,19 +978,30 @@ export class ActivityLog {
   }
 
   /**
-   * The window a CLI call belongs to (S2): the session of a server process, in today's or yesterday's file, whose
-   * parent is one of `ancestors` — the nearest first. Null when none is.
+   * The window a CLI call belongs to (S2): the session of a server process, today or yesterday, whose parent is one of
+   * `ancestors` — the nearest first. Null when none is. Read from each day's parents file; a day with none — written
+   * by an earlier build — is read whole, as before.
    */
   async sessionOfAncestor(
     ancestors: readonly ActivityParent[],
   ): Promise<{ key: string; parent: ActivityParent; folder: string | null } | null> {
     const now = this.#now().getTime();
+    const noted: { key: string; parent: ActivityParent; folder: string | null }[] = [];
     const texts: string[] = [];
     for (const day of [isoDay(now), isoDay(now - DAY_MS)]) {
+      const parents = await this.#parentsOf(day);
+      if (parents !== null) {
+        noted.push(...parents);
+        continue;
+      }
       const text = await this.#text(day).catch(() => null);
       if (text !== null) texts.push(text);
     }
     for (const ancestor of ancestors) {
+      const found = noted.find(
+        (each) => each.parent.pid === ancestor.pid && each.parent.startedAt === ancestor.startedAt,
+      );
+      if (found !== undefined) return found;
       // In the order `parentOf` writes a parent's keys; the start is JSON, so its quotes cannot end it early.
       const needle = `"parent":{"pid":${ancestor.pid},"startedAt":${JSON.stringify(ancestor.startedAt)}`;
       for (const text of texts) {

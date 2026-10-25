@@ -1165,3 +1165,57 @@ test('a line is cut to 16 KiB: items go from the end first, the count stays, and
   await log.append(line({ session: session({ key }) }));
   assert.equal(rawLines(state)[2]?.truncated, undefined);
 });
+
+// ── A CLI call finds its window without reading whole days (0.29.0 review) ─────────────────────────────────────
+
+test('a CLI call finds its window from a small index of server parents, not by reading whole days', async () => {
+  const state = tempDir();
+  const log = new ActivityLog(state, { settings: ON });
+  const probe: ProcessProbe = async (pid) =>
+    ({ 900: CLAUDE, 950: { ppid: 900, startedAt: 'Sun Oct 25 09:30:00 2026', name: 'zsh' } })[pid as 900] ?? null;
+  const window = await sessionIdentity('mcp', undefined, {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin',
+    home: '/Users/jo',
+  });
+  assert.equal(window.grouped, true);
+  const now = new Date().toISOString();
+  for (let index = 0; index < 3; index += 1) await log.append(line({ at: now, session: window }));
+  const day = now.slice(0, 10);
+  const index = readFileSync(join(state, 'activity', '.parents', `${day}.jsonl`), 'utf8')
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(index.length, 1, 'one entry for the window, however many lines it writes');
+  if (process.platform !== 'win32')
+    assert.equal(statSync(join(state, 'activity', '.parents', `${day}.jsonl`)).mode & 0o777, 0o600);
+
+  // The day itself emptied: the index alone finds the window.
+  writeFileSync(join(state, 'activity', `${day}.jsonl`), '');
+  const cliOptions = {
+    pid: 2001,
+    ppid: 950,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+    log,
+  };
+  assert.equal((await sessionIdentity('cli', undefined, cliOptions)).key, window.key);
+
+  // A day an earlier build wrote, with no index, is still read the old way.
+  const older = tempDir();
+  dayFile(older, now, '0000000000000000');
+  const legacy = new ActivityLog(older, { settings: ON });
+  writeFileSync(join(older, 'activity', `${day}.jsonl`), `${JSON.stringify(line({ at: now, session: window }))}\n`);
+  assert.equal((await sessionIdentity('cli', undefined, { ...cliOptions, log: legacy })).key, window.key);
+
+  // Retention takes the index with its day.
+  const old = new Date(Date.now() - 40 * DAY_MS).toISOString();
+  await log.append(line({ at: old, session: window }));
+  assert.ok(readdirSync(join(state, 'activity', '.parents')).includes(`${old.slice(0, 10)}.jsonl`));
+  await log.prune(30);
+  assert.ok(!readdirSync(join(state, 'activity', '.parents')).includes(`${old.slice(0, 10)}.jsonl`));
+});
