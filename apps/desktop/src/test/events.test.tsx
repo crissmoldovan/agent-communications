@@ -3,10 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import daemonContract from '../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json';
 import { COPY } from '../copy.ts';
 import { POLL_MS } from '../data.tsx';
-import type { Call, CliResult, TerminalCommand } from '../ipc.ts';
+import type { Bridge, Call, CliResult, EventServiceState, TerminalCommand } from '../ipc.ts';
 import {
   cliKinds,
   createFakeBridge,
+  EVENT_SERVICE,
   EXAMPLE_INSTALLATION,
   type FakeBridge,
   type Fixture,
@@ -174,6 +175,237 @@ describe('Events', () => {
     expect(within(deliveryTable).getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
     expect(within(deliveryTable).getByText('</untrusted-content>')).toBeTruthy();
     expect(deliveryTable.querySelector('img')).toBeNull();
+  });
+});
+
+/*
+ * The event service the app runs (design D2, D4, D5, D6; plan P1, Task 3): its switch, where it stands, and what the
+ * window offers when it gave up, when a newer version is installed, or when it needs Full Disk Access. The app only
+ * shows its supervisor's state and asks it; every state here is one of the fake bridge's `EVENT_SERVICE` fixtures.
+ */
+describe('The event service', () => {
+  const SERVICE = 'Event service';
+  const SWITCH = 'Run the event service';
+
+  /** The Events screen's other parts quiet, and the supervisor in `state`, with any command replaced by `handlers`. */
+  function serviceBridge(state: EventServiceState, handlers: Partial<Bridge> = {}): FakeBridge {
+    return createFakeBridge(
+      { eventServiceState: async () => state, ...handlers },
+      { eventsRules: [], eventsDeliveries: [] },
+    );
+  }
+
+  /** The section once the supervisor's state is shown. */
+  async function shownService(): Promise<HTMLElement> {
+    const section = await screen.findByRole('region', { name: SERVICE });
+    await waitFor(() => expect(within(section).queryByRole('status', { name: COPY.loading })).toBeNull());
+    return section;
+  }
+
+  const commands = (bridge: FakeBridge, command: keyof Bridge) =>
+    bridge.calls.filter((call) => call.command === command);
+
+  it('the event service switch shows Running with its since and version, and off calls setEventService(false)', async () => {
+    const restartedAt = new Date(Date.now() - 2 * 60_000).toISOString();
+    const bridge = serviceBridge({ ...EVENT_SERVICE.running, restarts: 1, lastRestartAt: restartedAt });
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    const toggle = within(section).getByRole('switch', { name: SWITCH });
+    expect(toggle.getAttribute('aria-checked')).toBe('true');
+    expect(within(section).getByText('Running')).toBeTruthy();
+    expect(section.querySelector(`time[datetime="${EVENT_SERVICE.running.since}"]`)).not.toBeNull();
+    expect(within(section).getByText('0.27.0')).toBeTruthy();
+    // A restart is one quiet line, its time relative to now.
+    const minutesAgo = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(-2, 'minute');
+    expect(within(section).getByText('Restarted').textContent).toBe(`Restarted ${minutesAgo}`);
+    // Nothing else is said of a service that runs as it should.
+    expect(within(section).queryByRole('alert')).toBeNull();
+    expect(within(section).queryByRole('button')).toBeNull();
+
+    fireEvent.click(toggle);
+    await waitFor(() =>
+      expect(commands(bridge, 'setEventService')).toEqual([{ command: 'setEventService', args: false }]),
+    );
+    await waitFor(() =>
+      expect(within(region(SERVICE)).getByRole('switch', { name: SWITCH }).getAttribute('aria-checked')).toBe('false'),
+    );
+    expect(within(region(SERVICE)).getByText('Stopped')).toBeTruthy();
+    // The switch is the supervisor's: it runs no CLI change, and opens no terminal.
+    expect(cliKinds(bridge)).not.toContain('eventsPause');
+    expect(bridge.calls.map((call) => call.command)).not.toContain('openInTerminal');
+  });
+
+  it('a stop from outside shows "Stopped from outside at" and the switch off', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.running);
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByText('Running')).toBeTruthy();
+    // The supervisor says so when it finds the clean stop.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.stoppedFromOutside));
+    const line = await within(region(SERVICE)).findByText('Stopped from outside at');
+    expect(
+      line.querySelector(`time[datetime="${EVENT_SERVICE.stoppedFromOutside.stoppedFromOutsideAt}"]`),
+    ).not.toBeNull();
+    expect(within(region(SERVICE)).getByRole('switch', { name: SWITCH }).getAttribute('aria-checked')).toBe('false');
+    expect(within(region(SERVICE)).queryByText('Running')).toBeNull();
+  });
+
+  it('giving up shows the copy, the last log lines as plain text, and Try again calls eventServiceRetry', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.gaveUp);
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    const alert = within(section).getByRole('alert');
+    expect(
+      within(alert).getByText('The event service stopped 5 times in 10 minutes, so Agent Comms stopped restarting it.'),
+    ).toBeTruthy();
+    for (const line of EVENT_SERVICE.gaveUp.logTail) expect(within(alert).getByText(line), line).toBeTruthy();
+    // A line of the log is text, never markup.
+    expect(alert.querySelector('img')).toBeNull();
+
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(commands(bridge, 'eventServiceRetry')).toHaveLength(1));
+    await waitFor(() => expect(within(region(SERVICE)).queryByRole('alert')).toBeNull());
+    expect(within(region(SERVICE)).getByText('Starting…')).toBeTruthy();
+  });
+
+  it('an older adopted version offers Restart to use it', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.olderAdopted, {
+      restartEventService: async () => ({ ...EVENT_SERVICE.running, version: '0.27.0' }),
+    });
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByText('0.26.2')).toBeTruthy();
+    expect(within(section).getByText('Started from a terminal')).toBeTruthy();
+    expect(within(section).getByText('A newer event service is installed (0.27.0).')).toBeTruthy();
+    fireEvent.click(within(section).getByRole('button', { name: 'Restart to use it' }));
+    await waitFor(() => expect(commands(bridge, 'restartEventService')).toHaveLength(1));
+    await waitFor(() =>
+      expect(within(region(SERVICE)).queryByText('A newer event service is installed (0.27.0).')).toBeNull(),
+    );
+    expect(within(region(SERVICE)).queryByRole('button', { name: 'Restart to use it' })).toBeNull();
+    expect(within(region(SERVICE)).getByText('0.27.0')).toBeTruthy();
+  });
+
+  it('a service started from a terminal that went away is not restarted, and Start starts it (D4)', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.terminalGone);
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByText('Stopped')).toBeTruthy();
+    fireEvent.click(within(section).getByRole('button', { name: 'Start' }));
+    await waitFor(() =>
+      expect(commands(bridge, 'setEventService')).toEqual([{ command: 'setEventService', args: true }]),
+    );
+    expect(await within(region(SERVICE)).findByText('Running')).toBeTruthy();
+    expect(within(region(SERVICE)).queryByRole('button', { name: 'Start' })).toBeNull();
+  });
+
+  it('the first-start question shows once with Start and Not now, each calling answerFirstStart', async () => {
+    // It is the app's, not a screen's: it shows over Overview.
+    const bridge = serviceBridge(EVENT_SERVICE.firstStart);
+    const first = renderApp(bridge);
+    const dialog = await screen.findByRole('alertdialog', { name: 'Start the event service?' });
+    expect(
+      within(dialog).getByText(
+        'The event service has run on this Mac before. Starting it resumes whatever it was set to do.',
+      ),
+    ).toBeTruthy();
+    // The watchdog's next word, still asking, shows no second one.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.firstStart));
+    expect(screen.getAllByRole('alertdialog')).toHaveLength(1);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Start' }));
+    await waitFor(() =>
+      expect(commands(bridge, 'answerFirstStart')).toEqual([{ command: 'answerFirstStart', args: true }]),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    // Answered, it is never asked again, even by a word that left the question in.
+    await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.firstStart));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    expect(commands(bridge, 'answerFirstStart')).toHaveLength(1);
+    first.unmount();
+
+    const later = serviceBridge(EVENT_SERVICE.firstStart);
+    renderApp(later, { screen: 'events' });
+    const again = await screen.findByRole('alertdialog', { name: 'Start the event service?' });
+    fireEvent.click(within(again).getByRole('button', { name: 'Not now' }));
+    await waitFor(() =>
+      expect(commands(later, 'answerFirstStart')).toEqual([{ command: 'answerFirstStart', args: false }]),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    // Not now leaves the switch off.
+    expect(
+      within(await shownService())
+        .getByRole('switch', { name: SWITCH })
+        .getAttribute('aria-checked'),
+    ).toBe('false');
+    // A service that is not asking shows no question.
+    const quiet = serviceBridge(EVENT_SERVICE.running);
+    renderApp(quiet);
+    await screen.findByRole('heading', { level: 1, name: 'Overview' });
+    await waitFor(() => expect(quiet.calls.map((call) => call.command)).toContain('eventServiceState'));
+    expect(screen.queryByRole('alertdialog', { name: 'Start the event service?' })).toBeNull();
+  });
+
+  it('Full Disk Access missing shows the line and Open System Settings', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.fullDiskAccessMissing);
+    const first = renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByText('Events from WhatsApp need Full Disk Access for Agent Comms.')).toBeTruthy();
+    fireEvent.click(within(section).getByRole('button', { name: 'Open System Settings' }));
+    await waitFor(() => expect(commands(bridge, 'openFullDiskAccess')).toHaveLength(1));
+    first.unmount();
+    // Granted, or not needed, it says nothing of it.
+    for (const fullDiskAccess of ['granted', 'not-needed'] as const) {
+      const view = renderApp(serviceBridge({ ...EVENT_SERVICE.running, fullDiskAccess }), { screen: 'events' });
+      const shown = await shownService();
+      expect(within(shown).queryByText(/Full Disk Access/), fullDiskAccess).toBeNull();
+      expect(within(shown).queryByRole('button', { name: 'Open System Settings' }), fullDiskAccess).toBeNull();
+      view.unmount();
+    }
+  });
+
+  it('on Windows the switch is absent and the line says why', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.windows);
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    expect(within(section).getByText("The event service doesn't run on Windows yet.")).toBeTruthy();
+    expect(within(section).queryByRole('switch')).toBeNull();
+    expect(within(section).queryByRole('button')).toBeNull();
+  });
+
+  it('a state that cannot be read says why, and the rest of the screen is there', async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.running, {
+      eventServiceState: async () => {
+        throw { code: 'APP_NOT_BUILT', message: 'event_service_state is not built yet' };
+      },
+    });
+    const first = renderApp(bridge, { screen: 'events' });
+    const section = await screen.findByRole('region', { name: SERVICE });
+    expect(await within(section).findByText('event_service_state is not built yet')).toBeTruthy();
+    expect(within(section).queryByRole('switch')).toBeNull();
+    expect(await screen.findByRole('region', { name: 'Status' })).toBeTruthy();
+    first.unmount();
+    // A command that fails says why, and the switch stays as the supervisor last said.
+    const refusing = serviceBridge(EVENT_SERVICE.running, {
+      setEventService: async () => {
+        throw { code: 'APP_IO', message: 'the event service could not be stopped' };
+      },
+    });
+    renderApp(refusing, { screen: 'events' });
+    const shown = await shownService();
+    const toggle = within(shown).getByRole('switch', { name: SWITCH });
+    fireEvent.click(toggle);
+    expect(await within(shown).findByText('the event service could not be stopped')).toBeTruthy();
+    expect(within(shown).getByRole('switch', { name: SWITCH }).getAttribute('aria-checked')).toBe('true');
+  });
+
+  it('without the events launcher nothing of the event service is asked', async () => {
+    const bridge = createFakeBridge({
+      installation: async () => ({ ...EXAMPLE_INSTALLATION, present: ['core', 'gmail'] }),
+    });
+    renderApp(bridge, { screen: 'events' });
+    expect(await screen.findByText("The events service isn't installed.")).toBeTruthy();
+    expect(screen.queryByRole('region', { name: SERVICE })).toBeNull();
+    expect(bridge.calls.map((call) => call.command)).not.toContain('eventServiceState');
   });
 });
 

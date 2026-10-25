@@ -3,6 +3,7 @@
 pub mod allowlist;
 pub mod commands;
 pub mod deeplink;
+pub mod event_service;
 pub mod grammar;
 pub mod ipc;
 pub mod launchers;
@@ -28,8 +29,8 @@ pub struct AppState {
     pub prepared: Arc<terminal::Prepared>,
 }
 
-/// Starts the app: its plugins, its state, its fourteen commands, the main window (`window::build_main`), the tray, the
-/// deep links and the updater.
+/// Starts the app: its plugins, its state, its twenty-one commands, the main window (`window::build_main`), the tray,
+/// the deep links, the updater and the event service's supervisor (`event_service`).
 pub fn run() {
     let builder = tauri::Builder::default();
     // First, on Windows and Linux: a second launch hands its arguments, and any agentcomms:// link in them, to this
@@ -58,11 +59,14 @@ pub fn run() {
     #[cfg(not(target_os = "macos"))]
     let builder = builder.plugin(tauri_plugin_autostart::Builder::new().build());
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(window::app_menu);
+    let builder = builder
+        .menu(window::app_menu)
+        .on_menu_event(window::on_menu_event);
     builder
         .manage(AppState::default())
         .manage(updater::Updates::default())
         .manage(deeplink::DeepLinks::default())
+        .manage(event_service::EventService::default())
         .invoke_handler(tauri::generate_handler![
             commands::installation,
             commands::cli,
@@ -78,6 +82,13 @@ pub fn run() {
             commands::check_for_updates,
             commands::install_update,
             commands::take_deep_link,
+            commands::event_service_state,
+            commands::set_event_service,
+            commands::event_service_retry,
+            commands::restart_event_service,
+            commands::answer_first_start,
+            commands::open_full_disk_access,
+            commands::answer_quit,
         ])
         .on_window_event(window::on_window_event)
         .setup(|app| {
@@ -86,6 +97,7 @@ pub fn run() {
             tray::build(app.handle())?;
             deeplink::listen(app.handle());
             updater::start(app.handle());
+            event_service::start(app.handle());
             Ok(())
         })
         .build(tauri::generate_context!())

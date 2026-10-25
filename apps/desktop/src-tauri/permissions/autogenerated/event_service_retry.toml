@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-event-service-retry"
+description = "Enables the event_service_retry command without any pre-configured scope."
+commands.allow = ["event_service_retry"]
+
+[[permission]]
+identifier = "deny-event-service-retry"
+description = "Denies the event_service_retry command without any pre-configured scope."
+commands.deny = ["event_service_retry"]

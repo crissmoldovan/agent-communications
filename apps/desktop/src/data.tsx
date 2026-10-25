@@ -4,7 +4,14 @@ import { type ApprovalView, type DoctorProduct, type DoctorView, doctorView, typ
 import { supports } from './gates.ts';
 import { loadableOf } from './hooks/use-call.ts';
 import { usePoll } from './hooks/use-poll.ts';
-import { type Bridge, type Call, type DeepLinkTarget, errorMessage, type Installation } from './ipc.ts';
+import {
+  type Bridge,
+  type Call,
+  type DeepLinkTarget,
+  type EventServiceState,
+  errorMessage,
+  type Installation,
+} from './ipc.ts';
 
 /** Something a screen waits for: loading, there, or what went wrong. */
 export type Loadable<T> = { state: 'loading' } | { state: 'ready'; value: T } | { state: 'error'; message: string };
@@ -18,6 +25,13 @@ export interface AppData {
   /** `absent` when the events service has no launcher here, and nothing was asked. */
   events: Loadable<unknown> | 'absent';
   doctors: Partial<Record<DoctorProduct, Loadable<DoctorView>>>;
+  /**
+   * The event service as the app runs it, from its supervisor (D2): read once its launcher is here, then kept current
+   * by `event-service:changed`. `absent` when there is no launcher, and nothing was asked.
+   */
+  eventService: Loadable<EventServiceState> | 'absent';
+  /** Shows a state the supervisor answered a command with, over any read that started before it. */
+  showEventService(state: EventServiceState): void;
   /** The approval an `agentcomms://` link asked for, until the screen that showed it clears it. */
   deepLink: DeepLinkTarget | null;
   refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation'): Promise<void>;
@@ -80,7 +94,8 @@ function useVisible(bridge: Bridge): boolean {
 /**
  * Reads what the screens share: the installation first, and nothing else unless `launch/core` is there. Then, every
  * 15 seconds while the window is visible, and at once on focus or `data-changed`: the approvals waiting, the update
- * status when the CLI has it, and the events service's status when it is here. The doctors run once at start.
+ * status when the CLI has it, and the events service's status when it is here. The doctors run once at start. The
+ * event service the app runs is read once, and its supervisor says when it changes.
  */
 export function AppDataProvider({ children }: { children: ReactNode }) {
   const bridge = useBridge();
@@ -89,6 +104,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [updateStatus, setUpdateStatus] = useState<Loadable<UpdateStatus> | 'unsupported'>({ state: 'loading' });
   const [events, setEvents] = useState<Loadable<unknown> | 'absent'>({ state: 'loading' });
   const [doctors, setDoctors] = useState<Partial<Record<DoctorProduct, Loadable<DoctorView>>>>({});
+  const [eventService, setEventServiceState] = useState<Loadable<EventServiceState> | 'absent'>({ state: 'loading' });
   const [deepLink, setDeepLink] = useState<DeepLinkTarget | null>(null);
   const visible = useVisible(bridge);
 
@@ -107,6 +123,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const approvalsRead = useLatestOnly();
   const updateStatusRead = useLatestOnly();
   const eventsRead = useLatestOnly();
+  const eventServiceRead = useLatestOnly();
 
   const loadApprovals = useCallback(async () => {
     const latest = approvalsRead();
@@ -206,6 +223,40 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     void runDoctors(STARTUP_DOCTORS.filter((product) => installed.present.includes(product)));
   }, [installed, runDoctors]);
 
+  // The supervisor's word is the latest: a read that started before it is too late to count.
+  const showEventService = useCallback(
+    (state: EventServiceState) => {
+      eventServiceRead();
+      setEventServiceState({ state: 'ready', value: state });
+    },
+    [eventServiceRead],
+  );
+
+  // The event service's state, once its launcher is here. The watchdog says when it changes, so it is not polled.
+  useEffect(() => {
+    const latest = eventServiceRead();
+    if (!eventsPresent) {
+      setEventServiceState('absent');
+      return;
+    }
+    setEventServiceState({ state: 'loading' });
+    bridge
+      .eventServiceState()
+      .then((value) => {
+        if (latest()) setEventServiceState({ state: 'ready', value });
+      })
+      .catch((error: unknown) => {
+        if (latest()) setEventServiceState({ state: 'error', message: errorMessage(error) });
+      });
+  }, [bridge, eventsPresent, eventServiceRead]);
+
+  useEffect(() => {
+    const stop = bridge.on('event-service:changed', showEventService);
+    return () => {
+      void stop.then((unlisten) => unlisten()).catch(() => undefined);
+    };
+  }, [bridge, showEventService]);
+
   const clearDeepLink = useCallback(() => setDeepLink(null), []);
 
   const value = useMemo<AppData>(
@@ -215,12 +266,26 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       updateStatus,
       events,
       doctors,
+      eventService,
+      showEventService,
       deepLink,
       refresh,
       runDoctors,
       clearDeepLink,
     }),
-    [installation, approvals, updateStatus, events, doctors, deepLink, refresh, runDoctors, clearDeepLink],
+    [
+      installation,
+      approvals,
+      updateStatus,
+      events,
+      doctors,
+      eventService,
+      showEventService,
+      deepLink,
+      refresh,
+      runDoctors,
+      clearDeepLink,
+    ],
   );
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>;
 }

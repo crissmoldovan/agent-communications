@@ -1,5 +1,6 @@
 //! The tray (desktop design DA2): its icon counts the approvals waiting, and its menu opens the window, pauses update
-//! notices for a day, ends every standing approval, checks for an update to the app, and quits.
+//! notices for a day, ends every standing approval, checks for an update to the app, and quits — asking first whether
+//! to keep the event service running, while one the app started runs (0.27.0 P3).
 //!
 //! The count is core's `approvals list --state pending`, run through the allow-list every 60 seconds (DA4), and again
 //! whenever the window runs it. It shows beside the icon on macOS and Linux, and in the tooltip everywhere: Windows
@@ -7,13 +8,13 @@
 
 use crate::allowlist::{Call, PauseDays};
 use crate::commands::context;
+use crate::event_service::{self, QuitRoute};
 use crate::ipc::CliResult;
 use crate::launchers::discover;
 use crate::runner::run;
 use crate::version::at_least;
 use crate::{updater, window};
 use serde_json::Value;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -221,9 +222,11 @@ fn on_menu(app: &AppHandle, id: &str) {
                 updater::check(&app, false).await;
             });
         }
+        // Asks first while a service the app started runs (P3).
         TrayAction::Quit => {
-            window::QUITTING.store(true, Ordering::SeqCst);
-            app.exit(0);
+            if event_service::on_quit(app) == QuitRoute::Quit {
+                event_service::quit(app);
+            }
         }
     }
 }
@@ -232,6 +235,20 @@ fn on_menu(app: &AppHandle, id: &str) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Quit goes through the event service's question (P3): the tray never exits past it.
+    #[test]
+    fn quit_asks_the_event_service_first() {
+        let source = include_str!("tray.rs");
+        let code = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        let arm = &code[code.find("TrayAction::Quit => {").expect("the Quit arm")..];
+        let arm = &arm[..arm.find("\n        }\n").expect("its end")];
+        assert!(
+            arm.contains("event_service::on_quit(app) == QuitRoute::Quit"),
+            "{arm}"
+        );
+        assert!(!arm.contains("app.exit("), "{arm}");
+    }
 
     #[test]
     fn tooltip_counts_approvals() {

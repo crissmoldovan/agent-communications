@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-event-service-state"
+description = "Enables the event_service_state command without any pre-configured scope."
+commands.allow = ["event_service_state"]
+
+[[permission]]
+identifier = "deny-event-service-state"
+description = "Denies the event_service_state command without any pre-configured scope."
+commands.deny = ["event_service_state"]

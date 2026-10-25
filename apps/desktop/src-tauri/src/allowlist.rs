@@ -199,6 +199,9 @@ pub enum Call {
     EventsRules {},
     /// The events service's `deliveries list`.
     EventsDeliveries {},
+    /// The events service's `stop`: a clean stop of its owner, as the switch's off and Quit's Stop it run it (0.27.0
+    /// D2). It takes no argument.
+    EventsStop {},
     /// The events service's `judge model status` (E2): the Laya judge's state, bytes and reason codes, read-only. It
     /// takes no argument.
     EventsJudgeModelStatus {},
@@ -377,6 +380,7 @@ impl Call {
             Call::EventsResume {} => events(&["resume"]),
             Call::EventsRules {} => events(&["rules", "list"]),
             Call::EventsDeliveries {} => events(&["deliveries", "list"]),
+            Call::EventsStop {} => events(&["stop"]),
             Call::EventsJudgeModelStatus { .. } => events(&["judge", "model", "status"]),
             Call::EventsJudgeKindDisable { .. } => events(&["judge", "kind", "disable", "laya"]),
         })
@@ -413,6 +417,13 @@ impl Call {
             _ => None,
         }
     }
+}
+
+/// The event service itself, as the app starts it (0.27.0 D2): `<data>/launch/events-daemon run` with the pins, and
+/// without `--json`, since it prints nothing to read. It is no `Call`: the window cannot ask for it, and `runner::run`
+/// would stop it at its timeout. Only `event_service` starts it, detached.
+pub fn service_run() -> Words {
+    events(&["run"])
 }
 
 /// One of every call the allow-list knows, with the JSON the UI sends for it: the rows of the plan's table.
@@ -461,6 +472,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsResume" }),
         json!({ "kind": "eventsRules" }),
         json!({ "kind": "eventsDeliveries" }),
+        json!({ "kind": "eventsStop" }),
         json!({ "kind": "eventsJudgeModelStatus" }),
         json!({ "kind": "eventsJudgeKindDisable" }),
     ];
@@ -923,6 +935,15 @@ mod tests {
                 thirty,
             ),
             (
+                json!({"kind":"eventsStop"}),
+                EventsDaemon,
+                &["stop"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
                 json!({"kind":"eventsJudgeModelStatus"}),
                 EventsDaemon,
                 &["judge", "model", "status"],
@@ -1183,6 +1204,52 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn events_stop_takes_no_argument_and_the_service_runs_only_from_rust() {
+        let stop = call(json!({ "kind": "eventsStop" }))
+            .words()
+            .expect("words");
+        assert_eq!(stop.product, Product::EventsDaemon);
+        assert_eq!(stop.words, ["stop"]);
+        assert_eq!(stop.shape, Shape::Bare);
+        assert!(stop.pins);
+        assert!(!call(json!({ "kind": "eventsStop" })).prepares_change());
+        assert_eq!(call(json!({ "kind": "eventsStop" })).needs(), None);
+        for bad in [
+            json!({ "kind": "eventsStop", "force": true }),
+            json!({ "kind": "eventsStop", "pid": 4242 }),
+            json!({ "kind": "eventsStop", "args": ["--signal"] }),
+            // The service itself is started by the app alone: the window has no call for it.
+            json!({ "kind": "eventsRun" }),
+            json!({ "kind": "run" }),
+        ] {
+            refused(bad);
+        }
+        // `run`: the launcher, `run`, then the four pins, without `--json`; the same pins and launcher as every call.
+        let run = service_run();
+        assert_eq!(run.product, Product::EventsDaemon);
+        assert_eq!(run.words, ["run"]);
+        assert!(run.pins);
+        assert!(run.quiet_updates);
+        let folders = crate::paths::Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let launcher = "/home/example/.local/share/agent-communications/launch/events-daemon";
+        let program = crate::launchers::Program {
+            program: launcher.into(),
+            leading: vec![],
+        };
+        let mut expected = vec![launcher.to_string(), "run".into()];
+        expected.extend(folders.pins());
+        assert_eq!(
+            crate::runner::argv(&run, &program, &folders, false),
+            expected
+        );
     }
 
     #[test]

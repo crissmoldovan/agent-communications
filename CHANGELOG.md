@@ -3,6 +3,48 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.27.0
+
+**The desktop app, Agent Comms, now runs the event service for you, and updates itself.** Until now the event service
+ran only while `agent-events run` held a terminal open, and every desktop release had to be installed by hand.
+
+**The event service, run by the app** (`desktop-v0.27.0`, macOS and Linux):
+- **On by default.** The Events screen has "Run the event service", and the app starts the service in the background
+  through this installation's launcher. A service already running from a terminal is used as it is, never started
+  twice. The service still collects nothing until you approve a rule at your terminal.
+- **It outlives the app.** Quitting asks once, in the window, "Keep the event service running?", with **Keep running**
+  (the default), **Stop it** and "Remember my answer". It starts at login when the app does.
+- **A crash is restarted; a stop is not.** If a service the app started crashes, the app starts it again after 1 s,
+  5 s, then 30 s, and shows "Restarted 2 min ago". After 5 failed starts in 10 minutes it stops trying, and Events
+  shows the last lines of `service.log` with **Try again**. A service stopped on purpose (`agent-events stop`, the
+  `events_stop` tool, or the switch) stays stopped, and Events says "Stopped from outside at <time>". A logout, a
+  restart or a `kill` is not a stop on purpose: the service comes back with the app.
+- **A new version takes over.** When the background update installs a newer event service, the app moves a service
+  it started onto it within a minute. A service started from a terminal gets **Restart to use it** instead.
+- **The first start after the upgrade asks** "Start the event service?" if the service has run on this Mac before,
+  because it resumes whatever it was set to do. **Not now** leaves it off until you switch it on. On a fresh Mac it
+  starts without asking.
+- **WhatsApp needs Full Disk Access for Agent Comms.** macOS counts the service as the app's, so the access Terminal
+  had no longer covers it. Events says so, with **Open System Settings**, and every other source keeps running.
+- **Not on Windows yet:** the switch is absent there, as the service refuses to run on Windows.
+- **What doesn't change:** the app still approves nothing. Rules, enable-all and judges are approved at your terminal,
+  the service owns its database, and Laya stays off. The service's log, `<state>/events/service.log`, stays under
+  1 MB.
+
+**The app updates itself on macOS** from `desktop-v0.27.0`. It checks a minute after it starts, then daily, and at
+once from Check for Updates… in the tray. A newer release shows as a dot on Settings and in the tray menu, never a
+pop-up, and installs only when you choose Install and restart, after its signature is checked. Install
+`desktop-v0.27.0` over an older copy by hand, once; the copies before it have their updater off. The Windows and Linux
+files are still built by CI without the updater key, so theirs stays off: install a newer release over them.
+
+**`@agentcomms/events-daemon`:** a clean stop now writes `last-stop.json` beside the event database, with the owner's
+PID, the time, and whether it was asked to stop or got a signal. Whatever runs the service can then tell a stop from a
+crash, and a requested stop from a logout. Nothing else about `agent-events`
+changes, and nothing is needed from you.
+
+This release is not a security fix: 0.26.2's declaration ends with it, so the background update treats 0.27.0 as an
+ordinary release.
+
 ## 0.26.2
 
 **Security fix.** The libraries that verify every update now come from sigstore-js's 3.x line: `@sigstore/verify`

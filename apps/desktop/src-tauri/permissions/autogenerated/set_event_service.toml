@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-event-service"
+description = "Enables the set_event_service command without any pre-configured scope."
+commands.allow = ["set_event_service"]
+
+[[permission]]
+identifier = "deny-set-event-service"
+description = "Denies the set_event_service command without any pre-configured scope."
+commands.deny = ["set_event_service"]

@@ -1,18 +1,24 @@
-import { Button, DescriptionList, EmptyState, Panel, Table } from '@cueplusplus/ui';
+import { Button, DescriptionList, EmptyState, Row as Line, Panel, Switch, Table } from '@cueplusplus/ui';
 import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { SectionPanel } from '../components/SectionPanel.tsx';
 import { TerminalResult } from '../components/TerminalResult.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
-import { When } from '../components/When.tsx';
+import { Ago, When } from '../components/When.tsx';
 import { COPY, needsLine } from '../copy.ts';
 import { useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
-import { type Call, errorMessage, type TerminalOutcome } from '../ipc.ts';
+import {
+  type Call,
+  type EventServiceState,
+  type EventServiceStatus,
+  errorMessage,
+  type TerminalOutcome,
+} from '../ipc.ts';
 import { ScreenFrame } from './Screen.tsx';
 
 /*
@@ -235,6 +241,200 @@ function Status() {
             </p>
           )}
         </div>
+      )}
+    </SectionPanel>
+  );
+}
+
+/*
+ * The event service the app runs (design D2, D4, D5, D6). Its supervisor, in Rust, starts, adopts, restarts and stops
+ * it; this section shows what the supervisor says, and asks it. The switch, Try again and Restart to use it are the
+ * supervisor's commands: nothing here approves anything, and nothing reads the event database.
+ */
+
+const SERVICE_TITLE = 'Event service';
+
+/** The section's words, as the plan's Global Constraints give them. */
+export const SERVICE_COPY = {
+  switch: 'Run the event service',
+  windows: "The event service doesn't run on Windows yet.",
+  restarted: 'Restarted',
+  stoppedFromOutside: 'Stopped from outside at',
+  gaveUp: 'The event service stopped 5 times in 10 minutes, so Agent Comms stopped restarting it.',
+  tryAgain: 'Try again',
+  restartToUse: 'Restart to use it',
+  fullDiskAccess: 'Events from WhatsApp need Full Disk Access for Agent Comms.',
+  openSystemSettings: 'Open System Settings',
+} as const;
+
+/** `A newer event service is installed (<version>).` */
+export function newerServiceLine(version: string): string {
+  return `A newer event service is installed (${version}).`;
+}
+
+/** Where the service stands, in a word. Giving up is said in full beneath it. */
+const SERVICE_WORDS: Readonly<Record<EventServiceStatus, string>> = {
+  unavailable: 'Not available',
+  stopped: 'Stopped',
+  starting: 'Starting…',
+  running: 'Running',
+  gaveUp: 'Stopped',
+};
+
+/** Asks the supervisor something; what it answers with is the state shown next. */
+type Ask = (command: () => Promise<EventServiceState | null>) => Promise<void>;
+
+/** A line, and the one button that acts on it. */
+function Offer({ line, tone, action }: { line: string; tone: 'fg' | 'warn'; action: ReactNode }) {
+  return (
+    <div className="flex flex-wrap items-center gap-(--cue-space-3)">
+      <p className={tone === 'warn' ? 'text-warn' : 'text-fg'}>{line}</p>
+      {action}
+    </div>
+  );
+}
+
+/** The state, as its supervisor sent it: the switch, where it stands, and what it offers. */
+function ServiceView({ state, busy, ask }: { state: EventServiceState; busy: boolean; ask: Ask }) {
+  const bridge = useBridge();
+  if (!state.available) return <p className="text-fg-muted">{SERVICE_COPY.windows}</p>;
+  const running = state.status === 'running';
+  return (
+    <>
+      <Switch
+        label={SERVICE_COPY.switch}
+        checked={state.wanted}
+        disabled={busy}
+        onCheckedChange={(on) => void ask(() => bridge.setEventService(on))}
+      />
+      <div>
+        <Line>
+          <span className="text-fg">{SERVICE_WORDS[state.status]}</span>
+          {running && state.since !== null ? (
+            <span className="text-fg-muted">
+              since <When at={state.since} />
+            </span>
+          ) : null}
+        </Line>
+        {running && state.version !== null ? (
+          <Line>
+            <span className="text-fg-muted">Version</span>
+            <span className="text-fg">{state.version}</span>
+          </Line>
+        ) : null}
+        {running && state.startedBy === 'terminal' ? (
+          <Line>
+            <span className="text-fg-muted">Started from a terminal</span>
+          </Line>
+        ) : null}
+        {state.lastRestartAt === null ? null : (
+          <Line>
+            <span className="text-fg-muted">
+              {SERVICE_COPY.restarted} <Ago at={state.lastRestartAt} />
+            </span>
+          </Line>
+        )}
+        {state.stoppedFromOutsideAt === null ? null : (
+          <Line>
+            <span className="text-fg-muted">
+              {SERVICE_COPY.stoppedFromOutside} <When at={state.stoppedFromOutsideAt} />
+            </span>
+          </Line>
+        )}
+      </div>
+      {state.status === 'gaveUp' ? (
+        <div role="alert" className="flex flex-col gap-(--cue-space-2)">
+          <p className="text-danger">{SERVICE_COPY.gaveUp}</p>
+          {state.logTail.length === 0 ? null : (
+            <div className="flex flex-col font-mono text-fg-muted">
+              {state.logTail.map((line, index) => (
+                // The lines come in the log's order and are replaced whole; their place is what tells two apart.
+                // biome-ignore lint/suspicious/noArrayIndexKey: a state's lines are never reordered in place
+                <div key={index}>
+                  <UntrustedText text={line} />
+                </div>
+              ))}
+            </div>
+          )}
+          <div>
+            <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.eventServiceRetry())}>
+              {SERVICE_COPY.tryAgain}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      {running && state.newerVersion !== null ? (
+        <Offer
+          line={newerServiceLine(state.newerVersion)}
+          tone="fg"
+          action={
+            <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.restartEventService())}>
+              {SERVICE_COPY.restartToUse}
+            </Button>
+          }
+        />
+      ) : null}
+      {/* Wanted, and stopped: one started from a terminal went away, and is not the app's to restart (D4). */}
+      {state.wanted && state.status === 'stopped' && !state.firstStartQuestion ? (
+        <div>
+          <Button size="sm" disabled={busy} onClick={() => void ask(() => bridge.setEventService(true))}>
+            Start
+          </Button>
+        </div>
+      ) : null}
+      {state.fullDiskAccess === 'missing' ? (
+        <Offer
+          line={SERVICE_COPY.fullDiskAccess}
+          tone="warn"
+          action={
+            <Button
+              size="sm"
+              onClick={() =>
+                void ask(async () => {
+                  await bridge.openFullDiskAccess();
+                  return null;
+                })
+              }
+            >
+              {SERVICE_COPY.openSystemSettings}
+            </Button>
+          }
+        />
+      ) : null}
+    </>
+  );
+}
+
+/**
+ * The event service's section: what its supervisor last said, read once and then sent on each change (`data.tsx`),
+ * and what each command answered with. A command that fails says why, and the state stays as the supervisor last said.
+ */
+function Service() {
+  const { eventService, showEventService } = useAppData();
+  const [busy, setBusy] = useState(false);
+  const [problem, setProblem] = useState<string | null>(null);
+
+  const ask: Ask = async (command) => {
+    setBusy(true);
+    setProblem(null);
+    try {
+      const next = await command();
+      if (next !== null) showEventService(next);
+    } catch (error) {
+      setProblem(errorMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (eventService === 'absent') return null;
+  return (
+    <SectionPanel title={SERVICE_TITLE}>
+      <ScreenState value={eventService}>{(state) => <ServiceView state={state} busy={busy} ask={ask} />}</ScreenState>
+      {problem === null ? null : (
+        <p role="alert" className="text-danger">
+          <UntrustedText text={problem} />
+        </p>
       )}
     </SectionPanel>
   );
@@ -592,9 +792,9 @@ function Laya() {
 }
 
 /**
- * The events service (DA5.6), mostly read-only: its status with Pause and Resume, its rules, its recent deliveries,
- * and Laya's state with Enable (in the terminal) and Disable. Everything else stays in its CLI and MCP, which carry its
- * secret-handling rules. Nothing here runs unless its launcher is installed.
+ * The events service (DA5.6), mostly read-only: the app's switch for running it (D2), its status with Pause and
+ * Resume, its rules, its recent deliveries, and Laya's state with Enable (in the terminal) and Disable. Everything else
+ * stays in its CLI and MCP, which carry its secret-handling rules. Nothing here runs unless its launcher is installed.
  */
 export function Events() {
   const { installation } = useAppData();
@@ -603,6 +803,7 @@ export function Events() {
     <ScreenFrame title="Events">
       {present ? (
         <>
+          <Service />
           <Status />
           <Laya />
           <Rules />

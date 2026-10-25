@@ -8,7 +8,10 @@ import { prepaintSource } from '../theme.ts';
 const APP = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string): string => readFileSync(`${APP}${path}`, 'utf8');
 
-/** The fourteen commands the app's Rust side answers (plan, Global Constraints), each granted as `allow-<name>`. */
+/**
+ * The twenty-one commands the app's Rust side answers, each granted as `allow-<name>`: Phase C's fourteen, and the
+ * event service's seven (desktop 0.27.0).
+ */
 const COMMANDS = [
   'installation',
   'cli',
@@ -24,6 +27,13 @@ const COMMANDS = [
   'check_for_updates',
   'install_update',
   'take_deep_link',
+  'event_service_state',
+  'set_event_service',
+  'event_service_retry',
+  'restart_event_service',
+  'answer_first_start',
+  'open_full_disk_access',
+  'answer_quit',
 ];
 
 /** Phase C's no-egress policy, with the one inline script — the pre-paint script — pinned by its hash (DA7, DA14). */
@@ -78,7 +88,7 @@ describe('the content policy', () => {
     expect(html).not.toMatch(/https?:\/\//);
   });
 
-  it('capabilities grant only events, dragging and the fourteen commands', () => {
+  it('capabilities grant only events, dragging and the twenty-one commands', () => {
     const capability = JSON.parse(read('src-tauri/capabilities/default.json'));
     expect(capability.windows).toEqual(['main']);
     expect([...capability.permissions].sort()).toEqual(

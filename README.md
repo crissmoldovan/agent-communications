@@ -156,6 +156,23 @@ policies, label style and what agents may do there; the approvals waiting for yo
 rules and the standing approvals; updates; the local events service; and every doctor check, with its fix to copy.
 The tray shows how many approvals wait, and closing the window hides it there.
 
+**From 0.27.0 it also runs the event service** (`agent-events run`), so it no longer needs a terminal left open.
+- **On by default,** with "Run the event service" on the Events screen to switch it off. The service collects nothing
+  until you approve a rule at the terminal, so an idle one costs little.
+- **It survives the app.** The service keeps running when the app quits, unless you choose **Stop it** when asked.
+  It starts at login when the app does.
+- **After a crash, the app restarts it,** waiting 1 s, 5 s, then 30 s between tries. After 5 failed starts in 10
+  minutes it stops trying, and Events shows the last lines of the log with **Try again**. A service you stop yourself
+  (`agent-events stop`, or switching it off) stays stopped; a logout, a restart or a `kill` doesn't count, and the
+  service comes back with the app. A service started from a terminal is used as it is, and never restarted by the app.
+- **A new version takes over within a minute** of the background update installing it.
+- **The first start after the upgrade asks first** ("Start the event service?") if the service has run on this Mac
+  before, since it resumes whatever it was set to do.
+- **WhatsApp events need Full Disk Access for Agent Comms.** macOS counts the service as the app's, so the access
+  Terminal had is not enough. Events says so, and opens that pane of System Settings for you. Other sources keep
+  running without it.
+- **Not on Windows yet:** the service doesn't run there, and the switch is absent.
+
 - **What it changes itself:** only what takes something away, which applies at once from the CLI too — revoking an
   approval, a rule that narrows what agents may do, ending a standing approval, pausing update notices.
 - **What it sends to Terminal:** everything that needs your approval. The app shows the full preview, and **Approve
@@ -178,11 +195,11 @@ ship with, on [the Releases page](https://github.com/crissmoldovan/agent-communi
 never marked Latest — that is always the CLI's — so look for the newest `desktop-v` one.
 
 - **macOS:** the `.dmg`. Open it and drag Agent Comms to Applications. The macOS build is signed with a Developer ID
-  and notarised only when the owner builds and publishes the release on their Mac. When that release carries the
-  updater, its copy looks for later signed releases itself, once a day and from Check for Updates… in the tray, and
-  installs one when you choose Install and restart in Settings, after checking its signature. A release published
-  before the updater key was set up says so, and its copy's Settings say its updater is off: install a newer release
-  over it.
+  and notarised only when the owner builds and publishes the release on their Mac. **From `desktop-v0.27.0` it
+  updates itself:** it looks for a later signed release a minute after it starts and then once a day, and at once
+  from Check for Updates… in the tray. A newer release shows as a dot on Settings and in the tray menu, never a
+  pop-up, and installs only when you choose Install and restart in Settings, after its signature is checked. Copies
+  before 0.27.0 have their updater off: install `desktop-v0.27.0` over them by hand, once.
 - **Windows:** the `.exe`, which installs for your user alone. It is unsigned, so SmartScreen warns before it runs.
 - **Linux:** the `.AppImage` (make it executable, then run it) or the `.deb` (`sudo apt install ./` followed by its
   file name). Both are unsigned. The tray needs `libayatana-appindicator3-1`, which the `.deb` installs.
