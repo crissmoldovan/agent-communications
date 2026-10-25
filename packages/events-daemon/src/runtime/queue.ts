@@ -105,6 +105,35 @@ export interface QueueClearResultV1 {
   readonly cleared: number;
 }
 
+/**
+ * What an agent window may see of the queue over MCP (routing design B3, B4): every item outside a lane, and the items
+ * of the one lane it is bound to (`lane`, null when it is bound to none) that arrived, and were appended, after it was
+ * bound (`since`). The person — the CLI and the app — passes no scope and sees everything.
+ */
+export interface QueueScope {
+  readonly lane: string | null;
+  readonly since: number;
+}
+
+/** The lane an item is in: its exact target version's, as the person approved it (B2). Null outside a lane. */
+const ITEM_LANE = `(SELECT json_extract(tv.document, '$.lane.name') FROM target_versions tv
+  WHERE tv.target_id = qi.target_id AND tv.version = qi.target_version)`;
+
+function scopeClause(scope: QueueScope | undefined): { readonly sql: string; readonly values: Array<string | number> } {
+  if (scope === undefined) return { sql: '', values: [] };
+  return {
+    sql: `(${ITEM_LANE} IS NULL OR (${ITEM_LANE} = ? AND qi.arrived_at > ? AND qi.appended_at > ?))`,
+    values: [scope.lane ?? '', scope.since, scope.since],
+  };
+}
+
+/** An open lane item a wake may name (B3): in the lane, after the binding, with its content still kept. */
+export interface LaneWakeRow {
+  readonly id: string;
+  readonly ruleId: string;
+  readonly channel: QueueChannel;
+}
+
 export interface QueueQuery {
   readonly state: QueueStateFilter;
   readonly ruleId?: string;
@@ -283,27 +312,36 @@ export class QueueStore {
     return { item };
   }
 
-  /** `queue items`: the content-free list an agent may read through MCP (Q5) — never a sender, subject, text or link. */
-  async items(args: Readonly<Record<string, unknown>> = {}): Promise<QueueItemsResultV1> {
+  /**
+   * `queue items`: the content-free list an agent may read through MCP (Q5) — never a sender, subject, text or link.
+   * An MCP caller's `scope` leaves out every lane item it is not bound to (routing B4).
+   */
+  async items(args: Readonly<Record<string, unknown>> = {}, scope?: QueueScope): Promise<QueueItemsResultV1> {
     const query = parseQueueQuery(args, this.#now(), { since: false });
     this.#expiry.sweep();
-    const rows = this.#rows(query);
+    const rows = this.#rows(query, scope);
     const config = (await this.#config.load()) as AccountNames;
     return { items: rows.slice(0, query.limit).map((row) => summary(row, config)), more: rows.length > query.limit };
   }
 
-  /** `queue counts`: the open, done and dismissed totals and each rule's open count, for a badge (content-free). */
-  counts(): QueueCountsResultV1 {
+  /**
+   * `queue counts`: the open, done and dismissed totals and each rule's open count, for a badge (content-free). An MCP
+   * caller's `scope` counts only what it may see (routing B4).
+   */
+  counts(scope?: QueueScope): QueueCountsResultV1 {
     this.#expiry.sweep();
+    const visible = scopeClause(scope);
+    const where = visible.sql === '' ? '' : `WHERE ${visible.sql}`;
     const totals = this.#store.database
-      .prepare('SELECT state, COUNT(*) AS count FROM queue_items GROUP BY state')
-      .all() as Array<{ state: QueueState; count: number }>;
+      .prepare(`SELECT qi.state AS state, COUNT(*) AS count FROM queue_items qi ${where} GROUP BY qi.state`)
+      .all(...visible.values) as Array<{ state: QueueState; count: number }>;
     // Every rule with items, and every active rule with a queue target even before its first match, so a new
     // queue rule is listed with none open rather than looking as if nothing sent to the queue.
     const byRule = this.#store.database
       .prepare(
         `SELECT rule_id, SUM(open) AS open FROM (
-           SELECT rule_id, CASE WHEN state = 'open' THEN 1 ELSE 0 END AS open FROM queue_items
+           SELECT qi.rule_id AS rule_id, CASE WHEN qi.state = 'open' THEN 1 ELSE 0 END AS open
+             FROM queue_items qi ${where}
            UNION ALL
            SELECT rule.rule_id, 0 AS open
              FROM active_versions AS pointer
@@ -315,7 +353,7 @@ export class QueueStore {
               )
          ) GROUP BY rule_id ORDER BY rule_id`,
       )
-      .all() as Array<{ rule_id: string; open: number }>;
+      .all(...visible.values) as Array<{ rule_id: string; open: number }>;
     const total = (state: QueueState) => totals.find((row) => row.state === state)?.count ?? 0;
     return {
       open: total('open'),
@@ -325,16 +363,60 @@ export class QueueStore {
     };
   }
 
-  done(id: unknown): QueueStateChangeResultV1 {
-    return this.#setState(id, 'done');
+  done(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
+    return this.#setState(id, 'done', scope);
   }
 
-  dismiss(id: unknown): QueueStateChangeResultV1 {
-    return this.#setState(id, 'dismissed');
+  dismiss(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
+    return this.#setState(id, 'dismissed', scope);
   }
 
-  reopen(id: unknown): QueueStateChangeResultV1 {
-    return this.#setState(id, 'open');
+  reopen(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
+    return this.#setState(id, 'open', scope);
+  }
+
+  /**
+   * `events_lane_item` (routing B2, B3): one item of `lane` that arrived, and was appended, after `since`, with its
+   * content as `queue show` gives it — read only for the window bound to that lane. Anything else is no such item.
+   */
+  async laneItem(id: unknown, lane: string, since: number): Promise<{ readonly item: QueueItemV1 }> {
+    const itemId = requireQueueItemId(id);
+    this.#expiry.sweep();
+    const inLane = this.#store.database
+      .prepare(
+        `SELECT 1 AS found FROM queue_items qi
+          WHERE qi.id = ? AND ${ITEM_LANE} = ? AND qi.arrived_at > ? AND qi.appended_at > ?`,
+      )
+      .get(itemId, lane, since, since);
+    if (inLane === undefined) return noSuchItem();
+    return this.show(itemId);
+  }
+
+  /** The open items of `lane` a wake may name (B3), oldest first: after `since`, with their content still kept. */
+  laneWakeRows(lane: string, since: number): readonly LaneWakeRow[] {
+    this.#expiry.sweep();
+    return (
+      this.#store.database
+        .prepare(
+          `SELECT qi.id AS id, qi.rule_id AS rule_id, qi.channel AS channel FROM queue_items qi
+            WHERE qi.state = 'open' AND qi.encrypted_record IS NOT NULL AND qi.expires_at > ?
+              AND ${ITEM_LANE} = ? AND qi.arrived_at > ? AND qi.appended_at > ?
+            ORDER BY qi.appended_at, qi.id LIMIT 500`,
+        )
+        .all(this.#now(), lane, since, since) as Array<{ id: string; rule_id: string; channel: QueueChannel }>
+    ).map((row) => ({ id: row.id, ruleId: row.rule_id, channel: row.channel }));
+  }
+
+  /** How many open items each lane holds, for the person's `lane list`. */
+  openByLane(): ReadonlyMap<string, number> {
+    this.#expiry.sweep();
+    const rows = this.#store.database
+      .prepare(
+        `SELECT lane, COUNT(*) AS open FROM (SELECT ${ITEM_LANE} AS lane FROM queue_items qi WHERE qi.state = 'open')
+          WHERE lane IS NOT NULL GROUP BY lane`,
+      )
+      .all() as Array<{ lane: string; open: number }>;
+    return new Map(rows.map((row) => [row.lane, row.open]));
   }
 
   /** `queue clear`: purges done and dismissed items now, content and row (§4.3). Open items are untouched. */
@@ -347,13 +429,18 @@ export class QueueStore {
   }
 
   /** Done, dismiss and reopen change only the person's own list; they tighten and loosen nothing (§4.4, DA10). */
-  #setState(id: unknown, state: QueueState): QueueStateChangeResultV1 {
+  #setState(id: unknown, state: QueueState, scope?: QueueScope): QueueStateChangeResultV1 {
     const itemId = requireQueueItemId(id);
     const now = this.#now();
+    const visible = scopeClause(scope);
     return this.#store.immediate(() => {
       const current = this.#store.database
-        .prepare('SELECT state, state_at FROM queue_items WHERE id = ?')
-        .get(itemId) as { state: QueueState; state_at: number } | undefined;
+        .prepare(
+          `SELECT qi.state AS state, qi.state_at AS state_at FROM queue_items qi WHERE qi.id = ?${
+            visible.sql === '' ? '' : ` AND ${visible.sql}`
+          }`,
+        )
+        .get(itemId, ...visible.values) as { state: QueueState; state_at: number } | undefined;
       if (current === undefined) return noSuchItem();
       if (current.state === state) return { item: { id: itemId, state, stateAt: iso(current.state_at) } };
       this.#store.database
@@ -363,9 +450,14 @@ export class QueueStore {
     });
   }
 
-  #rows(query: QueueQuery): readonly QueueRow[] {
+  #rows(query: QueueQuery, scope?: QueueScope): readonly QueueRow[] {
     const where: string[] = [];
     const values: Array<string | number> = [];
+    const visible = scopeClause(scope);
+    if (visible.sql !== '') {
+      where.push(visible.sql);
+      values.push(...visible.values);
+    }
     if (query.state !== 'all') {
       where.push('qi.state = ?');
       values.push(query.state);
