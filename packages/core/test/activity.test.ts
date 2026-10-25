@@ -607,9 +607,15 @@ test('comms_activity answers only for the calling session: it takes no session, 
       'account',
       'channel',
       'kind',
+      'limit',
       'outcome',
       'since',
     ]);
+    assert.match(tool.description ?? '', /the latest 50 lines of the last 24 hours/);
+    const tooMany = (await client.callTool({ name: 'comms_activity', arguments: { limit: 201 } })) as {
+      isError?: boolean;
+    };
+    assert.equal(tooMany.isError, true, 'at most 200 lines');
     assert.equal(tool.annotations?.readOnlyHint, true);
     const refused = (await client.callTool({ name: 'comms_activity', arguments: { session: '6666666666666666' } })) as {
       isError?: boolean;
@@ -938,4 +944,49 @@ test('retention holds while recording is off: a read prunes, and no read shows a
   const appending = new ActivityLog(state, { settings });
   assert.equal(await appending.append(line()), false, 'off: nothing written');
   assert.deepEqual(filesOf(join(state, 'activity')), [`${recent.slice(0, 10)}.jsonl`]);
+});
+
+// ── mine is bounded (0.29.0 review) ────────────────────────────────────────────────────────────────────────────
+
+test('mine returns the latest 50 lines of the last 24 hours by default, and 200 at most', async () => {
+  const m = machine();
+  const mine = session({ key: 'abababababababab' });
+  const now = Date.now();
+  for (let index = 0; index < 250; index += 1) {
+    await recordActivity(m.core, line({ session: mine, at: new Date(now - (index + 1) * 1000).toISOString() }));
+  }
+  const yesterday = new Date(now - 30 * 60 * 60 * 1000).toISOString();
+  await recordActivity(m.core, line({ session: mine, at: yesterday, operation: 'gmail.read' }));
+  const as = (request: Record<string, unknown> = {}) =>
+    activityMine(m.core, { surface: 'mcp', ...request }, { identity: async () => mine });
+
+  const plain = await as();
+  assert.equal(plain.lines.length, 50);
+  assert.equal(plain.more, true);
+  assert.equal(plain.limit, 50);
+  assert.ok(plain.since !== null && Date.parse(plain.since) >= now - 24 * 60 * 60 * 1000 - 5000, 'the last 24 hours');
+  assert.equal(plain.lines[0]?.at, new Date(now - 1000).toISOString(), 'the latest first');
+  assert.ok(
+    plain.lines.every((each) => each.operation !== 'gmail.read'),
+    'nothing older than 24 hours',
+  );
+
+  const most = await as({ limit: 200 });
+  assert.equal(most.lines.length, 200);
+  const further = await as({ since: '48h', limit: 200 });
+  assert.equal(further.lines.length, 200);
+  const older = await as({ since: '48h', kind: 'read', limit: 1, channel: 'gmail' });
+  assert.equal(older.lines.length, 1);
+  assert.ok((await as({ since: '48h', limit: 200 })).more, '251 lines in two days: more than 200');
+  for (const limit of [0, 201, 1.5]) await assert.rejects(as({ limit }), /1 to 200/);
+});
+
+test('activity mine takes --limit, and the other activity commands refuse it', async () => {
+  const m = machine();
+  assert.equal(cli(m, ['activity', 'mine', '--limit', '5', '--json']).json().data.limit, 5);
+  assert.equal(cli(m, ['activity', 'mine', '--json']).json().data.limit, 50);
+  assert.equal(cli(m, ['activity', 'mine', '--limit', '500']).status, 64);
+  const refused = cli(m, ['activity', 'sessions', '--limit', '5']);
+  assert.equal(refused.status, 64);
+  assert.match(refused.stderr, /takes no --limit/);
 });

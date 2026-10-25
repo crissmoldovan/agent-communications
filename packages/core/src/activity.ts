@@ -809,7 +809,7 @@ export class ActivityLog {
     // A session key is hex, and a quote inside any string a line holds is written `\"`: this finds only the key.
     const needle = `"key":"${key}"`;
     const lines: ActivityLine[] = [];
-    let more = false;
+    let matched = 0;
     let summary: Aggregate | null = null;
     const days = (await this.days()).filter((day) => day >= cutoff).reverse();
     for (const day of days) {
@@ -826,16 +826,19 @@ export class ActivityLog {
         const aggregate = aggregateOf(line);
         summary = summary === null ? aggregate : merge(summary, aggregate);
         if (!matches(line, filters)) continue;
-        if (lines.length >= limit) {
-          more = true;
-          continue;
-        }
         lines.push(line);
+        matched += 1;
+        // The newest `limit` by time, not the first met: two processes append to one file out of order. Kept to twice
+        // the limit as it goes, so a long session is never held whole.
+        if (lines.length >= limit * 2) {
+          lines.sort(newestFirst);
+          lines.length = limit;
+        }
       }
     }
-    // Lines appended out of order (two processes, one file) are put back in time order, newest first.
-    lines.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1));
-    return { lines, more, summary: summary === null ? null : summaryOf(summary) };
+    lines.sort(newestFirst);
+    if (lines.length > limit) lines.length = limit;
+    return { lines, more: matched > limit, summary: summary === null ? null : summaryOf(summary) };
   }
 
   /**
@@ -952,6 +955,11 @@ export class ActivityLog {
       failure: await this.readFailure(),
     };
   }
+}
+
+/** Newest first; lines of one time in the order they were met. */
+function newestFirst(a: ActivityLine, b: ActivityLine): number {
+  return a.at === b.at ? 0 : a.at < b.at ? 1 : -1;
 }
 
 function matches(line: ActivityLine, filters: ActivityFilters): boolean {

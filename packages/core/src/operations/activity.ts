@@ -83,7 +83,15 @@ export interface ActivityMineRequest extends ActivityShowRequest {
   readonly surface: 'mcp' | 'cli';
   /** The MCP client's `clientInfo`, when there is one. */
   readonly clientInfo?: ClientInfo | undefined;
+  /** The most lines to return, newest first: `MINE_DEFAULT_LIMIT` when left out, `MINE_MAX_LIMIT` at most. */
+  readonly limit?: number | undefined;
 }
+
+/** How many lines `mine` returns when asked for no number, and the most it returns at all. */
+export const MINE_DEFAULT_LIMIT = 50;
+export const MINE_MAX_LIMIT = 200;
+/** How far back `mine` looks when asked for no time: a day. */
+export const MINE_DEFAULT_SINCE = '24h';
 
 export interface ActivityMineResult {
   /** The calling session, as this process worked it out. */
@@ -94,10 +102,13 @@ export interface ActivityMineResult {
     readonly folder: string | null;
     readonly folderShown: string | null;
   };
-  readonly since: string | null;
+  readonly since: string;
+  /** The most lines this answer could hold. */
+  readonly limit: number;
   /** The session over the time asked; null when it recorded nothing there. */
   readonly summary: ShownActivitySession | null;
   readonly lines: ActivityLine[];
+  /** True when more lines matched than `limit`: ask with a later `since`, a filter, or a larger `limit`. */
   readonly more: boolean;
 }
 
@@ -230,7 +241,7 @@ export async function activityShow(
 
 /**
  * The calling session's own activity (S3): its lines and counts, filtered as `show` filters, and nothing of any other
- * session. Which session is asking is this process's own `sessionIdentity` — never an argument — so an MCP server
+ * session — by default its latest 50 lines of the last 24 hours, and 200 at most. Which session is asking is this process's own `sessionIdentity` — never an argument — so an MCP server
  * answers for the agent window that started it, and a CLI call for the window it ran in (or itself alone).
  *
  * `deps.identity` is a test's: the identity to answer as.
@@ -241,7 +252,12 @@ export async function activityMine(
   deps: { identity?: (() => Promise<ActivitySession>) | undefined } & ActivityReadOptions = {},
 ): Promise<ActivityMineResult> {
   const now = (deps.now ?? (() => new Date()))();
-  const filters = filtersOf(request, now);
+  const limit = request.limit ?? MINE_DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MINE_MAX_LIMIT) {
+    throw new CommsError('USAGE', `limit is a whole number of lines, 1 to ${MINE_MAX_LIMIT}, not ${String(limit)}`);
+  }
+  // Bounded both ways by default, so one answer is never every file held: the latest lines of the last day.
+  const filters = { ...filtersOf({ ...request, since: request.since ?? MINE_DEFAULT_SINCE }, now), limit };
   const identity =
     deps.identity === undefined
       ? await sessionIdentity(request.surface, request.clientInfo, { log: core.activity })
@@ -256,7 +272,8 @@ export async function activityMine(
       folder: identity.folder,
       folderShown: shownFolder(identity.folder, deps),
     },
-    since: filters.since ?? null,
+    since: filters.since as string,
+    limit,
     summary: shown.summary === null ? null : shownSession(shown.summary, deps),
     // `show` reads only lines whose key is this one; checked again here, since this is the boundary S3 draws.
     lines: shown.lines.filter((line) => line.session.key === identity.key).map((line) => enveloped(line, boundary)),

@@ -12,7 +12,13 @@ import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
-import { activityMine, activitySettingsChange, activitySettingsReport } from '../operations/activity.ts';
+import {
+  activityMine,
+  activitySettingsChange,
+  activitySettingsReport,
+  MINE_DEFAULT_LIMIT,
+  MINE_MAX_LIMIT,
+} from '../operations/activity.ts';
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
 import {
@@ -326,7 +332,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_activity',
     {
       title: 'What this session did',
-      description: `What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (${ACTIVITY_KINDS.join(', ')}), its outcome (${ACTIVITY_OUTCOMES.join(', ')}) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts. Filter by kind, channel, account, outcome and time. Reads only.`,
+      description: `What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (${ACTIVITY_KINDS.join(', ')}), its outcome (${ACTIVITY_OUTCOMES.join(', ')}) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts: the latest ${MINE_DEFAULT_LIMIT} lines of the last 24 hours by default — \`limit\` returns up to ${MINE_MAX_LIMIT}, and \`since\` looks further back; \`more\` says when more matched. Filter by kind, channel, account, outcome and time. Reads only.`,
       inputSchema: {
         kind: z
           .enum(ACTIVITY_KINDS as unknown as [string, ...string[]])
@@ -341,7 +347,18 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         since: z
           .string()
           .optional()
-          .describe('only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`'),
+          .describe(
+            'only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`; the last 24 hours when left out',
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MINE_MAX_LIMIT)
+          .optional()
+          .describe(
+            `the most lines to return, newest first: ${MINE_DEFAULT_LIMIT} when left out, ${MINE_MAX_LIMIT} at most`,
+          ),
       },
       annotations: readsLocal,
     },
