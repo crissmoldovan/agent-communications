@@ -194,3 +194,20 @@ The rest:
   - `docs/superpowers/specs/2026-10-25-action-queue-design.md` (Q1, Q5);
   - `packages/*/package.json`.
 - S24 The hermes-remote `events_wait` tool schema, as loaded in this session
+
+## The spike (2026-10-25): yes to all three
+
+A throwaway stdio server on `@modelcontextprotocol/server` 2.3.1 ran in an isolated interactive Claude Code 2.1.310
+session under `expect`. The server stayed in the session scratchpad: it imports the SDK by a machine path, which the repository's safety checks refuse.
+1. **With `serveStdio(factory)`,** the server negotiates 2026-07-28 and answers `tools/call` with `resultType:"task"`.
+   Claude Code polls `tasks/get` every 2 s. With `server.connect(new StdioServerTransport())`, as every server in this
+   repository does today, Claude Code falls back to 2025-11-25 (`"protocolEra":"legacy"`) and tasks are not used. The
+   SDK has no task store: `tasks/get` and `tasks/cancel` are registered by hand.
+2. **An idle window wakes.** The turn ended at 20:38:17. The task completed at 20:38:57, and a task notification
+   arrived 50 ms later. The model called the next tool on its own at 20:38:59.
+3. **Under `--dangerously-skip-permissions` too:** the task completed at 20:48:38, and the next tool was called at
+   20:48:40.
+
+**Seen along the way:**
+- `/exit` with a task running opens a "Background work is running" dialog, and holds wakes while it is open.
+- `--strict-mcp-config` still loads the built-in Chrome server; `--no-chrome` removes it.
