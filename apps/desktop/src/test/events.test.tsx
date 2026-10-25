@@ -84,6 +84,17 @@ async function hint(trigger: HTMLElement): Promise<string> {
   return (await screen.findByRole('tooltip')).textContent ?? '';
 }
 
+/** A tab's dot, when it has one: its tone, and what it says to a screen reader. Each tab has one at most. */
+function markOf(tab: HTMLElement): { tone: string | null; says: string | null } | null {
+  const dots = within(tab).queryAllByRole('status');
+  expect(dots.length).toBeLessThanOrEqual(1);
+  const dot = dots[0];
+  return dot === undefined ? null : { tone: dot.getAttribute('data-tone'), says: dot.textContent };
+}
+
+const FAILED_MARK = { tone: 'danger', says: 'could not be read' };
+const UPDATE_MARK = { tone: 'warn', says: 'needs an update' };
+
 /** Opens a tab, as a click on it does. */
 async function openTab(name: TabName): Promise<void> {
   fireEvent.click(await findTab(name));
@@ -260,17 +271,33 @@ describe('Events', () => {
     expect(reads()).toBe(before);
   });
 
-  it('the Rules and Deliveries tabs say how many each lists, and nothing when there are none or the list is unread', async () => {
-    const first = renderApp(bridgeWith({}, { eventsRules: rules, eventsDeliveries: deliveries }), { screen: 'events' });
-    // Two versions of one rule are one rule; every delivery counts.
-    expect(await screen.findByRole('tab', { name: 'Rules 1' })).toBeTruthy();
+  it('the Rules and Deliveries tabs count exactly the rows their tables show, and nothing when there are none', async () => {
+    // A row per version, as the table shows it: two versions of one rule are two rows. A row whose id is not text is a
+    // row all the same; an entry that is not a row at all is shown nowhere, and counted nowhere.
+    const odd = [...rules, { ...rules[0], rule_id: 7, version: 3 }, 'not a row'];
+    const first = renderApp(bridgeWith({}, { eventsRules: odd, eventsDeliveries: deliveries }), { screen: 'events' });
+    expect(await screen.findByRole('tab', { name: 'Rules 3' })).toBeTruthy();
     expect(await screen.findByRole('tab', { name: `Deliveries ${deliveries.length}` })).toBeTruthy();
+    await openTab('Rules');
+    expect(within(screen.getByRole('table', { name: 'Rules' })).getAllByRole('row')).toHaveLength(1 + 3);
+    expect(markOf(await findTab('Rules'))).toBeNull();
     first.unmount();
 
+    renderApp(bridgeWith({}, { eventsRules: [], eventsDeliveries: [] }), { screen: 'events' });
+    await openTab('Rules');
+    expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
+    await openTab('Deliveries');
+    expect(await within(region('Recent deliveries')).findByText('No deliveries yet.')).toBeTruthy();
+    for (const name of ['Rules', 'Deliveries'] as const) {
+      expect(screen.getByRole('tab', { name }), name).toBeTruthy();
+      expect(markOf(await findTab(name)), name).toBeNull();
+    }
+  });
+
+  it('a Rules or Deliveries read that failed, or a list the app cannot read, marks its tab with a danger dot', async () => {
     for (const [what, bridge, rulesSay, deliveriesSay] of [
-      ['empty', bridgeWith({}, { eventsRules: [], eventsDeliveries: [] }), 'No rules yet.', 'No deliveries yet.'],
       [
-        'unread',
+        'failed',
         bridgeWith({
           eventsRules: failed('CLI_FAILED', 'the rules could not be read'),
           eventsDeliveries: failed('CLI_FAILED', 'the deliveries could not be read'),
@@ -278,14 +305,25 @@ describe('Events', () => {
         'the rules could not be read',
         'the deliveries could not be read',
       ],
+      [
+        'unreadable',
+        bridgeWith({}, { eventsRules: { rules: 'not a list' }, eventsDeliveries: 'not a list' }),
+        'The list could not be read.',
+        'The list could not be read.',
+      ],
     ] as const) {
       const view = renderApp(bridge, { screen: 'events' });
+      // Marked while another tab is open: what went wrong waits behind it.
+      await waitFor(async () => expect(markOf(await findTab('Rules')), what).toEqual(FAILED_MARK));
+      await waitFor(async () => expect(markOf(await findTab('Deliveries')), what).toEqual(FAILED_MARK));
+      // No count beside it, and the view says what went wrong.
+      expect((await findTab('Rules')).textContent, what).toBe('Rules could not be read');
+      expect(markOf(await findTab('Service')), what).toBeNull();
+      expect(markOf(await findTab('Judges')), what).toBeNull();
       await openTab('Rules');
       expect(await within(region('Rules')).findByText(rulesSay), what).toBeTruthy();
       await openTab('Deliveries');
       expect(await within(region('Recent deliveries')).findByText(deliveriesSay), what).toBeTruthy();
-      expect(screen.getByRole('tab', { name: 'Rules' }), what).toBeTruthy();
-      expect(screen.getByRole('tab', { name: 'Deliveries' }), what).toBeTruthy();
       view.unmount();
     }
   });
@@ -673,6 +711,8 @@ describe('The event service', () => {
       // A newer version is offered only to one that runs, as the section offers it; Windows offers nothing.
       ['stopped, with a newer version', { ...EVENT_SERVICE.stopped, newerVersion: '0.27.0' }, 0],
       ['Windows', { ...EVENT_SERVICE.windows, fullDiskAccess: 'missing' }, 0],
+      // Wanted and stopped: one started from a terminal went away, and the section offers Start (D4).
+      ['wanted and stopped', EVENT_SERVICE.terminalGone, 1],
     ];
     for (const [what, state, count] of cases) {
       const view = renderApp(serviceBridge(state), { screen: 'events' });
@@ -685,6 +725,12 @@ describe('The event service', () => {
       expect(tab.querySelector('[data-slot="tab-attention"]') !== null, what).toBe(count > 0);
       view.unmount();
     }
+    // Until the first-start question is answered, Start is not offered: the question itself is over the screen.
+    const asking = renderApp(serviceBridge(EVENT_SERVICE.firstStart), { screen: 'events' });
+    expect(await screen.findByRole('alertdialog', { name: 'Start the event service?' })).toBeTruthy();
+    await waitFor(() => expect(screen.getAllByRole('tab', { hidden: true })).toHaveLength(4));
+    expect(screen.getByRole('tab', { name: 'Service', hidden: true })).toBeTruthy();
+    asking.unmount();
     // It follows the supervisor: a service that gives up while another tab is open says so on its tab.
     const bridge = serviceBridge(EVENT_SERVICE.running);
     renderApp(bridge, { screen: 'events' });
@@ -695,6 +741,46 @@ describe('The event service', () => {
     expect(await screen.findByRole('tab', { name: 'Service 1 to look at' })).toBeTruthy();
     await openTab('Service');
     expect(within(region(SERVICE)).getByRole('alert')).toBeTruthy();
+  });
+
+  it("the Service tab counts a command's failure, the problem the section says, until the next command clears it", async () => {
+    let refuse = true;
+    const bridge = serviceBridge(EVENT_SERVICE.running, {
+      setEventService: async (on) => {
+        if (refuse) throw { code: 'APP_IO', message: 'the event service could not be stopped' };
+        return on ? EVENT_SERVICE.running : EVENT_SERVICE.stopped;
+      },
+    });
+    renderApp(bridge, { screen: 'events' });
+    const section = await shownService();
+    fireEvent.click(within(section).getByRole('switch', { name: SWITCH }));
+    expect(await within(region(SERVICE)).findByText('the event service could not be stopped')).toBeTruthy();
+    await openTab('Rules');
+    expect(await screen.findByRole('tab', { name: 'Service 1 to look at' })).toBeTruthy();
+    // The next command clears it, and the tab with it.
+    refuse = false;
+    await openTab('Service');
+    fireEvent.click(within(region(SERVICE)).getByRole('switch', { name: SWITCH }));
+    await waitFor(() =>
+      expect(within(region(SERVICE)).queryByText('the event service could not be stopped')).toBeNull(),
+    );
+    expect(await screen.findByRole('tab', { name: 'Service' })).toBeTruthy();
+  });
+
+  it("a supervisor's state that cannot be read marks the Service tab with a danger dot", async () => {
+    const bridge = serviceBridge(EVENT_SERVICE.running, {
+      eventServiceState: async () => {
+        throw { code: 'APP_NOT_BUILT', message: 'event_service_state is not built yet' };
+      },
+    });
+    renderApp(bridge, { screen: 'events' });
+    expect(
+      await within(await screen.findByRole('region', { name: SERVICE })).findByText(
+        'event_service_state is not built yet',
+      ),
+    ).toBeTruthy();
+    await openTab('Rules');
+    await waitFor(async () => expect(markOf(await findTab('Service'))).toEqual(FAILED_MARK));
   });
 });
 
@@ -1557,7 +1643,82 @@ describe('Judges', () => {
       await openTab('Judges');
       const section = await screen.findByRole('region', { name: 'Judges' });
       await within(section).findByText(what === 'older' ? COPY.updateToUse : 'The judges could not be read.');
-      expect(screen.getByRole('tab', { name: 'Judges' }), what).toBeTruthy();
+      expect((await findTab('Judges')).textContent, what).toMatch(/^Judges(?!\s*\d)/);
+      view.unmount();
+    }
+  });
+
+  it('Judges: a read that failed or cannot be read marks the tab with a danger dot; an older events service, with a warn dot', {
+    timeout: RENDER_LOOP_MS,
+  }, async () => {
+    const fresh = at('fresh');
+    const jev = fresh.kinds[0] as Record<string, unknown>;
+    const cases: [string, FakeBridge, string, { tone: string; says: string } | null][] = [
+      ['every read as it should be', judgesBridge(fresh), 'Jev, by TypeSafe', null],
+      [
+        'its version',
+        judgesBridge(fresh, { results: { version: failed('CLI_FAILED', 'the version could not be read') } }),
+        'the version could not be read',
+        FAILED_MARK,
+      ],
+      [
+        'its kinds',
+        judgesBridge(fresh, { results: { judgeKindsList: failed('CLI_FAILED', 'the kinds could not be listed') } }),
+        'the kinds could not be listed',
+        FAILED_MARK,
+      ],
+      [
+        'its kinds, not a list',
+        judgesBridge({ ...fresh, kinds: { kinds: [] } as never }),
+        'The judge kinds could not be read.',
+        FAILED_MARK,
+      ],
+      [
+        'one kind',
+        judgesBridge({ ...fresh, kinds: [{ ...jev, state: 'paused' }, ...fresh.kinds.slice(1)] }),
+        'Its state could not be read.',
+        FAILED_MARK,
+      ],
+      [
+        'its judges',
+        judgesBridge(fresh, { results: { judgesList: failed('CLI_FAILED', 'the judges could not be listed') } }),
+        'the judges could not be listed',
+        FAILED_MARK,
+      ],
+      [
+        'its judges, not a list',
+        judgesBridge({ ...fresh, judges: { judges: [] } as never }),
+        'The judges could not be read.',
+        FAILED_MARK,
+      ],
+      [
+        "Laya's status",
+        judgesBridge(fresh, {
+          results: { eventsJudgeModelStatus: failed('CLI_FAILED', 'the model status could not be read') },
+        }),
+        'the model status could not be read',
+        FAILED_MARK,
+      ],
+      [
+        "Laya's status, in a shape the app does not know",
+        judgesBridge(fresh, { fixtures: { eventsJudgeModelStatus: { state: 'paused' } } }),
+        "Laya's status could not be read.",
+        FAILED_MARK,
+      ],
+      [
+        'an events service older than judges',
+        judgesBridge(fresh, { version: '0.16.0' }),
+        COPY.updateToUse,
+        UPDATE_MARK,
+      ],
+    ];
+    for (const [what, bridge, says, mark] of cases) {
+      const view = renderApp(bridge, { screen: 'events' });
+      // Marked before the tab is opened, so nothing waits unseen behind it.
+      await waitFor(async () => expect(markOf(await findTab('Judges')), what).toEqual(mark), { timeout: ROWS_MS });
+      await openTab('Judges');
+      expect(await within(region('Judges')).findByText(says, {}, { timeout: ROWS_MS }), what).toBeTruthy();
+      expect(markOf(await findTab('Judges')), what).toEqual(mark);
       view.unmount();
     }
   });
