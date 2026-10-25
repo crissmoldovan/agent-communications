@@ -123,6 +123,12 @@ approval preview then shows exactly what changes.
   - `doctor`, a content-free health report.
   
   Every command takes `--json`. The [CLI reference](../../docs/reference/events-daemon-cli.md) lists them all.
+- **What it delivered:** from 0.29.0, what each delivery came to (delivered, failed, or dropped before it was
+  delivered) is a line in agent-communications' private activity log, under the event service's own session. A line
+  names the rule, the account the events came from, how many events, the target and the outcome. It never holds the
+  event, its sender or its subject, nor a webhook's URL. `agentcomms activity sessions` lists the session, and
+  `agentcomms activity record off` stops the recording
+  ([activity](../../README.md#what-your-agents-did-activity)).
 
 ## Agents and approvals
 
