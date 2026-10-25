@@ -1509,7 +1509,7 @@ function EventsTabs() {
   );
   return (
     <Tabs.Root defaultValue={'service' satisfies EventsTab}>
-      <Tabs.List aria-label="Events">
+      <Tabs.List aria-label="Events" className="self-start">
         {tab('service', <Attention count={serviceAttention(eventService)} />)}
         {tab('judges', <Attention count={judgesWaiting(judgeReads)} />)}
         {tab('rules', <Count count={ruleCount(rules.result)} />)}
