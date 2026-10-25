@@ -3,6 +3,31 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**The desktop app, `desktop-v0.28.0`, has a new look: calm, soft and quiet, in the way of Linear and QuotaMate.** The
+owner asked for it after using 0.26: the old look was clunky, its fonts big and its monospaced labels terminal-like.
+The design is the mockup the owner approved on 2026-10-25.
+- **A theme of its own, `soft`, is the default.** It has soft filled panels in place of ruled boxes, three surface
+  shades, rounded corners, and one quiet accent, in dark and in light.
+  - The app opens on it once after the update, whatever you picked before. The appearance menu still offers `cue` and
+    `terminal`.
+- **One sans-serif face:** SF Pro on macOS, Inter elsewhere where it is installed. Body text is 13 px and secondary text
+  12 px. Monospace is kept only for literal values: paths, ids, commands.
+- **Every screen is reworked,** with nothing taken away. Every status, warning, number and action is still there.
+  - Each screen says what is true in a few words. Explanations move into hints or behind "Learn more".
+  - Where a screen has distinct views, it has a tab bar: Accounts by channel, Approvals, and Events (Service, Judges,
+    Rules, Deliveries). A tab holding a warning or something waiting shows its count, so nothing hides behind a tab.
+  - Settings puts updates and Start at login first. The folder overrides sit behind "Change folders…".
+- **Built on `@cueplusplus/ui` 0.30.0.** A few pieces of the look aren't in cue-ui yet: a gliding highlight on tabs,
+  swiping between tabs, a soft panel, and labels that all follow the label face (cue-ui-77 to 80 and 82). Until cue-ui
+  ships them, the app fills the gaps with a small amount of its own CSS, and its tab highlights move without gliding.
+  Each gap closes in a later release, when cue-ui has its piece.
+- **What doesn't change:** what the app may do. It still sends nothing, approves nothing at the app, and shows what a
+  sender wrote only as plain text, marked *From outside*.
+
+The npm packages are re-released at 0.28.0 with the app. Nothing in them changes.
+
 ## 0.27.1
 
 **The desktop app, `desktop-v0.27.1`: Start shows that it is starting, and Events shows every judge, Jev among them.**
