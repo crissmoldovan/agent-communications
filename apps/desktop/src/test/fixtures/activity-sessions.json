@@ -1,0 +1,93 @@
+{
+  "since": null,
+  "sessions": [
+    {
+      "key": "a1b2c3d4e5f60718",
+      "grouped": false,
+      "surfaces": ["daemon"],
+      "folder": null,
+      "client": null,
+      "parent": null,
+      "firstSeen": "2026-10-25T09:15:00.000Z",
+      "lastSeen": "2026-10-25T09:45:00.000Z",
+      "processes": 1,
+      "channels": ["gmail", "slack"],
+      "accounts": ["example/gmail", "example/slack"],
+      "counts": {
+        "kind": {
+          "read": 0,
+          "write": 0,
+          "told": 2,
+          "approval": 0
+        },
+        "outcome": {
+          "ok": 1,
+          "refused": 0,
+          "failed": 1
+        }
+      },
+      "folderShown": null
+    },
+    {
+      "key": "3f9a1c2e7b4d5a60",
+      "grouped": true,
+      "surfaces": ["mcp"],
+      "folder": "/example/home/work/acme-site",
+      "client": {
+        "name": "claude-code",
+        "version": "2.1.0"
+      },
+      "parent": {
+        "pid": 4100,
+        "startedAt": "Sat Oct 25 09:00:00 2026",
+        "name": "claude"
+      },
+      "firstSeen": "2026-10-25T09:12:03.000Z",
+      "lastSeen": "2026-10-25T09:40:12.000Z",
+      "processes": 2,
+      "channels": ["gmail", "slack", "whatsapp"],
+      "accounts": ["example/gmail", "example/slack", "example/whatsapp"],
+      "counts": {
+        "kind": {
+          "read": 7,
+          "write": 3,
+          "told": 0,
+          "approval": 0
+        },
+        "outcome": {
+          "ok": 8,
+          "refused": 1,
+          "failed": 1
+        }
+      },
+      "folderShown": "~/work/acme-site"
+    },
+    {
+      "key": "0c0ffee000000001",
+      "grouped": false,
+      "surfaces": ["cli"],
+      "folder": "/example/home",
+      "client": null,
+      "parent": null,
+      "firstSeen": "2026-10-24T18:02:00.000Z",
+      "lastSeen": "2026-10-24T18:02:00.000Z",
+      "processes": 1,
+      "channels": ["resend"],
+      "accounts": ["example/resend"],
+      "counts": {
+        "kind": {
+          "read": 1,
+          "write": 0,
+          "told": 0,
+          "approval": 0
+        },
+        "outcome": {
+          "ok": 1,
+          "refused": 0,
+          "failed": 0
+        }
+      },
+      "folderShown": "~"
+    }
+  ]
+}

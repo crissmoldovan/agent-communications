@@ -8,6 +8,10 @@ import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
 import accountsResend from './fixtures/accounts-resend.populated.json';
 import accountsSlack from './fixtures/accounts-slack.populated.json';
+import activitySessions from './fixtures/activity-sessions.json';
+import activityShow from './fixtures/activity-show.json';
+import activityShowDaemon from './fixtures/activity-show-daemon.json';
+import approvalsFinished from './fixtures/approvals-finished.json';
 import approvalsPending from './fixtures/approvals-pending.populated.json';
 import behaviour from './fixtures/behaviour.json';
 import doctorCore from './fixtures/doctor-core.json';
@@ -144,7 +148,23 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
     ({ gmail: accountsGmail, slack: accountsSlack, resend: accountsResend })[
       (call as Extract<Call, { kind: 'accounts' }>).product
     ],
+  // Approvals → Recent (0.29.0): each finished state's list, from one fixture of every state.
+  approvalsFinished: (call: Call) =>
+    approvalsFinished.filter(
+      (approval) => approval.state === (call as Extract<Call, { kind: 'approvalsFinished' }>).state,
+    ),
+  // The activity log (0.29.0), recorded from core's CLI over fake lines: an agent window's session and the event
+  // service's. Any other session is answered with the window's, as a fixture cannot fail; a test that needs core's
+  // NOT_FOUND gives its own `cli`.
+  activitySessions,
+  activityShow: (call: Call) =>
+    (call as Extract<Call, { kind: 'activityShow' }>).session === activityShowDaemon.session.key
+      ? activityShowDaemon
+      : activityShow,
 };
+
+/** An installation with every product at 0.29.0, the first core with the activity log. */
+export const ACTIVITY_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.29.0' };
 
 /** An `ok` result carrying `data`. */
 export function ok(data: unknown, exit = 0): CliResult {

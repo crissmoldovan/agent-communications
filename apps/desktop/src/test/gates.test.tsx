@@ -16,6 +16,7 @@ const LABELS: Record<Screen, string> = {
   overview: 'Overview',
   accounts: 'Accounts',
   approvals: 'Approvals',
+  activity: 'Activity',
   agent: 'Agent',
   updates: 'Updates',
   events: 'Events',
@@ -39,7 +40,12 @@ describe('what each CLI version supports', () => {
       updateStatus: '0.24.0',
       layaJudge: '0.25.0',
       judges: '0.17.0',
+      activity: '0.29.0',
     });
+    // The activity log is core's from 0.29.0, a pull request's build of it included.
+    expect(supports('0.28.0', 'activity')).toBe(false);
+    expect(supports('0.29.0', 'activity')).toBe(true);
+    expect(supports('0.29.0-feat-0.29', 'activity')).toBe(true);
     // The Judges section reads the events service's own version: 0.17.0 is the first with judges at all.
     expect(supports('0.16.0', 'judges')).toBe(false);
     expect(supports('0.17.0', 'judges')).toBe(true);
@@ -80,6 +86,7 @@ describe('the gated sections', () => {
       ['accounts', ['Needs 0.22.0 or later; this machine has 0.21.0.']],
       ['agent', ['Needs 0.22.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.']],
       ['updates', ['Needs 0.24.0 or later; this machine has 0.21.0.']],
+      ['activity', ['Needs 0.29.0 or later; this machine has 0.21.0.']],
     ];
     for (const [name, lines] of expectations) {
       const main = await open(name);
@@ -98,6 +105,8 @@ describe('the gated sections', () => {
       'standingRevoke',
       'standingOff',
       'updateStatus',
+      'activitySessions',
+      'activityShow',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.
