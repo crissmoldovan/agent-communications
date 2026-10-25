@@ -163,3 +163,51 @@ They agreed the order: the audit first, then the action queue, then routing (des
 - **0.29.0, a minor,** for every package: the recording is in core and the four channels, and the screen is in the
   desktop app.
 - The changelog says plainly what is recorded, where, for how long, and how to turn it off.
+
+## 7. Settled after the builder check (the lead's calls, 2026-10-25)
+
+A builder read this cold and asked five questions. Each answer below overrides the section it names.
+
+### S1. "Told about" in 0.29 is the event service's own record (overrides §4.4)
+- **What a "told" line is:** a line the event service writes for each delivery: the rule, the account, the number of
+  events, the target and the outcome.
+- **It holds no sender, subject or payload,** because the events design forbids payloads in any log (D7, D8), and
+  it is not joined to an agent session.
+- **Where they show:** under the event service's own session, as "Delivered 3 events from *David on Slack* to
+  <target>".
+- **Later:** joining a delivery to the session it reached needs a way to reach sessions, which is the routing work
+  (§5 item 3 of the desktop design). It is not part of this release.
+
+### S2. A session is an agent window, not a server process (overrides §4.3)
+- **Per process:** each server process records its own id, the client's `clientInfo`, its working folder, and its
+  **parent process**: its id, its start time, and its executable's name. A Claude Code window is one parent for all
+  the servers it starts.
+- **A session is the group** of processes with the same parent (id and start time) and the same folder. The screen,
+  the counts and `activity show <session>` all work on that group.
+- **The session key** is a hash of the parent's id, its start time and the folder, stable for the window's life.
+- **A CLI call** records its own parent chain up to three levels. If an agent's process (a parent that started MCP
+  servers) is found in that chain, the call joins that session. Otherwise it is a session of its own, marked `cli`.
+- **What can't be grouped stays alone, marked as such.** Examples: a client that starts servers through a wrapper, or
+  a parent that has gone. Grouping is a convenience, never a claim. The screen says "this window" only when the parent
+  matched.
+
+### S3. An agent sees only its own session (overrides §4.7)
+- **`comms_activity` over MCP** answers only for the session it is called from: its own lines and counts. It never
+  shows another session, another project or another account.
+- **The full view** (every session, every account) is the CLI's `agentcomms activity …` and the desktop app.
+- **What this boundary is for:** an agent that can run a shell can read the owner's files anyway. The boundary is that
+  no MCP tool hands one project's mail subjects to another project's agent.
+- **Security tests pin both sides:** the MCP view is limited, and the CLI view is full.
+
+### S4. WhatsApp is recorded without identities (adds to §4.2)
+- **What a WhatsApp line holds:** the operation, the account, the counts (chats, messages), the outcome and the
+  session.
+- **What it never holds:** a chat id, a name, a number or a message preview.
+- **Why:** a chat denied later then leaves nothing behind (`visibility.ts`'s rule that a denied chat is never listed
+  or kept), and core never needs WhatsApp's lists.
+
+### S5. Approvals → Recent reads the approval store (overrides §4.5's "from the same records")
+- **Where it reads:** Recent lists finished approvals from the approval store, which keeps them 90 days, through the
+  existing `approvals list` with a finished state. The desktop's allow-list gains exactly those states.
+- **What follows:** it works the day the upgrade lands, shows expiries (which no call ever records), and doesn't
+  depend on the activity switch.
