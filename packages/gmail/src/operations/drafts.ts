@@ -1,6 +1,7 @@
 import { readFile, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import {
+  type ActivityDetail,
   type AttachPolicy,
   approvalOutcome,
   asLegacy,
@@ -20,6 +21,7 @@ import {
   recipientDomains,
   renderMessagePreview,
 } from '@agentcomms/core';
+import { itemOf, recorded } from '../activity.ts';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
 import {
   accountNameOf,
@@ -236,8 +238,27 @@ async function draftIdentity(
   });
 }
 
-/** Creates a draft. Nothing is sent, and nothing can be: the send path is a separate operation with its own gate. */
+/** A draft as its activity line keeps it: its id, and its subject. */
+function draftLine(draft: DraftResult): ActivityDetail {
+  return { items: [itemOf(draft.draftId, draft.subject)] };
+}
+
+/**
+ * Creates a draft. Nothing is sent, and nothing can be: the send path is a separate operation with its own gate.
+ * Recorded in the activity log by the draft's id and subject.
+ */
 export async function createDraft(context: GmailContext, alias: string, input: DraftInput): Promise<DraftResult> {
+  return recorded(
+    context,
+    'gmail.draft.create',
+    'write',
+    alias,
+    () => createNewDraft(context, alias, input),
+    draftLine,
+  );
+}
+
+async function createNewDraft(context: GmailContext, alias: string, input: DraftInput): Promise<DraftResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   const transport = await context.transport(alias);
@@ -444,8 +465,27 @@ async function carriedAttachments(
   return { attachments, described, warnings };
 }
 
-/** Replies to a message, or forwards it. The recipients are computed, then shown, never assumed. */
+/**
+ * Replies to a message, or forwards it. The recipients are computed, then shown, never assumed. Recorded in the
+ * activity log by the draft's id and subject.
+ */
 export async function replyDraft(
+  context: GmailContext,
+  alias: string,
+  messageId: string,
+  input: ReplyInput,
+): Promise<DraftResult> {
+  return recorded(
+    context,
+    'gmail.draft.reply',
+    'write',
+    alias,
+    () => draftReplyTo(context, alias, messageId, input),
+    draftLine,
+  );
+}
+
+async function draftReplyTo(
   context: GmailContext,
   alias: string,
   messageId: string,
@@ -592,8 +632,22 @@ export interface DraftSummary {
 
 export const DRAFT_LIST_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min: 1 };
 
-/** The drafts in a mailbox. `limit` is as given, and checked before the mailbox is read; twenty when left out. */
+/**
+ * The drafts in a mailbox. `limit` is as given, and checked before the mailbox is read; twenty when left out. Recorded
+ * in the activity log by each draft's id and subject.
+ */
 export async function listDrafts(context: GmailContext, alias: string, given?: unknown): Promise<DraftSummary[]> {
+  return recorded(
+    context,
+    'gmail.draft.list',
+    'read',
+    alias,
+    () => draftsIn(context, alias, given),
+    (drafts) => ({ count: drafts.length, items: drafts.map((draft) => itemOf(draft.draftId, draft.subject)) }),
+  );
+}
+
+async function draftsIn(context: GmailContext, alias: string, given: unknown): Promise<DraftSummary[]> {
   const limit = numberOption(context, given, DRAFT_LIST_LIMIT) ?? 20;
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
@@ -630,7 +684,19 @@ export async function listDrafts(context: GmailContext, alias: string, given?: u
   return summaries;
 }
 
+/** Deletes a draft, recorded in the activity log by its id. */
 export async function deleteDraft(context: GmailContext, alias: string, draftId: string): Promise<{ draftId: string }> {
+  return recorded(
+    context,
+    'gmail.draft.delete',
+    'write',
+    alias,
+    () => deleteOneDraft(context, alias, draftId),
+    (deleted) => ({ items: [{ id: deleted.draftId }] }),
+  );
+}
+
+async function deleteOneDraft(context: GmailContext, alias: string, draftId: string): Promise<{ draftId: string }> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   await refuseWhileSending(context, resolved.inbox.id, draftId);
@@ -677,7 +743,24 @@ export async function refuseWhileSending(context: GmailContext, inboxId: string,
   }
 }
 
+/** Replaces a draft's content, recorded in the activity log by the draft's id and its subject now. */
 export async function updateDraft(
+  context: GmailContext,
+  alias: string,
+  draftId: string,
+  input: UpdateDraftInput,
+): Promise<DraftResult> {
+  return recorded(
+    context,
+    'gmail.draft.update',
+    'write',
+    alias,
+    () => updateOneDraft(context, alias, draftId, input),
+    draftLine,
+  );
+}
+
+async function updateOneDraft(
   context: GmailContext,
   alias: string,
   draftId: string,
@@ -796,8 +879,15 @@ export async function updateDraft(
   };
 }
 
-/** Reads a draft back, with the preview: what the user would approve if asked now. */
+/**
+ * Reads a draft back, with the preview: what the user would approve if asked now. Recorded in the activity log by the
+ * draft's id and subject.
+ */
 export async function getDraft(context: GmailContext, alias: string, draftId: string): Promise<DraftResult> {
+  return recorded(context, 'gmail.draft.get', 'read', alias, () => readOneDraft(context, alias, draftId), draftLine);
+}
+
+async function readOneDraft(context: GmailContext, alias: string, draftId: string): Promise<DraftResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   const transport = await context.transport(alias);

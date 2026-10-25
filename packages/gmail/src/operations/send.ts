@@ -5,11 +5,13 @@ import {
   approveAndWaitSentence,
   type Caps,
   CommsError,
+  type Config,
   canonicalAddress,
   domainOf,
   type Expectation,
   ensureSendEpochConfig,
   fenceOrStop,
+  findById,
   handoffSentence,
   LEASE_LOST_BEFORE_SEND,
   type LegacyDrainReport,
@@ -32,6 +34,7 @@ import {
   withApproval,
   withSendingLease,
 } from '@agentcomms/core';
+import { itemOf, plain, recorded } from '../activity.ts';
 import type { GmailContext, ResolvedInbox } from '../context.ts';
 import {
   accountNameOf,
@@ -867,6 +870,32 @@ export async function prepareSend(
     as?: string | undefined;
   } = {},
 ): Promise<SendPreparation> {
+  // Recorded in the activity log as an approval asked for: its id, the draft and its subject, and the recipients.
+  return recorded(
+    context,
+    'gmail.send.prepare',
+    'approval',
+    alias,
+    () => prepareOneSend(context, alias, draftId, options),
+    (prepared) => ({
+      approvalId: prepared.approvalId,
+      items: [itemOf(prepared.draftId, prepared.expect.subject)],
+      recipients: activityRecipients(prepared.expect),
+    }),
+  );
+}
+
+/** A send's recipients as its activity line keeps them: To, Cc and Bcc, as addresses. */
+function activityRecipients(expect: Pick<Expectation, 'to' | 'cc' | 'bcc'>): string[] {
+  return [...expect.to, ...expect.cc, ...expect.bcc].flatMap((address) => plain(address) ?? []);
+}
+
+async function prepareOneSend(
+  context: GmailContext,
+  alias: string,
+  draftId: string,
+  options: { as?: string | undefined },
+): Promise<SendPreparation> {
   const requested = oneOf(options.as, IDENTITIES, IDENTITY_WORDS);
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
@@ -1166,6 +1195,35 @@ export async function executeSend(
     /** Legacy callers may still restate it; otherwise the approval supplies the bound expectation. */
     expect?: Expectation | undefined;
     /** True only for the CLI marker `--expect-subject none`; MCP subjects remain ordinary strings. */
+    expectSubjectNone?: boolean | undefined;
+  },
+): Promise<SendResult> {
+  /*
+   * Recorded in the activity log around the send, never inside it: the line is written once the send below has ended,
+   * whichever way — the message Gmail filed (or the draft, when it named none), its subject, the recipients and the
+   * approval. A line that cannot be written changes nothing here: the audit log is the send's record.
+   */
+  return recorded(
+    context,
+    'gmail.send.execute',
+    'write',
+    alias,
+    () => sendApproved(context, alias, options),
+    (sent) => ({
+      approvalId: sent.approvalId,
+      items: [itemOf(sent.sentMessageId ?? sent.draftId, sent.subject)],
+      recipients: activityRecipients(sent),
+    }),
+  );
+}
+
+async function sendApproved(
+  context: GmailContext,
+  alias: string,
+  options: {
+    draftId?: string | undefined;
+    approvalId: string;
+    expect?: Expectation | undefined;
     expectSubjectNone?: boolean | undefined;
   },
 ): Promise<SendResult> {
@@ -1517,6 +1575,27 @@ export async function listApprovals(
  * prepared is retired in its own shape; a corrupt or unreadable one is refused, and nothing is written to it.
  */
 export async function revokeApproval(context: GmailContext, approvalId: string): Promise<StoredApproval> {
+  // Recorded in the activity log as an approval ended, by its id, against the mailbox it was for — known only once the
+  // record is read, so its name is found in the configuration as it was when the call began.
+  let config: Config | undefined;
+  return recorded(
+    context,
+    'gmail.send.cancel',
+    'approval',
+    [],
+    async () => {
+      config = await context.config().catch(() => undefined);
+      return cancelApproval(context, approvalId);
+    },
+    (stored) => {
+      const owner = ownerOf(stored);
+      const alias = owner === null || config === undefined ? '' : (findById(config, 'inbox', owner)?.alias ?? '');
+      return { approvalId, ...(owner === null ? {} : { account: { id: owner, alias } }) };
+    },
+  );
+}
+
+async function cancelApproval(context: GmailContext, approvalId: string): Promise<StoredApproval> {
   const stored = await context.core.approvals.revoke(approvalId, 'cancelled', { disposition: 'person' });
   await context.core.audit.append({
     inboxId: ownerOf(stored) ?? '',

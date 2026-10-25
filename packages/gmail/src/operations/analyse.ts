@@ -1,3 +1,4 @@
+import { itemOf, recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { buildTimeline, renderTimelineMarkdown, renderTimelineMermaid, type Timeline } from '../domain/timeline.ts';
 import { type ReadOptions, readThread } from './read.ts';
@@ -34,11 +35,39 @@ export async function ownAddresses(context: GmailContext, alias: string): Promis
   return [...addresses];
 }
 
+/**
+ * A thread's timeline, recorded in the activity log as each message it covers — its id and sender, the first with the
+ * thread's subject — and how many the thread holds. The thread it reads is part of this line, not one of its own.
+ */
 export async function threadTimeline(
   context: GmailContext,
   alias: string,
   threadId: string,
   options: ReadOptions & { businessHours?: boolean | undefined; maxThreadChars?: number | undefined } = {},
+): Promise<TimelineResult> {
+  return recorded(
+    context,
+    'gmail.thread.timeline',
+    'read',
+    alias,
+    () => buildThreadTimeline(context, alias, threadId, options),
+    (result) => ({
+      count: result.messageCount,
+      items: result.timeline.events.map((event, index) =>
+        itemOf(event.messageId, index === 0 ? result.timeline.subject : undefined, {
+          name: event.fromName,
+          address: event.from,
+        }),
+      ),
+    }),
+  );
+}
+
+async function buildThreadTimeline(
+  context: GmailContext,
+  alias: string,
+  threadId: string,
+  options: ReadOptions & { businessHours?: boolean | undefined; maxThreadChars?: number | undefined },
 ): Promise<TimelineResult> {
   // The bodies are not part of a timeline, so they are read at their smallest: the headers carry every fact used.
   const thread = await readThread(context, alias, threadId, { ...options, maxChars: options.maxChars ?? 1 });
@@ -68,7 +97,19 @@ export interface LabelSummary {
   messagesUnread?: number | undefined;
 }
 
+/** The mailbox's labels, recorded in the activity log by how many there are. */
 export async function listLabels(context: GmailContext, alias: string): Promise<LabelSummary[]> {
+  return recorded(
+    context,
+    'gmail.labels.list',
+    'read',
+    alias,
+    () => labelsOf(context, alias),
+    (labels) => ({ count: labels.length }),
+  );
+}
+
+async function labelsOf(context: GmailContext, alias: string): Promise<LabelSummary[]> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
   const transport = await context.transport(alias);
@@ -85,7 +126,19 @@ export interface SendAsSummary {
   hasSignature: boolean;
 }
 
+/** The addresses the mailbox may send as, recorded in the activity log by how many there are. */
 export async function listSendAs(context: GmailContext, alias: string): Promise<SendAsSummary[]> {
+  return recorded(
+    context,
+    'gmail.sendas.list',
+    'read',
+    alias,
+    () => sendAsOf(context, alias),
+    (addresses) => ({ count: addresses.length }),
+  );
+}
+
+async function sendAsOf(context: GmailContext, alias: string): Promise<SendAsSummary[]> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
   const transport = await context.transport(alias);

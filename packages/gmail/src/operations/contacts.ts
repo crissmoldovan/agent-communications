@@ -1,4 +1,5 @@
 import { CommsError, canonicalAddress, decodeHeaderWords, neutralise, parseAddressList } from '@agentcomms/core';
+import { itemOf, recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { headerValue } from '../domain/mime.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
@@ -51,10 +52,30 @@ export const CONTACTS_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', min
 
 const RANK: Record<ContactSource, number> = { contacts: 0, history: 1, 'other-contacts': 2 };
 
+/**
+ * Finds someone's address, recorded in the activity log by the words searched for and how many were found — never the
+ * people found: a contact is not a sender, and a line names only those.
+ */
 export async function searchContacts(
   context: GmailContext,
   query: string,
   options: ContactsOptions = {},
+): Promise<ContactsResult> {
+  return recorded(
+    context,
+    'gmail.contacts.search',
+    'read',
+    options.inboxes,
+    () => searchContactsIn(context, query, options),
+    (result) => ({ count: result.contacts.length }),
+    query,
+  );
+}
+
+async function searchContactsIn(
+  context: GmailContext,
+  query: string,
+  options: ContactsOptions,
 ): Promise<ContactsResult> {
   if (!query.trim()) {
     throw new CommsError('USAGE', 'searching contacts needs something to search for', {
@@ -240,6 +261,24 @@ export const FOLLOW_UP_LIMIT: NumberOption = { flag: '--limit', arg: 'limit', mi
  * model's reading of the text — a follow-up list that invents obligations is worse than none.
  */
 export async function followUps(context: GmailContext, options: FollowUpOptions = {}): Promise<FollowUpsResult> {
+  // Recorded by each thread found and its subject — with its sender for one awaiting me; for one awaiting them, the
+  // other party is a recipient, which a line does not name.
+  return recorded(
+    context,
+    'gmail.followups',
+    'read',
+    options.inboxes,
+    () => followUpsIn(context, options),
+    (result) => ({
+      count: result.rows.length,
+      items: result.rows.map((row) =>
+        itemOf(row.threadId, row.subject, row.direction === 'awaiting-me' ? { address: row.with } : undefined),
+      ),
+    }),
+  );
+}
+
+async function followUpsIn(context: GmailContext, options: FollowUpOptions): Promise<FollowUpsResult> {
   // Checked before anything is read, so a word that is not a direction is refused the same way from either surface.
   const direction = oneOf(options.direction, FOLLOW_UP_DIRECTIONS, 'a direction') ?? 'them';
   // And the numbers, which used to be clamped into range whatever arrived.

@@ -246,6 +246,8 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     { name: 'agent-gmail', version: VERSION },
     { instructions: await buildInstructions(context, pinned) },
   );
+  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
+  context.clientInfo = () => server.server.getClientVersion();
 
   /**
    * Every tool answers with the same envelope, and the text block mirrors it for clients that drop structured data.
