@@ -1,5 +1,15 @@
 import { AppShell, Sidebar } from '@cueplusplus/ui';
-import { Activity, Bot, CheckCheck, LayoutDashboard, RefreshCw, Settings, Stethoscope, Users } from 'lucide-react';
+import {
+  Activity,
+  Bot,
+  CheckCheck,
+  History,
+  LayoutDashboard,
+  RefreshCw,
+  Settings,
+  Stethoscope,
+  Users,
+} from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { AppearanceMenu } from './components/AppearanceMenu.tsx';
 import { COPY, type Screen, SECTIONS, SETTINGS } from './copy.ts';
@@ -9,6 +19,7 @@ const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
   accounts: Users,
   approvals: CheckCheck,
+  activity: History,
   agent: Bot,
   updates: RefreshCw,
   events: Activity,
@@ -17,7 +28,7 @@ const ICONS: Record<Screen, ComponentType> = {
 };
 
 /**
- * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the seven
+ * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the eight
  * sections with Settings at its foot. On macOS the header leaves the traffic lights their room.
  *
  * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns

@@ -6,6 +6,7 @@ import { COPY, type Screen } from './copy.ts';
 import { useAppData } from './data.tsx';
 import { Shell } from './Shell.tsx';
 import { Accounts } from './screens/Accounts.tsx';
+import { Activity } from './screens/Activity.tsx';
 import { Agent } from './screens/Agent.tsx';
 import { Approvals } from './screens/Approvals.tsx';
 import { Doctor } from './screens/Doctor.tsx';
@@ -20,6 +21,7 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
   overview: Overview,
   accounts: Accounts,
   approvals: Approvals,
+  activity: Activity,
   agent: Agent,
   updates: Updates,
   events: Events,
