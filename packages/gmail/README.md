@@ -263,7 +263,7 @@ machine; the file never passes through the conversation, and no tool returns its
 | Configuration | `$XDG_CONFIG_HOME/agent-communications`, else `~/.config/agent-communications` (`%APPDATA%` on Windows) |
 | Tokens and client secrets | the system keychain, or owner-only files (`--store file`) |
 | Approvals, audit log, state | `<config>/state` |
-| What each agent window read, did and sent: the activity log | `<config>/state/activity`, one file a day, kept 30 days: ids, subjects, senders, the words searched for, file names and sizes, a send's recipients — never a body or an attachment (`agentcomms activity`) |
+| What each agent window read, did and sent: the activity log | `<config>/state/activity`, one file a day, kept 30 days: ids, subjects, senders, the words searched for, file names and sizes, a send's recipients — never a body or an attachment (`agentcomms activity sessions`) |
 | Attachments you save | where you say each time: Downloads, the folder you ran the command in, or one you name |
 | Exports | `~/Downloads/agent-communications`, or `defaults.downloadsDir` |
 

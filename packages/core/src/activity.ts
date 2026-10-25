@@ -733,7 +733,7 @@ export class ActivityLog {
       pid: process.pid,
     };
     this.#failure = failure;
-    const said = `agentcomms: activity is not being recorded: ${failure.message}`;
+    const said = `agent-communications: activity is not being recorded: ${failure.message}`;
     if (this.#warn !== undefined) {
       if (!this.#warned) this.#warn(said);
     } else if (!warnedOnStderr) {

@@ -480,7 +480,7 @@ test('on Windows, or when the parent has gone, a process is ungrouped and never 
 });
 
 test('ps is read as macOS and Linux print it', { skip: process.platform === 'win32' ? 'no ps' : false }, async () => {
-  assert.deepEqual(parsePsLine(' 26128 Sat Oct 24 22:41:34 2026     /Users/jo/.local/bin/claude\n'), {
+  assert.deepEqual(parsePsLine(' 26128 Sat Oct 24 22:41:34 2026     /example/home/jo/.local/bin/claude\n'), {
     ppid: 26128,
     startedAt: 'Sat Oct 24 22:41:34 2026',
     name: 'claude',
@@ -1012,14 +1012,14 @@ test('a process in /, the home folder or a system folder is never grouped, so on
       cwd: () => folder,
       probe,
       platform: 'darwin',
-      home: '/Users/jo',
+      home: '/example/home/jo',
       ...extra,
     });
   for (const folder of [
     '/',
-    '/Users/jo',
-    '/Users/jo/',
-    '/Users',
+    '/example/home/jo',
+    '/example/home/jo/',
+    '/example/home',
     '/usr/local/bin',
     '/Applications/Claude.app/Contents',
     '/tmp',
@@ -1031,17 +1031,17 @@ test('a process in /, the home folder or a system folder is never grouped, so on
     assert.equal(one.folder, folder, 'it still says where it ran');
   }
   // A project folder under the home is grouped, as before.
-  const project = await identity('/Users/jo/work/acme', 103);
-  const sibling = await identity('/Users/jo/work/acme', 104);
+  const project = await identity('/example/home/jo/work/acme', 103);
+  const sibling = await identity('/example/home/jo/work/acme', 104);
   assert.equal(project.grouped, true);
   assert.equal(project.key, sibling.key);
   // A connection's own session id, where the transport has one, is part of the key.
-  const viaA = await identity('/Users/jo/work/acme', 105, { connection: 'conn-a' });
-  const viaB = await identity('/Users/jo/work/acme', 106, { connection: 'conn-b' });
+  const viaA = await identity('/example/home/jo/work/acme', 105, { connection: 'conn-a' });
+  const viaB = await identity('/example/home/jo/work/acme', 106, { connection: 'conn-b' });
   assert.equal(viaA.grouped, true);
   assert.notEqual(viaA.key, viaB.key, 'two connections are two sessions');
   assert.notEqual(viaA.key, project.key);
-  assert.equal((await identity('/Users/jo/work/acme', 107, { connection: 'conn-a' })).key, viaA.key);
+  assert.equal((await identity('/example/home/jo/work/acme', 107, { connection: 'conn-a' })).key, viaA.key);
   // On Windows the same folders, by their Windows names, would be refused too.
   const windows = await identity('C:\\Users\\jo', 108, { platform: 'win32' });
   assert.equal(windows.grouped, false);
@@ -1049,7 +1049,7 @@ test('a process in /, the home folder or a system folder is never grouped, so on
     assert.equal(sharedFolder(folder, 'C:\\Users\\jo', 'win32'), true, folder);
   }
   assert.equal(sharedFolder('C:\\Users\\jo\\work\\acme', 'C:\\Users\\jo', 'win32'), false);
-  assert.equal(sharedFolder('/tmp/acme', '/Users/jo', 'linux'), false, 'a project in a temporary folder is one');
+  assert.equal(sharedFolder('/tmp/acme', '/example/home/jo', 'linux'), false, 'a project in a temporary folder is one');
   // The event service serves no project, and launchd starts it in /: it stays one session since it started.
   const launchd: ProcessProbe = async () => ({ ppid: 0, startedAt: 'Sun Oct 25 08:00:00 2026', name: 'launchd' });
   const service = (pid: number) =>
@@ -1059,7 +1059,7 @@ test('a process in /, the home folder or a system folder is never grouped, so on
       cwd: () => '/',
       probe: launchd,
       platform: 'darwin',
-      home: '/Users/jo',
+      home: '/example/home/jo',
     });
   assert.equal((await service(201)).grouped, true);
   assert.equal((await service(201)).key, (await service(202)).key);
@@ -1085,7 +1085,7 @@ test('a timeout working out the session is not kept: a call a minute later reads
     cwd: () => '/work/acme',
     probe,
     platform: 'darwin' as const,
-    home: '/Users/jo',
+    home: '/example/home/jo',
     cache,
     now: () => clock,
     budgetMs: 40,
@@ -1121,7 +1121,7 @@ test('warming starts the read when the server starts; the event service waits fo
     cwd: () => '/work/acme',
     probe: slow,
     platform: 'darwin' as const,
-    home: '/Users/jo',
+    home: '/example/home/jo',
   };
   const warmed = new SessionIdentityCache();
   warmSessionIdentity('mcp', { ...base, cache: warmed, budgetMs: 2000 });
@@ -1192,7 +1192,7 @@ test('a CLI call finds its window from a small index of server parents, not by r
     cwd: () => '/work/acme',
     probe,
     platform: 'darwin',
-    home: '/Users/jo',
+    home: '/example/home/jo',
   });
   assert.equal(window.grouped, true);
   const now = new Date().toISOString();
@@ -1213,7 +1213,7 @@ test('a CLI call finds its window from a small index of server parents, not by r
     cwd: () => '/work/acme',
     probe,
     platform: 'darwin' as const,
-    home: '/Users/jo',
+    home: '/example/home/jo',
     log,
   };
   assert.equal((await sessionIdentity('cli', undefined, cliOptions)).key, window.key);
