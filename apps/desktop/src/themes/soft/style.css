@@ -51,6 +51,14 @@
   --cue-style-segment-ink: var(--cue-fg);
   --cue-style-segment-weight: 500;
 
+  /* Tabs are the same quiet track, rounded, with the chosen tab raised on it as a pill: no rule under the list and no
+   * accent underline (the mockup's tab bars). Tabs reads the segment names above for the track and the raised tab, and
+   * these for its shape; a 3px inset leaves the pill inside the track's corners. */
+  --cue-style-segment-inset: 3px;
+  --cue-style-tab-radius: calc(var(--cue-radius-control) * var(--cue-radius-scale) + 3px);
+  --cue-style-tab-rule: 0px;
+  --cue-style-tab-underline: transparent;
+
   /* The page's measure: about the mockup's 760px column. */
   --cue-measure-wide: 50rem;
 
