@@ -180,3 +180,19 @@ test('Judges: an events service older than judges asks for an update and reads n
   expect(kinds).not.toContain('judgeKindsList');
   expect(kinds).not.toContain('judgesList');
 });
+
+test('Events: the screen opens on Service, and the Judges tab counts the kinds on with no judge', async ({ page }) => {
+  await installMockIpc(page, scenario('typesafe-on'));
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
+  await expect(page.getByRole('tablist', { name: 'Events' }).getByRole('tab')).toHaveCount(4);
+  await expect(page.getByRole('tab', { name: 'Service', exact: true })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('region', { name: 'Judges' })).toHaveCount(0);
+  // Jev is on with no judge: its tab says so while another is open, so nothing waits unseen behind it.
+  const judges = page.getByRole('tab', { name: 'Judges 1 to look at', exact: true });
+  await expect(judges).toBeVisible();
+  await judges.click();
+  await expect(
+    page.getByRole('region', { name: 'Judges' }).getByText('Next: add a judge and its key at the terminal.'),
+  ).toBeVisible();
+});

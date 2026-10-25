@@ -73,8 +73,9 @@ test('Settings: the updater and Start at login first, then the folders in use, t
   await expect(folders.getByLabel('Config folder')).toBeVisible();
   await expect(folders.getByLabel('State folder')).toBeVisible();
   await expect(folders.getByLabel('Data folder')).toBeVisible();
-  // Its explanation is a hint beside it, reached from the keyboard too.
-  await folders.getByRole('button', { name: 'Why name them here' }).focus();
+  // Its explanation is a hint beside it, the next stop from the keyboard.
+  await page.keyboard.press('Tab');
+  await expect(folders.getByRole('button', { name: 'Why name them here' })).toBeFocused();
   await expect(page.getByRole('tooltip')).toHaveText(
     'An app started from the Dock or the Start menu sees no shell variables, so it needs the same folders named here.',
   );
