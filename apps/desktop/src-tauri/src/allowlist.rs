@@ -1566,8 +1566,10 @@ mod tests {
             refused(json!({ "kind": "eventsJudgeKindDisable", "judgeKind": kind }));
             refused(json!({ "kind": "eventsJudgeModelStatus", "judgeKind": kind }));
         }
+        // Built from the webview's JSON, never as a Rust literal, so this crate still builds when E2's mutants give
+        // Laya's disable a field (`e2-t11-rust-disable-takes-a-kind`).
         assert_eq!(
-            serde_json::to_value(Call::EventsJudgeKindDisable {}).expect("json"),
+            serde_json::to_value(call(json!({ "kind": "eventsJudgeKindDisable" }))).expect("json"),
             json!({ "kind": "eventsJudgeKindDisable" })
         );
         assert_eq!(
@@ -1596,7 +1598,7 @@ mod tests {
         assert!(crate::version::at_least("0.17.0", JUDGE_KINDS_VERSION));
         assert!(crate::version::at_least("0.27.1", JUDGE_KINDS_VERSION));
         assert_eq!(
-            Call::EventsJudgeKindDisable {}.needs(),
+            call(json!({ "kind": "eventsJudgeKindDisable" })).needs(),
             Some(LAYA_JUDGE_VERSION)
         );
     }
