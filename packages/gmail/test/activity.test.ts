@@ -424,7 +424,7 @@ test('a call that fails is recorded as failed, and one refused for a usage mista
 
 test('a search of several mailboxes is one line, naming them all', async () => {
   const { harness, context } = await connected();
-  await harness.addInbox({ alias: 'home', email: 'jo@home.test', refreshToken: 'not-refreshable' });
+  await harness.addInbox({ alias: 'home', email: 'jo@home.test', refreshToken: 'fake-not-refreshable' });
   const line = await onlyLine(harness, () => search(context, { query: 'invoice' }));
   assert.deepEqual(line.account, { id: '', alias: 'home,work' });
   assert.equal(line.count, 1, 'work answered, home could not');
