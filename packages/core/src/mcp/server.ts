@@ -1,6 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { ACTIVITY_KINDS, ACTIVITY_OUTCOMES } from '../activity.ts';
+import { ACTIVITY_KINDS, ACTIVITY_OUTCOMES, warmSessionIdentity } from '../activity.ts';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
 import { waitCallOptions } from '../approval-wait-surface.ts';
 import { BEHAVIOUR_ACTS } from '../behaviour.ts';
@@ -12,7 +12,13 @@ import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
-import { activityMine, activitySettingsChange, activitySettingsReport } from '../operations/activity.ts';
+import {
+  activityMine,
+  activitySettingsChange,
+  activitySettingsReport,
+  MINE_DEFAULT_LIMIT,
+  MINE_MAX_LIMIT,
+} from '../operations/activity.ts';
 import { MAX_WAIT_SECONDS, waitForApproval } from '../operations/approval-wait.ts';
 import { ATTACH_CHANGE_KINDS, attachChange, attachReport } from '../operations/attach-settings.ts';
 import {
@@ -175,6 +181,8 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     { name: 'agentcomms', version: VERSION },
     { instructions: await buildInstructions(core) },
   );
+  // Which agent window started this server, read in the background now, so its first calls find it done (S2).
+  warmSessionIdentity('mcp');
 
   /*
    * What the command prints with `--json`, as JSON: a field left undefined is left out, as it is there, and a command a
@@ -326,7 +334,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     'comms_activity',
     {
       title: 'What this session did',
-      description: `What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (${ACTIVITY_KINDS.join(', ')}), its outcome (${ACTIVITY_OUTCOMES.join(', ')}) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts. Filter by kind, channel, account, outcome and time. Reads only.`,
+      description: `What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (${ACTIVITY_KINDS.join(', ')}), its outcome (${ACTIVITY_OUTCOMES.join(', ')}) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts: the latest ${MINE_DEFAULT_LIMIT} lines of the last 24 hours by default — \`limit\` returns up to ${MINE_MAX_LIMIT}, and \`since\` looks further back; \`more\` says when more matched. Filter by kind, channel, account, outcome and time. A window whose grouping could not be read — always on Windows, and in a folder such as \`/\` or the home folder that cannot tell projects apart — shows nothing here: its calls are still recorded, each process on its own. Reads only.`,
       inputSchema: {
         kind: z
           .enum(ACTIVITY_KINDS as unknown as [string, ...string[]])
@@ -341,17 +349,30 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         since: z
           .string()
           .optional()
-          .describe('only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`'),
+          .describe(
+            'only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`; the last 24 hours when left out',
+          ),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MINE_MAX_LIMIT)
+          .optional()
+          .describe(
+            `the most lines to return, newest first: ${MINE_DEFAULT_LIMIT} when left out, ${MINE_MAX_LIMIT} at most`,
+          ),
       },
       annotations: readsLocal,
     },
-    async (args) =>
+    async (args, ctx) =>
       read(() => {
         const client = server.server.getClientVersion();
         return activityMine(core, {
           surface: 'mcp',
           ...args,
           ...(client?.name ? { clientInfo: { name: client.name, version: client.version } } : {}),
+          // A transport's own session id, where it has one (stdio has none): one connection, one session.
+          ...(ctx.sessionId ? { connection: ctx.sessionId } : {}),
         });
       }),
   );

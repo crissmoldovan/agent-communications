@@ -12,6 +12,7 @@ import {
   updateToolNotice,
   waitCallOptions,
   waitForApproval,
+  warmSessionIdentity,
 } from '@agentcomms/core';
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
@@ -133,6 +134,8 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     { name: 'agent-resend', version: VERSION },
     { instructions: await buildInstructions(context, pinned) },
   );
+  // Which agent window started this server, read in the background now, so its first calls find it done (S2).
+  warmSessionIdentity('mcp');
   // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
   context.clientInfo = () => server.server.getClientVersion();
 

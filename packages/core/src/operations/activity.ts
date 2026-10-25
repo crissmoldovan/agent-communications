@@ -83,7 +83,17 @@ export interface ActivityMineRequest extends ActivityShowRequest {
   readonly surface: 'mcp' | 'cli';
   /** The MCP client's `clientInfo`, when there is one. */
   readonly clientInfo?: ClientInfo | undefined;
+  /** The most lines to return, newest first: `MINE_DEFAULT_LIMIT` when left out, `MINE_MAX_LIMIT` at most. */
+  readonly limit?: number | undefined;
+  /** The MCP connection's own session id, where its transport has one: part of the session key. */
+  readonly connection?: string | undefined;
 }
+
+/** How many lines `mine` returns when asked for no number, and the most it returns at all. */
+export const MINE_DEFAULT_LIMIT = 50;
+export const MINE_MAX_LIMIT = 200;
+/** How far back `mine` looks when asked for no time: a day. */
+export const MINE_DEFAULT_SINCE = '24h';
 
 export interface ActivityMineResult {
   /** The calling session, as this process worked it out. */
@@ -94,10 +104,13 @@ export interface ActivityMineResult {
     readonly folder: string | null;
     readonly folderShown: string | null;
   };
-  readonly since: string | null;
+  readonly since: string;
+  /** The most lines this answer could hold. */
+  readonly limit: number;
   /** The session over the time asked; null when it recorded nothing there. */
   readonly summary: ShownActivitySession | null;
   readonly lines: ActivityLine[];
+  /** True when more lines matched than `limit`: ask with a later `since`, a filter, or a larger `limit`. */
   readonly more: boolean;
 }
 
@@ -230,7 +243,7 @@ export async function activityShow(
 
 /**
  * The calling session's own activity (S3): its lines and counts, filtered as `show` filters, and nothing of any other
- * session. Which session is asking is this process's own `sessionIdentity` — never an argument — so an MCP server
+ * session — by default its latest 50 lines of the last 24 hours, and 200 at most. Which session is asking is this process's own `sessionIdentity` — never an argument — so an MCP server
  * answers for the agent window that started it, and a CLI call for the window it ran in (or itself alone).
  *
  * `deps.identity` is a test's: the identity to answer as.
@@ -241,10 +254,18 @@ export async function activityMine(
   deps: { identity?: (() => Promise<ActivitySession>) | undefined } & ActivityReadOptions = {},
 ): Promise<ActivityMineResult> {
   const now = (deps.now ?? (() => new Date()))();
-  const filters = filtersOf(request, now);
+  const limit = request.limit ?? MINE_DEFAULT_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > MINE_MAX_LIMIT) {
+    throw new CommsError('USAGE', `limit is a whole number of lines, 1 to ${MINE_MAX_LIMIT}, not ${String(limit)}`);
+  }
+  // Bounded both ways by default, so one answer is never every file held: the latest lines of the last day.
+  const filters = { ...filtersOf({ ...request, since: request.since ?? MINE_DEFAULT_SINCE }, now), limit };
   const identity =
     deps.identity === undefined
-      ? await sessionIdentity(request.surface, request.clientInfo, { log: core.activity })
+      ? await sessionIdentity(request.surface, request.clientInfo, {
+          log: core.activity,
+          connection: request.connection,
+        })
       : await deps.identity();
   const shown = await core.activity.show(identity.key, filters);
   const boundary = newBoundary();
@@ -256,7 +277,8 @@ export async function activityMine(
       folder: identity.folder,
       folderShown: shownFolder(identity.folder, deps),
     },
-    since: filters.since ?? null,
+    since: filters.since as string,
+    limit,
     summary: shown.summary === null ? null : shownSession(shown.summary, deps),
     // `show` reads only lines whose key is this one; checked again here, since this is the boundary S3 draws.
     lines: shown.lines.filter((line) => line.session.key === identity.key).map((line) => enveloped(line, boundary)),
@@ -435,12 +457,18 @@ export async function activityDoctorCheck(
   const problems = settings.problems.length > 0 ? `; ${settings.problems.join('; ')}` : '';
   const failure = health.failure;
   const failing = failure !== null && (health.lastWritten === null || failure.at > health.lastWritten);
+  // Retention holds whether or not anything is recorded: a day past it is never shown, and the day's first read or
+  // call deletes it. One still here is one that could not be deleted yet.
+  const cutoff = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const overdue = health.days.filter((day) => day < cutoff).length;
+  const waiting =
+    overdue > 0 ? `; ${overdue} older than that, never shown, and deleted by the day's first read or call` : '';
   if (settings.record === 'off') {
     return {
       name,
       ok: true,
-      ...(problems ? { warn: true as const } : {}),
-      detail: `off: nothing is recorded; ${health.days.length} ${health.days.length === 1 ? 'day' : 'days'} held, kept ${kept}${problems}`,
+      ...(problems || overdue > 0 ? { warn: true as const } : {}),
+      detail: `off: nothing is recorded; ${health.days.length} ${health.days.length === 1 ? 'day' : 'days'} held, kept ${kept}${waiting}${problems}`,
     };
   }
   if (!health.writable) {
@@ -459,8 +487,6 @@ export async function activityDoctorCheck(
       fix: remedy(`Make ${dir} a folder its owner can write: recording resumes with the next call.`),
     };
   }
-  const cutoff = new Date(Date.now() - settings.retentionDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const overdue = health.days.filter((day) => day < cutoff).length;
   const held =
     health.days.length === 0
       ? 'nothing recorded yet'
@@ -471,6 +497,6 @@ export async function activityDoctorCheck(
     name,
     ok: true,
     ...(problems || overdue > 0 ? { warn: true as const } : {}),
-    detail: `on, kept ${kept}: ${held}${overdue > 0 ? `; ${overdue} older than that, deleted with the next call recorded` : ''}${past}${problems}`,
+    detail: `on, kept ${kept}: ${held}${waiting}${past}${problems}`,
   };
 }

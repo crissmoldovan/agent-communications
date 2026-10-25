@@ -4,10 +4,12 @@
  *
  * `config.json` keeps them as `activity: { record, retentionDays }`, a key the schemas do not name, so every release
  * sharing the file keeps it through its writes, as it keeps `agentLabel` and `behaviour`. It is read only through
- * `readActivitySettings`, which reads a value it does not understand as the stricter one — recording off, the fewest
- * days a number allows — never as the default. Stricter here means less kept about what agents did: `off` and fewer
- * days are the tightenings, which apply at once, and `on` and more days the loosenings, which a person approves
- * (`classifyChange`). So a hand edit or a later release's word can only make this release record less.
+ * `readActivitySettings`, which reads a value it does not understand as recording nothing — never as the default.
+ * `off` and fewer days are the tightenings, which apply at once, and `on` and more days the loosenings, which a person
+ * approves (`classifyChange`). So a hand edit or a later release's word can only make this release record less.
+ *
+ * A retention it cannot read is read as the longest, 365 days, with recording off: what it cannot read must never
+ * delete what is held. Read as one day, a typo — or a later release's word — once deleted all but a day of the log.
  *
  * `config.ts` imports this module to judge a change, so it imports nothing at all.
  */
@@ -51,9 +53,9 @@ export function storedActivity(config: { readonly activity?: unknown }): Readonl
 
 /**
  * The settings in force for `config`. A missing block, or a missing key, is the default. Anything else this release
- * cannot read is read as the stricter value and named in `problems`: a word other than `on` or `off` as `off`; a
- * number of days out of range as the nearest in range, a fraction as the whole days below it, and anything that is
- * not a number as one day.
+ * cannot read is named in `problems`, and read so that nothing is recorded and nothing is deleted: a word other than
+ * `on` or `off` as `off`; a retention that is not a whole number from 1 to 365 — out of range, a fraction, not a
+ * number — as 365 days with recording `off`; a block that is not an object as both.
  */
 export function readActivitySettings(config: { readonly activity?: unknown }): ActivitySettings {
   const problems: string[] = [];
@@ -61,8 +63,10 @@ export function readActivitySettings(config: { readonly activity?: unknown }): A
   if (raw === undefined) return { record: 'on', retentionDays: DEFAULT_ACTIVITY_RETENTION_DAYS, problems };
   const stored = storedActivity(config);
   if (stored === null) {
-    problems.push('activity in config.json is not an object, so recording is off and one day is kept');
-    return { record: 'off', retentionDays: MIN_ACTIVITY_RETENTION_DAYS, problems };
+    problems.push(
+      `activity in config.json is not an object, so recording is off and ${MAX_ACTIVITY_RETENTION_DAYS} days are kept`,
+    );
+    return { record: 'off', retentionDays: MAX_ACTIVITY_RETENTION_DAYS, problems };
   }
   let record: ActivityRecordSetting = 'on';
   if (stored.record !== undefined) {
@@ -77,12 +81,10 @@ export function readActivitySettings(config: { readonly activity?: unknown }): A
   if (days !== undefined) {
     if (isActivityRetention(days)) retentionDays = days;
     else {
-      retentionDays =
-        typeof days === 'number' && Number.isFinite(days)
-          ? Math.min(MAX_ACTIVITY_RETENTION_DAYS, Math.max(MIN_ACTIVITY_RETENTION_DAYS, Math.floor(days)))
-          : MIN_ACTIVITY_RETENTION_DAYS;
+      retentionDays = MAX_ACTIVITY_RETENTION_DAYS;
+      record = 'off';
       problems.push(
-        `activity.retentionDays is ${describe(days)}, not a whole number from ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, so ${retentionDays} ${retentionDays === 1 ? 'day is' : 'days are'} kept`,
+        `activity.retentionDays is ${describe(days)}, not a whole number from ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, so recording is off and ${MAX_ACTIVITY_RETENTION_DAYS} days are kept`,
       );
     }
   }

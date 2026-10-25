@@ -74,7 +74,7 @@ The most recent audit records, newest last: every send, change and approval step
 
 ### `comms_activity`
 
-What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (read, write, told, approval), its outcome (ok, refused, failed) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts. Filter by kind, channel, account, outcome and time. Reads only.
+What this agent session — the window that started this server — read, was told, did and sent through agent-communications: its own calls only, never another session's. Each line: when, the channel and account, the operation, its kind (read, write, told, approval), its outcome (ok, refused, failed) and why, how long it took, and what it touched — ids, and subjects, senders and file names inside the untrusted-content envelope; never a message body. Newest first, with the session's counts: the latest 50 lines of the last 24 hours by default — `limit` returns up to 200, and `since` looks further back; `more` says when more matched. Filter by kind, channel, account, outcome and time. A window whose grouping could not be read — always on Windows, and in a folder such as `/` or the home folder that cannot tell projects apart — shows nothing here: its calls are still recorded, each process on its own. Reads only.
 
 *read-only*
 
@@ -84,7 +84,8 @@ What this agent session — the window that started this server — read, was to
 | `channel` | string | no | only this channel: `gmail`, `slack`, `resend`, `whatsapp`, `events` |
 | `account` | string | no | only this account, by its name — `organisation/platform` — or its id |
 | `outcome` | `ok` \\| `refused` \\| `failed` | no | only calls that ended so |
-| `since` | string | no | only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h` |
+| `since` | string | no | only calls at or after this: an ISO time, or a span back from now such as `7d` or `12h`; the last 24 hours when left out |
+| `limit` | integer | no | the most lines to return, newest first: 50 when left out, 200 at most |
 
 ### `comms_approvals_list`
 

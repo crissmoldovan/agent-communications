@@ -734,8 +734,9 @@ test('a reaction waiting for a person is a refused approval line; the reaction m
 test('a standing approval prepared, and an acknowledgement made under it, each record one line on each surface', async (t) => {
   const w = await standingWorld(t, { sendPolicy: 'chat' });
   const folder = join(w.harness.core.paths.stateDir, 'activity');
+  // The day files only: the folder also holds core's own indexes (`.index`, `.parents`).
   const lines = () =>
-    (existsSync(folder) ? readdirSync(folder) : [])
+    (existsSync(folder) ? readdirSync(folder).filter((name) => name.endsWith('.jsonl')) : [])
       .sort()
       .flatMap((name) => readFileSync(join(folder, name), 'utf8').split('\n'))
       .filter((line) => line.trim() !== '')

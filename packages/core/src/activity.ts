@@ -1,7 +1,8 @@
 import { execFile } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { access, constants, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { access, constants, open, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   type ActivitySettings,
@@ -12,7 +13,7 @@ import {
 } from './activity-settings.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
-import { appendPrivateLine, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
+import { appendPrivateLine, ensurePrivateDir, FILE_MODE, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
 
 /**
  * The activity log (design 2026-10-25-activity, §4 with S1–S5): one line for every call an agent session makes that
@@ -57,6 +58,11 @@ export type ActivitySurface = (typeof ACTIVITY_SURFACES)[number];
 export const MAX_ACTIVITY_ITEMS = 50;
 /** How much of a subject a line keeps, in characters. */
 export const MAX_SUBJECT_CHARS = 200;
+/**
+ * The most a line may take as written, its newline included: 16 KiB, well inside the one write `appendPrivateLine`
+ * makes of it, so a line is always whole or absent, whatever its items hold. Past it, `fitted` cuts it.
+ */
+export const MAX_ACTIVITY_LINE_BYTES: number = 16 * 1024;
 
 /** An MCP client's `clientInfo`, as the client reported it: what it said, never proof of what it is (§4.3). */
 export interface ClientInfo {
@@ -157,6 +163,11 @@ export interface ActivityLine {
   readonly recipients?: readonly string[] | undefined;
   readonly approvalId?: string | undefined;
   readonly told?: ActivityTold | undefined;
+  /**
+   * The line was cut to `MAX_ACTIVITY_LINE_BYTES`: items, then recipients, dropped from the end, and long words
+   * shortened. `count` still says how many items there were.
+   */
+  readonly truncated?: true | undefined;
 }
 
 /** A line to append: `at` is now when left out. */
@@ -276,6 +287,70 @@ function sessionOf(raw: unknown): ActivitySession {
  * Anything else the input carries — a body, a text, an HTML part, bytes — is not copied, whatever it is called.
  */
 export function activityLineOf(input: ActivityLineInput, now: Date = new Date()): ActivityLine {
+  return fitted(boundedLine(input, now));
+}
+
+/** How many bytes a line takes as written, its newline included. */
+function bytesOf(line: ActivityLine): number {
+  return Buffer.byteLength(JSON.stringify(line)) + 1;
+}
+
+/**
+ * The line, cut until it fits in `MAX_ACTIVITY_LINE_BYTES`, and marked `truncated` when it was: items from the end
+ * first — `count` keeps how many there were — then recipients from the end, then the longer words shortened, and
+ * last the words that are not the line's own dropped. Text a sender wrote can be many times its length as JSON (a
+ * control character is six bytes), so the bounds on each field alone do not bound the line.
+ */
+function fitted(line: ActivityLine): ActivityLine {
+  if (bytesOf(line) <= MAX_ACTIVITY_LINE_BYTES) return line;
+  const items = [...(line.items ?? [])];
+  const recipients = [...(line.recipients ?? [])];
+  let cutLine: ActivityLine = { ...line, truncated: true };
+  const fits = () => bytesOf(cutLine) <= MAX_ACTIVITY_LINE_BYTES;
+  while (items.length > 0 && !fits()) {
+    items.pop();
+    cutLine = { ...cutLine, items: [...items] };
+  }
+  while (recipients.length > 0 && !fits()) {
+    recipients.pop();
+    cutLine = { ...cutLine, recipients: [...recipients] };
+  }
+  if (fits()) return cutLine;
+  const short = (text: string | undefined, max: number) => (text === undefined ? undefined : cut(text, max));
+  const { ancestors: _ancestors, ...session } = cutLine.session;
+  cutLine = {
+    ...cutLine,
+    channel: short(cutLine.channel, 40) ?? '',
+    operation: short(cutLine.operation, 64) ?? '',
+    account: { id: short(cutLine.account.id, 64) ?? '', alias: short(cutLine.account.alias, 64) ?? '' },
+    session: {
+      ...session,
+      folder: cutLine.session.folder === null ? null : (short(cutLine.session.folder, 256) ?? null),
+      ...(session.client === undefined
+        ? {}
+        : {
+            client: {
+              name: short(session.client.name, 40) ?? '',
+              ...(session.client.version === undefined ? {} : { version: short(session.client.version, 20) }),
+            },
+          }),
+      ...(session.parent === undefined
+        ? {}
+        : { parent: { ...session.parent, name: short(session.parent.name, 40) ?? '' } }),
+    },
+    ...(cutLine.reason === undefined ? {} : { reason: short(cutLine.reason, 100) }),
+    ...(cutLine.query === undefined ? {} : { query: short(cutLine.query, 100) }),
+    ...(cutLine.told === undefined
+      ? {}
+      : { told: { rule: short(cutLine.told.rule, 60) ?? '', target: short(cutLine.told.target, 60) ?? '' } }),
+  };
+  if (fits()) return cutLine;
+  const { reason: _reason, query: _query, told: _told, counts: _counts, ...rest } = cutLine;
+  return { ...rest, truncated: true };
+}
+
+/** The line every field of it bounded, before the line as a whole is (`fitted`). */
+function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
   const raw = input as unknown as Record<string, unknown>;
   const at = typeof raw.at === 'string' && ISO_TIME.test(raw.at) ? raw.at : now.toISOString();
   const account = own<Record<string, unknown>>(raw.account);
@@ -322,6 +397,7 @@ export function activityLineOf(input: ActivityLineInput, now: Date = new Date())
     ...(told === undefined
       ? {}
       : { told: { rule: cut(told.rule, BOUNDS.name) ?? '', target: cut(told.target, BOUNDS.name) ?? '' } }),
+    ...(raw.truncated === true ? { truncated: true as const } : {}),
   };
 }
 
@@ -565,6 +641,11 @@ export interface ActivityLogOptions {
 
 const FAILURE_FILE = 'activity-failure.json';
 const INDEX_DIR = '.index';
+/**
+ * Each day's server windows: one small line for each server process's window on that day — its key, parent and
+ * folder — so a CLI call finds the window it runs in without reading the day (`sessionOfAncestor`).
+ */
+const PARENTS_DIR = '.parents';
 const DEFAULT_SHOW_LIMIT = 1000;
 const ON_BY_DEFAULT: ActivitySettings = Object.freeze({
   record: 'on',
@@ -600,6 +681,9 @@ export class ActivityLog {
   #failureWrittenAt = 0;
   #warned = false;
   #prunedDay: string | null = null;
+  /** The days this process has made sure of a parents file for, and the windows it has noted there, by day. */
+  readonly #parentsReady = new Set<string>();
+  readonly #parentsNoted = new Set<string>();
 
   constructor(stateDir: string, options: ActivityLogOptions = {}) {
     this.directory = join(stateDir, 'activity');
@@ -618,20 +702,16 @@ export class ActivityLog {
    * Appends one line, unless recording is off. True when it was written. Never throws: a line that cannot be written
    * is said once per process (`warn`, stderr by default), recorded beside the log for `doctor`, and returns false.
    *
-   * The first line a process writes on each day also prunes days older than the retention in force — the log's
-   * daily maintenance, best effort.
+   * The first call a process makes on each day — this, or any read — first prunes days older than the retention in
+   * force, whether or not recording is on: the log's daily maintenance, best effort.
    */
   async append(input: ActivityLineInput): Promise<boolean> {
-    let settings: ActivitySettings;
-    try {
-      settings = await this.#settings();
-    } catch {
-      settings = UNREADABLE;
-    }
+    const settings = await this.#maintained();
     if (settings.record !== 'on') return false;
     try {
       const line = activityLineOf(input, this.#now());
       await appendPrivateLine(join(this.directory, `${line.at.slice(0, 10)}.jsonl`), JSON.stringify(line));
+      await this.#noteParent(line);
       if (this.#failure !== null) {
         // Recording again: what this process recorded of its failure is no longer true.
         this.#failure = null;
@@ -641,7 +721,6 @@ export class ActivityLog {
       await this.#failed(error);
       return false;
     }
-    await this.#dailyPrune(settings);
     return true;
   }
 
@@ -668,11 +747,82 @@ export class ActivityLog {
     await writeFileAtomic(this.#failureFile, `${JSON.stringify(failure)}\n`).catch(() => undefined);
   }
 
-  async #dailyPrune(settings: ActivitySettings): Promise<void> {
+  /**
+   * The day's parents file, made on a process's first line of the day — so a reader can tell a day with no window
+   * from one an earlier build wrote, with no index — and a grouped server's window noted in it once a day. Best
+   * effort: without it a CLI call reads the day itself.
+   */
+  async #noteParent(line: ActivityLine): Promise<void> {
+    const day = line.at.slice(0, 10);
+    const path = join(this.directory, PARENTS_DIR, `${day}.jsonl`);
+    try {
+      if (!this.#parentsReady.has(day)) {
+        await ensurePrivateDir(join(this.directory, PARENTS_DIR));
+        await (await open(path, 'a', FILE_MODE)).close();
+        this.#parentsReady.add(day);
+      }
+      const { session } = line;
+      if (session.surface !== 'mcp' || !session.grouped || session.parent === undefined) return;
+      const noted = `${day}\0${session.key}`;
+      if (this.#parentsNoted.has(noted)) return;
+      await appendPrivateLine(
+        path,
+        JSON.stringify({ key: session.key, parent: session.parent, folder: session.folder }),
+      );
+      this.#parentsNoted.add(noted);
+    } catch {
+      // The day is still read the old way.
+    }
+  }
+
+  /** The windows noted on `day`, or null when the day has no parents file (an earlier build wrote it, or none). */
+  async #parentsOf(day: string): Promise<{ key: string; parent: ActivityParent; folder: string | null }[] | null> {
+    let text: string;
+    try {
+      text = await readFile(join(this.directory, PARENTS_DIR, `${day}.jsonl`), 'utf8');
+    } catch {
+      return null;
+    }
+    return text.split('\n').flatMap((raw) => {
+      if (!raw) return [];
+      try {
+        const held = own<Record<string, unknown>>(JSON.parse(raw));
+        const parent = parentOf(held?.parent);
+        const key = held?.key;
+        if (typeof key !== 'string' || !SESSION_KEY.test(key) || parent === undefined) return [];
+        return [{ key, parent, folder: typeof held?.folder === 'string' ? held.folder : null }];
+      } catch {
+        return [];
+      }
+    });
+  }
+
+  /** The settings in force, read afresh; a reader that throws reads as `UNREADABLE` — off, and every day kept. */
+  async #settingsNow(): Promise<ActivitySettings> {
+    try {
+      return await this.#settings();
+    } catch {
+      return UNREADABLE;
+    }
+  }
+
+  /**
+   * The settings in force, after the day's maintenance: the first call a process makes on a day — an append or a read,
+   * recording on or off — deletes the days past the retention. Never throws.
+   */
+  async #maintained(): Promise<ActivitySettings> {
+    const settings = await this.#settingsNow();
     const today = isoDay(this.#now().getTime());
-    if (this.#prunedDay === today) return;
-    this.#prunedDay = today;
-    await this.prune(settings.retentionDays).catch(() => undefined);
+    if (this.#prunedDay !== today) {
+      this.#prunedDay = today;
+      await this.prune(settings.retentionDays).catch(() => undefined);
+    }
+    return settings;
+  }
+
+  /** The first day the retention in force keeps: any day before it is never shown, deleted yet or not. */
+  #cutoff(retentionDays: number): string {
+    return isoDay(this.#now().getTime() - retentionDays * DAY_MS);
   }
 
   /** The days held, oldest first. */
@@ -699,12 +849,13 @@ export class ActivityLog {
         `the activity log keeps a whole number of days, ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, not ${String(retentionDays)}`,
       );
     }
-    const cutoff = isoDay(this.#now().getTime() - retentionDays * DAY_MS);
+    const cutoff = this.#cutoff(retentionDays);
     const deleted: string[] = [];
     for (const day of await this.days()) {
       if (day >= cutoff) continue;
       await rm(join(this.directory, `${day}.jsonl`), { force: true });
       await rm(join(this.directory, INDEX_DIR, `${day}.json`), { force: true }).catch(() => undefined);
+      await rm(join(this.directory, PARENTS_DIR, `${day}.jsonl`), { force: true }).catch(() => undefined);
       deleted.push(day);
     }
     return { deleted };
@@ -756,12 +907,17 @@ export class ActivityLog {
     return sessions;
   }
 
-  /** Every session with a line at or after `since` (every day held, when left out), newest first. */
+  /**
+   * Every session with a line at or after `since` (every day the retention keeps, when left out), newest first. A day
+   * past the retention is never read, whether or not it has been deleted yet.
+   */
   async sessions(options: { since?: string | undefined } = {}): Promise<ActivitySessionSummary[]> {
     const since = options.since;
     const today = isoDay(this.#now().getTime());
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
     const groups = new Map<string, Aggregate>();
     for (const day of await this.days()) {
+      if (day < cutoff) continue;
       if (since !== undefined && `${day}T23:59:59.999Z` < since) continue;
       const whole = since === undefined || since <= `${day}T00:00:00.000Z`;
       if (whole && day < today) {
@@ -779,18 +935,19 @@ export class ActivityLog {
 
   /**
    * One session's lines, newest first, that match every filter given; and its summary over the time asked. Only
-   * lines whose session key is exactly `key` are ever read into the answer.
+   * lines whose session key is exactly `key` are ever read into the answer, and none of a day past the retention.
    */
   async show(key: string, filters: ActivityFilters = {}): Promise<ActivityShown> {
     if (!SESSION_KEY.test(key)) throw new CommsError('USAGE', `"${cut(key, 40)}" is not a session key`);
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
     const limit = filters.limit ?? DEFAULT_SHOW_LIMIT;
     const since = filters.since;
     // A session key is hex, and a quote inside any string a line holds is written `\"`: this finds only the key.
     const needle = `"key":"${key}"`;
     const lines: ActivityLine[] = [];
-    let more = false;
+    let matched = 0;
     let summary: Aggregate | null = null;
-    const days = (await this.days()).reverse();
+    const days = (await this.days()).filter((day) => day >= cutoff).reverse();
     for (const day of days) {
       if (since !== undefined && `${day}T23:59:59.999Z` < since) break;
       const text = await this.#text(day);
@@ -805,32 +962,46 @@ export class ActivityLog {
         const aggregate = aggregateOf(line);
         summary = summary === null ? aggregate : merge(summary, aggregate);
         if (!matches(line, filters)) continue;
-        if (lines.length >= limit) {
-          more = true;
-          continue;
-        }
         lines.push(line);
+        matched += 1;
+        // The newest `limit` by time, not the first met: two processes append to one file out of order. Kept to twice
+        // the limit as it goes, so a long session is never held whole.
+        if (lines.length >= limit * 2) {
+          lines.sort(newestFirst);
+          lines.length = limit;
+        }
       }
     }
-    // Lines appended out of order (two processes, one file) are put back in time order, newest first.
-    lines.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? 1 : -1));
-    return { lines, more, summary: summary === null ? null : summaryOf(summary) };
+    lines.sort(newestFirst);
+    if (lines.length > limit) lines.length = limit;
+    return { lines, more: matched > limit, summary: summary === null ? null : summaryOf(summary) };
   }
 
   /**
-   * The window a CLI call belongs to (S2): the session of a server process, in today's or yesterday's file, whose
-   * parent is one of `ancestors` — the nearest first. Null when none is.
+   * The window a CLI call belongs to (S2): the session of a server process, today or yesterday, whose parent is one of
+   * `ancestors` — the nearest first. Null when none is. Read from each day's parents file; a day with none — written
+   * by an earlier build — is read whole, as before.
    */
   async sessionOfAncestor(
     ancestors: readonly ActivityParent[],
   ): Promise<{ key: string; parent: ActivityParent; folder: string | null } | null> {
     const now = this.#now().getTime();
+    const noted: { key: string; parent: ActivityParent; folder: string | null }[] = [];
     const texts: string[] = [];
     for (const day of [isoDay(now), isoDay(now - DAY_MS)]) {
+      const parents = await this.#parentsOf(day);
+      if (parents !== null) {
+        noted.push(...parents);
+        continue;
+      }
       const text = await this.#text(day).catch(() => null);
       if (text !== null) texts.push(text);
     }
     for (const ancestor of ancestors) {
+      const found = noted.find(
+        (each) => each.parent.pid === ancestor.pid && each.parent.startedAt === ancestor.startedAt,
+      );
+      if (found !== undefined) return found;
       // In the order `parentOf` writes a parent's keys; the start is JSON, so its quotes cannot end it early.
       const needle = `"parent":{"pid":${ancestor.pid},"startedAt":${JSON.stringify(ancestor.startedAt)}`;
       for (const text of texts) {
@@ -877,8 +1048,12 @@ export class ActivityLog {
     return mine.at >= stored.at ? mine : stored;
   }
 
-  /** What `doctor` shows of the log. Reads only: it creates nothing. */
+  /**
+   * What `doctor` shows of the log. It creates nothing; like every read it first deletes the days past the retention,
+   * once a day per process, so the days it lists past the retention are those that could not be deleted.
+   */
   async health(): Promise<ActivityHealth> {
+    await this.#maintained();
     const today = isoDay(this.#now().getTime());
     let exists = false;
     let isDirectory = true;
@@ -927,6 +1102,11 @@ export class ActivityLog {
       failure: await this.readFailure(),
     };
   }
+}
+
+/** Newest first; lines of one time in the order they were met. */
+function newestFirst(a: ActivityLine, b: ActivityLine): number {
+  return a.at === b.at ? 0 : a.at < b.at ? 1 : -1;
 }
 
 function matches(line: ActivityLine, filters: ActivityFilters): boolean {
@@ -997,8 +1177,12 @@ export const psProbe: ProcessProbe = (pid, timeoutMs) =>
     }
   });
 
-/** About how long working out a session may take, at most: it is done once per process. */
+/** How long a call waits for its session to be worked out: no longer, and it goes on alone for now. */
 export const SESSION_IDENTITY_BUDGET_MS = 200;
+/** How long a server's or the event service's read of its parent may take, in the background. */
+export const SESSION_IDENTITY_BACKGROUND_MS = 2000;
+/** How soon after a read that did not finish another is tried: no more than once a minute. */
+export const SESSION_IDENTITY_RETRY_MS = 60_000;
 
 export interface SessionIdentityOptions {
   /**
@@ -1006,19 +1190,31 @@ export interface SessionIdentityOptions {
    * a CLI call is always a session of its own.
    */
   log?: Pick<ActivityLog, 'sessionOfAncestor'> | undefined;
-  /** For a test: this process's id, its parent's, its folder, how processes are read, the system, the bound. */
+  /**
+   * The MCP connection's own session id, where its transport has one (`ctx.sessionId`; stdio has none): mixed into
+   * the key, so two connections through one parent are two sessions.
+   */
+  connection?: string | undefined;
+  /**
+   * Where what was worked out is kept: this process's own when left out — or, when any test seam below is given, nowhere,
+   * unless a test hands one in.
+   */
+  cache?: SessionIdentityCache | undefined;
+  /**
+   * For a test: this process's id, its parent's, its folder, how processes are read, the system, how long the read
+   * may take (`SESSION_IDENTITY_BACKGROUND_MS` in the background, `SESSION_IDENTITY_BUDGET_MS` for a CLI call), how
+   * long a call waits for it, the home folder, and the clock a retry is timed by.
+   */
   pid?: number | undefined;
   ppid?: number | undefined;
   cwd?: (() => string) | undefined;
   probe?: ProcessProbe | undefined;
   platform?: NodeJS.Platform | undefined;
   budgetMs?: number | undefined;
+  waitMs?: number | undefined;
+  home?: string | undefined;
+  now?: (() => number) | undefined;
 }
-
-/** A random id this process made when it started (§4.3). */
-const PROCESS_ID = randomBytes(6).toString('hex');
-/** The key of this process's own session, when it is not grouped with others. */
-const OWN_KEY = randomBytes(8).toString('hex');
 
 function randomKey(): string {
   return randomBytes(8).toString('hex');
@@ -1029,17 +1225,52 @@ interface Ancestry {
   readonly folder: string | null;
   /** Nearest first; each with the parent it names in turn. */
   readonly chain: readonly (ActivityParent & { readonly ppid: number })[];
+  /**
+   * True when the read ended for good: it reached its depth, a process with no parent of its own, or a system it does
+   * not ask. False when it ran out of time or a read failed — tried again, at most once a minute.
+   */
+  readonly complete: boolean;
 }
 
-/** The ancestry of this process, read once per depth and kept: the parent cannot change while a process lives. */
-const ANCESTRY = new Map<number, Promise<Ancestry>>();
-/** A CLI call's identity, worked out once per log it was asked against. */
-const CLI_IDENTITY = new Map<string, Promise<ActivitySession>>();
+/** One background read of a process's parent: when it began, and what it found once it has finished. */
+interface AncestryRead {
+  readonly at: number;
+  readonly promise: Promise<Ancestry>;
+  settled: Ancestry | null;
+}
 
+/**
+ * What a process has worked out of its session: its random ids, its background reads of its parent, and a CLI call's
+ * identity. One per process (`sessionIdentity` keeps its own); a test makes its own.
+ */
+export class SessionIdentityCache {
+  /** A random id this process made when it started (§4.3). */
+  readonly processId: string = randomBytes(6).toString('hex');
+  /** The key of this process's own session, when it is not grouped with others. */
+  readonly ownKey: string = randomKey();
+}
+
+/** Each cache's background reads, and its CLI identity by log: held here, so the class shows only its ids. */
+const READS = new WeakMap<SessionIdentityCache, Map<string, AncestryRead>>();
+const CLI_IDENTITIES = new WeakMap<SessionIdentityCache, Map<string, Promise<ActivitySession>>>();
+
+function heldIn<V>(map: WeakMap<SessionIdentityCache, Map<string, V>>, cache: SessionIdentityCache): Map<string, V> {
+  let held = map.get(cache);
+  if (held === undefined) {
+    held = new Map();
+    map.set(cache, held);
+  }
+  return held;
+}
+
+const PROCESS_CACHE = new SessionIdentityCache();
+/** This process's own random id: a line handed in without one names this process. */
+const PROCESS_ID = PROCESS_CACHE.processId;
+
+/** `promise`, or null after `ms`. Its timer is not unref'd: whoever awaits it keeps the process alive till then. */
 function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
   return new Promise((resolve) => {
     const timer = setTimeout(() => resolve(null), Math.max(0, ms));
-    timer.unref?.();
     promise.then(
       (value) => {
         clearTimeout(timer);
@@ -1053,47 +1284,155 @@ function within<T>(promise: Promise<T | null>, ms: number): Promise<T | null> {
   });
 }
 
-async function readAncestry(options: SessionIdentityOptions, depth: number, initIsParent: boolean): Promise<Ancestry> {
+function folderOf(options: SessionIdentityOptions): string | null {
+  try {
+    return (options.cwd ?? (() => process.cwd()))();
+  } catch {
+    return null;
+  }
+}
+
+async function readAncestry(
+  options: SessionIdentityOptions,
+  depth: number,
+  initIsParent: boolean,
+  budgetMs: number,
+): Promise<Ancestry> {
   const platform = options.platform ?? process.platform;
   const pid = options.pid ?? process.pid;
-  let folder: string | null;
-  try {
-    folder = (options.cwd ?? (() => process.cwd()))();
-  } catch {
-    folder = null;
-  }
+  const folder = folderOf(options);
   const chain: (ActivityParent & { ppid: number })[] = [];
-  if (platform === 'win32') return { pid, folder, chain };
+  if (platform === 'win32') return { pid, folder, chain, complete: true };
   const probe = options.probe ?? psProbe;
-  const deadline = Date.now() + (options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS);
+  const deadline = Date.now() + budgetMs;
   let next = options.ppid ?? process.ppid;
   // Process 1 adopts a process whose parent has gone: it is no window, except to the event service, which it starts.
   while (chain.length < depth && (next > 1 || (initIsParent && next === 1 && chain.length === 0))) {
     const left = deadline - Date.now();
-    if (left <= 0) break;
+    if (left <= 0) return { pid, folder, chain, complete: false };
     const facts = await within(probe(next, left), left);
-    if (facts === null) break;
+    if (facts === null) return { pid, folder, chain, complete: false };
     chain.push({ pid: next, startedAt: facts.startedAt, name: facts.name, ppid: facts.ppid });
     if (next === 1) break;
     next = facts.ppid;
   }
-  return { pid, folder, chain };
-}
-
-function windowKey(parent: ActivityParent, folder: string): string {
-  return createHash('sha256').update(`${parent.pid}\0${parent.startedAt}\0${folder}`).digest('hex').slice(0, 16);
+  return { pid, folder, chain, complete: true };
 }
 
 /**
- * Which session this process's calls belong to (S2), worked out once per process and kept: its id, its parent's id,
- * start and name, its folder and the session key. Bounded to about 200 ms; never throws.
+ * The background read of this process's parent, begun if none is under way or kept: a read that finished is kept for
+ * good, one under way is waited on, and one that ran out of time is begun again once a minute has passed.
+ */
+function ancestryRead(
+  cache: SessionIdentityCache,
+  options: SessionIdentityOptions,
+  initIsParent: boolean,
+): AncestryRead {
+  const id = initIsParent ? 'daemon' : 'server';
+  const now = (options.now ?? Date.now)();
+  const reads = heldIn(READS, cache);
+  const held = reads.get(id);
+  if (
+    held !== undefined &&
+    (held.settled === null || held.settled.complete || now - held.at < SESSION_IDENTITY_RETRY_MS)
+  ) {
+    return held;
+  }
+  const read: AncestryRead = {
+    at: now,
+    settled: null,
+    promise: readAncestry(options, 1, initIsParent, options.budgetMs ?? SESSION_IDENTITY_BACKGROUND_MS),
+  };
+  read.promise.then(
+    (ancestry) => {
+      read.settled = ancestry;
+    },
+    () => undefined,
+  );
+  reads.set(id, read);
+  return read;
+}
+
+/**
+ * Begins working out this process's session in the background, as an MCP server or the event service starts, so its
+ * first calls find it done: a read of its parent of up to `SESSION_IDENTITY_BACKGROUND_MS`. Returns at once; never
+ * throws. A CLI call reads its own, and is not warmed.
+ */
+export function warmSessionIdentity(surface: ActivitySurface = 'mcp', options: SessionIdentityOptions = {}): void {
+  if (surface === 'cli') return;
+  try {
+    ancestryRead(options.cache ?? PROCESS_CACHE, options, surface === 'daemon');
+  } catch {
+    // Worked out on the first call instead.
+  }
+}
+
+function windowKey(parent: ActivityParent, folder: string, connection: string | undefined): string {
+  const named = connection === undefined || connection === '' ? '' : `\0${connection}`;
+  return createHash('sha256')
+    .update(`${parent.pid}\0${parent.startedAt}\0${folder}${named}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/** System folders, each with everything under it: no project is started there. */
+const POSIX_SYSTEM_TREES = [
+  '/System',
+  '/Library',
+  '/Applications',
+  '/usr',
+  '/bin',
+  '/sbin',
+  '/etc',
+  '/dev',
+  '/proc',
+  '/sys',
+  '/boot',
+];
+/** Folders that hold everyone's projects, or anyone's temporary files — only the folder itself, not what is in it. */
+const POSIX_SHARED = ['/tmp', '/var', '/private', '/private/tmp', '/private/var', '/opt', '/Volumes', '/mnt', '/media'];
+const WINDOWS_SYSTEM_TREES = ['\\windows', '\\program files', '\\program files (x86)', '\\programdata'];
+
+/**
+ * Whether a folder is one that cannot tell projects apart (S3): a filesystem's root, the home folder or a folder above
+ * it, a system folder or anything in one, or a shared one such as `/tmp`. A client that starts every server from one
+ * process there — a desktop app started in `/`, say — would otherwise make every project it serves one session.
+ */
+export function sharedFolder(folder: string, home: string, platform: NodeJS.Platform = process.platform): boolean {
+  if (platform === 'win32') {
+    const plain = (path: string) => path.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+    const at = plain(folder);
+    const homeAt = plain(home);
+    if (/^[a-z]:$/.test(at) || at === '') return true;
+    if (homeAt !== '' && (at === homeAt || homeAt.startsWith(`${at}\\`))) return true;
+    const rest = at.replace(/^[a-z]:/, '');
+    return rest === '\\users' || WINDOWS_SYSTEM_TREES.some((tree) => rest === tree || rest.startsWith(`${tree}\\`));
+  }
+  const plain = (path: string) => (path.length > 1 ? path.replace(/\/+$/, '') : path) || '/';
+  const at = plain(folder);
+  const homeAt = plain(home);
+  if (at === '/') return true;
+  if (homeAt !== '/' && (at === homeAt || homeAt.startsWith(`${at}/`))) return true;
+  if (POSIX_SHARED.includes(at)) return true;
+  return POSIX_SYSTEM_TREES.some((tree) => at === tree || at.startsWith(`${tree}/`));
+}
+
+/**
+ * Which session this process's calls belong to (S2): its id, its parent's id, start and name, its folder and the
+ * session key. Never throws.
  *
  * - **An MCP server** (`mcp`) is grouped with every other server its parent started in the same folder: one agent
- *   window. When its parent cannot be read in time, or has gone, it is ungrouped, with a key of its own.
- * - **A CLI call** (`cli`) reads up to three processes above it. When one of them is the parent of a server process
- *   that recorded a line today (or yesterday) in `options.log`, the call joins that window's session; otherwise it is
- *   a session of its own. Its `ancestors` name those processes either way.
- * - **The event service** (`daemon`) is grouped by its parent too, process 1 included: one session since it started.
+ *   window. Its parent is read in the background — begun by `warmSessionIdentity` as the server starts, or by its first
+ *   call — for up to two seconds; a call waits for it about 200 ms and, when it is not done, goes on alone for now. A
+ *   read that ran out of time is not kept: one a minute or more later tries again. A parent that has gone, a folder
+ *   that cannot be read, and a folder that cannot tell projects apart (`sharedFolder`: `/`, the home folder, a system
+ *   folder) leave it ungrouped, with a key of its own.
+ * - **A CLI call** (`cli`) reads up to three processes above it, within about 200 ms. When one of them is the parent
+ *   of a server process that recorded a line today (or yesterday) in `options.log`, the call joins that window's
+ *   session; otherwise it is a session of its own. Its `ancestors` name those processes either way.
+ * - **The event service** (`daemon`) is grouped by its parent too, process 1 included, whatever its folder — it serves
+ *   no project — so it is one session since it started. It waits for the whole read: it records on a timer, and keeps
+ *   what it is given.
  * - **On Windows** no process is grouped: a query of a process's parent and start does not answer within the bound.
  *
  * `clientInfo` is what an MCP client said it is; it is stored as that, and nothing depends on it.
@@ -1109,24 +1448,29 @@ export async function sessionIdentity(
     options.cwd !== undefined ||
     options.probe !== undefined ||
     options.platform !== undefined ||
-    options.budgetMs !== undefined;
+    options.budgetMs !== undefined ||
+    options.waitMs !== undefined ||
+    options.home !== undefined ||
+    options.now !== undefined;
+  const cache = options.cache ?? (seams ? null : PROCESS_CACHE);
   const client = clientOf(clientInfo);
   try {
-    if (surface === 'cli' && !seams) {
+    if (surface === 'cli' && cache !== null) {
       const directory = (options.log as { directory?: string } | undefined)?.directory ?? '';
-      let held = CLI_IDENTITY.get(directory);
+      const identities = heldIn(CLI_IDENTITIES, cache);
+      let held = identities.get(directory);
       if (held === undefined) {
-        held = identityOf(surface, options, false);
-        CLI_IDENTITY.set(directory, held);
+        held = identityOf(surface, options, cache);
+        identities.set(directory, held);
       }
       return { ...(await held), ...(client === undefined ? {} : { client }) };
     }
-    const session = await identityOf(surface, options, seams);
+    const session = await identityOf(surface, options, cache);
     return { ...session, ...(client === undefined ? {} : { client }) };
   } catch {
     return {
-      key: seams ? randomKey() : OWN_KEY,
-      process: PROCESS_ID,
+      key: cache?.ownKey ?? randomKey(),
+      process: cache?.processId ?? PROCESS_ID,
       pid: options.pid ?? process.pid,
       ...(client === undefined ? {} : { client }),
       folder: null,
@@ -1139,37 +1483,62 @@ export async function sessionIdentity(
 async function identityOf(
   surface: ActivitySurface,
   options: SessionIdentityOptions,
-  seams: boolean,
+  cache: SessionIdentityCache | null,
 ): Promise<ActivitySession> {
-  const depth = surface === 'cli' ? 3 : 1;
-  const initIsParent = surface === 'daemon';
-  let ancestry: Promise<Ancestry>;
-  if (seams) ancestry = readAncestry(options, depth, initIsParent);
-  else {
-    const cached = ANCESTRY.get(depth * 2 + (initIsParent ? 1 : 0));
-    ancestry = cached ?? readAncestry(options, depth, initIsParent);
-    if (cached === undefined) ANCESTRY.set(depth * 2 + (initIsParent ? 1 : 0), ancestry);
-  }
-  const { pid, folder, chain } = await ancestry;
-  const own = seams ? randomKey() : OWN_KEY;
-  const parentOfChain = (index: number): ActivityParent | undefined => {
+  const own = cache?.ownKey ?? randomKey();
+  const processId = cache?.processId ?? randomBytes(6).toString('hex');
+  const parentOfChain = (chain: Ancestry['chain'], index: number): ActivityParent | undefined => {
     const held = chain[index];
     return held === undefined ? undefined : { pid: held.pid, startedAt: held.startedAt, name: held.name };
   };
-  const base = { process: seams ? randomBytes(6).toString('hex') : PROCESS_ID, pid, folder, surface };
   if (surface === 'cli') {
+    // A command is short: it reads its own, within the call's bound, and has no later call to try again on.
+    const { pid, folder, chain } = await readAncestry(
+      options,
+      3,
+      false,
+      options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS,
+    );
+    const base = { process: processId, pid, folder, surface };
     const ancestors = chain.map((held) => held.name);
-    const parents = chain.map((_, index) => parentOfChain(index) as ActivityParent);
+    const parents = chain.map((_, index) => parentOfChain(chain, index) as ActivityParent);
     const joined = parents.length > 0 && options.log ? await options.log.sessionOfAncestor(parents) : null;
     if (joined !== null) return { key: joined.key, ...base, parent: joined.parent, ancestors, grouped: true };
-    const parent = parentOfChain(0);
+    const parent = parentOfChain(chain, 0);
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), ancestors, grouped: false };
   }
-  const parent = parentOfChain(0);
-  if (parent === undefined || folder === null) {
+  const initIsParent = surface === 'daemon';
+  let ancestry: Ancestry | null;
+  if (cache === null) {
+    ancestry = await readAncestry(options, 1, initIsParent, options.budgetMs ?? SESSION_IDENTITY_BUDGET_MS);
+  } else {
+    const read = ancestryRead(cache, options, initIsParent);
+    const wait = initIsParent
+      ? (options.budgetMs ?? SESSION_IDENTITY_BACKGROUND_MS)
+      : (options.waitMs ?? SESSION_IDENTITY_BUDGET_MS);
+    ancestry = read.settled ?? (await within(read.promise, wait));
+  }
+  if (ancestry === null) {
+    // Not worked out yet: alone for now, under this process's own key; a later call finds it done.
+    return {
+      key: own,
+      process: processId,
+      pid: options.pid ?? process.pid,
+      folder: folderOf(options),
+      grouped: false,
+      surface,
+    };
+  }
+  const { pid, folder, chain } = ancestry;
+  const base = { process: processId, pid, folder, surface };
+  const parent = parentOfChain(chain, 0);
+  const home = options.home ?? homedir();
+  // The event service serves no project, so its folder — `/`, as launchd starts it — merges none: it is not held to it.
+  const shared = !initIsParent && folder !== null && sharedFolder(folder, home, options.platform ?? process.platform);
+  if (parent === undefined || folder === null || shared) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
   }
-  return { key: windowKey(parent, folder), ...base, parent, grouped: true };
+  return { key: windowKey(parent, folder, options.connection), ...base, parent, grouped: true };
 }
 
 // ── For the channels ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1201,6 +1570,11 @@ export interface ActivityContext {
   readonly clientInfo?: ClientInfo | (() => ClientInfo | undefined) | undefined;
   /** The session, when the caller has worked it out already; otherwise `sessionIdentity(surface, clientInfo)`. */
   readonly session?: ActivitySession | undefined;
+  /**
+   * The MCP connection's own session id, where its transport has one — a tool handler's `ctx.sessionId`; stdio has
+   * none — mixed into the session key (`SessionIdentityOptions.connection`).
+   */
+  readonly connection?: string | (() => string | undefined) | undefined;
   /** A search's words, known before it runs. */
   readonly query?: string | undefined;
 }
@@ -1258,6 +1632,7 @@ async function recordCall(
       context.session ??
       (await sessionIdentity(context.surface, clientInfo, {
         log: context.core.activity as Pick<ActivityLog, 'sessionOfAncestor'>,
+        connection: typeof context.connection === 'function' ? context.connection() : context.connection,
       }));
     const query = detail.query ?? context.query;
     await recordActivity(context.core, {

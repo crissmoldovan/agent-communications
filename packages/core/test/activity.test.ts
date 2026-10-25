@@ -11,11 +11,15 @@ import {
   ActivityLog,
   type ActivitySession,
   MAX_ACTIVITY_ITEMS,
+  MAX_ACTIVITY_LINE_BYTES,
   MAX_SUBJECT_CHARS,
   type ProcessProbe,
   parsePsLine,
   recordActivity,
+  SessionIdentityCache,
   sessionIdentity,
+  sharedFolder,
+  warmSessionIdentity,
   withActivity,
 } from '../src/activity.ts';
 import { readActivitySettings } from '../src/activity-settings.ts';
@@ -300,14 +304,18 @@ test('subjects are cut at 200 characters, and a line lists at most 50 items with
   const state = tempDir();
   const log = new ActivityLog(state, { settings: ON });
   const long = `${'é'.repeat(150)}${'🙂'.repeat(100)}`;
-  const items = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, subject: long }));
+  // Fifty items with short subjects fit in a line; long ones are cut to fit as well (`MAX_ACTIVITY_LINE_BYTES`).
+  const items = Array.from({ length: 120 }, (_, index) => ({ id: `m${index}`, subject: `Invoice ${index}` }));
   await log.append(line({ items }));
   const [stored] = rawLines(state);
-  const kept = stored?.items as { id: string; subject: string }[];
   assert.equal(MAX_ACTIVITY_ITEMS, 50);
   assert.equal(MAX_SUBJECT_CHARS, 200);
-  assert.equal(kept.length, 50);
+  assert.equal(((stored?.items ?? []) as unknown[]).length, 50);
   assert.equal(stored?.count, 120, 'past fifty, the count says how many there were');
+  assert.equal(stored?.truncated, undefined, 'fifty short items fit whole');
+  await log.append(line({ items: items.slice(0, 5).map((item) => ({ ...item, subject: long })) }));
+  const kept = rawLines(state)[1]?.items as { id: string; subject: string }[];
+  assert.equal(kept.length, 5);
   for (const item of kept) {
     assert.ok([...item.subject].length <= 200, `${[...item.subject].length} characters`);
     assert.ok(item.subject.endsWith('…'), 'a cut subject says it was cut');
@@ -315,7 +323,7 @@ test('subjects are cut at 200 characters, and a line lists at most 50 items with
   }
   // A count smaller than the items is not believed.
   await log.append(line({ items: items.slice(0, 3), count: 1 }));
-  assert.equal(rawLines(state)[1]?.count, 3);
+  assert.equal(rawLines(state)[2]?.count, 3);
 });
 
 // ── Sessions ───────────────────────────────────────────────────────────────────────────────────────────────────
@@ -607,9 +615,16 @@ test('comms_activity answers only for the calling session: it takes no session, 
       'account',
       'channel',
       'kind',
+      'limit',
       'outcome',
       'since',
     ]);
+    assert.match(tool.description ?? '', /the latest 50 lines of the last 24 hours/);
+    assert.match(tool.description ?? '', /grouping could not be read — always on Windows.*shows nothing here/);
+    const tooMany = (await client.callTool({ name: 'comms_activity', arguments: { limit: 201 } })) as {
+      isError?: boolean;
+    };
+    assert.equal(tooMany.isError, true, 'at most 200 lines');
     assert.equal(tool.annotations?.readOnlyHint, true);
     const refused = (await client.callTool({ name: 'comms_activity', arguments: { session: '6666666666666666' } })) as {
       isError?: boolean;
@@ -666,15 +681,39 @@ function applied<T>(outcome: GatedOutcome<T>): T {
   return outcome.result;
 }
 
-test('settings read on and 30 days by default, and a value this release cannot read as the stricter one', () => {
+test('settings read on and 30 days by default; one this release cannot read records nothing and deletes nothing', () => {
   assert.deepEqual(readActivitySettings({}), { record: 'on', retentionDays: 30, problems: [] });
   assert.deepEqual(readActivitySettings({ activity: { record: 'off', retentionDays: 7 } }).retentionDays, 7);
   const odd = readActivitySettings({ activity: { record: 'sometimes', retentionDays: 9000 } });
   assert.equal(odd.record, 'off');
   assert.equal(odd.retentionDays, 365);
   assert.equal(odd.problems.length, 2);
-  assert.equal(readActivitySettings({ activity: { retentionDays: 'forever' } }).retentionDays, 1);
-  assert.equal(readActivitySettings({ activity: 'yes' }).record, 'off');
+  // A retention it cannot read is the longest, and nothing is recorded under it: never a day, which deletes the rest.
+  for (const retentionDays of ['forever', 0, -3, 7.5, null, 9000]) {
+    const read = readActivitySettings({ activity: { record: 'on', retentionDays } });
+    assert.equal(read.retentionDays, 365, `${JSON.stringify(retentionDays)} keeps the most`);
+    assert.equal(read.record, 'off', `${JSON.stringify(retentionDays)} records nothing`);
+    assert.equal(read.problems.length, 1);
+  }
+  assert.deepEqual(readActivitySettings({ activity: 'yes' }).record, 'off');
+  assert.deepEqual(readActivitySettings({ activity: 'yes' }).retentionDays, 365);
+  // A word it cannot read for `record` alone leaves a retention it can read as it is.
+  assert.equal(readActivitySettings({ activity: { record: 'sometimes', retentionDays: 3 } }).retentionDays, 3);
+});
+
+test('an unreadable retention deletes no day, records nothing, and doctor says why', async () => {
+  const m = machine({ activity: { record: 'on', retentionDays: 'forever' } });
+  const state = m.core.paths.stateDir;
+  const old = new Date(Date.now() - 40 * DAY_MS).toISOString();
+  dayFile(state, old, '9999999999999999');
+  assert.equal(await m.core.activity.append(line()), false, 'nothing recorded under a retention it cannot read');
+  await m.core.activity.sessions();
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${old.slice(0, 10)}.jsonl`], 'the 40-day-old day is kept');
+  const check = await activityDoctorCheck(m.core);
+  assert.equal(check.ok, true);
+  assert.equal(check.warn, true);
+  assert.match(check.detail, /^off/);
+  assert.match(check.detail, /activity\.retentionDays is "forever"/);
 });
 
 test('turning recording off and keeping less apply at once; on and keeping more wait for the person', async () => {
@@ -853,4 +892,343 @@ test('activity record and retention from a terminal: off and fewer days at once,
   assert.equal(settings.json().data.record, 'off', 'nothing written before the yes');
   assert.equal(cli(m, ['activity', 'retention', '0']).status, 64);
   assert.equal(cli(m, ['activity', 'record', 'maybe']).status, 64);
+});
+
+// ── Retention holds whatever is recorded (0.29.0 review) ───────────────────────────────────────────────────────
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** A day's file written as an earlier process left it: one line, for `key`, at `at`. */
+function dayFile(state: string, at: string, key: string): void {
+  const dir = join(state, 'activity');
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  writeFileSync(join(dir, `${at.slice(0, 10)}.jsonl`), `${JSON.stringify(line({ at, session: session({ key }) }))}\n`, {
+    flag: 'a',
+    mode: 0o600,
+  });
+}
+
+test('retention holds while recording is off: a read prunes, and no read shows a day past it', async () => {
+  const m = machine({ activity: { record: 'off', retentionDays: 7 } });
+  const state = m.core.paths.stateDir;
+  const key = '9999999999999999';
+  const old = new Date(Date.now() - 20 * DAY_MS).toISOString();
+  const recent = new Date(Date.now() - 60_000).toISOString();
+
+  // A process that has pruned already today: the old day appears after, and no read of it shows it.
+  const settings = async () => readActivitySettings(await m.core.config.load());
+  const pruned = new ActivityLog(state, { settings });
+  await pruned.sessions();
+  dayFile(state, old, key);
+  dayFile(state, recent, key);
+  const listed = await pruned.sessions();
+  assert.deepEqual(
+    listed.map((each) => each.firstSeen),
+    [recent],
+    'a day past the retention is never shown, even before it is deleted',
+  );
+  const shown = await pruned.show(key);
+  assert.deepEqual(
+    shown.lines.map((each) => each.at),
+    [recent],
+  );
+  assert.equal(shown.summary?.firstSeen, recent);
+  assert.ok(filesOf(join(state, 'activity')).includes(`${old.slice(0, 10)}.jsonl`), 'not deleted by that process');
+
+  // The doctor sees it waiting, though nothing is recorded.
+  const waiting = await activityDoctorCheck({ ...m.core, activity: pruned });
+  assert.match(waiting.detail, /^off/);
+  assert.match(waiting.detail, /1 older than that/);
+
+  // A process that has not pruned today does so on its first read, though recording is off.
+  const fresh = new ActivityLog(state, { settings });
+  await fresh.sessions();
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${recent.slice(0, 10)}.jsonl`]);
+  const after = await activityDoctorCheck({ ...m.core, activity: new ActivityLog(state, { settings }) });
+  assert.doesNotMatch(after.detail, /older than that/);
+  assert.equal(after.warn, undefined);
+
+  // And an append while off, in a process that has not pruned today, prunes too.
+  dayFile(state, old, key);
+  const appending = new ActivityLog(state, { settings });
+  assert.equal(await appending.append(line()), false, 'off: nothing written');
+  assert.deepEqual(filesOf(join(state, 'activity')), [`${recent.slice(0, 10)}.jsonl`]);
+});
+
+// ── mine is bounded (0.29.0 review) ────────────────────────────────────────────────────────────────────────────
+
+test('mine returns the latest 50 lines of the last 24 hours by default, and 200 at most', async () => {
+  const m = machine();
+  const mine = session({ key: 'abababababababab' });
+  const now = Date.now();
+  for (let index = 0; index < 250; index += 1) {
+    await recordActivity(m.core, line({ session: mine, at: new Date(now - (index + 1) * 1000).toISOString() }));
+  }
+  const yesterday = new Date(now - 30 * 60 * 60 * 1000).toISOString();
+  await recordActivity(m.core, line({ session: mine, at: yesterday, operation: 'gmail.read' }));
+  const as = (request: Record<string, unknown> = {}) =>
+    activityMine(m.core, { surface: 'mcp', ...request }, { identity: async () => mine });
+
+  const plain = await as();
+  assert.equal(plain.lines.length, 50);
+  assert.equal(plain.more, true);
+  assert.equal(plain.limit, 50);
+  assert.ok(plain.since !== null && Date.parse(plain.since) >= now - 24 * 60 * 60 * 1000 - 5000, 'the last 24 hours');
+  assert.equal(plain.lines[0]?.at, new Date(now - 1000).toISOString(), 'the latest first');
+  assert.ok(
+    plain.lines.every((each) => each.operation !== 'gmail.read'),
+    'nothing older than 24 hours',
+  );
+
+  const most = await as({ limit: 200 });
+  assert.equal(most.lines.length, 200);
+  const further = await as({ since: '48h', limit: 200 });
+  assert.equal(further.lines.length, 200);
+  const older = await as({ since: '48h', kind: 'read', limit: 1, channel: 'gmail' });
+  assert.equal(older.lines.length, 1);
+  assert.ok((await as({ since: '48h', limit: 200 })).more, '251 lines in two days: more than 200');
+  for (const limit of [0, 201, 1.5]) await assert.rejects(as({ limit }), /1 to 200/);
+});
+
+test('activity mine takes --limit, and the other activity commands refuse it', async () => {
+  const m = machine();
+  assert.equal(cli(m, ['activity', 'mine', '--limit', '5', '--json']).json().data.limit, 5);
+  assert.equal(cli(m, ['activity', 'mine', '--json']).json().data.limit, 50);
+  assert.equal(cli(m, ['activity', 'mine', '--limit', '500']).status, 64);
+  const refused = cli(m, ['activity', 'sessions', '--limit', '5']);
+  assert.equal(refused.status, 64);
+  assert.match(refused.stderr, /takes no --limit/);
+});
+
+// ── No grouping where projects cannot be told apart (0.29.0 review, S3) ────────────────────────────────────────
+
+test('a process in /, the home folder or a system folder is never grouped, so one client cannot merge projects', async () => {
+  const facts = { 900: { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'Claude' } };
+  const probe: ProcessProbe = async (pid) => facts[pid as 900] ?? null;
+  const identity = (folder: string, pid: number, extra: Record<string, unknown> = {}) =>
+    sessionIdentity('mcp', undefined, {
+      pid,
+      ppid: 900,
+      cwd: () => folder,
+      probe,
+      platform: 'darwin',
+      home: '/Users/jo',
+      ...extra,
+    });
+  for (const folder of [
+    '/',
+    '/Users/jo',
+    '/Users/jo/',
+    '/Users',
+    '/usr/local/bin',
+    '/Applications/Claude.app/Contents',
+    '/tmp',
+  ]) {
+    const one = await identity(folder, 101);
+    const two = await identity(folder, 102);
+    assert.equal(one.grouped, false, `${folder}: not grouped`);
+    assert.notEqual(one.key, two.key, `${folder}: each process a key of its own`);
+    assert.equal(one.folder, folder, 'it still says where it ran');
+  }
+  // A project folder under the home is grouped, as before.
+  const project = await identity('/Users/jo/work/acme', 103);
+  const sibling = await identity('/Users/jo/work/acme', 104);
+  assert.equal(project.grouped, true);
+  assert.equal(project.key, sibling.key);
+  // A connection's own session id, where the transport has one, is part of the key.
+  const viaA = await identity('/Users/jo/work/acme', 105, { connection: 'conn-a' });
+  const viaB = await identity('/Users/jo/work/acme', 106, { connection: 'conn-b' });
+  assert.equal(viaA.grouped, true);
+  assert.notEqual(viaA.key, viaB.key, 'two connections are two sessions');
+  assert.notEqual(viaA.key, project.key);
+  assert.equal((await identity('/Users/jo/work/acme', 107, { connection: 'conn-a' })).key, viaA.key);
+  // On Windows the same folders, by their Windows names, would be refused too.
+  const windows = await identity('C:\\Users\\jo', 108, { platform: 'win32' });
+  assert.equal(windows.grouped, false);
+  for (const folder of ['C:\\', 'c:\\users\\jo\\', 'C:\\Users', 'C:\\Windows\\System32', 'C:\\Program Files\\Claude']) {
+    assert.equal(sharedFolder(folder, 'C:\\Users\\jo', 'win32'), true, folder);
+  }
+  assert.equal(sharedFolder('C:\\Users\\jo\\work\\acme', 'C:\\Users\\jo', 'win32'), false);
+  assert.equal(sharedFolder('/tmp/acme', '/Users/jo', 'linux'), false, 'a project in a temporary folder is one');
+  // The event service serves no project, and launchd starts it in /: it stays one session since it started.
+  const launchd: ProcessProbe = async () => ({ ppid: 0, startedAt: 'Sun Oct 25 08:00:00 2026', name: 'launchd' });
+  const service = (pid: number) =>
+    sessionIdentity('daemon', undefined, {
+      pid,
+      ppid: 1,
+      cwd: () => '/',
+      probe: launchd,
+      platform: 'darwin',
+      home: '/Users/jo',
+    });
+  assert.equal((await service(201)).grouped, true);
+  assert.equal((await service(201)).key, (await service(202)).key);
+});
+
+// ── Grouping is worked out in the background, and a timeout is not kept (0.29.0 review) ─────────────────────────
+
+const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const CLAUDE = { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'claude' };
+
+test('a timeout working out the session is not kept: a call a minute later reads again, and groups', async () => {
+  const cache = new SessionIdentityCache();
+  let clock = Date.parse('2026-10-25T10:00:00.000Z');
+  let asked = 0;
+  let answers = false;
+  const probe: ProcessProbe = () => {
+    asked += 1;
+    return answers ? Promise.resolve(CLAUDE) : new Promise(() => undefined);
+  };
+  const options = {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+    cache,
+    now: () => clock,
+    budgetMs: 40,
+    waitMs: 5,
+  };
+  const first = await sessionIdentity('mcp', undefined, options);
+  assert.equal(first.grouped, false, 'not read yet: on its own for now');
+  assert.equal(first.folder, '/work/acme');
+  await pause(100); // the background read gives up
+  answers = true;
+  clock += 30_000;
+  const soon = await sessionIdentity('mcp', undefined, options);
+  assert.equal(soon.grouped, false);
+  assert.equal(asked, 1, 'not read again within the minute');
+  assert.equal(soon.key, first.key, 'on its own, one key for the process');
+  clock += 31_000;
+  const later = await sessionIdentity('mcp', undefined, options);
+  assert.equal(asked, 2, 'read again after a minute');
+  assert.equal(later.grouped, true, 'and grouped');
+  const again = await sessionIdentity('mcp', undefined, options);
+  assert.equal(again.key, later.key);
+  assert.equal(asked, 2, 'a read that worked is kept');
+});
+
+test('warming starts the read when the server starts; the event service waits for the whole budget', async () => {
+  const slow: ProcessProbe = async () => {
+    await pause(60);
+    return CLAUDE;
+  };
+  const base = {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe: slow,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+  };
+  const warmed = new SessionIdentityCache();
+  warmSessionIdentity('mcp', { ...base, cache: warmed, budgetMs: 2000 });
+  await pause(120);
+  assert.equal((await sessionIdentity('mcp', undefined, { ...base, cache: warmed, waitMs: 0 })).grouped, true);
+  // Not warmed, a server's first call waits only a little and goes on alone; the service waits for the answer.
+  const cold = await sessionIdentity('mcp', undefined, { ...base, cache: new SessionIdentityCache(), waitMs: 5 });
+  assert.equal(cold.grouped, false);
+  const service = await sessionIdentity('daemon', undefined, { ...base, cache: new SessionIdentityCache(), waitMs: 5 });
+  assert.equal(service.grouped, true);
+});
+
+// ── A line is small enough to be appended whole (0.29.0 review) ────────────────────────────────────────────────
+
+test('a line is cut to 16 KiB: items go from the end first, the count stays, and it says it was cut', async () => {
+  const state = tempDir();
+  const log = new ActivityLog(state, { settings: ON });
+  // Control characters are written six bytes each (`\u0001`): fifty such items are some 200 KiB as JSON.
+  const loud = (length: number) => '\u0001'.repeat(length);
+  const items = Array.from({ length: 50 }, (_, index) => ({
+    id: `m${index}`,
+    subject: loud(200),
+    name: loud(255),
+    from: { name: loud(200), address: loud(320) },
+  }));
+  const key = 'cdcdcdcdcdcdcdcd';
+  assert.equal(await log.append(line({ session: session({ key }), items })), true);
+  const [file] = filesOf(join(state, 'activity'));
+  const written = readFileSync(join(state, 'activity', file as string), 'utf8');
+  assert.ok(Buffer.byteLength(written) <= MAX_ACTIVITY_LINE_BYTES, `${Buffer.byteLength(written)} bytes`);
+  assert.equal(MAX_ACTIVITY_LINE_BYTES, 16 * 1024);
+  const [stored] = rawLines(state);
+  const kept = stored?.items as { id: string }[];
+  assert.ok(kept.length > 0 && kept.length < 50, `${kept.length} items kept`);
+  assert.deepEqual(
+    kept.map((each) => each.id),
+    items.slice(0, kept.length).map((each) => each.id),
+    'the first ones, in order',
+  );
+  assert.equal(stored?.count, 50, 'the count says how many there were');
+  assert.equal(stored?.truncated, true);
+  const shown = await log.show(key);
+  assert.equal(shown.lines[0]?.truncated, true, 'read back as cut');
+
+  // Recipients too, when items are not what makes it long.
+  const many = Array.from({ length: 50 }, () => loud(320));
+  await log.append(
+    line({ session: session({ key }), operation: 'gmail.send.execute', kind: 'write', recipients: many }),
+  );
+  const second = readFileSync(join(state, 'activity', file as string), 'utf8').split('\n')[1] ?? '';
+  assert.ok(Buffer.byteLength(second) + 1 <= MAX_ACTIVITY_LINE_BYTES, `${Buffer.byteLength(second)} bytes`);
+  assert.equal(JSON.parse(second).truncated, true);
+  // A line that fits is not marked.
+  await log.append(line({ session: session({ key }) }));
+  assert.equal(rawLines(state)[2]?.truncated, undefined);
+});
+
+// ── A CLI call finds its window without reading whole days (0.29.0 review) ─────────────────────────────────────
+
+test('a CLI call finds its window from a small index of server parents, not by reading whole days', async () => {
+  const state = tempDir();
+  const log = new ActivityLog(state, { settings: ON });
+  const probe: ProcessProbe = async (pid) =>
+    ({ 900: CLAUDE, 950: { ppid: 900, startedAt: 'Sun Oct 25 09:30:00 2026', name: 'zsh' } })[pid as 900] ?? null;
+  const window = await sessionIdentity('mcp', undefined, {
+    pid: 101,
+    ppid: 900,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin',
+    home: '/Users/jo',
+  });
+  assert.equal(window.grouped, true);
+  const now = new Date().toISOString();
+  for (let index = 0; index < 3; index += 1) await log.append(line({ at: now, session: window }));
+  const day = now.slice(0, 10);
+  const index = readFileSync(join(state, 'activity', '.parents', `${day}.jsonl`), 'utf8')
+    .split('\n')
+    .filter(Boolean);
+  assert.equal(index.length, 1, 'one entry for the window, however many lines it writes');
+  if (process.platform !== 'win32')
+    assert.equal(statSync(join(state, 'activity', '.parents', `${day}.jsonl`)).mode & 0o777, 0o600);
+
+  // The day itself emptied: the index alone finds the window.
+  writeFileSync(join(state, 'activity', `${day}.jsonl`), '');
+  const cliOptions = {
+    pid: 2001,
+    ppid: 950,
+    cwd: () => '/work/acme',
+    probe,
+    platform: 'darwin' as const,
+    home: '/Users/jo',
+    log,
+  };
+  assert.equal((await sessionIdentity('cli', undefined, cliOptions)).key, window.key);
+
+  // A day an earlier build wrote, with no index, is still read the old way.
+  const older = tempDir();
+  dayFile(older, now, '0000000000000000');
+  const legacy = new ActivityLog(older, { settings: ON });
+  writeFileSync(join(older, 'activity', `${day}.jsonl`), `${JSON.stringify(line({ at: now, session: window }))}\n`);
+  assert.equal((await sessionIdentity('cli', undefined, { ...cliOptions, log: legacy })).key, window.key);
+
+  // Retention takes the index with its day.
+  const old = new Date(Date.now() - 40 * DAY_MS).toISOString();
+  await log.append(line({ at: old, session: window }));
+  assert.ok(readdirSync(join(state, 'activity', '.parents')).includes(`${old.slice(0, 10)}.jsonl`));
+  await log.prune(30);
+  assert.ok(!readdirSync(join(state, 'activity', '.parents')).includes(`${old.slice(0, 10)}.jsonl`));
 });
