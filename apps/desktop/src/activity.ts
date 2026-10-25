@@ -243,6 +243,7 @@ export const OUTCOME_WORDS: Readonly<Record<ActivityOutcome, string>> = {
 
 /** A channel's name on screen: core is agent-communications. */
 export function channelLabel(channel: string): string {
+  if (channel === 'events') return 'Event service';
   return productLabel(channel === '' ? null : channel);
 }
 

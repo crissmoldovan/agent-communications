@@ -236,9 +236,9 @@ impl ActivityOutcome {
     }
 }
 
-/// The channel an activity line is from, as `activity show --channel` takes it: core and the four channels this
-/// release builds in (`channels.generated.ts`, `BuiltInChannel`). Closed: a channel word outside it is shown on a line,
-/// never passed on.
+/// The channel an activity line is from, as `activity show --channel` takes it: core, the four channels this release
+/// builds in (`channels.generated.ts`, `BuiltInChannel`), and `events`, the event service's delivery lines. Closed: a
+/// channel word outside it is shown on a line, never passed on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ActivityChannel {
@@ -247,6 +247,7 @@ pub enum ActivityChannel {
     Slack,
     Resend,
     Whatsapp,
+    Events,
 }
 
 impl ActivityChannel {
@@ -257,6 +258,7 @@ impl ActivityChannel {
             ActivityChannel::Slack => "slack",
             ActivityChannel::Resend => "resend",
             ActivityChannel::Whatsapp => "whatsapp",
+            ActivityChannel::Events => "events",
         }
     }
 }
@@ -2019,6 +2021,7 @@ mod tests {
         for (field, value, flag) in [
             ("activityKind", "told", "--kind"),
             ("channel", "core", "--channel"),
+            ("channel", "events", "--channel"),
             ("account", "work", "--account"),
             ("outcome", "ok", "--outcome"),
         ] {

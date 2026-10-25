@@ -65,8 +65,11 @@ export type ActivityKind = 'read' | 'write' | 'told' | 'approval';
 /** How an activity line ended, as `activity show --outcome` takes it (`allowlist.rs`, `ActivityOutcome`). */
 export type ActivityOutcome = 'ok' | 'refused' | 'failed';
 
-/** The channels `activity show --channel` takes (`allowlist.rs`, `ActivityChannel`): core and the four built in. */
-export const ACTIVITY_CHANNELS = ['core', 'gmail', 'slack', 'resend', 'whatsapp'] as const;
+/**
+ * The channels `activity show --channel` takes (`allowlist.rs`, `ActivityChannel`): core, the four built in, and
+ * `events`, the event service's delivery lines.
+ */
+export const ACTIVITY_CHANNELS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
 export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
 
 /**
