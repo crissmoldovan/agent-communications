@@ -602,18 +602,44 @@ fn process_ids() -> Vec<u32> {
     let Ok(count) = usize::try_from(count) else {
         return Vec::new();
     };
-    let mut pids: Vec<libc::pid_t> = vec![0; count + 64];
-    let bytes = libc::c_int::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
-        .unwrap_or(libc::c_int::MAX);
-    // SAFETY: `pids` is writable for `bytes` bytes; the kernel fills at most that many and says how many PIDs it wrote.
-    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-    let Ok(filled) = usize::try_from(filled) else {
-        return Vec::new();
-    };
-    pids.truncate(filled.min(pids.len()));
-    pids.into_iter()
+    let listed = listed_with_room(count, PIDS_MOST, |pids: &mut [libc::pid_t]| {
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(pids)).ok()?;
+        // SAFETY: `pids` is writable for `bytes` bytes; the kernel fills at most that many and says how many PIDs it
+        // wrote.
+        let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        usize::try_from(filled).ok()
+    });
+    listed
+        .unwrap_or_default()
+        .into_iter()
         .filter_map(|pid| u32::try_from(pid).ok())
         .collect()
+}
+
+/// How many slots a listing of the processes must leave empty to be taken as whole.
+const PIDS_ROOM: usize = 64;
+/// The most PIDs the app lists, far past any Mac's `kern.maxproc`: a megabyte of them.
+const PIDS_MOST: usize = 1 << 18;
+
+/// The processes, listed whole: `list` fills a buffer and says how many it wrote, as the kernel does, and `expected` is
+/// how many it counted first. Processes start between the count and the listing, so a listing that leaves fewer than
+/// `PIDS_ROOM` slots empty may have been cut short: it is asked again with twice the room, until one fits, or the
+/// buffer holds `most`, when what it gave is kept. None when a listing fails.
+fn listed_with_room<T: Copy + Default>(
+    expected: usize,
+    most: usize,
+    mut list: impl FnMut(&mut [T]) -> Option<usize>,
+) -> Option<Vec<T>> {
+    let mut size = expected.saturating_add(PIDS_ROOM).min(most);
+    loop {
+        let mut buffer = vec![T::default(); size];
+        let filled = list(&mut buffer)?.min(size);
+        if filled.saturating_add(PIDS_ROOM) <= size || size >= most {
+            buffer.truncate(filled);
+            return Some(buffer);
+        }
+        size = size.saturating_mul(2).min(most);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -632,15 +658,37 @@ fn process_ids() -> Vec<u32> {
     Vec::new()
 }
 
+/// How many times the processes are read for the service to adopt, when they name no one service, and how far apart.
+const ADOPT_LOOKS: usize = 3;
+const ADOPT_AGAIN: Duration = Duration::from_millis(50);
+
 /// The service a terminal started that the app adopts, found by its command line, when it can be (`pick_adopted`).
+/// Read again a moment later when none, or two, are found (`looked_again`).
 fn find_adopted(folders: &Folders, except: Option<u32>) -> Option<(u32, Option<String>)> {
     let default_state_dir = resolve_folders(&PathEnv::from_process()).state_dir;
-    pick_adopted(
-        &service_processes(),
-        &folders.state_dir,
-        &default_state_dir,
-        except,
-    )
+    looked_again(|| {
+        pick_adopted(
+            &service_processes(),
+            &folders.state_dir,
+            &default_state_dir,
+            except,
+        )
+    })
+}
+
+/// What `look` finds, looked for up to `ADOPT_LOOKS` times, `ADOPT_AGAIN` apart. A process the service forks has the
+/// service's command line until it runs another program, so for that moment the processes name two services, and
+/// adopt neither.
+fn looked_again<T>(mut look: impl FnMut() -> Option<T>) -> Option<T> {
+    for at in 1..=ADOPT_LOOKS {
+        if let Some(found) = look() {
+            return Some(found);
+        }
+        if at < ADOPT_LOOKS {
+            thread::sleep(ADOPT_AGAIN);
+        }
+    }
+    None
 }
 
 /// Whether the process `pid` is still `events-daemon run`, read from its command line (Review Focus 3). A PID that has
@@ -3026,6 +3074,110 @@ mod tests {
         let _ = service.wait();
         assert!(seen, "a live events-daemon run is ours");
         assert!(!is_our_service(pid), "and, once gone, no longer");
+    }
+
+    /// The kernel lists as many PIDs as fit, and processes start between counting them and listing them: a listing
+    /// that leaves too little room may have been cut short, so it is asked again with twice the room, up to a cap.
+    #[test]
+    fn the_process_list_grows_until_it_has_room_to_spare() {
+        // A list the kernel fills from `processes`, which grows by `born` each time it is asked.
+        fn kernel(mut processes: usize, born: usize) -> impl FnMut(&mut [u32]) -> Option<usize> {
+            move |buffer: &mut [u32]| {
+                processes = processes.saturating_add(born);
+                let filled = processes.min(buffer.len());
+                for (slot, pid) in buffer.iter_mut().zip(1..) {
+                    *slot = pid;
+                }
+                Some(filled)
+            }
+        }
+        // Counted 1000; 300 more start before the first listing, which would have been cut at 1064.
+        let mut asked = Vec::new();
+        let mut storm = kernel(1000, 300);
+        let listed = listed_with_room(1000, PIDS_MOST, |buffer| {
+            asked.push(buffer.len());
+            storm(buffer)
+        })
+        .expect("listed");
+        assert_eq!(listed.len(), 1600, "the second listing, whole");
+        assert_eq!(asked, [1000 + PIDS_ROOM, 2 * (1000 + PIDS_ROOM)]);
+        assert_eq!(listed.first(), Some(&1));
+        // A quiet machine: one listing.
+        let mut asked = 0;
+        let mut quiet = kernel(500, 0);
+        let listed = listed_with_room(500, PIDS_MOST, |buffer| {
+            asked += 1;
+            quiet(buffer)
+        })
+        .expect("listed");
+        assert_eq!((listed.len(), asked), (500, 1));
+        // Never past the cap: a list that never fits stops there, with what it gave.
+        let mut endless = kernel(0, usize::MAX / 4);
+        let mut sizes = Vec::new();
+        let listed = listed_with_room(10, 1000, |buffer| {
+            sizes.push(buffer.len());
+            endless(buffer)
+        })
+        .expect("listed");
+        assert_eq!(listed.len(), 1000);
+        assert_eq!(sizes.last(), Some(&1000));
+        assert!(sizes.windows(2).all(|pair| pair[1] > pair[0]), "{sizes:?}");
+        // A count of nothing still leaves room, and a listing that fails is nothing.
+        let mut few = kernel(3, 0);
+        assert_eq!(
+            listed_with_room(0, PIDS_MOST, &mut few).map(|pids| pids.len()),
+            Some(3)
+        );
+        assert_eq!(listed_with_room(10, PIDS_MOST, |_| None), None::<Vec<u32>>);
+        // A kernel that says it wrote more than the buffer holds is held to the buffer.
+        let listed = listed_with_room(10, 100, |buffer: &mut [u32]| Some(buffer.len() + 50))
+            .expect("listed");
+        assert_eq!(listed.len(), 100);
+    }
+
+    /// A process the service forks has the service's command line until it runs another program, so a look at that
+    /// moment finds two and adopts neither: the processes are read again, a moment later, a few times.
+    #[test]
+    fn adoption_looks_again_when_the_processes_name_no_one_service() {
+        let mut looks = 0;
+        let found = looked_again(|| {
+            looks += 1;
+            (looks == 2).then_some(7)
+        });
+        assert_eq!((found, looks), (Some(7), 2), "found at the second look");
+        let mut looks = 0;
+        let started = Instant::now();
+        let found: Option<u32> = looked_again(|| {
+            looks += 1;
+            None
+        });
+        assert_eq!((found, looks), (None, ADOPT_LOOKS));
+        assert!(started.elapsed() >= ADOPT_AGAIN * (ADOPT_LOOKS as u32 - 1));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a moment, not a wait"
+        );
+        // One there at once is taken at once.
+        let mut looks = 0;
+        assert_eq!(
+            looked_again(|| {
+                looks += 1;
+                Some(1)
+            }),
+            Some(1)
+        );
+        assert_eq!(looks, 1);
+        // And the fork itself: a service and its child, before the child runs another program, are two of one command
+        // line, which `pick_adopted` cannot tell apart.
+        let service = words(&[
+            "/bin/sh",
+            "/x/runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+            "run",
+            "--state-dir",
+            "/s",
+        ]);
+        let forked = vec![(10, service.clone()), (11, service)];
+        assert_eq!(pick_adopted(&forked, "/s", "/s", None), None);
     }
 
     #[test]
