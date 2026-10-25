@@ -81,9 +81,12 @@ test('revoke removes the approval', async ({ page }) => {
   await rememberRevokes(page);
   await openApprovals(page);
   await expect(page.getByRole('article')).toHaveCount(3);
+  const count = page.getByRole('region', { name: 'Waiting' }).locator('[data-slot="section-header-count"]');
+  await expect(count).toHaveText('3');
   await card(page, GMAIL).getByRole('button', { name: 'Revoke' }).click();
   await expect(card(page, GMAIL)).toHaveCount(0);
   await expect(page.getByRole('article')).toHaveCount(2);
+  await expect(count).toHaveText('2');
   const cli = (await recorded(page)).filter((call) => call.cmd === 'cli').map((call) => call.args.call);
   expect(cli).toContainEqual({ kind: 'approvalRevoke', approvalId: GMAIL });
   // Nothing was sent to Terminal, and nothing approved.
