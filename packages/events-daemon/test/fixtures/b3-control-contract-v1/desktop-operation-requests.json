@@ -136,5 +136,14 @@
     "name": "queue-reopen-request",
     "request": { "operation": "queue-reopen", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
   },
-  { "name": "queue-clear-request", "request": { "operation": "queue-clear", "args": {} } }
+  { "name": "queue-clear-request", "request": { "operation": "queue-clear", "args": {} } },
+  { "name": "lane-list-request", "request": { "operation": "lane-list", "args": {} } },
+  {
+    "name": "lane-bind-request",
+    "request": {
+      "operation": "lane-bind",
+      "args": { "lane": "david", "window": "25f971a3-0c69-44e3-971c-3a4656afa986" }
+    }
+  },
+  { "name": "lane-unbind-request", "request": { "operation": "lane-unbind", "args": { "lane": "david" } } }
 ]

@@ -147,6 +147,12 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_queue_done',
           'events_queue_dismiss',
           'events_queue_reopen',
+          'events_lane_whoami',
+          'events_lane_list',
+          'events_lane_unbind',
+          'events_watch',
+          'events_wait',
+          'events_lane_item',
         ],
       );
     } finally {

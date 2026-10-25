@@ -69,6 +69,8 @@ export interface QueueItemSummaryV1 {
   readonly rule: { readonly id: string; readonly version: number; readonly name: string };
   readonly channel: QueueChannel;
   readonly account: { readonly id: string; readonly alias: string | null };
+  /** The lane of the item's queue target, as the person approved it (routing B2), or null for a plain queue. */
+  readonly lane: string | null;
 }
 
 /** A `queue list` or `queue show` item: sender-written fields arrive inside the untrusted-content envelope. */
@@ -118,6 +120,10 @@ export interface QueueScope {
 /** The lane an item is in: its exact target version's, as the person approved it (B2). Null outside a lane. */
 const ITEM_LANE = `(SELECT json_extract(tv.document, '$.lane.name') FROM target_versions tv
   WHERE tv.target_id = qi.target_id AND tv.version = qi.target_version)`;
+
+const ROW_COLUMNS = `qi.id, qi.delivery_id, qi.decision_id, qi.rule_id, qi.rule_version, qi.target_id, qi.target_version,
+  qi.account_id, qi.channel, qi.whatsapp_message_id, qi.state, qi.state_at, qi.arrived_at, qi.expires_at, qi.released,
+  qi.encrypted_record, d.switch_generation, ${ITEM_LANE} AS lane`;
 
 function scopeClause(scope: QueueScope | undefined): { readonly sql: string; readonly values: Array<string | number> } {
   if (scope === undefined) return { sql: '', values: [] };
@@ -222,11 +228,8 @@ interface QueueRow {
   readonly released: number;
   readonly encrypted_record: Uint8Array | null;
   readonly switch_generation: number;
+  readonly lane: string | null;
 }
-
-const ROW_COLUMNS = `qi.id, qi.delivery_id, qi.decision_id, qi.rule_id, qi.rule_version, qi.target_id, qi.target_version,
-  qi.account_id, qi.channel, qi.whatsapp_message_id, qi.state, qi.state_at, qi.arrived_at, qi.expires_at, qi.released,
-  qi.encrypted_record, d.switch_generation`;
 
 interface AccountNames {
   readonly inboxes?: Readonly<Record<string, { readonly id?: unknown; readonly email?: unknown }>>;
@@ -671,5 +674,6 @@ function summary(row: QueueRow, config: AccountNames): QueueItemSummaryV1 {
     rule: { id: row.rule_id, version: row.rule_version, name: row.rule_id },
     channel: row.channel,
     account: { id: row.account_id, alias: accountAlias(config, row.channel, row.account_id) },
+    lane: row.lane ?? null,
   };
 }

@@ -111,6 +111,8 @@ export interface LaneBindingV1 {
     readonly sessionId: string | null;
     readonly activityKey: string | null;
     readonly folder: string | null;
+    /** The folder as core's activity shows it, with the home folder as `~`, or null with no folder. */
+    readonly folderShown: string | null;
     readonly client: { readonly name: string; readonly version?: string } | null;
   };
   readonly since: string;

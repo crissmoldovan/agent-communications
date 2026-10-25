@@ -7,12 +7,7 @@ import {
   canonicalFullRuleDocument,
   canonicalTarget,
 } from '../src/domain/activation-documents.ts';
-import {
-  isLaneName,
-  isLaneWindowId,
-  LANE_POINTER_CHANNEL_NAMES,
-  lanePointerText,
-} from '../src/domain/lanes.ts';
+import { isLaneName, isLaneWindowId, LANE_POINTER_CHANNEL_NAMES, lanePointerText } from '../src/domain/lanes.ts';
 import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { ImmutableVersions } from '../src/domain/versions.ts';
 import { renderB3ApprovalPreviewV1 } from '../src/operations/b3-contract.ts';
@@ -192,7 +187,13 @@ test('LANE-A: the wake is a pointer the service writes, with no sender text (§2
     '1 new item in lane david (Slack, rule david-on-slack): read it with events_lane_item, item qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D. Then call events_watch for lane david again to keep watching.',
   );
   assert.match(
-    lanePointerText({ lane: 'david', itemId: 'qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D', channel: 'gmail', ruleId: 'r', waiting: 3 }),
+    lanePointerText({
+      lane: 'david',
+      itemId: 'qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D',
+      channel: 'gmail',
+      ruleId: 'r',
+      waiting: 3,
+    }),
     /^3 new items in lane david; the first \(Gmail, rule r\): read it with events_lane_item, item qi_/u,
   );
   // A rule id is the person's, but nothing outside a plain id's grammar is written into a privileged spot as it is.

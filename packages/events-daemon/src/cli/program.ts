@@ -46,6 +46,7 @@ import {
   updateBudget,
   updateJudge,
 } from '../operations/judges.ts';
+import { laneBind, laneList, laneUnbind } from '../operations/lanes.ts';
 import { pause, resume } from '../operations/pause.ts';
 import {
   queueClear,
@@ -86,6 +87,7 @@ import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
+import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
@@ -770,6 +772,37 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // An agent must not be able to make the person's queue disappear: clear is the terminal's and the app's.
       assertNotMcpServer(env, 'clear');
       print(await queueClear(controlOptions(program)));
+    });
+
+  // Routing's lanes (routing design 2026-10-25, §6): every lane and the window bound to it, binding — the person's act
+  // at a terminal, which refuses inside the event service's MCP server (B1) — and unbinding, applied at once.
+  const lane = program
+    .command('lane')
+    .description(
+      'bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it',
+    );
+  lane
+    .command('list')
+    .description('list every lane, its rules, channels and open items, and the agent window bound to it')
+    .action(async () => {
+      ran = true;
+      print(await laneList(controlOptions(program)));
+    });
+  lane
+    .command('bind <lane>')
+    .description('bind a lane to one agent window, by the id events_lane_whoami gives (a person at a terminal)')
+    .requiredOption('--window <id>', "the window's Claude Code session id, or its activity session key")
+    .action(async (name: string, options: Record<string, unknown>) => {
+      ran = true;
+      assertNotMcpServer(env, 'bind');
+      print(await laneBind(requireLaneName(name), requireLaneWindowId(options.window), controlOptions(program)));
+    });
+  lane
+    .command('unbind <lane>')
+    .description('unbind a lane from its window at once; its watches end')
+    .action(async (name: string) => {
+      ran = true;
+      print(await laneUnbind(requireLaneName(name), controlOptions(program)));
     });
 
   program

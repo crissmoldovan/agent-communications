@@ -88,7 +88,21 @@ const OPERATION_FIELDS = Object.freeze(['operation', 'via', 'after', 'argv', 'ar
  * owner operation. Other packages retain their already-shipped, deliberately asymmetric rows (notably the Gmail
  * approval-form probe, which is MCP-only), so this narrower rule does not rewrite their protocol.
  */
-const isB3Exception = (row) => row?.status === 'exception' && row.package === 'events-daemon';
+const isB3Exception = (row) =>
+  row?.status === 'exception' && row.package === 'events-daemon' && !isDaemonWindowException(row);
+
+/**
+ * Routing's window tools (routing design 2026-10-25, §3.7): an agent window's own watch, long-poll, lane read and
+ * identity mean nothing at a terminal, so each is an MCP-only exception with its reason, as other packages' MCP-only
+ * rows are — no command, and no operation for a command to be checked against.
+ */
+const isDaemonWindowException = (row) =>
+  row?.status === 'exception' &&
+  row.package === 'events-daemon' &&
+  row.cli === null &&
+  typeof row.mcp === 'string' &&
+  row.mcp !== '' &&
+  OPERATION_FIELDS.every((field) => row[field] === undefined);
 
 /** An `expect` key: a parameter's name, or a path of keys into it. */
 const EXPECT_KEY = /^[A-Za-z_$][\w$]*(\.[\w$]+)*$/;

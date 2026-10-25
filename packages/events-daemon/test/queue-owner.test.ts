@@ -220,6 +220,7 @@ test('QUEUE-A: a real owner puts a matched mail in the queue; the CLI reads it, 
       'from',
       'id',
       'judge',
+      'lane',
       'link',
       'rule',
       'state',
@@ -242,6 +243,7 @@ test('QUEUE-A: a real owner puts a matched mail in the queue; the CLI reads it, 
       url: `https://mail.google.com/mail/?authuser=${encodeURIComponent(EMAIL)}#all/${MESSAGE_ID}`,
     });
     assert.deepEqual(item.judge, { state: 'none' });
+    assert.equal(item.lane, null, 'a plain queue’s item is in no lane');
 
     const counted = await cli(stateDir, ['queue', 'counts', '--json']);
     assert.equal(counted.code, 0, counted.err);

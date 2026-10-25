@@ -732,6 +732,16 @@
     }
   },
   {
+    "name": "lane-list-result",
+    "request": {
+      "operation": "lane-list",
+      "args": {}
+    },
+    "result": {
+      "lanes": []
+    }
+  },
+  {
     "name": "stop-result",
     "request": {
       "operation": "stop",

@@ -510,7 +510,8 @@
                 "heldList",
                 "dryrun-list",
                 "queue-counts",
-                "queue-clear"
+                "queue-clear",
+                "lane-list"
               ]
             },
             "args": { "$ref": "#/$defs/emptyArgs" },
@@ -854,6 +855,39 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "lane-bind" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["lane", "window"],
+              "properties": {
+                "lane": { "$ref": "#/$defs/laneName" },
+                "window": { "$ref": "#/$defs/laneWindowId" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "lane-unbind" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["lane"],
+              "properties": { "lane": { "$ref": "#/$defs/laneName" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -1124,6 +1158,45 @@
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+    "laneSessionId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+    },
+    "laneActivityKey": { "type": "string", "pattern": "^[0-9a-f]{16}$" },
+    "laneWindowId": { "anyOf": [{ "$ref": "#/$defs/laneSessionId" }, { "$ref": "#/$defs/laneActivityKey" }] },
+    "laneBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["window", "since"],
+      "properties": {
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["sessionId", "activityKey", "folder", "folderShown", "client"],
+          "properties": {
+            "sessionId": { "anyOf": [{ "$ref": "#/$defs/laneSessionId" }, { "type": "null" }] },
+            "activityKey": { "anyOf": [{ "$ref": "#/$defs/laneActivityKey" }, { "type": "null" }] },
+            "folder": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+            "folderShown": { "anyOf": [{ "type": "string", "minLength": 1 }, { "type": "null" }] },
+            "client": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["name"],
+                  "properties": {
+                    "name": { "type": "string", "minLength": 1 },
+                    "version": { "type": "string", "minLength": 1 }
+                  }
+                },
+                { "type": "null" }
+              ]
+            }
+          }
+        },
+        "since": { "$ref": "#/$defs/isoTime" }
+      }
+    },
     "queueRetention": { "type": "integer", "minimum": 86400000, "maximum": 2592000000 },
     "queueState": { "enum": ["open", "done", "dismissed"] },
     "queueStateFilter": { "enum": ["open", "done", "dismissed", "all"] },
@@ -1133,7 +1206,7 @@
     "queueItemSummary": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "state", "stateAt", "arrivedAt", "expiresAt", "rule", "channel", "account"],
+      "required": ["id", "state", "stateAt", "arrivedAt", "expiresAt", "rule", "channel", "account", "lane"],
       "properties": {
         "id": { "$ref": "#/$defs/queueItemId" },
         "state": { "$ref": "#/$defs/queueState" },
@@ -1159,7 +1232,8 @@
             "id": { "$ref": "#/$defs/id" },
             "alias": { "anyOf": [{ "$ref": "#/$defs/id" }, { "type": "null" }] }
           }
-        }
+        },
+        "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] }
       }
     },
     "queueJudge": {
@@ -1202,7 +1276,19 @@
     "queueItem": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "state", "stateAt", "arrivedAt", "expiresAt", "rule", "channel", "account", "from", "judge"],
+      "required": [
+        "id",
+        "state",
+        "stateAt",
+        "arrivedAt",
+        "expiresAt",
+        "rule",
+        "channel",
+        "account",
+        "lane",
+        "from",
+        "judge"
+      ],
       "properties": {
         "id": { "$ref": "#/$defs/queueItemId" },
         "state": { "$ref": "#/$defs/queueState" },
@@ -1212,6 +1298,7 @@
         "rule": { "$ref": "#/$defs/queueItemSummary/properties/rule" },
         "channel": { "$ref": "#/$defs/queueChannel" },
         "account": { "$ref": "#/$defs/queueItemSummary/properties/account" },
+        "lane": { "$ref": "#/$defs/queueItemSummary/properties/lane" },
         "from": {
           "type": "object",
           "additionalProperties": false,
@@ -1673,6 +1760,51 @@
           "required": ["cleared"],
           "properties": { "cleared": { "type": "integer", "minimum": 0 } }
         },
+        "lane-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lanes"],
+          "properties": {
+            "lanes": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "rules", "channels", "open", "binding"],
+                "properties": {
+                  "name": { "$ref": "#/$defs/laneName" },
+                  "rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["id"],
+                      "properties": { "id": { "$ref": "#/$defs/id" } }
+                    }
+                  },
+                  "channels": { "type": "array", "items": { "$ref": "#/$defs/queueChannel" } },
+                  "open": { "type": "integer", "minimum": 0 },
+                  "binding": { "anyOf": [{ "$ref": "#/$defs/laneBinding" }, { "type": "null" }] }
+                }
+              }
+            }
+          }
+        },
+        "lane-bind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "binding"],
+          "properties": {
+            "lane": { "$ref": "#/$defs/laneName" },
+            "binding": { "$ref": "#/$defs/laneBinding" }
+          }
+        },
+        "lane-unbind": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["lane", "unbound"],
+          "properties": { "lane": { "$ref": "#/$defs/laneName" }, "unbound": { "const": true } }
+        },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -1771,7 +1903,10 @@
                     "queue-done",
                     "queue-dismiss",
                     "queue-reopen",
-                    "queue-clear"
+                    "queue-clear",
+                    "lane-list",
+                    "lane-bind",
+                    "lane-unbind"
                   ]
                 }
               }
@@ -1949,6 +2084,18 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-clear" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-clear" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "lane-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/lane-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "lane-bind" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/lane-bind" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "lane-unbind" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/lane-unbind" } } }
             }
           ]
         },

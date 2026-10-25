@@ -19,22 +19,31 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  * The queue's person-only gate: its content reads (Q1), and `queue clear`, which an agent must not be able to use to
  * make the person's queue disappear. A separate gate from dry-run's terminal-only one, which is unchanged.
  */
-export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'clear' = 'read'): void {
+export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'clear' | 'bind' = 'read'): void {
   const marker = env[MCP_SERVER_MARKER];
-  if (marker !== undefined && marker !== '')
-    throw new CommsError(
-      'APPROVAL_REQUIRED',
-      action === 'read'
-        ? "queue item content is for a person, at a terminal or in the app — the event service's MCP server cannot read it"
-        : "clearing the queue is for a person, at a terminal or in the app — the event service's MCP server cannot clear it",
-      {
-        hint:
-          action === 'read'
-            ? 'queue items and queue counts give an agent what is waiting, without what it says.'
-            : 'An agent may mark an item done, dismissed or reopened; done and dismissed items stay for their retention.',
-        details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER },
-      },
-    );
+  if (marker === undefined || marker === '') return;
+  const refusals = {
+    read: {
+      message:
+        "queue item content is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
+      hint: 'queue items and queue counts give an agent what is waiting, without what it says.',
+    },
+    clear: {
+      message:
+        "clearing the queue is for a person, at a terminal or in the app — the event service's MCP server cannot clear it",
+      hint: 'An agent may mark an item done, dismissed or reopened; done and dismissed items stay for their retention.',
+    },
+    // Routing B1: binding lets one agent window read a lane, so it is the person's act.
+    bind: {
+      message:
+        "binding a lane is for a person, at a terminal or in the app — the event service's MCP server cannot bind one",
+      hint: 'An agent gives the person its window id from events_lane_whoami; the person binds it.',
+    },
+  } as const;
+  throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {
+    hint: refusals[action].hint,
+    details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER },
+  });
 }
 
 function judgeLine(judge: QueueJudgeV1): string {

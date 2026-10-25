@@ -80,10 +80,14 @@ function rule(ruleId: string, target: Record<string, unknown>, version = 1) {
 function storeTarget(store: EventDatabase, target: Record<string, unknown>): void {
   const document = canonicalJson(target);
   store.database
-    .prepare(
-      'INSERT OR IGNORE INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)',
-    )
-    .run(`${target.targetId}@${target.version}`, target.targetId, target.version, document, sha256Hex(document));
+    .prepare('INSERT OR IGNORE INTO target_versions (id, target_id, version, document, digest) VALUES (?, ?, ?, ?, ?)')
+    .run(
+      `${target.targetId}@${target.version}`,
+      String(target.targetId),
+      Number(target.version),
+      document,
+      sha256Hex(document),
+    );
 }
 
 function activate(store: EventDatabase, document: ReturnType<typeof rule>): void {
@@ -191,11 +195,13 @@ async function withLanes(
     store,
     cipher: { decrypt: async (_location: unknown, bytes: Uint8Array) => Buffer.from(bytes) },
     approvals: { get: async () => null },
-    config: { load: async () => ({ inboxes: {}, accounts: { 'team/slack': { id: SLACK, platform: 'slack' } } }) } as never,
+    config: {
+      load: async () => ({ inboxes: {}, accounts: { 'team/slack': { id: SLACK, platform: 'slack' } } }),
+    } as never,
     fence: async () => ({ switchGeneration: 3 }),
     now: () => clock.value,
   });
-  const lanes = new LaneService({ store, queue, now: () => clock.value, recheckMs: 20 });
+  const lanes = new LaneService({ store, queue, now: () => clock.value, recheckMs: 20, home: '/example/home' });
   try {
     store.database.exec('UPDATE event_settings SET enabled = 1, switch_generation = 3');
     activate(store, rule('david-on-slack', laneTarget('david')));
@@ -218,7 +224,8 @@ function refused(code: string, pattern: RegExp) {
   };
 }
 
-const ENVELOPE = /^<untrusted-content boundary="[^"]+" field="[a-z-]+">\n[\s\S]*\n<\/untrusted-content boundary="[^"]+">$/u;
+const ENVELOPE =
+  /^<untrusted-content boundary="[^"]+" field="[a-z-]+">\n[\s\S]*\n<\/untrusted-content boundary="[^"]+">$/u;
 
 test('LANE-B: the person binds a reported window by either id; one window per lane, one lane per window (B1)', {
   skip: WINDOWS_SKIP,
@@ -236,6 +243,7 @@ test('LANE-B: the person binds a reported window by either id; one window per la
           sessionId: DAVID.sessionId,
           activityKey: DAVID.activityKey,
           folder: DAVID.folder,
+          folderShown: '~/work/david-project',
           client: { name: 'claude-code', version: '2.1.310' },
         },
         since: new Date(NOW).toISOString(),
@@ -379,6 +387,10 @@ test('LANE-B: a window not bound to a lane sees none of its items in the queue t
     assert.deepEqual(await ids(undefined), [before, plain, billing, after].sort(), 'the person sees everything');
     assert.deepEqual(await ids(OTHER), [plain], 'an unbound window sees no lane’s items');
     assert.deepEqual(await ids(DAVID), [plain, after].sort(), 'the bound window sees its lane since it was bound');
+    const lanesOf = Object.fromEntries(
+      (await queue.items({ state: 'all' }, lanes.scopeFor(DAVID))).items.map((item) => [item.id, item.lane]),
+    );
+    assert.deepEqual(lanesOf, { [plain]: null, [after]: 'david' }, 'each item names its lane, or none');
 
     const counts = (window: LaneWindowIdentity) => queue.counts(lanes.scopeFor(window));
     assert.equal(counts(OTHER).open, 1);
@@ -436,11 +448,7 @@ test('LANE-B: only the bound window reads a lane item, only one that arrived aft
       }
       assert.fail(`the bound window read ${id}`);
     };
-    const own = new Set([
-      await ownLane(before),
-      await ownLane(plain),
-      await ownLane('qi_ZZZZZZZZZZZZZZZZZZZZZZZZZZ'),
-    ]);
+    const own = new Set([await ownLane(before), await ownLane(plain), await ownLane('qi_ZZZZZZZZZZZZZZZZZZZZZZZZZZ')]);
     assert.equal(own.size, 1, 'an item before the binding, outside the lane or missing: one refusal');
     assert.match([...own][0] as string, /^NOT_FOUND\|/u);
   });
@@ -452,7 +460,10 @@ test('LANE-B: a watch is a task that completes on the next new item with a conte
   await withLanes(async ({ store, lanes, clock }) => {
     lanes.seen(DAVID);
     lanes.seen(OTHER);
-    assert.throws(() => lanes.watch('david', DAVID), refused('APPROVAL_REQUIRED', /lane david is not bound to this window/u));
+    assert.throws(
+      () => lanes.watch('david', DAVID),
+      refused('APPROVAL_REQUIRED', /lane david is not bound to this window/u),
+    );
     lanes.bind('david', DAVID.sessionId as string);
     assert.throws(() => lanes.watch('david', OTHER), refused('APPROVAL_REQUIRED', /not bound to this window/u));
     seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW - DAY });

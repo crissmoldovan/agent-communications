@@ -109,6 +109,20 @@ const EXPECTED_QUEUE_ROWS = [
   ['events-daemon.queue.clear', 'queue clear', null, 'exception', 'queueClear'],
 ] as const;
 
+/**
+ * Routing's lanes (0.31.0): the person lists, binds and unbinds; binding is terminal-only (B1); an agent window's own
+ * identity, watch, long-poll and lane read are MCP-only exceptions, each with its reason (§3.7).
+ */
+const EXPECTED_LANE_ROWS = [
+  ['events-daemon.lane.list', 'lane list', 'events_lane_list', 'both', 'laneList'],
+  ['events-daemon.lane.bind', 'lane bind', null, 'exception', 'laneBind'],
+  ['events-daemon.lane.unbind', 'lane unbind', 'events_lane_unbind', 'both', 'laneUnbind'],
+  ['events-daemon.lane.whoami', null, 'events_lane_whoami', 'exception'],
+  ['events-daemon.lane.watch', null, 'events_watch', 'exception'],
+  ['events-daemon.lane.wait', null, 'events_wait', 'exception'],
+  ['events-daemon.lane.item', null, 'events_lane_item', 'exception'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -117,7 +131,7 @@ const rowShape = (row: Capability) => ({
   ...(row.operation === undefined ? {} : { operation: row.operation }),
 });
 
-const shapedRows = (source: readonly (readonly [string, string, string | null, string, string?])[]) =>
+const shapedRows = (source: readonly (readonly [string, string | null, string | null, string, string?])[]) =>
   source.map(([id, cli, mcp, status, operation]) => ({
     id,
     cli,
@@ -131,6 +145,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_B3_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
   ...shapedRows(EXPECTED_QUEUE_ROWS),
+  ...shapedRows(EXPECTED_LANE_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
@@ -253,9 +268,21 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.queue.list',
     'events-daemon.queue.show',
     'events-daemon.queue.clear',
+    'events-daemon.lane.bind',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
+  }
+  for (const id of [
+    'events-daemon.lane.whoami',
+    'events-daemon.lane.watch',
+    'events-daemon.lane.wait',
+    'events-daemon.lane.item',
+  ]) {
+    const row = exceptions.get(id);
+    assert.equal(row?.cli, null, `${id} is an agent window's own, with no command`);
+    assert.equal(row?.operation, undefined, `${id} has no command whose operation could be checked against it`);
+    assert.ok((row?.reason ?? '').length > 40, `${id} says why it is MCP only`);
   }
   for (const [id, cli, operation, reason] of EXPECTED_B3_EXCEPTIONS) {
     const row = exceptions.get(id);

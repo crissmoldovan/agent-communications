@@ -190,6 +190,7 @@
           "id": "ibx_AAAAAAAAAAAAAAAA",
           "alias": "work/gmail"
         },
+        "lane": null,
         "from": {
           "name": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-name\">\nA Sender\n</untrusted-content boundary=\"BOUNDARY\">",
           "address": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-address\">\nsender@example.test\n</untrusted-content boundary=\"BOUNDARY\">"
@@ -259,6 +260,90 @@
         "state": "open",
         "stateAt": "2026-10-25T13:01:00.000Z"
       }
+    }
+  },
+  {
+    "name": "lane-list-bound-result",
+    "request": {
+      "operation": "lane-list",
+      "args": {}
+    },
+    "result": {
+      "lanes": [
+        {
+          "name": "billing",
+          "rules": [
+            {
+              "id": "billing-by-mail"
+            }
+          ],
+          "channels": ["gmail"],
+          "open": 0,
+          "binding": null
+        },
+        {
+          "name": "david",
+          "rules": [
+            {
+              "id": "david-on-slack"
+            }
+          ],
+          "channels": ["slack"],
+          "open": 2,
+          "binding": {
+            "window": {
+              "sessionId": "25f971a3-0c69-44e3-971c-3a4656afa986",
+              "activityKey": "0123456789abcdef",
+              "folder": "/example/home/work/project",
+              "folderShown": "~/work/project",
+              "client": {
+                "name": "claude-code",
+                "version": "2.1.310"
+              }
+            },
+            "since": "2026-10-26T09:00:00.000Z"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "lane-bind-result",
+    "request": {
+      "operation": "lane-bind",
+      "args": {
+        "lane": "david",
+        "window": "25f971a3-0c69-44e3-971c-3a4656afa986"
+      }
+    },
+    "result": {
+      "lane": "david",
+      "binding": {
+        "window": {
+          "sessionId": "25f971a3-0c69-44e3-971c-3a4656afa986",
+          "activityKey": "0123456789abcdef",
+          "folder": "/example/home/work/project",
+          "folderShown": "~/work/project",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.310"
+          }
+        },
+        "since": "2026-10-26T09:00:00.000Z"
+      }
+    }
+  },
+  {
+    "name": "lane-unbind-result",
+    "request": {
+      "operation": "lane-unbind",
+      "args": {
+        "lane": "david"
+      }
+    },
+    "result": {
+      "lane": "david",
+      "unbound": true
     }
   }
 ]

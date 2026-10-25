@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { CommsError } from '@agentcomms/core';
+import { CommsError, homeDirectory, shortenHome } from '@agentcomms/core';
 import {
   isActivityKey,
   isClaudeCodeSessionId,
@@ -123,14 +123,27 @@ export interface LaneServiceOptions {
   readonly now?: (() => number) | undefined;
   /** How often a long-poll looks again without being told of an append (an item reopened, say). */
   readonly recheckMs?: number | undefined;
+  /** The person's home folder, shown as `~` in a binding's folder; the process's own by default. */
+  readonly home?: string | undefined;
 }
 
 function usage(message: string, reason?: string): never {
   throw new CommsError('USAGE', message, reason === undefined ? {} : { details: { reason } });
 }
 
-function requireLaneName(value: unknown): string {
+/** A lane name, or the contract's bad-argument refusal (64) before anything is asked. */
+export function requireLaneName(value: unknown): string {
   if (!isLaneName(value)) usage('a lane name is 1 to 40 lowercase letters, digits and hyphens');
+  return value;
+}
+
+/** A window id — a Claude Code session id or an activity session key — or the bad-argument refusal (64). */
+export function requireLaneWindowId(value: unknown): string {
+  if (!isLaneWindowId(value))
+    usage(
+      'a window id is a Claude Code session id (a UUID) or an activity session key (16 hex characters)',
+      'WINDOW_ID_INVALID',
+    );
   return value;
 }
 
@@ -177,12 +190,14 @@ function isBoundWindow(binding: BindingRow, caller: LaneWindowIdentity): boolean
   return caller.grouped && binding.activity_key !== null && binding.activity_key === caller.activityKey;
 }
 
-function bindingView(row: BindingRow): LaneBindingV1 {
+function bindingView(row: BindingRow, home: string): LaneBindingV1 {
   return {
     window: {
       sessionId: row.session_id,
       activityKey: row.activity_key,
       folder: row.folder,
+      // As core's activity shows a folder: the home folder as `~` (the person's view; the owner runs as the person).
+      folderShown: row.folder === null ? null : shortenHome(row.folder, home, process.platform),
       client:
         row.client_name === null
           ? null
@@ -207,6 +222,7 @@ export class LaneService {
   readonly #queue: LaneServiceOptions['queue'];
   readonly #now: () => number;
   readonly #recheckMs: number;
+  readonly #home: string;
   readonly #tasks = new Map<string, Task>();
   /** Per binding, the items it has been woken for: in memory, so a restart wakes again rather than misses. */
   readonly #woken = new Map<string, Set<string>>();
@@ -218,6 +234,7 @@ export class LaneService {
     this.#queue = options.queue;
     this.#now = options.now ?? Date.now;
     this.#recheckMs = options.recheckMs ?? 1_000;
+    this.#home = options.home ?? homeDirectory();
   }
 
   /** Records a window the event service's MCP server reported, so the person can bind it by either id (B1). */
@@ -278,7 +295,7 @@ export class LaneService {
             rules: [...entry.rules].sort().map((id) => ({ id })),
             channels: [...entry.channels].sort(),
             open: open.get(name) ?? 0,
-            binding: binding === undefined ? null : bindingView(binding),
+            binding: binding === undefined ? null : bindingView(binding, this.#home),
           };
         }),
     };
@@ -299,16 +316,12 @@ export class LaneService {
    */
   bind(laneValue: unknown, windowId: unknown): LaneBindResultV1 {
     const lane = requireLaneName(laneValue);
-    if (!isLaneWindowId(windowId))
-      usage(
-        'a window id is a Claude Code session id (a UUID) or an activity session key (16 hex characters)',
-        'WINDOW_ID_INVALID',
-      );
+    requireLaneWindowId(windowId);
     if (!this.#carried().has(lane))
       throw new CommsError('NOT_FOUND', `no active rule's queue target carries lane ${lane}`, {
         hint: 'A lane is a queue target with lane: { name }, sent to by a rule you approve.',
       });
-    const window = this.#reportedWindow(windowId);
+    const window = this.#reportedWindow(windowId as string);
     if (window === undefined)
       usage(
         'no agent window with that id has reached the event service: ask the agent in that window to call events_lane_whoami, and bind the id it gives',
@@ -364,7 +377,7 @@ export class LaneService {
           row.since,
         );
     });
-    return { lane, binding: bindingView(row) };
+    return { lane, binding: bindingView(row, this.#home) };
   }
 
   /**
@@ -378,7 +391,10 @@ export class LaneService {
       this.seen(caller);
       if (binding === undefined || !isBoundWindow(binding, caller)) notBoundHere(lane);
     } else if (binding === undefined && !this.#carried().has(lane)) {
-      throw new CommsError('NOT_FOUND', `no active rule's queue target carries lane ${lane}, and nothing is bound to it`);
+      throw new CommsError(
+        'NOT_FOUND',
+        `no active rule's queue target carries lane ${lane}, and nothing is bound to it`,
+      );
     }
     if (binding !== undefined) {
       this.#store.immediate(() =>
