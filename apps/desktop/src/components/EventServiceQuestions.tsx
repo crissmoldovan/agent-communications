@@ -8,7 +8,8 @@ import { UntrustedText } from './UntrustedText.tsx';
 /*
  * The two questions the event service asks of the whole app, whatever screen is open (plan P1, P3). Each is cue-ui's
  * AlertDialog, held open until it is answered: Escape and an outside press do not dismiss it, because Rust waits for
- * the answer. Each answer is sent once, however often its button is pressed.
+ * the answer. Each answer is sent once, however often its button is pressed. The first-start question closes the
+ * moment it is answered; the quit question stays until the app quits, and says there if its answer fails.
  */
 
 /** The words of both questions, as the plan's Global Constraints give them. */
@@ -24,7 +25,7 @@ export const QUESTION_COPY = {
   remember: 'Remember my answer',
 } as const;
 
-/** Sends one answer at a time: a press while one is on its way is ignored. */
+/** Sends one answer at a time, for the quit question: a press while one is on its way is ignored. */
 function useAnswer(): {
   busy: boolean;
   problem: string | null;
@@ -63,34 +64,38 @@ function Problem({ text }: { text: string | null }) {
 
 /**
  * The first automatic start, on a Mac where the service has run before (P1): asked when the supervisor says so, and
- * once. Its answer is the supervisor's to keep; the state it answers with is shown at once.
+ * once. It closes the moment it is answered, without waiting for the answer to come back: the supervisor keeps it and
+ * says the service is starting, and the Events screen shows that, or, if the answer fails, why, in its service section.
  */
 export function FirstStartQuestion() {
   const bridge = useBridge();
-  const { eventService, showEventService } = useAppData();
+  const { eventService, showEventService, showEventServiceProblem } = useAppData();
   const [answered, setAnswered] = useState(false);
-  const { busy, problem, answer } = useAnswer();
+  const sent = useRef(false);
   const start = useRef<HTMLButtonElement>(null);
   const asked = eventService !== 'absent' && eventService.state === 'ready' && eventService.value.firstStartQuestion;
 
-  const reply = (yes: boolean) =>
-    void answer(async () => {
-      const next = await bridge.answerFirstStart(yes);
-      setAnswered(true);
-      showEventService(next);
-    });
+  const reply = (yes: boolean) => {
+    if (sent.current) return;
+    sent.current = true;
+    setAnswered(true);
+    showEventServiceProblem(null);
+    bridge
+      .answerFirstStart(yes)
+      .then(showEventService)
+      .catch((error: unknown) => showEventServiceProblem(errorMessage(error)));
+  };
 
   return (
     <AlertDialog.Root open={asked && !answered}>
       <AlertDialog.Content initialFocus={start}>
         <AlertDialog.Title>{QUESTION_COPY.firstStartTitle}</AlertDialog.Title>
         <AlertDialog.Description>{QUESTION_COPY.firstStartBody}</AlertDialog.Description>
-        <Problem text={problem} />
         <AlertDialog.Footer>
-          <Button variant="secondary" disabled={busy} onClick={() => reply(false)}>
+          <Button variant="secondary" onClick={() => reply(false)}>
             {QUESTION_COPY.notNow}
           </Button>
-          <Button ref={start} variant="primary" disabled={busy} onClick={() => reply(true)}>
+          <Button ref={start} variant="primary" onClick={() => reply(true)}>
             {QUESTION_COPY.start}
           </Button>
         </AlertDialog.Footer>

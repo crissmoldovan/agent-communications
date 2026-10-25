@@ -282,6 +282,8 @@ pub fn applescript_string(text: &str) -> String {
 ///   `account add <account>`; a Resend account has no sign-in again, and no other product has a sign-in.
 /// - **Laya's Enable:** the events service's `judge kind enable laya`, and nothing else: the terminal shows its preview
 ///   and takes its approval (E2 Task 11).
+/// - **Turning on Jev or a local model server:** the events service's `judge kind enable typesafe|local-endpoint`, the
+///   kind from its closed enum, as Laya's Enable (0.27.1).
 pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>), AppError> {
     Ok(match command {
         TerminalCommand::Approve {
@@ -344,6 +346,15 @@ pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>)
                 .iter()
                 .map(|word| word.to_string())
                 .collect(),
+        ),
+        TerminalCommand::JudgeKindEnable { judge_kind } => (
+            Product::EventsDaemon,
+            vec![
+                "judge".to_string(),
+                "kind".to_string(),
+                "enable".to_string(),
+                judge_kind.word().to_string(),
+            ],
         ),
     })
 }
@@ -484,6 +495,7 @@ pub fn open_with(
         TerminalCommand::Change { revoke, .. } => Some(effects.revoke(revoke, ctx)),
         TerminalCommand::Approve { .. }
         | TerminalCommand::SignIn { .. }
+        | TerminalCommand::JudgeKindEnable { .. }
         | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
@@ -2084,6 +2096,191 @@ mod tests {
                 args.iter().any(|arg| arg.contains(&text)),
                 "{platform:?}: {args:?}"
             );
+        }
+    }
+
+    /// Turning on Jev or a local model server (0.27.1): the events service's own launcher, `judge kind enable <kind>`
+    /// and the pins, the words the daemon's judges contract runs through its CLI. As Laya's Enable: nothing is revoked
+    /// first, nothing is prepared or recorded, and the terminal opens once.
+    #[test]
+    fn judge_kind_enable_opens_the_events_launcher_with_its_kind_and_revokes_nothing() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        for (kind, word) in [
+            (crate::allowlist::EndpointJudgeKind::Typesafe, "typesafe"),
+            (
+                crate::allowlist::EndpointJudgeKind::LocalEndpoint,
+                "local-endpoint",
+            ),
+        ] {
+            let command = TerminalCommand::JudgeKindEnable { judge_kind: kind };
+            let words = argv_for(&command, &ctx).expect("words");
+            assert_eq!(
+                words,
+                located(
+                    &ctx,
+                    Product::EventsDaemon,
+                    &["judge", "kind", "enable", word]
+                )
+            );
+            assert_eq!(
+                crate::allowlist::desktop_judges_contract_words("judgeKindEnable", Some(word)),
+                (strings(&["judge", "kind", "enable", word]), false)
+            );
+            let effects = Fake::new(true);
+            let prepared = Prepared::default();
+            let outcome =
+                open_with(command.clone(), &ctx, &effects, &prepared).expect("an outcome");
+            assert!(
+                matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+                "{outcome:?}"
+            );
+            assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+            assert_eq!(
+                effects.spawned.borrow().clone().expect("a plan"),
+                plan(ctx.platform, &words, &|name| effects.found(name))
+            );
+            assert!(prepared.map().is_empty(), "{word}: nothing was recorded");
+            // The webview's shape for it, exactly (`ipc.ts`).
+            assert_eq!(
+                serde_json::from_value::<TerminalCommand>(
+                    serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": word })
+                )
+                .expect("its shape"),
+                command
+            );
+            // Without the events service's launcher there is nothing to open.
+            let (_bare_dir, bare) = installation(&[Product::Core]);
+            assert_eq!(
+                argv_for(&command, &bare).expect_err("not installed").code,
+                "APP_NOT_INSTALLED"
+            );
+        }
+    }
+
+    /// The kind is a closed enum: Laya, a free string or another spelling is refused, and so is any other field. Laya's
+    /// own Enable still takes no argument, so it never takes another kind.
+    #[test]
+    fn judge_kind_enable_refuses_a_free_kind_laya_and_any_other_field() {
+        for kind in [
+            serde_json::json!("laya"),
+            serde_json::json!("Typesafe"),
+            serde_json::json!("typesafe "),
+            serde_json::json!("local_endpoint"),
+            serde_json::json!("jev"),
+            serde_json::json!(""),
+            serde_json::json!("--json"),
+            serde_json::json!("typesafe; rm -rf ~"),
+            serde_json::json!(7),
+            serde_json::json!(null),
+            serde_json::json!(["typesafe"]),
+        ] {
+            let bad = serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": kind });
+            assert!(
+                serde_json::from_value::<TerminalCommand>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+        for bad in [
+            serde_json::json!({ "kind": "judgeKindEnable" }),
+            serde_json::json!({ "kind": "judgeKindEnable", "judge": "typesafe" }),
+            serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": "typesafe", "approval": ID }),
+            serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": "typesafe", "approvalId": ID }),
+            serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": "typesafe", "json": true }),
+            serde_json::json!({ "kind": "judgeKindEnable", "judgeKind": "typesafe", "words": ["--approval", ID] }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "judgeKind": "typesafe" }),
+            serde_json::json!({ "kind": "eventsJudgeKindEnable", "judgeKind": "laya" }),
+            // Turning a kind off is a call, not a terminal line.
+            serde_json::json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
+        ] {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+        // Laya's Enable is as it was: its own words, and no kind.
+        assert_eq!(
+            command_words(&TerminalCommand::EventsJudgeKindEnable {}).expect("words"),
+            (
+                Product::EventsDaemon,
+                strings(&["judge", "kind", "enable", "laya"])
+            )
+        );
+    }
+
+    /// The Enable line for Jev and a local model server on each platform, as its shell reads it: the launcher (on
+    /// Windows, Node and the launcher), `judge kind enable <kind>`, then the pins, with neither `--json` nor
+    /// `--approval` anywhere in it.
+    #[test]
+    fn judge_kind_enable_line_has_no_json_or_approval_on_macos_linux_and_windows() {
+        let posix = |home: &str| Folders {
+            config_dir: format!("{home}/.config/agent-communications"),
+            state_dir: format!("{home}/.config/agent-communications/state"),
+            data_dir: format!("{home}/.local/share/agent-communications"),
+            secrets_dir: format!("{home}/.config/agent-communications/secrets"),
+        };
+        let windows = Folders {
+            config_dir: r"C:\Users\example\AppData\Roaming\agent-communications".into(),
+            state_dir: r"C:\Users\example\AppData\Roaming\agent-communications\state".into(),
+            data_dir: r"C:\Users\example\AppData\Local\agent-communications".into(),
+            secrets_dir: r"C:\Users\example\AppData\Roaming\agent-communications\secrets".into(),
+        };
+        for (kind, word) in [
+            (crate::allowlist::EndpointJudgeKind::Typesafe, "typesafe"),
+            (
+                crate::allowlist::EndpointJudgeKind::LocalEndpoint,
+                "local-endpoint",
+            ),
+        ] {
+            let (product, words) =
+                command_words(&TerminalCommand::JudgeKindEnable { judge_kind: kind })
+                    .expect("words");
+            assert_eq!(product, Product::EventsDaemon);
+            assert_eq!(words, strings(&["judge", "kind", "enable", word]));
+            let cases = [
+                (
+                    Platform::MacOs,
+                    posix("/Users/example"),
+                    vec!["/Users/example/.local/share/agent-communications/launch/events-daemon"],
+                    format!(
+                        "/Users/example/.local/share/agent-communications/launch/events-daemon judge kind enable {word} --config-dir /Users/example/.config/agent-communications --state-dir /Users/example/.config/agent-communications/state --data-dir /Users/example/.local/share/agent-communications --secrets-dir /Users/example/.config/agent-communications/secrets"
+                    ),
+                ),
+                (
+                    Platform::Linux,
+                    posix("/home/example"),
+                    vec!["/home/example/.local/share/agent-communications/launch/events-daemon"],
+                    format!(
+                        "/home/example/.local/share/agent-communications/launch/events-daemon judge kind enable {word} --config-dir /home/example/.config/agent-communications --state-dir /home/example/.config/agent-communications/state --data-dir /home/example/.local/share/agent-communications --secrets-dir /home/example/.config/agent-communications/secrets"
+                    ),
+                ),
+                (
+                    Platform::Windows,
+                    windows.clone(),
+                    vec![
+                        r"C:\Program Files\nodejs\node.exe",
+                        r"C:\Users\example\AppData\Local\agent-communications\launch\events-daemon",
+                    ],
+                    format!(
+                        r#""C:\Program Files\nodejs\node.exe" C:\Users\example\AppData\Local\agent-communications\launch\events-daemon judge kind enable {word} --config-dir C:\Users\example\AppData\Roaming\agent-communications --state-dir C:\Users\example\AppData\Roaming\agent-communications\state --data-dir C:\Users\example\AppData\Local\agent-communications --secrets-dir C:\Users\example\AppData\Roaming\agent-communications\secrets"#
+                    ),
+                ),
+            ];
+            for (platform, folders, program, expected) in cases {
+                let program = crate::launchers::Program {
+                    program: program[0].to_string(),
+                    leading: program[1..].iter().map(|word| word.to_string()).collect(),
+                };
+                let argv = located_line(product, &words, &program, &folders);
+                let text = line(&argv, platform).expect("a line");
+                assert_eq!(text, expected, "{platform:?}");
+                assert!(
+                    !text.contains("--json")
+                        && !text.contains("--approval")
+                        && !text.contains(" approve ")
+                        && !text.contains(" laya"),
+                    "{platform:?}: {text}"
+                );
+            }
         }
     }
 

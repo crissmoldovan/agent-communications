@@ -4,7 +4,9 @@
 //! capped log, and records what it started in its own settings folder (`event-service.json`). A watchdog asks
 //! the events CLI's `status` every 15 seconds, and a pure decision, `decide`, chooses what to do: start, adopt, restart,
 //! say it was stopped from outside, give up, restart on a new version, ask first, or nothing. Every side effect is
-//! `apply`'s.
+//! `apply`'s. The window's commands — the switch, the first-start answer, Try again, Restart to use it — only record
+//! what the person asked for and wake the watchdog, which does it at once: none of them runs the events CLI, so the
+//! window never waits for it (0.27.1).
 
 use crate::allowlist::{service_run, Call};
 use crate::commands::context;
@@ -20,7 +22,7 @@ use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, LazyLock, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, PoisonError, TryLockError};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
@@ -600,18 +602,47 @@ fn process_ids() -> Vec<u32> {
     let Ok(count) = usize::try_from(count) else {
         return Vec::new();
     };
-    let mut pids: Vec<libc::pid_t> = vec![0; count + 64];
-    let bytes = libc::c_int::try_from(pids.len() * std::mem::size_of::<libc::pid_t>())
-        .unwrap_or(libc::c_int::MAX);
-    // SAFETY: `pids` is writable for `bytes` bytes; the kernel fills at most that many and says how many PIDs it wrote.
-    let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
-    let Ok(filled) = usize::try_from(filled) else {
-        return Vec::new();
-    };
-    pids.truncate(filled.min(pids.len()));
-    pids.into_iter()
+    let listed = listed_with_room(count, PIDS_MOST, |pids: &mut [libc::pid_t]| {
+        let bytes = libc::c_int::try_from(std::mem::size_of_val(pids)).ok()?;
+        // SAFETY: `pids` is writable for `bytes` bytes; the kernel fills at most that many and says how many PIDs it
+        // wrote.
+        let filled = unsafe { libc::proc_listallpids(pids.as_mut_ptr().cast(), bytes) };
+        usize::try_from(filled).ok()
+    });
+    listed
+        .unwrap_or_default()
+        .into_iter()
         .filter_map(|pid| u32::try_from(pid).ok())
         .collect()
+}
+
+/// How many slots a listing of the processes must leave empty to be taken as whole. Only macOS lists them so.
+#[cfg(any(target_os = "macos", test))]
+const PIDS_ROOM: usize = 64;
+/// The most PIDs the app lists, far past any Mac's `kern.maxproc`: a megabyte of them.
+#[cfg(any(target_os = "macos", test))]
+const PIDS_MOST: usize = 1 << 18;
+
+/// The processes, listed whole: `list` fills a buffer and says how many it wrote, as the kernel does, and `expected` is
+/// how many it counted first. Processes start between the count and the listing, so a listing that leaves fewer than
+/// `PIDS_ROOM` slots empty may have been cut short: it is asked again with twice the room, until one fits, or the
+/// buffer holds `most`, when what it gave is kept. None when a listing fails.
+#[cfg(any(target_os = "macos", test))]
+fn listed_with_room<T: Copy + Default>(
+    expected: usize,
+    most: usize,
+    mut list: impl FnMut(&mut [T]) -> Option<usize>,
+) -> Option<Vec<T>> {
+    let mut size = expected.saturating_add(PIDS_ROOM).min(most);
+    loop {
+        let mut buffer = vec![T::default(); size];
+        let filled = list(&mut buffer)?.min(size);
+        if filled.saturating_add(PIDS_ROOM) <= size || size >= most {
+            buffer.truncate(filled);
+            return Some(buffer);
+        }
+        size = size.saturating_mul(2).min(most);
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -630,15 +661,37 @@ fn process_ids() -> Vec<u32> {
     Vec::new()
 }
 
+/// How many times the processes are read for the service to adopt, when they name no one service, and how far apart.
+const ADOPT_LOOKS: usize = 3;
+const ADOPT_AGAIN: Duration = Duration::from_millis(50);
+
 /// The service a terminal started that the app adopts, found by its command line, when it can be (`pick_adopted`).
+/// Read again a moment later when none, or two, are found (`looked_again`).
 fn find_adopted(folders: &Folders, except: Option<u32>) -> Option<(u32, Option<String>)> {
     let default_state_dir = resolve_folders(&PathEnv::from_process()).state_dir;
-    pick_adopted(
-        &service_processes(),
-        &folders.state_dir,
-        &default_state_dir,
-        except,
-    )
+    looked_again(|| {
+        pick_adopted(
+            &service_processes(),
+            &folders.state_dir,
+            &default_state_dir,
+            except,
+        )
+    })
+}
+
+/// What `look` finds, looked for up to `ADOPT_LOOKS` times, `ADOPT_AGAIN` apart. A process the service forks has the
+/// service's command line until it runs another program, so for that moment the processes name two services, and
+/// adopt neither.
+fn looked_again<T>(mut look: impl FnMut() -> Option<T>) -> Option<T> {
+    for at in 1..=ADOPT_LOOKS {
+        if let Some(found) = look() {
+            return Some(found);
+        }
+        if at < ADOPT_LOOKS {
+            thread::sleep(ADOPT_AGAIN);
+        }
+    }
+    None
 }
 
 /// Whether the process `pid` is still `events-daemon run`, read from its command line (Review Focus 3). A PID that has
@@ -987,6 +1040,40 @@ fn detach(command: &mut Command) {
 #[cfg(not(unix))]
 fn detach(_command: &mut Command) {}
 
+/// What the person asked for that the watchdog has yet to do (0.27.1). A command only records it, under the lock, and
+/// wakes the watchdog, so none of them waits for the events CLI: the watchdog's next look does the work.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Requested {
+    #[default]
+    Nothing,
+    /// The switch on, the first-start question's Start, Try again: start the service, or adopt the one running.
+    Start,
+    /// Restart to use it (D5): stop whatever runs, then start the version installed now.
+    Restart,
+    /// The switch off, or Not now: stop whatever runs.
+    Stop,
+}
+
+/// What a command asks of the supervisor: recorded at once (`Supervisor::request`), and done by the watchdog.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Request {
+    /// `set_event_service`: the switch.
+    Switch(bool),
+    /// `event_service_retry`: Try again.
+    Retry,
+    /// `restart_event_service`: Restart to use it.
+    Restart,
+    /// `answer_first_start`: Start, or Not now.
+    FirstStart(bool),
+}
+
+impl Request {
+    /// Whether it asks for the service to stop: the switch off, or Not now.
+    pub fn stops(self) -> bool {
+        matches!(self, Request::Switch(false) | Request::FirstStart(false))
+    }
+}
+
 /// The supervisor: the record, the app's own child, and what the window is told. `decide` chooses; this does it.
 pub struct Supervisor {
     record: ServiceRecord,
@@ -1010,10 +1097,27 @@ pub struct Supervisor {
     full_disk_access: String,
     /// Set, under the supervisor's lock, once the app is quitting: from then on nothing is started.
     quitting: bool,
+    /// What the person asked for, which the watchdog's next look does.
+    requested: Requested,
+    /// Set from Quit's Stop it until its stop is done, so the window says it is stopping.
+    stopping_for_quit: bool,
+    /// Set when the switch was turned off while the service was shown running or starting: said to be stopping, not
+    /// stopped, until the watchdog has stopped it.
+    stopping_shown: bool,
+    /// Set, by the window's thread, the moment Quit is pressed (`on_quit`): from then on nothing is started, unless the
+    /// person answers Keep running (`start_before_quit`).
+    quit_pressed: Arc<AtomicBool>,
 }
 
 impl Supervisor {
     pub fn new(record: ServiceRecord, record_dir: Option<PathBuf>, platform: Platform) -> Self {
+        // The switch turned off before the app last quit, with the service it knew of not yet stopped and forgotten:
+        // the first look finishes that stop. The switch's off is the only way the record keeps a service while off.
+        let requested = if !record.wanted && record.started_at.is_some() {
+            Requested::Stop
+        } else {
+            Requested::Nothing
+        };
         Supervisor {
             record,
             record_dir,
@@ -1030,11 +1134,23 @@ impl Supervisor {
             installed_version: None,
             full_disk_access: FULL_DISK_ACCESS_NOT_NEEDED.into(),
             quitting: false,
+            requested,
+            stopping_for_quit: false,
+            stopping_shown: false,
+            quit_pressed: Arc::new(AtomicBool::new(false)),
         }
     }
 
     pub fn record(&self) -> &ServiceRecord {
         &self.record
+    }
+
+    /// The supervisor, told by `quit_pressed` when Quit is pressed, which the app sets without waiting for it.
+    pub fn sharing_quit(self, quit_pressed: Arc<AtomicBool>) -> Self {
+        Supervisor {
+            quit_pressed,
+            ..self
+        }
     }
 
     fn save(&self) {
@@ -1112,12 +1228,23 @@ impl Supervisor {
         }
     }
 
-    /// One look: observe, decide, apply. While a restart waits, nothing is asked until it is due.
+    /// One look: what the person asked for, when they asked for something since the last look; otherwise observe,
+    /// decide, apply. While a restart waits, nothing is asked until it is due.
     pub fn tick(&mut self, ctx: &RunContext, now: SystemTime) {
         if self.platform == Platform::Windows || self.quitting {
             return;
         }
         self.trim_log(ctx);
+        match std::mem::take(&mut self.requested) {
+            Requested::Start => self.start_as_asked(ctx, now),
+            Requested::Restart => self.restart_as_asked(ctx, now),
+            Requested::Stop => self.stop_as_asked(ctx),
+            Requested::Nothing => self.look(ctx, now),
+        }
+    }
+
+    /// Observe, decide, apply.
+    fn look(&mut self, ctx: &RunContext, now: SystemTime) {
         if let Some(due) = self.restart_due {
             if now < due {
                 return;
@@ -1226,6 +1353,12 @@ impl Supervisor {
             return;
         }
         self.first_start_question = false;
+        // Quit was pressed: nothing is started over it. The start waits, and counts as the app's service, so the quit
+        // question asks about it, and Keep running makes it (`start_before_quit`).
+        if self.quit_pressed.load(Ordering::SeqCst) {
+            self.requested = Requested::Start;
+            return;
+        }
         match spawn_service(ctx) {
             Ok(child) => {
                 let pid = child.id();
@@ -1371,22 +1504,65 @@ impl Supervisor {
         self.record.started_by_app && self.process() == Process::Alive
     }
 
+    /// Whether a start the person asked for, or one Quit held back, waits to be made: a Restart to use it too.
+    pub fn start_pending(&self) -> bool {
+        matches!(self.requested, Requested::Start | Requested::Restart)
+    }
+
+    /// What the quit question is about: a service the app started runs, or one it is about to start. A start that
+    /// waits counts, so Quit never quits past a service the watchdog may start a moment later.
+    pub fn asks_at_quit(&mut self) -> bool {
+        self.app_service_running() || self.start_pending()
+    }
+
+    /// Keep running, answered while a start waits: it is made now, before the app quits, so the answer holds. The one
+    /// start after Quit was pressed.
+    pub fn start_before_quit(&mut self, ctx: &RunContext, now: SystemTime) {
+        if !self.start_pending() || self.quitting {
+            return;
+        }
+        let held = self.quit_pressed.swap(false, Ordering::SeqCst);
+        self.tick(ctx, now);
+        self.quit_pressed.store(held, Ordering::SeqCst);
+        // Quit still holds: a start that could not be made now is left for the next run, the switch on.
+        if self.start_pending() {
+            self.requested = Requested::Nothing;
+        }
+    }
+
+    /// Where the service stands, from what the supervisor knows, with `process` what became of the one it knows of.
+    fn status_of(&self, process: Process) -> EventServiceStatus {
+        let known_to_run = self.owner == Owner::Running || process == Process::Alive;
+        match self.requested {
+            // Quit's Stop it, under way: stopping until it has stopped.
+            _ if self.stopping_for_quit => EventServiceStatus::Stopping,
+            // Restart to use it: starting from the press until the new one answers.
+            Requested::Restart => EventServiceStatus::Starting,
+            // The switch off: stopping, never running, until the watchdog has stopped what runs; stopped at once when
+            // nothing is known to run, or to be starting.
+            Requested::Stop if self.stopping_shown || known_to_run => EventServiceStatus::Stopping,
+            Requested::Stop => EventServiceStatus::Stopped,
+            _ if self.owner == Owner::Running => EventServiceStatus::Running,
+            // A start asked for: starting from the press until it answers, or its start fails and waits, or gives up.
+            Requested::Start => EventServiceStatus::Starting,
+            Requested::Nothing if process == Process::Alive || self.restart_due.is_some() => {
+                EventServiceStatus::Starting
+            }
+            Requested::Nothing if self.record.wanted && given_up(&self.record) => {
+                EventServiceStatus::GaveUp
+            }
+            Requested::Nothing => EventServiceStatus::Stopped,
+        }
+    }
+
     /// The state the window is shown.
     pub fn state(&mut self, ctx: &RunContext) -> EventServiceState {
         if self.platform == Platform::Windows {
             return unavailable();
         }
         let process = self.process();
-        let running = self.owner == Owner::Running;
-        let status = if running {
-            EventServiceStatus::Running
-        } else if process == Process::Alive || self.restart_due.is_some() {
-            EventServiceStatus::Starting
-        } else if self.record.wanted && given_up(&self.record) {
-            EventServiceStatus::GaveUp
-        } else {
-            EventServiceStatus::Stopped
-        };
+        let status = self.status_of(process);
+        let running = status == EventServiceStatus::Running;
         let ours = self.record.started_by_app && process == Process::Alive;
         let known = self.record.started_at.is_some();
         EventServiceState {
@@ -1417,51 +1593,104 @@ impl Supervisor {
         }
     }
 
-    /// The switch. On: wanted, with its failures cleared, and a service the app knew of that is no longer there
-    /// forgotten, so it starts one, or adopts one running — also after an adopted one went, or a stop from outside
-    /// (D4). Off: whatever runs is stopped through the events CLI's `stop`. Either is the first-start question's answer.
-    pub fn set_wanted(&mut self, ctx: &RunContext, on: bool, now: SystemTime) {
+    /// The switch (D2), as the person sets it: recorded and kept at once, and left to the watchdog's next look, which
+    /// the command wakes (0.27.1). On: wanted, with its failures cleared and a stop from outside forgotten, and
+    /// starting from now until the watchdog has started the service, or adopted one running. Off: whatever runs is
+    /// stopped at that look. Either is the first-start question's answer. Nothing here runs the events CLI or starts
+    /// or stops a process, so the window never waits for one.
+    pub fn set_wanted(&mut self, on: bool) {
+        let process = self.process();
+        let shown = self.status_of(process);
+        self.stopping_shown = !on
+            && matches!(
+                shown,
+                EventServiceStatus::Running
+                    | EventServiceStatus::Starting
+                    | EventServiceStatus::Stopping
+            );
         self.restart_due = None;
         self.restarting = false;
         self.first_start_question = false;
         self.record.first_start_answered = true;
+        self.record.wanted = on;
         if on {
-            self.record.wanted = true;
             self.record.recent_failures.clear();
             self.stopped_from_outside_at = None;
-            let mut observed = self.observe(ctx);
-            if observed.owner != Owner::Running && observed.process != Process::Alive {
-                self.child = None;
-                self.record = forget(&self.record);
-                observed.process = Process::NoneRecorded;
-            }
-            let action = decide(&self.record, &observed, now);
-            self.apply(ctx, action, &observed, now);
+            self.requested = Requested::Start;
         } else {
-            self.record.wanted = false;
-            let observed = self.observe(ctx);
-            if observed.owner == Owner::Running || observed.process == Process::Alive {
-                self.stop(ctx);
-            }
-            self.child = None;
-            self.record = forget(&self.record);
+            self.requested = Requested::Stop;
         }
         self.save();
     }
 
     /// Try again, after giving up: the switch on again, with the failures forgotten.
-    pub fn retry(&mut self, ctx: &RunContext, now: SystemTime) {
-        self.set_wanted(ctx, true, now);
+    pub fn retry(&mut self) {
+        self.set_wanted(true);
     }
 
-    /// Restart to use it (D5): whatever runs is stopped, and once it has let go of the database (`wait_gone`) the app
-    /// starts the version installed now, as its own.
-    pub fn restart(&mut self, ctx: &RunContext, now: SystemTime) {
+    /// Restart to use it (D5), recorded as the switch is: wanted, with its failures cleared, and starting from now
+    /// until the watchdog's next look has stopped whatever runs and started the version installed now.
+    pub fn restart(&mut self) {
+        self.stopping_shown = false;
         self.restart_due = None;
+        self.restarting = false;
         self.first_start_question = false;
         self.record.wanted = true;
         self.record.first_start_answered = true;
         self.record.recent_failures.clear();
+        self.requested = Requested::Restart;
+        self.save();
+    }
+
+    /// The first-start question's answer (P1): Start starts it, Not now leaves the switch off.
+    pub fn answer_first_start(&mut self, start: bool) {
+        self.set_wanted(start);
+    }
+
+    /// A command's request, recorded.
+    pub fn request(&mut self, request: Request) {
+        match request {
+            Request::Switch(on) => self.set_wanted(on),
+            Request::Retry => self.retry(),
+            Request::Restart => self.restart(),
+            Request::FirstStart(start) => self.answer_first_start(start),
+        }
+    }
+
+    /// Whether the switch was turned off and the watchdog has yet to stop what runs: Quit then stops it first.
+    pub fn stop_pending(&self) -> bool {
+        self.requested == Requested::Stop
+    }
+
+    /// The start the person asked for: a service the app knew of that is no longer there is forgotten, so it starts
+    /// one, or adopts one running — also after an adopted one went, or a stop from outside (D4).
+    fn start_as_asked(&mut self, ctx: &RunContext, now: SystemTime) {
+        let mut observed = self.observe(ctx);
+        if observed.owner != Owner::Running && observed.process != Process::Alive {
+            self.child = None;
+            self.record = forget(&self.record);
+            observed.process = Process::NoneRecorded;
+        }
+        let action = decide(&self.record, &observed, now);
+        self.apply(ctx, action, &observed, now);
+        self.save();
+    }
+
+    /// The switch's off: whatever runs is stopped through the events CLI's `stop`, and forgotten.
+    fn stop_as_asked(&mut self, ctx: &RunContext) {
+        let observed = self.observe(ctx);
+        if observed.owner == Owner::Running || observed.process == Process::Alive {
+            self.stop(ctx);
+        }
+        self.child = None;
+        self.record = forget(&self.record);
+        self.stopping_shown = false;
+        self.save();
+    }
+
+    /// Restart to use it (D5): whatever runs is stopped, and once it has let go of the database (`wait_gone`) the app
+    /// starts the version installed now, as its own.
+    fn restart_as_asked(&mut self, ctx: &RunContext, now: SystemTime) {
         let observed = self.observe(ctx);
         let running = observed.owner == Owner::Running || observed.process == Process::Alive;
         if running && !self.stop(ctx) {
@@ -1480,11 +1709,6 @@ impl Supervisor {
         self.save();
     }
 
-    /// The first-start question's answer (P1): Start starts it, Not now leaves the switch off.
-    pub fn answer_first_start(&mut self, ctx: &RunContext, start: bool, now: SystemTime) {
-        self.set_wanted(ctx, start, now);
-    }
-
     /// Keeps the quit question's answer, for Remember my answer.
     pub fn remember_quit(&mut self, answer: QuitAnswer) {
         self.record.quit_answer = Some(answer);
@@ -1498,15 +1722,27 @@ impl Supervisor {
         self.restart_due = None;
     }
 
-    /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
-    /// The switch stays on, so the app starts it again when it next runs (D2): it stops for this run only.
-    pub fn stop_for_quit(&mut self, ctx: &RunContext) {
+    /// The app is quitting, and stops the service first (`stop_for_quit`): from now on nothing is started, and while
+    /// there is something to stop the window is told it is stopping. Published before the stop, which takes seconds.
+    pub fn begin_stop_for_quit(&mut self) {
         self.begin_quit();
-        if self.app_service_running() {
+        self.stopping_for_quit = self.requested == Requested::Stop || self.app_service_running();
+    }
+
+    /// Quit's Stop it: a service the app started is stopped, and forgotten, so its clean stop is not one from outside.
+    /// The switch stays on, so the app starts it again when it next runs (D2): it stops for this run only. A stop the
+    /// switch asked for that the watchdog has yet to do is done instead: whatever runs is stopped, as the switch's off
+    /// stops it.
+    pub fn stop_for_quit(&mut self, ctx: &RunContext) {
+        self.begin_stop_for_quit();
+        if std::mem::take(&mut self.requested) == Requested::Stop {
+            self.stop_as_asked(ctx);
+        } else if self.app_service_running() {
             self.stop(ctx);
             self.record = forget(&self.record);
             self.save();
         }
+        self.stopping_for_quit = false;
     }
 }
 
@@ -1612,16 +1848,25 @@ struct Shown {
     state: Option<EventServiceState>,
     app_service_running: bool,
     quit_answer: Option<QuitAnswer>,
+    /// The switch was turned off, and the watchdog has yet to stop what runs.
+    stop_pending: bool,
+    /// A start waits to be made (`Supervisor::start_pending`).
+    start_pending: bool,
 }
 
 /// The event service as the app holds it. The supervisor is none on Windows, where nothing is ever started.
 #[derive(Default)]
 pub struct EventService {
     supervisor: Mutex<Option<Supervisor>>,
+    /// What commands asked while the watchdog held the supervisor, looking, which can take seconds: recorded the moment
+    /// it lets go, so a command never waits for a look in progress.
+    requests: Mutex<Vec<Request>>,
     shown: Mutex<Shown>,
     wake: Wake,
     /// Set once a remembered Stop it is under way: a second Quit stops nothing more.
     stopping: AtomicBool,
+    /// Set the moment Quit is pressed, shared with the supervisor, which starts nothing from then on.
+    quit_pressed: Arc<AtomicBool>,
     /// Set by the quit question's first answer, the only one acted on.
     answered: AtomicBool,
     /// Whether a WhatsApp account exists, and when that was asked.
@@ -1630,8 +1875,9 @@ pub struct EventService {
     checking_access: AtomicBool,
 }
 
-/// Starts the supervisor, in `setup`: loads the record, and starts the watchdog, which looks at once and then every
-/// 15 seconds. Wanted by default (D2), so a first launch, or a launch at login, starts the service. Nothing on Windows.
+/// Starts the supervisor, in `setup`: loads the record, and starts the watchdog, which looks at once, then every
+/// 15 seconds, and at once whenever a command wakes it. Wanted by default (D2), so a first launch, or a launch at
+/// login, starts the service. Nothing on Windows.
 pub fn start(app: &AppHandle) {
     if Platform::current() == Platform::Windows {
         return;
@@ -1641,7 +1887,10 @@ pub fn start(app: &AppHandle) {
     };
     let dir = settings::settings_dir(app).ok();
     let record = dir.as_deref().map(load_record).unwrap_or_default();
-    *lock(&service.supervisor) = Some(Supervisor::new(record, dir, Platform::current()));
+    *lock(&service.supervisor) = Some(
+        Supervisor::new(record, dir, Platform::current())
+            .sharing_quit(service.quit_pressed.clone()),
+    );
     let app = app.clone();
     let _ = thread::Builder::new()
         .name("event-service".into())
@@ -1665,37 +1914,162 @@ fn with_supervisor<T>(
     work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
 ) -> Option<(T, EventServiceState)> {
     let service = app.try_state::<EventService>()?;
+    let held = lock(&service.supervisor);
+    on_held(app, &service, held, work)
+}
+
+/// `with_supervisor`'s work, on the supervisor `held`: the requests commands left while it was held are recorded first,
+/// and again after `work`, so the state the window is told has them.
+fn on_held<T>(
+    app: &AppHandle,
+    service: &EventService,
+    held: MutexGuard<'_, Option<Supervisor>>,
+    work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
+) -> Option<(T, EventServiceState)> {
     let ctx = context(&app.state::<AppState>());
-    let mut held = lock(&service.supervisor);
-    let supervisor = held.as_mut()?;
-    let answer = work(supervisor, &ctx);
-    let state = supervisor.state(&ctx);
-    let running = supervisor.app_service_running();
-    let quit_answer = supervisor.record().quit_answer;
-    drop(held);
-    let changed = {
-        let mut shown = lock(&service.shown);
-        shown.app_service_running = running;
-        shown.quit_answer = quit_answer;
-        let changed = shown.state.as_ref() != Some(&state);
-        shown.state = Some(state.clone());
-        changed
-    };
+    let (answer, state, changed) = held_work(service, &ctx, held, work)?;
     if changed {
         let _ = app.emit(CHANGED, &state);
     }
     Some((answer, state))
 }
 
-/// A command's work, and the state after it; the watchdog is woken to look again.
-fn command(app: &AppHandle, work: impl FnOnce(&mut Supervisor, &RunContext)) -> EventServiceState {
-    let Some((_, state)) = with_supervisor(app, work) else {
+/// `on_held`, but for telling the window: `work`'s answer, the state, and whether it changed since it was last
+/// published, which the main thread reads (`Shown`).
+fn held_work<T>(
+    service: &EventService,
+    ctx: &RunContext,
+    mut held: MutexGuard<'_, Option<Supervisor>>,
+    work: impl FnOnce(&mut Supervisor, &RunContext) -> T,
+) -> Option<(T, EventServiceState, bool)> {
+    let supervisor = held.as_mut()?;
+    take_requests(service, supervisor);
+    let answer = work(supervisor, ctx);
+    take_requests(service, supervisor);
+    let state = supervisor.state(ctx);
+    let running = supervisor.asks_at_quit();
+    let stop_pending = supervisor.stop_pending();
+    let start_pending = supervisor.start_pending();
+    let quit_answer = supervisor.record().quit_answer;
+    drop(held);
+    let changed = {
+        let mut shown = lock(&service.shown);
+        shown.app_service_running = running;
+        shown.quit_answer = quit_answer;
+        shown.stop_pending = stop_pending;
+        shown.start_pending = start_pending;
+        let changed = shown.state.as_ref() != Some(&state);
+        shown.state = Some(state.clone());
+        changed
+    };
+    Some((answer, state, changed))
+}
+
+/// Records, in order, the requests commands left beside the supervisor.
+fn take_requests(service: &EventService, supervisor: &mut Supervisor) {
+    let requests = std::mem::take(&mut *lock(&service.requests));
+    for request in requests {
+        supervisor.request(request);
+    }
+}
+
+/// A command (0.27.1): its request recorded, the watchdog woken to do it, and the state it comes to, at once. The
+/// supervisor runs no events CLI for it here. While the watchdog holds the supervisor, looking, the request waits
+/// beside it and is recorded the moment it lets go; the window is told now what it comes to (`requested_state`).
+fn command(app: &AppHandle, request: Request) -> EventServiceState {
+    let Some(service) = app.try_state::<EventService>() else {
         return unavailable();
     };
-    if let Some(service) = app.try_state::<EventService>() {
-        service.wake.notify();
+    let ctx = context(&app.state::<AppState>());
+    let state = asked(&service, &ctx, request).map(|(state, changed)| {
+        if changed {
+            let _ = app.emit(CHANGED, &state);
+        }
+        state
+    });
+    service.wake.notify();
+    state.unwrap_or_else(unavailable)
+}
+
+/// `command`'s work: the request recorded on a free supervisor, or left beside a busy one, and the state it comes to,
+/// with whether the window is to be told it by an event too. A request left waiting says at once, to what Quit reads
+/// without the supervisor (`Shown`), whether it is a stop.
+fn asked(
+    service: &EventService,
+    ctx: &RunContext,
+    request: Request,
+) -> Option<(EventServiceState, bool)> {
+    let record = |supervisor: &mut Supervisor, _: &RunContext| supervisor.request(request);
+    let held = match service.supervisor.try_lock() {
+        Ok(held) => held,
+        Err(TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(TryLockError::WouldBlock) => {
+            lock(&service.requests).push(request);
+            let shown = {
+                let mut shown = lock(&service.shown);
+                shown.stop_pending = request.stops();
+                shown.start_pending = !request.stops();
+                if shown.start_pending {
+                    shown.app_service_running = true;
+                }
+                shown.state.clone()
+            };
+            return match shown {
+                Some(shown) => Some((requested_state(&shown, request), false)),
+                // Nothing told yet: the window has shown nothing to ask about, so this is waited for.
+                None => held_work(service, ctx, lock(&service.supervisor), |_, _| {})
+                    .map(|(_, state, changed)| (state, changed)),
+            };
+        }
+    };
+    held_work(service, ctx, held, record).map(|(_, state, changed)| (state, changed))
+}
+
+/// What a request comes to, from the state the window was last told: what `Supervisor::state` says once it is
+/// recorded, before the watchdog has done it. The question is answered; on, it is wanted, and starting unless it runs
+/// (Restart to use it is starting even then), with its failures and any stop from outside forgotten; off, it is
+/// stopping until the watchdog has stopped whatever runs, when it was shown running or starting, and stopped at once
+/// when nothing ran.
+fn requested_state(shown: &EventServiceState, request: Request) -> EventServiceState {
+    if !shown.available {
+        return shown.clone();
     }
-    state
+    let on = match request {
+        Request::Switch(on) | Request::FirstStart(on) => on,
+        Request::Retry | Request::Restart => true,
+    };
+    let running = shown.status == EventServiceStatus::Running;
+    let under_way = matches!(
+        shown.status,
+        EventServiceStatus::Running | EventServiceStatus::Starting | EventServiceStatus::Stopping
+    );
+    let status = if request == Request::Restart {
+        EventServiceStatus::Starting
+    } else if !on && under_way {
+        EventServiceStatus::Stopping
+    } else if !on {
+        EventServiceStatus::Stopped
+    } else if running {
+        EventServiceStatus::Running
+    } else {
+        EventServiceStatus::Starting
+    };
+    let still_running = status == EventServiceStatus::Running;
+    EventServiceState {
+        wanted: on,
+        status,
+        started_by: shown.started_by.clone().filter(|_| still_running),
+        since: shown.since.clone().filter(|_| still_running),
+        version: shown.version.clone().filter(|_| still_running),
+        newer_version: shown.newer_version.clone().filter(|_| still_running),
+        stopped_from_outside_at: shown
+            .stopped_from_outside_at
+            .clone()
+            .filter(|_| !on || request == Request::Restart),
+        log_tail: Vec::new(),
+        first_start_question: false,
+        ..shown.clone()
+    }
 }
 
 /// `event_service_state`: read only, so the watchdog is not woken.
@@ -1757,30 +2131,22 @@ fn refresh_full_disk_access(app: &AppHandle) {
 
 /// `set_event_service`.
 pub fn set_wanted(app: &AppHandle, on: bool) -> EventServiceState {
-    command(app, |supervisor, ctx| {
-        supervisor.set_wanted(ctx, on, SystemTime::now())
-    })
+    command(app, Request::Switch(on))
 }
 
 /// `event_service_retry`.
 pub fn retry(app: &AppHandle) -> EventServiceState {
-    command(app, |supervisor, ctx| {
-        supervisor.retry(ctx, SystemTime::now())
-    })
+    command(app, Request::Retry)
 }
 
 /// `restart_event_service`.
 pub fn restart(app: &AppHandle) -> EventServiceState {
-    command(app, |supervisor, ctx| {
-        supervisor.restart(ctx, SystemTime::now())
-    })
+    command(app, Request::Restart)
 }
 
 /// `answer_first_start`.
 pub fn answer_first_start(app: &AppHandle, start: bool) -> EventServiceState {
-    command(app, |supervisor, ctx| {
-        supervisor.answer_first_start(ctx, start, SystemTime::now())
-    })
+    command(app, Request::FirstStart(start))
 }
 
 /// The pane of System Settings that gives Full Disk Access (D6).
@@ -1807,8 +2173,36 @@ pub enum QuitRoute {
     Quit,
     /// The window is shown and asks "Keep the event service running?"; `answer_quit` quits.
     Ask,
-    /// Stop it was remembered: the service the app started is stopped, then the app quits.
+    /// Stop it was remembered, or the switch was just turned off and its stop is not done yet: the service is stopped,
+    /// then the app quits.
     StopThenQuit,
+    /// Commands wait beside the supervisor, which the watchdog holds: a thread records them, then chooses the route
+    /// from what they came to, and acts on it, quitting too.
+    Later,
+}
+
+/// What a Quit comes to now: `Later` while commands wait beside the supervisor, so none is lost; otherwise
+/// `route_for` what the supervisor last published. Never waits for the supervisor.
+fn quit_plan(service: &EventService) -> QuitRoute {
+    if !lock(&service.requests).is_empty() {
+        return QuitRoute::Later;
+    }
+    let shown = lock(&service.shown);
+    // Keep running, remembered, while a start waits: the thread makes it before quitting, as the answer says.
+    if shown.start_pending && shown.quit_answer == Some(QuitAnswer::Keep) {
+        return QuitRoute::Later;
+    }
+    route_for(&shown)
+}
+
+/// What a Quit comes to, from what the supervisor last published: with the switch just turned off and its stop not yet
+/// done, the stop is done first and nothing is asked; otherwise `quit_route`.
+fn route_for(shown: &Shown) -> QuitRoute {
+    if shown.stop_pending {
+        QuitRoute::StopThenQuit
+    } else {
+        quit_route(shown.app_service_running, shown.quit_answer)
+    }
 }
 
 /// Whether Quit asks: only while a service the app started runs, and no answer is remembered (P3).
@@ -1846,7 +2240,7 @@ pub fn quit_step(route: QuitRoute, stopping: &AtomicBool) -> QuitStep {
         // opens once however often it is asked.
         QuitRoute::Ask => QuitStep::ShowAndAsk,
         QuitRoute::StopThenQuit if first_to_ask(stopping) => QuitStep::StopThenQuit,
-        QuitRoute::StopThenQuit => QuitStep::Nothing,
+        QuitRoute::StopThenQuit | QuitRoute::Later => QuitStep::Nothing,
     }
 }
 
@@ -1859,15 +2253,38 @@ fn first_answer(answered: &AtomicBool) -> bool {
 /// waits for nothing: it reads what the supervisor last published. On `Ask` the window is shown, brought forward and
 /// sent `quit-requested`, every time, so a window that missed it is asked again; nothing quits past the question, and
 /// only its first answer is acted on (Review Focus 5). On `StopThenQuit` a thread of its own stops the service, once,
-/// then quits. On `Quit` the caller quits.
+/// then quits. On `Quit` the caller quits. On `Later`, commands wait beside the supervisor: a thread records them, then
+/// chooses among those and acts, quitting itself, so a switch turned off a moment before Quit is never lost.
 pub fn on_quit(app: &AppHandle) -> QuitRoute {
     let Some(service) = app.try_state::<EventService>() else {
         return QuitRoute::Quit;
     };
-    let route = {
-        let shown = lock(&service.shown);
-        quit_route(shown.app_service_running, shown.quit_answer)
-    };
+    // From now on nothing is started, unless the person answers Keep running.
+    service.quit_pressed.store(true, Ordering::SeqCst);
+    let route = quit_plan(&service);
+    if route == QuitRoute::Later {
+        let app = app.clone();
+        thread::spawn(move || {
+            with_supervisor(&app, |supervisor, ctx| {
+                if supervisor.record().quit_answer == Some(QuitAnswer::Keep) {
+                    supervisor.start_before_quit(ctx, SystemTime::now());
+                }
+            });
+            let Some(service) = app.try_state::<EventService>() else {
+                return quit(&app);
+            };
+            let route = route_for(&lock(&service.shown));
+            if quit_as(&app, &service, route) == QuitRoute::Quit {
+                quit(&app);
+            }
+        });
+        return route;
+    }
+    quit_as(app, &service, route)
+}
+
+/// What one Quit on `route` does (`quit_step`); the route, for the caller to quit on `Quit`.
+fn quit_as(app: &AppHandle, service: &EventService, route: QuitRoute) -> QuitRoute {
     match quit_step(route, &service.stopping) {
         QuitStep::Quit | QuitStep::Nothing => {}
         QuitStep::ShowAndAsk => {
@@ -1877,6 +2294,7 @@ pub fn on_quit(app: &AppHandle) -> QuitRoute {
         QuitStep::StopThenQuit => {
             let app = app.clone();
             thread::spawn(move || {
+                with_supervisor(&app, |supervisor, _| supervisor.begin_stop_for_quit());
                 with_supervisor(&app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
                 quit(&app);
             });
@@ -1905,15 +2323,27 @@ pub fn answer_quit(app: &AppHandle, keep: bool, remember: bool) -> Result<(), Ap
     } else {
         QuitAnswer::Stop
     };
-    with_supervisor(app, |supervisor, ctx| {
+    // First what the answer is, published, so the window says the service is stopping while it stops; then the stop.
+    let stopping = with_supervisor(app, |supervisor, ctx| {
+        // Keep running, with a start not yet made: made now, as the answer says.
+        if keep {
+            supervisor.start_before_quit(ctx, SystemTime::now());
+        }
         supervisor.begin_quit();
         if remember {
             supervisor.remember_quit(answer);
         }
-        if !keep {
-            supervisor.stop_for_quit(ctx);
+        // Keep running keeps what the switch wants: a stop it asked for is still done.
+        let stopping = !keep || supervisor.stop_pending();
+        if stopping {
+            supervisor.begin_stop_for_quit();
         }
-    });
+        stopping
+    })
+    .is_some_and(|(stopping, _)| stopping);
+    if stopping {
+        with_supervisor(app, |supervisor, ctx| supervisor.stop_for_quit(ctx));
+    }
     quit(app);
     Ok(())
 }
@@ -2844,6 +3274,110 @@ mod tests {
         assert!(!is_our_service(pid), "and, once gone, no longer");
     }
 
+    /// The kernel lists as many PIDs as fit, and processes start between counting them and listing them: a listing
+    /// that leaves too little room may have been cut short, so it is asked again with twice the room, up to a cap.
+    #[test]
+    fn the_process_list_grows_until_it_has_room_to_spare() {
+        // A list the kernel fills from `processes`, which grows by `born` each time it is asked.
+        fn kernel(mut processes: usize, born: usize) -> impl FnMut(&mut [u32]) -> Option<usize> {
+            move |buffer: &mut [u32]| {
+                processes = processes.saturating_add(born);
+                let filled = processes.min(buffer.len());
+                for (slot, pid) in buffer.iter_mut().zip(1..) {
+                    *slot = pid;
+                }
+                Some(filled)
+            }
+        }
+        // Counted 1000; 300 more start before the first listing, which would have been cut at 1064.
+        let mut asked = Vec::new();
+        let mut storm = kernel(1000, 300);
+        let listed = listed_with_room(1000, PIDS_MOST, |buffer| {
+            asked.push(buffer.len());
+            storm(buffer)
+        })
+        .expect("listed");
+        assert_eq!(listed.len(), 1600, "the second listing, whole");
+        assert_eq!(asked, [1000 + PIDS_ROOM, 2 * (1000 + PIDS_ROOM)]);
+        assert_eq!(listed.first(), Some(&1));
+        // A quiet machine: one listing.
+        let mut asked = 0;
+        let mut quiet = kernel(500, 0);
+        let listed = listed_with_room(500, PIDS_MOST, |buffer| {
+            asked += 1;
+            quiet(buffer)
+        })
+        .expect("listed");
+        assert_eq!((listed.len(), asked), (500, 1));
+        // Never past the cap: a list that never fits stops there, with what it gave.
+        let mut endless = kernel(0, usize::MAX / 4);
+        let mut sizes = Vec::new();
+        let listed = listed_with_room(10, 1000, |buffer| {
+            sizes.push(buffer.len());
+            endless(buffer)
+        })
+        .expect("listed");
+        assert_eq!(listed.len(), 1000);
+        assert_eq!(sizes.last(), Some(&1000));
+        assert!(sizes.windows(2).all(|pair| pair[1] > pair[0]), "{sizes:?}");
+        // A count of nothing still leaves room, and a listing that fails is nothing.
+        let mut few = kernel(3, 0);
+        assert_eq!(
+            listed_with_room(0, PIDS_MOST, &mut few).map(|pids| pids.len()),
+            Some(3)
+        );
+        assert_eq!(listed_with_room(10, PIDS_MOST, |_| None), None::<Vec<u32>>);
+        // A kernel that says it wrote more than the buffer holds is held to the buffer.
+        let listed = listed_with_room(10, 100, |buffer: &mut [u32]| Some(buffer.len() + 50))
+            .expect("listed");
+        assert_eq!(listed.len(), 100);
+    }
+
+    /// A process the service forks has the service's command line until it runs another program, so a look at that
+    /// moment finds two and adopts neither: the processes are read again, a moment later, a few times.
+    #[test]
+    fn adoption_looks_again_when_the_processes_name_no_one_service() {
+        let mut looks = 0;
+        let found = looked_again(|| {
+            looks += 1;
+            (looks == 2).then_some(7)
+        });
+        assert_eq!((found, looks), (Some(7), 2), "found at the second look");
+        let mut looks = 0;
+        let started = Instant::now();
+        let found: Option<u32> = looked_again(|| {
+            looks += 1;
+            None
+        });
+        assert_eq!((found, looks), (None, ADOPT_LOOKS));
+        assert!(started.elapsed() >= ADOPT_AGAIN * (ADOPT_LOOKS as u32 - 1));
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "a moment, not a wait"
+        );
+        // One there at once is taken at once.
+        let mut looks = 0;
+        assert_eq!(
+            looked_again(|| {
+                looks += 1;
+                Some(1)
+            }),
+            Some(1)
+        );
+        assert_eq!(looks, 1);
+        // And the fork itself: a service and its child, before the child runs another program, are two of one command
+        // line, which `pick_adopted` cannot tell apart.
+        let service = words(&[
+            "/bin/sh",
+            "/x/runtime/0.26.1-events-daemon/node_modules/@agentcomms/events-daemon/dist/cli.mjs",
+            "run",
+            "--state-dir",
+            "/s",
+        ]);
+        let forked = vec![(10, service.clone()), (11, service)];
+        assert_eq!(pick_adopted(&forked, "/s", "/s", None), None);
+    }
+
     #[test]
     fn the_kernels_process_arguments_are_read_word_by_word() {
         let mut buffer = 3i32.to_ne_bytes().to_vec();
@@ -3048,6 +3582,7 @@ mod tests {
     #[cfg(unix)]
     const FAKE_SERVICE: &str = r#"#!/bin/sh
 here=$(dirname "$0")
+printf '%s\n' "$1" >> "$here/calls"
 case $1 in
   status)
     if [ -f "$here/running" ]; then printf '{"owner":"running","enabled":false,"paused":false}\n'
@@ -3145,6 +3680,15 @@ exit 64
             fs::read_to_string(events_dir(&self.ctx.folders).join(LOG_FILE)).unwrap_or_default()
         }
 
+        /// The subcommand of every time the launcher was run since the calls were last cleared, in order.
+        fn calls(&self) -> Vec<String> {
+            fs::read_to_string(self.path("calls"))
+                .unwrap_or_default()
+                .lines()
+                .map(str::to_string)
+                .collect()
+        }
+
         fn supervisor(&self, record: ServiceRecord) -> Supervisor {
             Supervisor::new(record, Some(self.app.clone()), Platform::current())
         }
@@ -3211,7 +3755,8 @@ exit 64
         assert!(supervisor.app_service_running());
         assert_eq!(load_record(&fake.app).pid, Some(pid), "kept");
         // Off: through the events CLI's `stop`, and it is gone, and forgotten.
-        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        supervisor.set_wanted(false);
+        supervisor.tick(&fake.ctx, SystemTime::now());
         let stop = fs::read_to_string(fake.path("stop-argv")).expect("stop was asked");
         assert_eq!(stop.lines().take(2).collect::<Vec<_>>(), ["stop", "--json"]);
         assert!(!fake.has("running"));
@@ -3228,6 +3773,600 @@ exit 64
         supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(!fake.has("run-argv"));
         fake.finish(&mut supervisor);
+    }
+
+    /// A start the person asks for — the first-start question's Start, the switch, Try again — runs no events CLI on
+    /// the command's path, where the window waits: the command records it and says the service is starting, and the
+    /// watchdog's next look starts it, or adopts one running. It is starting from the click until it answers (0.27.1).
+    #[cfg(unix)]
+    #[test]
+    fn a_requested_start_runs_no_cli_and_the_watchdogs_next_look_starts_it() {
+        let fake = Fake::new();
+        // A Mac where the service has run before: the first look asks first (P1), and starts nothing.
+        let events = events_dir(&fake.ctx.folders);
+        fs::create_dir_all(&events).expect("events");
+        fs::write(events.join(DATABASE_FILE), "").expect("a database from before");
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(supervisor.state(&fake.ctx).first_start_question);
+        assert_eq!(fake.calls(), ["status"]);
+
+        // Start: recorded and kept at once, said to be starting, and nothing run.
+        fake.unmark("calls");
+        supervisor.answer_first_start(true);
+        assert_eq!(
+            fake.calls(),
+            Vec::<String>::new(),
+            "no events CLI on the command's path"
+        );
+        assert!(
+            supervisor.child.is_none(),
+            "nothing started on the command's path"
+        );
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Starting);
+        assert!(state.wanted);
+        assert!(!state.first_start_question);
+        let kept = load_record(&fake.app);
+        assert!(
+            kept.wanted && kept.first_start_answered,
+            "the answer is kept at once"
+        );
+
+        // The watchdog's next look starts it, and it is starting until it answers.
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(supervisor.record().started_by_app);
+        assert!(supervisor.child.is_some());
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        eventually("it runs", || fake.has("running"));
+        assert_eq!(fake.calls(), ["status", "run"]);
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Running
+        );
+
+        // Restart to use it: the same. Starting from the press; the next look stops the old one and starts the new.
+        let old = supervisor.record().pid;
+        fake.unmark("calls");
+        supervisor.restart();
+        assert_eq!(
+            fake.calls(),
+            Vec::<String>::new(),
+            "Restart to use it runs nothing"
+        );
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Starting);
+        assert_eq!(state.since, None);
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(fake
+            .calls()
+            .starts_with(&["status".to_string(), "stop".to_string()]));
+        assert!(supervisor.record().started_by_app);
+        assert_ne!(supervisor.record().pid, old, "a new one");
+        eventually("the new one runs", || fake.has("running"));
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Running);
+        assert_eq!(state.restarts, 1);
+
+        // Off: nothing run on the command's path either. It runs until the next look stops it.
+        fake.unmark("calls");
+        supervisor.set_wanted(false);
+        assert_eq!(
+            fake.calls(),
+            Vec::<String>::new(),
+            "the switch's off runs nothing"
+        );
+        assert!(!load_record(&fake.app).wanted, "kept at once");
+        let state = supervisor.state(&fake.ctx);
+        assert!(!state.wanted);
+        assert_eq!(
+            state.status,
+            EventServiceStatus::Stopping,
+            "stopping, never running, until it has stopped"
+        );
+        assert_eq!(state.since, None);
+        assert!(supervisor.stop_pending());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.has("running"));
+        assert!(fake.calls().contains(&"stop".to_string()));
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopped
+        );
+        assert!(!supervisor.stop_pending());
+
+        // A terminal's service running meanwhile: the switch on again runs nothing either, and the next look adopts
+        // the one running rather than starting a second.
+        fake.mark("running");
+        fake.unmark("calls");
+        supervisor.set_wanted(true);
+        assert_eq!(
+            fake.calls(),
+            Vec::<String>::new(),
+            "the switch runs nothing"
+        );
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(fake.calls(), ["status"], "adopted, not started twice");
+        let state = supervisor.state(&fake.ctx);
+        assert_eq!(state.status, EventServiceStatus::Running);
+        assert_eq!(state.started_by.as_deref(), Some("terminal"));
+        fake.unmark("running");
+        fake.finish(&mut supervisor);
+
+        // Try again, after giving up: the same.
+        let gave_up = ServiceRecord {
+            recent_failures: (0..5)
+                .map(|n| iso(SystemTime::now() - Duration::from_secs(60 * n)))
+                .collect(),
+            ..ServiceRecord::default()
+        };
+        fake.unmark("stop");
+        let mut retried = fake.supervisor(gave_up);
+        assert_eq!(retried.state(&fake.ctx).status, EventServiceStatus::GaveUp);
+        fake.unmark("calls");
+        retried.retry();
+        assert_eq!(fake.calls(), Vec::<String>::new(), "Try again runs nothing");
+        assert_eq!(
+            retried.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        assert!(retried.record().recent_failures.is_empty());
+        retried.tick(&fake.ctx, SystemTime::now());
+        assert!(retried.record().started_by_app, "started at the next look");
+        eventually("it runs", || fake.has("running"));
+        fake.finish(&mut retried);
+    }
+
+    /// A start asked for that fails — here a launcher others may change, which the app refuses to run (DA16) — goes
+    /// the way a failed start always has: starting while its retry waits, then the waits, then giving up.
+    #[cfg(unix)]
+    #[test]
+    fn a_requested_start_that_fails_waits_as_any_failed_start_does() {
+        use std::os::unix::fs::PermissionsExt;
+        let fake = Fake::new();
+        fs::set_permissions(
+            fake.path("events-daemon"),
+            fs::Permissions::from_mode(0o777),
+        )
+        .expect("open to all");
+        let mut supervisor = fake.supervisor(ServiceRecord {
+            wanted: false,
+            first_start_answered: true,
+            ..ServiceRecord::default()
+        });
+        supervisor.set_wanted(true);
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        let at = SystemTime::now();
+        supervisor.tick(&fake.ctx, at);
+        assert_eq!(supervisor.record().recent_failures.len(), 1);
+        assert_eq!(
+            supervisor.restart_due,
+            Some(at + Duration::from_secs(1)),
+            "1 s, as any failed start"
+        );
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Starting
+        );
+        fake.finish(&mut supervisor);
+    }
+
+    /// While the watchdog is looking, a command does not wait for it: the window is told what the request comes to
+    /// from what it was last told. That is what the supervisor says once the request is recorded, in every state.
+    #[test]
+    fn what_a_busy_watchdog_says_a_request_comes_to_is_what_it_then_reports() {
+        let folders = tempfile::tempdir().expect("a folder");
+        let data = folders.path().to_string_lossy().into_owned();
+        let ctx = RunContext {
+            folders: Folders {
+                config_dir: format!("{data}/config"),
+                state_dir: format!("{data}/state"),
+                data_dir: data.clone(),
+                secrets_dir: format!("{data}/secrets"),
+            },
+            platform: Platform::current(),
+            node: None,
+        };
+        let platform = if Platform::current() == Platform::Windows {
+            Platform::MacOs
+        } else {
+            Platform::current()
+        };
+        let made = |name: &str| -> Supervisor {
+            let with = |record: ServiceRecord| Supervisor::new(record, None, platform);
+            match name {
+                "stopped" => {
+                    let mut supervisor = with(fresh());
+                    supervisor.owner = NotRunning;
+                    supervisor
+                }
+                "asking" => {
+                    let mut supervisor = with(fresh());
+                    supervisor.owner = NotRunning;
+                    supervisor.first_start_question = true;
+                    supervisor
+                }
+                "gave up" => with(ServiceRecord {
+                    recent_failures: (0..5)
+                        .map(|n| iso(now() - Duration::from_secs(60 * n)))
+                        .collect(),
+                    ..fresh()
+                }),
+                "restart waits" => {
+                    let mut supervisor = with(fresh());
+                    supervisor.owner = NotRunning;
+                    supervisor.restart_due = Some(now() + Duration::from_secs(5));
+                    supervisor
+                }
+                "adopted, older" => {
+                    let mut supervisor = with(adopted());
+                    supervisor.owner = Running;
+                    supervisor.installed_version = Some("0.27.0".into());
+                    supervisor.restarts = 2;
+                    supervisor.last_restart_at = Some(STARTED.into());
+                    supervisor
+                }
+                "stopped from outside" => {
+                    let mut supervisor = with(ServiceRecord {
+                        wanted: false,
+                        first_start_answered: true,
+                        ..fresh()
+                    });
+                    supervisor.owner = NotRunning;
+                    supervisor.stopped_from_outside_at = Some(STARTED.into());
+                    supervisor
+                }
+                "windows" => Supervisor::new(fresh(), None, Platform::Windows),
+                _ => unreachable!("{name}"),
+            }
+        };
+        let requests = [
+            Request::Switch(true),
+            Request::Switch(false),
+            Request::Retry,
+            Request::Restart,
+            Request::FirstStart(true),
+            Request::FirstStart(false),
+        ];
+        for name in [
+            "stopped",
+            "asking",
+            "gave up",
+            "restart waits",
+            "adopted, older",
+            "stopped from outside",
+            "windows",
+        ] {
+            for request in requests {
+                let mut supervisor = made(name);
+                let before = supervisor.state(&ctx);
+                supervisor.request(request);
+                assert_eq!(
+                    requested_state(&before, request),
+                    supervisor.state(&ctx),
+                    "{name}, {request:?}"
+                );
+            }
+        }
+        // And what each comes to, in words: a start is starting, unless it runs; off is stopping while the service is
+        // known to run or to be starting, and stopped at once when nothing runs.
+        let stopped = made("stopped").state(&ctx);
+        let asking = made("asking").state(&ctx);
+        let gave_up = made("gave up").state(&ctx);
+        let waiting = made("restart waits").state(&ctx);
+        assert_eq!(waiting.status, EventServiceStatus::Starting);
+        let running = made("adopted, older").state(&ctx);
+        assert_eq!(running.status, EventServiceStatus::Running);
+        let after = |state: &EventServiceState, request| requested_state(state, request).status;
+        assert_eq!(
+            after(&stopped, Request::FirstStart(true)),
+            EventServiceStatus::Starting
+        );
+        assert_eq!(
+            after(&running, Request::Switch(true)),
+            EventServiceStatus::Running
+        );
+        assert_eq!(
+            after(&running, Request::Restart),
+            EventServiceStatus::Starting
+        );
+        assert_eq!(
+            after(&running, Request::Switch(false)),
+            EventServiceStatus::Stopping
+        );
+        assert_eq!(
+            after(&waiting, Request::Switch(false)),
+            EventServiceStatus::Stopping
+        );
+        // Nothing runs: Not now, the switch off after giving up, or when stopped, say stopped at once, the stop still
+        // recorded for the watchdog's next look.
+        assert_eq!(
+            after(&asking, Request::FirstStart(false)),
+            EventServiceStatus::Stopped
+        );
+        assert_eq!(
+            after(&stopped, Request::FirstStart(false)),
+            EventServiceStatus::Stopped
+        );
+        assert_eq!(
+            after(&gave_up, Request::Switch(false)),
+            EventServiceStatus::Stopped
+        );
+        let mut not_now = made("asking");
+        not_now.answer_first_start(false);
+        assert!(not_now.stop_pending(), "the stop is still recorded");
+        assert_eq!(not_now.state(&ctx).status, EventServiceStatus::Stopped);
+        // A service known to run, by what `status` last said, is stopping, whatever was shown.
+        let mut answering = made("stopped");
+        answering.owner = Running;
+        answering.set_wanted(false);
+        assert_eq!(answering.state(&ctx).status, EventServiceStatus::Stopping);
+    }
+
+    /// A context with folders of its own and no launcher: nothing in it can run.
+    fn bare_context() -> (tempfile::TempDir, RunContext) {
+        let folders = tempfile::tempdir().expect("a folder");
+        let data = folders.path().to_string_lossy().into_owned();
+        let ctx = RunContext {
+            folders: Folders {
+                config_dir: format!("{data}/config"),
+                state_dir: format!("{data}/state"),
+                data_dir: data.clone(),
+                secrets_dir: format!("{data}/secrets"),
+            },
+            platform: Platform::current(),
+            node: None,
+        };
+        (folders, ctx)
+    }
+
+    /// The app as it holds the service, with a supervisor that runs nothing, and the state it first publishes.
+    fn held_service(record: ServiceRecord, ctx: &RunContext) -> EventService {
+        let service = EventService::default();
+        *lock(&service.supervisor) = Some(Supervisor::new(record, None, Platform::MacOs));
+        held_work(&service, ctx, lock(&service.supervisor), |_, _| {}).expect("published");
+        service
+    }
+
+    /// Once Quit is pressed nothing is started, unless the person answers Keep running: a start the watchdog was about
+    /// to make waits, and counts as the app's service, so Quit asks about it rather than quitting past it. Keep running
+    /// makes it before the app quits; Stop it, or no answer, never does.
+    #[cfg(unix)]
+    #[test]
+    fn nothing_starts_after_quit_is_pressed_unless_keep_running_is_answered() {
+        let fake = Fake::new();
+        let quit_pressed = Arc::new(AtomicBool::new(false));
+        let mut supervisor = fake
+            .supervisor(ServiceRecord::default())
+            .sharing_quit(quit_pressed.clone());
+        // The watchdog's first look would start it, but Quit was pressed a moment before.
+        quit_pressed.store(true, Ordering::SeqCst);
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(fake.calls(), ["status"], "nothing started");
+        assert!(supervisor.child.is_none());
+        assert!(supervisor.start_pending(), "the start waits");
+        assert!(supervisor.asks_at_quit(), "and counts as the app's service");
+        assert_eq!(quit_route(supervisor.asks_at_quit(), None), QuitRoute::Ask);
+        // Looked at again while the question is open: still nothing.
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.calls().contains(&"run".to_string()));
+        // Keep running: the start is made, before the app quits, and nothing after.
+        supervisor.start_before_quit(&fake.ctx, SystemTime::now());
+        assert!(supervisor.child.is_some(), "Keep running made it");
+        eventually("it runs", || fake.has("running"));
+        assert!(quit_pressed.load(Ordering::SeqCst), "Quit still holds");
+        assert!(!supervisor.start_pending());
+        assert!(supervisor.asks_at_quit());
+        fake.finish(&mut supervisor);
+
+        // A start asked for, and Quit with Stop it: never made; the switch stays on, for the next run.
+        fake.unmark("stop");
+        fake.unmark("calls");
+        let quit_pressed = Arc::new(AtomicBool::new(false));
+        let mut stopped = fake
+            .supervisor(ServiceRecord {
+                wanted: false,
+                ..ServiceRecord::default()
+            })
+            .sharing_quit(quit_pressed.clone());
+        stopped.set_wanted(true);
+        assert!(stopped.asks_at_quit(), "a start asked for is asked about");
+        quit_pressed.store(true, Ordering::SeqCst);
+        stopped.stop_for_quit(&fake.ctx);
+        stopped.tick(&fake.ctx, SystemTime::now());
+        assert!(!fake.calls().contains(&"run".to_string()), "never made");
+        assert!(stopped.child.is_none());
+        assert!(stopped.record().wanted, "for this run only");
+        fake.finish(&mut stopped);
+    }
+
+    /// What Quit reads of a start the app has not made yet: it asks; with Keep running remembered, a thread makes the
+    /// start before quitting; with Stop it remembered, nothing is started.
+    #[test]
+    fn quit_asks_about_a_start_not_yet_made() {
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        assert_eq!(
+            quit_plan(&service),
+            QuitRoute::Quit,
+            "nothing asked for, nothing running"
+        );
+        held_work(
+            &service,
+            &ctx,
+            lock(&service.supervisor),
+            |supervisor, _| supervisor.answer_first_start(true),
+        )
+        .expect("recorded");
+        assert!(lock(&service.shown).app_service_running);
+        assert_eq!(quit_plan(&service), QuitRoute::Ask);
+        for (answer, route) in [
+            (QuitAnswer::Keep, QuitRoute::Later),
+            (QuitAnswer::Stop, QuitRoute::StopThenQuit),
+        ] {
+            held_work(
+                &service,
+                &ctx,
+                lock(&service.supervisor),
+                |supervisor, _| supervisor.remember_quit(answer),
+            )
+            .expect("kept");
+            assert_eq!(quit_plan(&service), route, "{answer:?}");
+        }
+    }
+
+    /// The switch turned off while the watchdog holds the supervisor, looking, and Quit pressed before it lets go:
+    /// Quit reads what waits beside the supervisor, so the stop is done first, never lost. A start asked for in that
+    /// moment, the switch or the first-start question's Start, is recorded before Quit chooses too.
+    #[test]
+    fn a_request_waiting_beside_a_busy_supervisor_is_recorded_before_quit_chooses() {
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        {
+            // The app's own service runs, and Keep running was remembered: Quit would quit, and leave it running.
+            let mut shown = lock(&service.shown);
+            shown.app_service_running = true;
+            shown.quit_answer = Some(QuitAnswer::Keep);
+        }
+        assert_eq!(quit_plan(&service), QuitRoute::Quit);
+        let looking = lock(&service.supervisor);
+        let (state, changed) = asked(&service, &ctx, Request::Switch(false)).expect("answered");
+        assert!(!state.wanted);
+        assert!(!changed, "told by the answer, not by an event");
+        assert_eq!(lock(&service.requests).as_slice(), [Request::Switch(false)]);
+        assert!(
+            lock(&service.shown).stop_pending,
+            "Quit reads it without the supervisor"
+        );
+        // Quit, while the watchdog still looks: chosen once the request is recorded, on a thread.
+        assert_eq!(quit_plan(&service), QuitRoute::Later);
+        drop(looking);
+        held_work(&service, &ctx, lock(&service.supervisor), |_, _| {}).expect("recorded");
+        assert!(lock(&service.requests).is_empty());
+        assert_eq!(quit_plan(&service), QuitRoute::StopThenQuit);
+        let supervisor = lock(&service.supervisor);
+        let supervisor = supervisor.as_ref().expect("a supervisor");
+        assert!(
+            !supervisor.record().wanted,
+            "the switch is off, and kept so"
+        );
+        assert!(supervisor.stop_pending());
+
+        // A start asked for in that moment: no stop is said to wait, and it is recorded before Quit chooses.
+        for request in [Request::Switch(true), Request::FirstStart(true)] {
+            let (_folders, ctx) = bare_context();
+            let service = held_service(
+                ServiceRecord {
+                    wanted: false,
+                    ..fresh()
+                },
+                &ctx,
+            );
+            let looking = lock(&service.supervisor);
+            asked(&service, &ctx, request).expect("answered");
+            assert!(!lock(&service.shown).stop_pending, "{request:?}");
+            assert_eq!(quit_plan(&service), QuitRoute::Later, "{request:?}");
+            drop(looking);
+            held_work(&service, &ctx, lock(&service.supervisor), |_, _| {}).expect("recorded");
+            let supervisor = lock(&service.supervisor);
+            let record = supervisor.as_ref().expect("a supervisor").record();
+            assert!(record.wanted && record.first_start_answered, "{request:?}");
+        }
+
+        // With nothing waiting, a free supervisor records a request at once.
+        let (_folders, ctx) = bare_context();
+        let service = held_service(fresh(), &ctx);
+        let (state, changed) = asked(&service, &ctx, Request::Switch(false)).expect("answered");
+        assert!(!state.wanted);
+        assert!(changed, "told by an event too");
+        assert!(lock(&service.requests).is_empty());
+    }
+
+    /// The switch turned off, and Quit before the watchdog has stopped what runs: Quit stops it first, and asks
+    /// nothing, as Keep running would keep it. The app quitting before even that, the next run's first look stops it.
+    #[cfg(unix)]
+    #[test]
+    fn a_stop_the_switch_asked_for_is_done_before_quitting_or_at_the_next_run() {
+        let shown = |stop_pending: bool| Shown {
+            state: None,
+            app_service_running: true,
+            quit_answer: Some(QuitAnswer::Keep),
+            stop_pending,
+            start_pending: false,
+        };
+        assert_eq!(route_for(&shown(true)), QuitRoute::StopThenQuit);
+        assert_eq!(route_for(&shown(false)), QuitRoute::Quit);
+        let asking = Shown {
+            quit_answer: None,
+            ..shown(false)
+        };
+        assert_eq!(route_for(&asking), QuitRoute::Ask);
+
+        let fake = Fake::new();
+        let mut supervisor = fake.supervisor(ServiceRecord::default());
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        eventually("it runs", || fake.has("running"));
+        supervisor.set_wanted(false);
+        assert!(supervisor.stop_pending());
+        supervisor.begin_stop_for_quit();
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopping
+        );
+        supervisor.stop_for_quit(&fake.ctx);
+        assert!(!fake.has("running"), "stopped before quitting");
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopped
+        );
+        assert!(!supervisor.stop_pending());
+        let kept = load_record(&fake.app);
+        assert!(!kept.wanted);
+        assert_eq!(kept.started_at, None, "and forgotten");
+        fake.finish(&mut supervisor);
+
+        // The app quit with the stop not done: the record still knows the service, with the switch off.
+        fake.unmark("stop");
+        let mut first = fake.supervisor(ServiceRecord::default());
+        first.tick(&fake.ctx, SystemTime::now());
+        eventually("it runs", || fake.has("running"));
+        first.set_wanted(false);
+        assert_eq!(load_record(&fake.app).started_at, first.record().started_at);
+        let pid = first.record().pid;
+        // The next run's supervisor finishes it at its first look, through the events CLI's `stop`.
+        let mut next = fake.supervisor(load_record(&fake.app));
+        assert!(next.stop_pending());
+        assert_eq!(
+            next.state(&fake.ctx).status,
+            EventServiceStatus::Stopping,
+            "a stop not done yet"
+        );
+        next.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(next.state(&fake.ctx).status, EventServiceStatus::Stopped);
+        assert!(!fake.has("running"));
+        assert_eq!(load_record(&fake.app).pid, None);
+        assert!(pid.is_some());
+        // A switch that is off with nothing known is nothing to stop.
+        assert!(!fake
+            .supervisor(ServiceRecord {
+                wanted: false,
+                ..ServiceRecord::default()
+            })
+            .stop_pending());
+        fake.finish(&mut first);
+        fake.finish(&mut next);
     }
 
     /// The app's own service, stopped from outside: a SIGTERM — a logout — restarts it with the switch on; a stop
@@ -3336,12 +4475,14 @@ exit 64
         assert!(!fake.has("run-argv"));
         // The switch on again starts the app's own, at once.
         fake.unmark("refuse");
-        supervisor.set_wanted(&fake.ctx, true, SystemTime::now());
+        supervisor.set_wanted(true);
+        supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(supervisor.record().started_by_app);
         assert!(supervisor.record().recent_failures.is_empty());
         assert_eq!(supervisor.state(&fake.ctx).stopped_from_outside_at, None);
         eventually("it runs", || fake.has("running"));
-        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        supervisor.set_wanted(false);
+        supervisor.tick(&fake.ctx, SystemTime::now());
         fake.finish(&mut supervisor);
     }
 
@@ -3455,7 +4596,8 @@ exit 0
             supervisor.tick(&fake.ctx, SystemTime::now());
             assert!(!supervisor.record().started_by_app, "{name}");
             assert_eq!(supervisor.record().pid.is_some(), known, "{name}");
-            supervisor.restart(&fake.ctx, SystemTime::now());
+            supervisor.restart();
+            supervisor.tick(&fake.ctx, SystemTime::now());
             assert!(
                 supervisor.record().started_by_app,
                 "{name}: the app's own now"
@@ -3474,7 +4616,8 @@ exit 0
             }
             let _ = old.kill();
             let _ = old.wait();
-            supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+            supervisor.set_wanted(false);
+            supervisor.tick(&fake.ctx, SystemTime::now());
             fake.finish(&mut supervisor);
         }
     }
@@ -3556,11 +4699,13 @@ exit 0
         assert!(!fake.has("run-argv"));
         // Try again: it starts.
         fake.unmark("crash");
-        supervisor.retry(&fake.ctx, SystemTime::now());
+        supervisor.retry();
+        supervisor.tick(&fake.ctx, SystemTime::now());
         assert!(supervisor.record().recent_failures.is_empty());
         eventually("it runs", || fake.has("running"));
         assert!(supervisor.state(&fake.ctx).log_tail.is_empty());
-        supervisor.set_wanted(&fake.ctx, false, SystemTime::now());
+        supervisor.set_wanted(false);
+        supervisor.tick(&fake.ctx, SystemTime::now());
         fake.finish(&mut supervisor);
     }
 
@@ -3584,7 +4729,8 @@ exit 0
         };
         // Switched off: the CLI finds nothing running, and the PID, another program now, is sent nothing.
         let mut off = fake.supervisor(record.clone());
-        off.set_wanted(&fake.ctx, false, now);
+        off.set_wanted(false);
+        off.tick(&fake.ctx, now);
         std::thread::sleep(Duration::from_millis(200));
         assert!(
             other.try_wait().expect("asked").is_none(),
@@ -3711,6 +4857,17 @@ exit 0
         assert!(supervisor.app_service_running());
         supervisor.remember_quit(QuitAnswer::Stop);
         assert_eq!(load_record(&fake.app).quit_answer, Some(QuitAnswer::Stop));
+        // Stop it says it is stopping before the stop is done, never running.
+        supervisor.tick(&fake.ctx, SystemTime::now());
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Running
+        );
+        supervisor.begin_stop_for_quit();
+        assert_eq!(
+            supervisor.state(&fake.ctx).status,
+            EventServiceStatus::Stopping
+        );
         supervisor.stop_for_quit(&fake.ctx);
         assert!(fake.has("stop-argv"), "through the events CLI's stop");
         assert!(!fake.has("running"));

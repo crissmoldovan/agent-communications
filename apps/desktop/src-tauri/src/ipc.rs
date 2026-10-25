@@ -9,7 +9,7 @@ use serde_json::Value;
 use std::fmt;
 
 pub use crate::allowlist::{
-    AccountName, Acts, ApprovalId, Call, ConversationId, PauseDays, UpdateLevel,
+    AccountName, Acts, ApprovalId, Call, ConversationId, EndpointJudgeKind, PauseDays, UpdateLevel,
 };
 pub use crate::launchers::Product;
 pub use crate::paths::{FolderOverrides, Folders};
@@ -159,6 +159,10 @@ pub enum TerminalCommand {
     /// Its preview and its approval happen there; the app prepares nothing, records no approval and never approves. It
     /// is not a `change`: it takes no argument and no approval of the app's.
     EventsJudgeKindEnable {},
+    /// Turning on Jev or a local model server, which only a terminal may take (0.27.1): the events service's `judge
+    /// kind enable <kind>`, as Laya's Enable is. Its preview and its approval happen there; the app prepares nothing,
+    /// records no approval and never approves. The kind is closed, and never Laya's.
+    JudgeKindEnable { judge_kind: EndpointJudgeKind },
 }
 
 /// What opening the terminal came to.
@@ -253,6 +257,8 @@ pub enum EventServiceStatus {
     /// Started, or about to be restarted, and not answering yet.
     Starting,
     Running,
+    /// The switch was turned off, or Quit's Stop it answered, and the service has not stopped yet.
+    Stopping,
     /// It stopped 5 times in 10 minutes, so the app stopped restarting it.
     GaveUp,
 }
@@ -332,6 +338,7 @@ mod tests {
             EventServiceStatus::Stopped,
             EventServiceStatus::Starting,
             EventServiceStatus::Running,
+            EventServiceStatus::Stopping,
             EventServiceStatus::GaveUp,
         ]
         .into_iter()
@@ -344,6 +351,7 @@ mod tests {
                 json!("stopped"),
                 json!("starting"),
                 json!("running"),
+                json!("stopping"),
                 json!("gaveUp")
             ]
         );
@@ -378,7 +386,19 @@ mod tests {
             sign_in,
             TerminalCommand::SignIn { again: false, .. }
         ));
+        let judge_kind: TerminalCommand = serde_json::from_value(
+            json!({ "kind": "judgeKindEnable", "judgeKind": "local-endpoint" }),
+        )
+        .expect("judgeKindEnable");
+        assert_eq!(
+            judge_kind,
+            TerminalCommand::JudgeKindEnable {
+                judge_kind: crate::allowlist::EndpointJudgeKind::LocalEndpoint
+            }
+        );
         for bad in [
+            json!({ "kind": "judgeKindEnable", "judgeKind": "laya" }),
+            json!({ "kind": "judgeKindEnable", "judgeKind": "anything" }),
             json!({ "kind": "approve", "product": "slack", "approvalId": "ap_x" }),
             json!({ "kind": "approve", "product": "slack", "approvalId": ID, "code": "ABCD" }),
             json!({ "kind": "change", "call": { "kind": "send" }, "revoke": ID }),

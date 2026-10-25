@@ -37,6 +37,12 @@ export type UpdateLevel = 'auto' | 'every-14-days' | 'never';
 /** The products with accounts to list. */
 export type AccountsProduct = 'gmail' | 'slack' | 'resend';
 
+/**
+ * The judge kinds the app turns on (in the terminal) and off by name: TypeSafe's hosted Jev and a local model server
+ * (`allowlist.rs`, `EndpointJudgeKind`). Laya's calls take no kind.
+ */
+export type EndpointJudgeKind = 'typesafe' | 'local-endpoint';
+
 /** Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. */
 export type Call =
   | { kind: 'version'; product: Product }
@@ -64,6 +70,9 @@ export type Call =
   | { kind: 'eventsResume' }
   | { kind: 'eventsRules' }
   | { kind: 'eventsDeliveries' }
+  | { kind: 'judgeKindsList' }
+  | { kind: 'judgesList' }
+  | { kind: 'judgeKindDisable'; judgeKind: EndpointJudgeKind }
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
 
@@ -104,7 +113,9 @@ export type TerminalCommand =
   | { kind: 'change'; call: Call; revoke: string }
   | { kind: 'signIn'; product: Product; account: string; again: boolean }
   /** Laya's enablement, in the terminal only: its preview and approval happen there, never in the app (E2 Task 11). */
-  | { kind: 'eventsJudgeKindEnable' };
+  | { kind: 'eventsJudgeKindEnable' }
+  /** Turning on Jev or a local model server, in the terminal only, as Laya's enablement (0.27.1). */
+  | { kind: 'judgeKindEnable'; judgeKind: EndpointJudgeKind };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 
@@ -144,7 +155,7 @@ export interface UpdaterState {
 }
 
 /** Where the event service the app runs stands (`event_service.rs`, `EventServiceStatus`). */
-export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'gaveUp';
+export type EventServiceStatus = 'unavailable' | 'stopped' | 'starting' | 'running' | 'stopping' | 'gaveUp';
 
 /** Whether the service the app starts may read WhatsApp's database (D6): only asked when a WhatsApp account exists. */
 export type FullDiskAccess = 'granted' | 'missing' | 'not-needed';
@@ -208,7 +219,10 @@ export interface Bridge {
   installUpdate(): Promise<void>;
   takeDeepLink(): Promise<DeepLinkTarget | null>;
   eventServiceState(): Promise<EventServiceState>;
-  /** The switch: on starts the service (or adopts a running one), off stops it through the events CLI's stop. */
+  /**
+   * The switch: on starts the service (or adopts a running one), off stops it through the events CLI's stop. Each
+   * answers at once, with what the supervisor recorded: on is `starting` until the watchdog has it running.
+   */
   setEventService(on: boolean): Promise<EventServiceState>;
   /** Try again, after the app gave up restarting it. */
   eventServiceRetry(): Promise<EventServiceState>;

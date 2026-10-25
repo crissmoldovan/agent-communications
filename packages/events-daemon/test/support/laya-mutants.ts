@@ -689,7 +689,7 @@ async function expectNodeMutationToFail(mutation: LayaMutation): Promise<LayaMut
 const DESKTOP_SKIPPED = new Set(['node_modules', 'dist', 'target', 'gen', 'test-results', 'playwright-report']);
 
 /**
- * The desktop app, without what its tools install or write, and the events daemon's contract it reads, below `root`.
+ * The desktop app, without what its tools install or write, and the events daemon's contracts it reads, below `root`.
  * `dist/` is the one exception the cargo leg asks for: Tauri's context embeds the built UI, so a crate without it does
  * not build. Its installed modules are linked, as the node leg's are.
  */
@@ -705,6 +705,8 @@ async function copyDesktopTree(root: string, options: { readonly dist: boolean }
   });
   if (options.dist) await cp(join(app, 'dist'), join(copied, 'dist'), { recursive: true });
   await copyFile(root, 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json');
+  // The Judges section's contract (0.27.1): the app's Rust and Vitest tests read it beside Laya's.
+  await copyFile(root, 'packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json');
   return copied;
 }
 

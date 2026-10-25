@@ -1,0 +1,221 @@
+{
+  "schemaVersion": "desktop-contract-judges-v1",
+  "about": "The events daemon's half of the desktop app's Judges section (0.27.1), beside Laya's in desktop-contract-v1.json. `calls` are the words the app's allow-list builds to read every judge kind and judge, to turn TypeSafe's hosted Jev or a local model server off at once, and the terminal line that turns one on; `vectors` are `judge kinds list` and `judges list` as the real owner answers them through the events CLI at each step of turning both kinds on and off; `disable` is what turning each off answers. The app's tests read the vectors as the events service's answers.",
+  "calls": [
+    {
+      "call": "judgeKindsList",
+      "operation": "judgeKindsList",
+      "words": ["judge", "kinds", "list"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "judgesList",
+      "operation": "judgesList",
+      "words": ["judges", "list"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "judgeKindDisable",
+      "judgeKind": "typesafe",
+      "operation": "disableJudgeKind",
+      "words": ["judge", "kind", "disable", "typesafe"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "judgeKindDisable",
+      "judgeKind": "local-endpoint",
+      "operation": "disableJudgeKind",
+      "words": ["judge", "kind", "disable", "local-endpoint"],
+      "json": true,
+      "terminal": false
+    },
+    {
+      "call": "judgeKindEnable",
+      "judgeKind": "typesafe",
+      "operation": "enableJudgeKind",
+      "words": ["judge", "kind", "enable", "typesafe"],
+      "json": false,
+      "terminal": true
+    },
+    {
+      "call": "judgeKindEnable",
+      "judgeKind": "local-endpoint",
+      "operation": "enableJudgeKind",
+      "words": ["judge", "kind", "enable", "local-endpoint"],
+      "json": false,
+      "terminal": true
+    }
+  ],
+  "vectors": [
+    {
+      "name": "fresh",
+      "kinds": [
+        { "kind": "typesafe", "state": "disabled", "version": null },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "disabled", "version": null }
+      ],
+      "judges": []
+    },
+    {
+      "name": "typesafe-on",
+      "kinds": [
+        { "kind": "typesafe", "state": "enabled", "version": 1 },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "disabled", "version": null }
+      ],
+      "judges": []
+    },
+    {
+      "name": "typesafe-on-with-jev",
+      "kinds": [
+        { "kind": "typesafe", "state": "enabled", "version": 1 },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "disabled", "version": null }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        }
+      ]
+    },
+    {
+      "name": "both-on",
+      "kinds": [
+        { "kind": "typesafe", "state": "enabled", "version": 1 },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "enabled", "version": 1 }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        }
+      ]
+    },
+    {
+      "name": "both-on-with-local",
+      "kinds": [
+        { "kind": "typesafe", "state": "enabled", "version": 1 },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "enabled", "version": 1 }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        },
+        {
+          "judgeId": "local",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "example-model",
+          "revokedAt": null
+        }
+      ]
+    },
+    {
+      "name": "local-removed",
+      "kinds": [
+        { "kind": "typesafe", "state": "enabled", "version": 1 },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "enabled", "version": 1 }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        },
+        {
+          "judgeId": "local",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "example-model",
+          "revokedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "name": "typesafe-off",
+      "kinds": [
+        { "kind": "typesafe", "state": "disabled", "version": null },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "enabled", "version": 1 }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        },
+        {
+          "judgeId": "local",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "example-model",
+          "revokedAt": 1760000000000
+        }
+      ]
+    },
+    {
+      "name": "all-off",
+      "kinds": [
+        { "kind": "typesafe", "state": "disabled", "version": null },
+        { "kind": "laya", "state": "unavailable", "code": "E2_EXTERNAL_REFERENCE_BLOCKED" },
+        { "kind": "local-endpoint", "state": "disabled", "version": null }
+      ],
+      "judges": [
+        {
+          "judgeId": "jev",
+          "version": 1,
+          "kind": "typesafe",
+          "provider": "typesafe",
+          "model": "jev-1.13.0",
+          "revokedAt": null
+        },
+        {
+          "judgeId": "local",
+          "version": 1,
+          "kind": "local-endpoint",
+          "provider": "ollama",
+          "model": "example-model",
+          "revokedAt": 1760000000000
+        }
+      ]
+    }
+  ],
+  "disable": {
+    "typesafe": { "kind": "typesafe", "disabled": true, "pointer": "removed", "pendingActivationsCancelled": 0 },
+    "local-endpoint": {
+      "kind": "local-endpoint",
+      "disabled": true,
+      "pointer": "removed",
+      "pendingActivationsCancelled": 0
+    }
+  }
+}

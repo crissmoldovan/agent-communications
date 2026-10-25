@@ -79,7 +79,7 @@ pub fn on_run_event(app: &AppHandle, event: RunEvent) {
             }
             match event_service::on_quit(app) {
                 QuitRoute::Quit => QUITTING.store(true, Ordering::SeqCst),
-                QuitRoute::Ask | QuitRoute::StopThenQuit => api.prevent_exit(),
+                QuitRoute::Ask | QuitRoute::StopThenQuit | QuitRoute::Later => api.prevent_exit(),
             }
         }
         #[cfg(target_os = "macos")]

@@ -172,6 +172,9 @@ The tray shows how many approvals wait, and closing the window hides it there.
   Terminal had is not enough. Events says so, and opens that pane of System Settings for you. Other sources keep
   running without it.
 - **Not on Windows yet:** the service doesn't run there, and the switch is absent.
+- **Its judges, from 0.27.1.** Events lists the service's three kinds of judge: Jev (TypeSafe's hosted model, sent
+  the fields a rule names), Laya (on this Mac, not offered yet) and a local model server of your own. **Turn on in
+  Terminal** opens the enablement for you to approve there; **Turn off** applies at once.
 
 - **What it changes itself:** only what takes something away, which applies at once from the CLI too — revoking an
   approval, a rule that narrows what agents may do, ending a standing approval, pausing update notices.

@@ -2,6 +2,7 @@
  * A bridge for tests: every command answers from fixtures — recorded CLI JSON, or fake data written by hand — and
  * every call is recorded. Nothing is run, opened or copied, and no test reaches Tauri, a CLI, the network or a home.
  */
+import judgesContract from '../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json';
 import type { AppEvents, Bridge, Call, CliResult, EventServiceState, Folders, Installation, Product } from '../ipc.ts';
 import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
@@ -67,6 +68,8 @@ export const EVENT_SERVICE = {
   starting: { ...SERVICE_RUNNING, status: 'starting', since: null, version: null },
   /** Switched off in the app. */
   stopped: { ...SERVICE_RUNNING, ...NOT_RUNNING, wanted: false },
+  /** Switched off, and the supervisor's watchdog not done stopping it yet. */
+  stopping: { ...SERVICE_RUNNING, ...NOT_RUNNING, wanted: false, status: 'stopping' },
   /** A clean stop the app did not ask for, at a terminal or through the events tools: the switch turned off (D4). */
   stoppedFromOutside: {
     ...SERVICE_RUNNING,
@@ -105,6 +108,14 @@ export const EVENT_SERVICE = {
  */
 export type Fixture = unknown | ((call: Call) => unknown);
 
+/**
+ * The events service's judge kinds and judges as the owner's own Mac answers them: Jev and a local model server off,
+ * Laya not offered, and no judge yet (the daemon's `fresh` vector, `desktop-contract-judges-v1.json`).
+ */
+const JUDGES_FRESH = (
+  judgesContract as { vectors: { name: string; kinds: unknown[]; judges: unknown[] }[] }
+).vectors.find((vector) => vector.name === 'fresh');
+
 /** What each call kind answers by default: the populated fixtures, a doctor and an account list per product. */
 export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   approvalsPending,
@@ -118,6 +129,8 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   eventsStatus,
   eventsJudgeModelStatus: layaDisabled,
   eventsJudgeKindDisable: { kind: 'laya', disabled: true, pointer: 'removed', pendingActivationsCancelled: 0 },
+  judgeKindsList: JUDGES_FRESH?.kinds,
+  judgesList: JUDGES_FRESH?.judges,
   doctor: (call: Call) =>
     ({
       core: doctorCore,

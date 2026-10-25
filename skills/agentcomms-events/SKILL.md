@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.27.0"
+compatibility: "@agentcomms/events-daemon@0.27.1"
 metadata:
   group: communications
   lifecycle: release
