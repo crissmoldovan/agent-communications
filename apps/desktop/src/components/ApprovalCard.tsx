@@ -140,7 +140,7 @@ function Pair({ term, children }: { term: string; children: ReactNode }) {
 /** Strings a sender controls, one to a line, each as plain text. */
 function SenderText({ texts }: { texts: string[] }) {
   return (
-    <div className="flex flex-col gap-(--cue-space-1) font-mono">
+    <div className="flex flex-col gap-(--cue-space-1)">
       {texts.map((text, index) => (
         // The same address may appear twice; its place in the list is what tells them apart.
         // biome-ignore lint/suspicious/noArrayIndexKey: the list is never reordered.
@@ -156,7 +156,7 @@ function SenderText({ texts }: { texts: string[] }) {
  * One approval that waits (DA5.3, DA11): its kind, channel, id and times, and every string a sender wrote as plain
  * text. `Revoke` applies at once and reads the list again. `Approve in Terminal` opens that channel's approve, through
  * its own launcher, where the person types the code: the app never approves. `selected` marks the one a link opened,
- * scrolls to it and gives it the focus.
+ * scrolls to it and gives it the focus. The buttons sit under what they act on, as the redesign's mockup has them.
  */
 export function ApprovalCard({
   approval,
@@ -218,6 +218,14 @@ export function ApprovalCard({
   const kind = (approval.kind === null ? undefined : KIND_WORDS[approval.kind]) ?? approval.kind ?? 'Approval';
   const title = `${kind} · ${productLabel(approval.channel)}`;
   const isChange = approval.kind === 'change';
+  const hasDetails =
+    approval.to.length > 0 ||
+    approval.cc.length > 0 ||
+    approval.bcc.length > 0 ||
+    (approval.subject !== null && approval.subject !== '') ||
+    approval.files.length > 0 ||
+    approval.said !== null ||
+    approval.reason !== null;
 
   return (
     <article
@@ -228,82 +236,94 @@ export function ApprovalCard({
       className="outline-none"
     >
       <Panel className={selected ? 'border-accent' : undefined}>
-        <PanelHeader
-          title={<span id={titleId}>{title}</span>}
-          actions={
-            approval.state === 'corrupt' ? undefined : (
-              <>
-                {approver === null ? null : (
+        <PanelHeader title={<span id={titleId}>{title}</span>}>
+          <span className="min-w-0 font-mono break-all text-fg-muted">{approval.approvalId}</span>
+        </PanelHeader>
+        <div className="flex flex-col gap-(--cue-space-3) px-(--cue-pad-row-x) pb-(--cue-space-4)">
+          {approval.createdAt === null && approval.expiresAt === null ? null : (
+            <p className="flex flex-wrap gap-x-(--cue-space-4) gap-y-(--cue-space-1) text-(length:--cue-text-label) text-fg-muted">
+              {approval.createdAt === null ? null : (
+                <span className="flex gap-(--cue-space-1)">
+                  <span className="text-fg-subtle">Created</span>
+                  <When iso={approval.createdAt} />
+                </span>
+              )}
+              {approval.expiresAt === null ? null : (
+                <span className="flex gap-(--cue-space-1)">
+                  <span className="text-fg-subtle">Expires</span>
+                  <When iso={approval.expiresAt} />
+                </span>
+              )}
+            </p>
+          )}
+          {hasDetails ? (
+            <DescriptionList.Root>
+              {approval.to.length === 0 ? null : (
+                <Pair term="To">
+                  <SenderText texts={approval.to} />
+                </Pair>
+              )}
+              {approval.cc.length === 0 ? null : (
+                <Pair term="Cc">
+                  <SenderText texts={approval.cc} />
+                </Pair>
+              )}
+              {approval.bcc.length === 0 ? null : (
+                <Pair term="Bcc">
+                  <SenderText texts={approval.bcc} />
+                </Pair>
+              )}
+              {approval.subject === null || approval.subject === '' ? null : (
+                <Pair term={isChange ? 'Summary' : 'Subject'}>
+                  <SenderText texts={[approval.subject]} />
+                </Pair>
+              )}
+              {approval.files.length === 0 ? null : (
+                <Pair term="Files">
+                  <SenderText texts={approval.files} />
+                </Pair>
+              )}
+              {approval.said === null ? null : <Pair term="Where it stands">{approval.said}</Pair>}
+              {approval.reason === null ? null : <Pair term="Why">{approval.reason}</Pair>}
+            </DescriptionList.Root>
+          ) : null}
+          {opened === null && problem === null && approval.state === 'corrupt' ? null : (
+            <div className="flex flex-wrap items-center justify-end gap-(--cue-space-2)">
+              <div className="mr-auto flex min-w-0 flex-col gap-(--cue-space-1)">
+                {opened === null ? null : <TerminalResult outcome={opened} />}
+                {problem === null ? null : (
+                  <p role="alert" className="text-danger">
+                    <UntrustedText
+                      text={problem.hint === null ? problem.message : `${problem.message} ${problem.hint}`}
+                    />
+                  </p>
+                )}
+              </div>
+              {approval.state === 'corrupt' ? null : (
+                <>
                   <Button
                     variant="secondary"
                     size="sm"
-                    loading={busy === 'approve'}
+                    loading={busy === 'revoke'}
                     disabled={busy !== null}
-                    onClick={() => void approve(approver)}
+                    onClick={() => void revoke()}
                   >
-                    {COPY.approveInTerminal}
+                    {COPY.revoke}
                   </Button>
-                )}
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  loading={busy === 'revoke'}
-                  disabled={busy !== null}
-                  onClick={() => void revoke()}
-                >
-                  {COPY.revoke}
-                </Button>
-              </>
-            )
-          }
-        >
-          <span className="font-mono text-fg-muted">{approval.approvalId}</span>
-        </PanelHeader>
-        <div className="flex flex-col gap-(--cue-space-3) px-(--cue-pad-row-x) py-(--cue-pad-row-y)">
-          <DescriptionList.Root>
-            {approval.createdAt === null ? null : (
-              <Pair term="Created">
-                <When iso={approval.createdAt} />
-              </Pair>
-            )}
-            {approval.expiresAt === null ? null : (
-              <Pair term="Expires">
-                <When iso={approval.expiresAt} />
-              </Pair>
-            )}
-            {approval.to.length === 0 ? null : (
-              <Pair term="To">
-                <SenderText texts={approval.to} />
-              </Pair>
-            )}
-            {approval.cc.length === 0 ? null : (
-              <Pair term="Cc">
-                <SenderText texts={approval.cc} />
-              </Pair>
-            )}
-            {approval.bcc.length === 0 ? null : (
-              <Pair term="Bcc">
-                <SenderText texts={approval.bcc} />
-              </Pair>
-            )}
-            {approval.subject === null || approval.subject === '' ? null : (
-              <Pair term={isChange ? 'Summary' : 'Subject'}>
-                <SenderText texts={[approval.subject]} />
-              </Pair>
-            )}
-            {approval.files.length === 0 ? null : (
-              <Pair term="Files">
-                <SenderText texts={approval.files} />
-              </Pair>
-            )}
-            {approval.said === null ? null : <Pair term="Where it stands">{approval.said}</Pair>}
-            {approval.reason === null ? null : <Pair term="Why">{approval.reason}</Pair>}
-          </DescriptionList.Root>
-          {opened === null ? null : <TerminalResult outcome={opened} />}
-          {problem === null ? null : (
-            <p role="alert" className="text-danger">
-              <UntrustedText text={problem.hint === null ? problem.message : `${problem.message} ${problem.hint}`} />
-            </p>
+                  {approver === null ? null : (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      loading={busy === 'approve'}
+                      disabled={busy !== null}
+                      onClick={() => void approve(approver)}
+                    >
+                      {COPY.approveInTerminal}
+                    </Button>
+                  )}
+                </>
+              )}
+            </div>
           )}
         </div>
       </Panel>

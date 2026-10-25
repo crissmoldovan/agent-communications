@@ -1,4 +1,4 @@
-import { EmptyState, Panel } from '@cueplusplus/ui';
+import { EmptyState, Panel, SectionHeader } from '@cueplusplus/ui';
 import { useEffect, useState } from 'react';
 import { ApprovalCard, approverOf, readApprovals } from '../components/ApprovalCard.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
@@ -18,6 +18,10 @@ const UNREADABLE = 'The approvals list could not be read.';
 /**
  * Each waiting approval, with Revoke and Approve in Terminal (DA5.3, DA11), from the list the app polls. An
  * `agentcomms://approvals/<id>` link selects that approval and scrolls to it, or says it is no longer waiting.
+ *
+ * D7 gives this screen two views, Waiting and Recent. The app reads only what waits (`approvals list --state pending`,
+ * the one approvals read Rust allows), so Waiting, with its count, is the only view until a read of the recent ones is
+ * built: a Recent tab with nothing behind it would be a view of nothing.
  */
 export function Approvals() {
   const { approvals, installation, deepLink, clearDeepLink } = useAppData();
@@ -52,20 +56,23 @@ export function Approvals() {
                   {GONE}
                 </p>
               ) : null}
-              {list.length === 0 ? (
-                <Panel>
-                  <EmptyState title={NOTHING_WAITING} />
-                </Panel>
-              ) : (
-                list.map((approval) => (
-                  <ApprovalCard
-                    key={approval.approvalId}
-                    approval={approval}
-                    approver={approverOf(approval, present)}
-                    selected={approval.approvalId === target}
-                  />
-                ))
-              )}
+              <section aria-label="Waiting" className="flex flex-col gap-(--cue-space-3)">
+                <SectionHeader label="Waiting" count={list.length} />
+                {list.length === 0 ? (
+                  <Panel>
+                    <EmptyState title={NOTHING_WAITING} />
+                  </Panel>
+                ) : (
+                  list.map((approval) => (
+                    <ApprovalCard
+                      key={approval.approvalId}
+                      approval={approval}
+                      approver={approverOf(approval, present)}
+                      selected={approval.approvalId === target}
+                    />
+                  ))
+                )}
+              </section>
             </>
           );
         }}
