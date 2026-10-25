@@ -75,6 +75,8 @@ async function calls(page: Page): Promise<Recorded[]> {
 async function openLaya(page: Page) {
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
+  // The judges are the Events screen's second tab; the first is the event service.
+  await page.getByRole('tab', { name: /^Judges\b/ }).click();
   return page.getByRole('region', { name: 'Laya', exact: true });
 }
 
