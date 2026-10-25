@@ -451,9 +451,9 @@ function Picker({ lane, lanes }: { lane: string; lanes: LaneView[] }) {
         </p>
       )}
       {outcome === null ? null : (
-        <div className="flex flex-col gap-(--cue-space-1)">
+        <div className="flex flex-col gap-(--cue-space-1) text-(length:--cue-text-ui)">
           <TerminalResult outcome={outcome} />
-          <p className="text-(length:--cue-text-ui) text-fg-muted">{LANES_COPY.pickerAfter}</p>
+          <p className="text-fg-muted">{LANES_COPY.pickerAfter}</p>
         </div>
       )}
       {problem === null ? null : <Problem message={problem} />}
