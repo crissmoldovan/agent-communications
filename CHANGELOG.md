@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.29.0
 
 **Activity: what your agents read, were told about, did and sent, by agent window, kept private on this machine.**
 The owner asked for an audit of what agent sessions read and sent, as the first step towards an action queue and
