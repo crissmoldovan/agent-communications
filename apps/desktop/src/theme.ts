@@ -19,7 +19,9 @@ export const THEME_NAMES = ['soft', 'cue', 'terminal'] as const satisfies readon
 export const THEME_DEFAULTS = { theme: 'soft', density: 'normal', mode: 'system' } as const;
 
 /** The local-storage key the provider and the pre-paint script share. */
-export const STORAGE_KEY = 'agent-comms';
+// A new key in 0.28.0: the redesign opens once on its own look, `soft`, whatever an earlier version stored; the
+// appearance menu still offers cue and terminal (desktop design §9).
+export const STORAGE_KEY = 'agent-comms.look';
 
 /**
  * The pre-paint script: stamps the stored theme, density and mode on `<html>` before anything paints. It is the one

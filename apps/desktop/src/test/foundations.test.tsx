@@ -271,7 +271,7 @@ describe('the shell', () => {
     for (const theme of ['cue', 'terminal', 'soft']) {
       fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: theme }));
       await waitFor(() => expect(root.getAttribute('data-theme')).toBe(theme));
-      expect(JSON.parse(window.localStorage.getItem('agent-comms') ?? '{}')).toMatchObject({ theme });
+      expect(JSON.parse(window.localStorage.getItem('agent-comms.look') ?? '{}')).toMatchObject({ theme });
     }
   });
 });
