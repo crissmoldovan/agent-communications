@@ -38,7 +38,8 @@ type View = 'label' | 'rules' | 'standing';
  *
  * The screen reads all three when it opens, as it did on one page, and keeps every view mounted: a count on a tab says
  * what its view holds — the rules, the standing approvals that hold, and in the warn tone anything to look at — and a
- * preview waiting in one view is not revoked by looking at another. A gated view reads nothing.
+ * preview waiting in one view is not revoked by looking at another. A gated view reads nothing, and its tab is marked
+ * "needs an update" in the warn tone, so the line asking for a newer CLI is never behind an unmarked tab.
  */
 export function Agent() {
   const { installation } = useAppData();
@@ -60,10 +61,12 @@ export function Agent() {
             Label <LabelCount result={label.result} />
           </Tabs.Tab>
           <Tabs.Tab value="rules">
-            Behaviour rules <RulesCount result={rules.result} />
+            Behaviour rules{' '}
+            {supports(installed, 'behaviour') ? <RulesCount result={rules.result} /> : <TabNeedsUpdate />}
           </Tabs.Tab>
           <Tabs.Tab value="standing">
-            Standing approvals <StandingCount result={standing.result} />
+            Standing approvals{' '}
+            {supports(installed, 'standing') ? <StandingCount result={standing.result} /> : <TabNeedsUpdate />}
           </Tabs.Tab>
         </Tabs.List>
         <Tabs.Panel value="label" keepMounted>
@@ -101,6 +104,18 @@ function TabCount({ count, tone, says }: { count: number; tone: 'neutral' | 'war
       <span aria-hidden="true">{count}</span>
       <span className="sr-only">{says}</span>
     </Chip>
+  );
+}
+
+/**
+ * A view this CLI is too old for, marked on its tab: its read never runs, so it has nothing to count, and the line that
+ * says which version it needs is in the view (DA12), not hidden behind an unmarked tab.
+ */
+function TabNeedsUpdate() {
+  return (
+    <span data-slot="tab-gate" data-tone="warn" className="inline-flex">
+      <StatusDot tone="warn" label="needs an update" />
+    </span>
   );
 }
 
