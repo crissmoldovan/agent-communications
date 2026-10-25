@@ -3,6 +3,7 @@ import { chmod, open, readFile, stat } from 'node:fs/promises';
 import { homedir, platform } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
+import { readActivitySettings, storedActivity } from './activity-settings.ts';
 import {
   type AgentLabelLoosening,
   type AgentLabelRule,
@@ -297,6 +298,16 @@ interface ConfigBody {
    * keep every key they do not name, so older releases keep it too, and judged by `classifyChange`.
    */
   behaviour?: unknown;
+  /**
+   * The activity log's settings (design 2026-10-25-activity §4.1): `{ record: 'on' | 'off', retentionDays: 1..365 }`,
+   * on and 30 when absent.
+   *
+   * `unknown` here, as `agentLabel` and `behaviour` are: it is read only through `readActivitySettings`, which reads a
+   * value it does not understand as recording less — off, and the fewest days — so a hand edit or a later release's
+   * word can only tighten. Kept through every write as the schemas keep every key they do not name, and judged by
+   * `classifyChange`: recording again and keeping more days are loosenings, off and fewer days tightenings.
+   */
+  activity?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2134,6 +2145,17 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
     const levels = behaviourLevels(behaviour.deltas);
     loosen('behaviour.rules', levels.before, levels.after);
   }
+  // The activity log (design 2026-10-25-activity §4.1), judged by the settings in force on each side: recording again
+  // and keeping more days let more be known afterwards of what agents read and sent, so a person agrees to them; off
+  // and fewer days apply at once.
+  const activityBefore = readActivitySettings(before);
+  const activityAfter = readActivitySettings(after);
+  if (activityBefore.record === 'off' && activityAfter.record === 'on') {
+    loosen('activity.record', activityBefore.record, activityAfter.record);
+  }
+  if (activityAfter.retentionDays > activityBefore.retentionDays) {
+    loosen('activity.retentionDays', activityBefore.retentionDays, activityAfter.retentionDays);
+  }
   return { loosened: changes.map((change) => change.path), changes };
 }
 
@@ -2230,7 +2252,7 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * the agent label's settings, the behaviour rules, and each mailbox's and account's own settings — including those of
+ * the agent label's settings, the behaviour rules, the activity log's, and each mailbox's and account's own settings — including those of
  * one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
@@ -2275,6 +2297,8 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   const labelAfter = storedAgentLabel(after);
   for (const key of LABEL_SETTINGS) record(`agentLabel.${key}`, labelBefore[key], labelAfter[key]);
   record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
+  record('activity.record', storedActivity(before)?.record, storedActivity(after)?.record);
+  record('activity.retentionDays', storedActivity(before)?.retentionDays, storedActivity(after)?.retentionDays);
   return changes;
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "@agentcomms/desktop",
-  "version": "0.28.0",
+  "version": "0.29.0",
   "private": true,
   "description": "Agent Comms: the tray app that shows this machine's agent-communications. Never published to npm.",
   "type": "module",

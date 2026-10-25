@@ -1,4 +1,5 @@
 import { CommsError, escapeForDisplay, isCommsError, isDangerous } from '@agentcomms/core';
+import { recordWhatsApp } from '../activity.ts';
 import { chatRefOf, noSuchChat } from '../chat-ref.ts';
 import type { ResolvedAccount, WhatsAppContext } from '../context.ts';
 import { WhatsAppIndex } from '../index-db.ts';
@@ -128,6 +129,26 @@ export function composeDraft(request: { to: string; text: string }): DraftResult
  * one account is not drafted to by naming another. A pinned server serves its account alone and consults no other.
  */
 export async function draftMessage(
+  context: WhatsAppContext,
+  request: { account?: string | undefined; to: string; text: string },
+): Promise<DraftResult> {
+  /*
+   * One message drafted to one chat — never which, nor what it says (S4). Kind `approval`: nothing reaches WhatsApp, and
+   * the person sends it. A draft naming no account is checked against every account's lists, so it is recorded under
+   * the only account there is, or under all of several.
+   */
+  return recordWhatsApp(
+    context,
+    request.account,
+    'whatsapp.draft',
+    'approval',
+    () => draftOf(context, request),
+    () => ({ chats: 1, messages: 1 }),
+    { anyAccount: true },
+  );
+}
+
+async function draftOf(
   context: WhatsAppContext,
   request: { account?: string | undefined; to: string; text: string },
 ): Promise<DraftResult> {

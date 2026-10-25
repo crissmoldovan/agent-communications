@@ -43,7 +43,57 @@ export type AccountsProduct = 'gmail' | 'slack' | 'resend';
  */
 export type EndpointJudgeKind = 'typesafe' | 'local-endpoint';
 
-/** Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. */
+/**
+ * An approval that no longer waits, as Approvals → Recent reads it (`allowlist.rs`, `FinishedApprovalState`): one list
+ * for each. Closed: never `pending` (Waiting's), `sending` or `corrupt`.
+ */
+export type FinishedApprovalState = 'approved' | 'used' | 'failed' | 'unknown' | 'expired' | 'revoked';
+
+/** Every finished state, in the order Recent asks for them. */
+export const FINISHED_APPROVAL_STATES: readonly FinishedApprovalState[] = [
+  'approved',
+  'used',
+  'failed',
+  'unknown',
+  'expired',
+  'revoked',
+];
+
+/** What an activity line did, as `activity show --kind` takes it (`allowlist.rs`, `ActivityKind`). */
+export type ActivityKind = 'read' | 'write' | 'told' | 'approval';
+
+/** How an activity line ended, as `activity show --outcome` takes it (`allowlist.rs`, `ActivityOutcome`). */
+export type ActivityOutcome = 'ok' | 'refused' | 'failed';
+
+/**
+ * The channels `activity show --channel` takes (`allowlist.rs`, `ActivityChannel`): core, the four built in, and
+ * `events`, the event service's delivery lines.
+ */
+export const ACTIVITY_CHANNELS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
+export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
+
+/**
+ * How far back the Activity screen reads (`allowlist.rs`, `ActivitySince`): 7 or 30 days, or today — the start of the
+ * person's day, in whole seconds since the epoch, which Rust checks and writes as an ISO time.
+ */
+export type ActivitySince = '7d' | '30d' | { today: number };
+
+/** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
+export type ActivityShowCall = {
+  kind: 'activityShow';
+  session: string;
+  since: ActivitySince;
+  activityKind?: ActivityKind;
+  channel?: ActivityChannel;
+  account?: string;
+  outcome?: ActivityOutcome;
+};
+
+/**
+ * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
+ * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
+ * union up to the first line that ends in `;`, and anchors on its disable as that line.
+ */
 export type Call =
   | { kind: 'version'; product: Product }
   | { kind: 'approvalsPending' }
@@ -73,6 +123,9 @@ export type Call =
   | { kind: 'judgeKindsList' }
   | { kind: 'judgesList' }
   | { kind: 'judgeKindDisable'; judgeKind: EndpointJudgeKind }
+  | { kind: 'approvalsFinished'; state: FinishedApprovalState }
+  | { kind: 'activitySessions'; since: ActivitySince }
+  | ActivityShowCall
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
 

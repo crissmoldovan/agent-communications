@@ -1,6 +1,7 @@
 import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { CommsError, createUniqueFile, relativeSubpath, resolveInsideRoot, safeFilename, slug } from '@agentcomms/core';
+import { recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { dayOf, downloadsRoot } from './attachments.ts';
 import { type ReadMessageResult, type ReadThreadResult, readMessage, readThread } from './read.ts';
@@ -80,11 +81,35 @@ function markdownForMessage(message: ReadMessageResult): string {
   return lines.join('\n');
 }
 
+/**
+ * Writes a message or a thread to a file, recorded in the activity log as the file — its name, which is this package's
+ * own (the day and the id), and its size — under the id exported, with how many messages it holds. The read it makes
+ * is part of this line, not one of its own.
+ */
 export async function exportMail(
   context: GmailContext,
   alias: string,
   id: string,
   options: ExportOptions = {},
+): Promise<ExportResult> {
+  return recorded(
+    context,
+    'gmail.export',
+    'read',
+    alias,
+    () => exportTo(context, alias, id, options),
+    (result) => ({
+      items: [{ id, name: basename(result.path), size: result.bytes }],
+      counts: { messages: result.messageCount },
+    }),
+  );
+}
+
+async function exportTo(
+  context: GmailContext,
+  alias: string,
+  id: string,
+  options: ExportOptions,
 ): Promise<ExportResult> {
   // Checked before anything is read: a word that is not a format used to be written out as Markdown under its name.
   const format = oneOf(options.format, EXPORT_FORMATS, 'an export format') ?? 'md';

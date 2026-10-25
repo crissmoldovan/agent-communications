@@ -1,3 +1,13 @@
+/*
+ * The activity log (design 2026-10-25-activity): what agent sessions read, were told, did and sent, private to this
+ * machine, never content. For the channels: `withActivity` around every operation that reads or writes account data,
+ * `recordActivity` for a line built by hand (the event service's `told` lines, S1), and `sessionIdentity`, which an MCP
+ * server calls with its client's `clientInfo` — once per process; it is kept. `activityLineOf` copies only the fields
+ * a line has, so nothing else a caller hands over is ever written.
+ */
+export * from './activity.ts';
+/* Its two settings, `activity.record` and `activity.retentionDays`, read as the stricter value when unreadable. */
+export * from './activity-settings.ts';
 export * from './addresses.ts';
 export * from './agent-label.ts';
 export * from './approval-binding.ts';

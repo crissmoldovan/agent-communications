@@ -14,6 +14,7 @@ const SLACK_CONVERSATION = new RegExp(grammar.slackConversation, 'u');
 const MAIL_CONVERSATION = new RegExp(grammar.mailConversation, 'u');
 const RESERVED: readonly string[] = grammar.reserved;
 const ACTS: readonly string[] = grammar.acts;
+const SESSION_KEY = new RegExp(grammar.sessionKey, 'u');
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -45,6 +46,11 @@ export function isActs(value: string): boolean {
   if (value === 'none') return true;
   const listed = value.split(',');
   return listed.every((act, index) => ACTS.includes(act) && !listed.slice(0, index).includes(act));
+}
+
+/** An activity session's key, as core makes it: sixteen lowercase hex digits. */
+export function isSessionKey(value: string): boolean {
+  return isPlainValue(value) && SESSION_KEY.test(value);
 }
 
 /** The acts a rule can allow, in the order the form shows them. */

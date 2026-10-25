@@ -117,6 +117,11 @@ terminal), `approve` (under `confirm`, a person at a terminal) and `mcp` (it sta
 | `agent-resend mcp install --client <client>` | `comms_server_install` (core) |
 | `agent-resend mcp prune` | `comms_server_prune` (core) |
 
+Every command that reads or changes an account — all but `account`, `doctor`, `send wait`, `approve` and `mcp` — is
+recorded in core's private activity log, the same from a command and a tool: the email ids, subjects and senders it
+touched, a download's file names and sizes, a send's recipients and approval, and how it ended. Never a body or an
+attachment's bytes. `agentcomms activity sessions` shows it, and `agentcomms activity record off` stops it.
+
 Every command takes `--json` for the whole result, with stable exit codes: `0` ok, `10` a send or a change was
 refused or needs approval, `64` usage, `65` bad data, `66` not found, `69` Resend or the secret store unavailable,
 `75` temporary, `77` key or permission needed, `78` configuration problem.

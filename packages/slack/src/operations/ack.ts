@@ -25,6 +25,7 @@ import {
   standingRefused,
   truncateDisplay,
 } from '@agentcomms/core';
+import { describeAck, recordSlack } from '../activity.ts';
 import { callSlack, type SlackCall } from '../api/call.ts';
 import { escapeForSlack, payloadOf } from '../compose/blocks.ts';
 import { openDraftStore, type SlackDraft } from '../compose/drafts.ts';
@@ -553,6 +554,16 @@ export async function ack(
   alias: string,
   request: AckRequest,
   slack: SessionDeps = {},
+): Promise<AckResult> {
+  // Recorded around the act, never in it: what the gate sends and refuses is the gate's alone.
+  return recordSlack(context, alias, 'slack.ack', 'write', () => ackOnce(context, alias, request, slack), describeAck);
+}
+
+async function ackOnce(
+  context: SlackContext,
+  alias: string,
+  request: AckRequest,
+  slack: SessionDeps,
 ): Promise<AckResult> {
   // 1. Before anything is read: what is asked for is a digest, at a message, on a workspace that may send.
   const digest = contentDigestOf(request.content);

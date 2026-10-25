@@ -391,6 +391,21 @@ approval id, and runs again with `--approval <id>` after your yes.
 does not. When a repair needs several commands, it prints them one per line. It exits `78` when something is broken,
 so CI can gate on it.
 
+### What your agents did: activity
+
+From 0.29.0, agent-communications keeps a private log of what each agent window read, did and sent, and what the
+event service delivered: `<state>/activity/`, one file a day, kept 30 days. It holds subjects, senders and file
+names so a line reads like "Read 'Invoice March' from David", and never a message body, an attachment or a secret.
+WhatsApp is recorded only as counts.
+
+- `agentcomms activity sessions` lists the agent windows, newest first, by project folder and client;
+  `agentcomms activity show <session>` lists what one did. The desktop app's Activity screen shows the same.
+- An agent sees only its own window, through `comms_activity` (or `agentcomms activity mine`): never another
+  project's mail.
+- `agentcomms activity record off` stops recording at once, and `agentcomms activity retention <days>` shortens how
+  long it is kept; `comms_activity_settings` does the same for an agent. Turning recording back on, or keeping it
+  longer, is a loosening, approved as every other is.
+
 ### Upgrading
 
 `mcp install` pins the exact version into the entry it registers, so upgrading the package elsewhere

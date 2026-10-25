@@ -1,4 +1,5 @@
-import { approvalOutcome, asLegacy, asV2, CommsError, recipientDomains } from '@agentcomms/core';
+import { type ActivityItem, approvalOutcome, asLegacy, asV2, CommsError, recipientDomains } from '@agentcomms/core';
+import { recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 
 /**
@@ -86,6 +87,22 @@ export async function applyUndo(
   alias: string,
   entries: readonly NonNullable<ModifyResult['undo']>[number][],
 ): Promise<{ inbox: string; messages: number; groups: number }> {
+  // Recorded in the activity log by the messages it puts back, by id.
+  return recorded(
+    context,
+    'gmail.organise.undo',
+    'write',
+    alias,
+    () => undoChanges(context, alias, entries),
+    () => ({ items: entries.map((entry) => ({ id: entry.messageId })) }),
+  );
+}
+
+async function undoChanges(
+  context: GmailContext,
+  alias: string,
+  entries: readonly NonNullable<ModifyResult['undo']>[number][],
+): Promise<{ inbox: string; messages: number; groups: number }> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);
@@ -148,7 +165,27 @@ async function refuseWhileSending(
   }
 }
 
+/**
+ * Changes labels, recorded in the activity log by the messages and threads named, by id, and how many messages that
+ * came to. A dry run changes nothing, so it is recorded as a read.
+ */
 export async function modify(context: GmailContext, alias: string, options: ModifyOptions): Promise<ModifyResult> {
+  return recorded(
+    context,
+    'gmail.organise',
+    options.dryRun ? 'read' : 'write',
+    alias,
+    () => modifyLabels(context, alias, options),
+    (result) => ({ count: result.messages, items: namedIds(options) }),
+  );
+}
+
+/** The messages and threads a change names, by id, as given. */
+function namedIds(options: { messageIds?: string[] | undefined; threadIds?: string[] | undefined }): ActivityItem[] {
+  return [...(options.messageIds ?? []), ...(options.threadIds ?? [])].map((id) => ({ id }));
+}
+
+async function modifyLabels(context: GmailContext, alias: string, options: ModifyOptions): Promise<ModifyResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);
@@ -257,6 +294,27 @@ export async function trash(
     dryRun?: boolean | undefined;
   },
 ): Promise<TrashResult> {
+  // Recorded in the activity log by each message moved, by id; a dry run moves nothing, so it is recorded as a read.
+  return recorded(
+    context,
+    'gmail.trash',
+    options.dryRun ? 'read' : 'write',
+    alias,
+    () => moveToBin(context, alias, options),
+    (result) => ({ items: result.messages.map((id) => ({ id })) }),
+  );
+}
+
+async function moveToBin(
+  context: GmailContext,
+  alias: string,
+  options: {
+    messageIds?: string[] | undefined;
+    threadIds?: string[] | undefined;
+    undo?: boolean | undefined;
+    dryRun?: boolean | undefined;
+  },
+): Promise<TrashResult> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);
@@ -296,8 +354,22 @@ export interface CreatedLabel {
   existed: boolean;
 }
 
-/** Creates a label, or returns the one already there: asking twice should not be an error. */
+/**
+ * Creates a label, or returns the one already there: asking twice should not be an error. Recorded in the activity log
+ * by the label's id.
+ */
 export async function createLabel(context: GmailContext, alias: string, name: string): Promise<CreatedLabel> {
+  return recorded(
+    context,
+    'gmail.label.create',
+    'write',
+    alias,
+    () => labelNamed(context, alias, name),
+    (label) => ({ items: [{ id: label.id }] }),
+  );
+}
+
+async function labelNamed(context: GmailContext, alias: string, name: string): Promise<CreatedLabel> {
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);

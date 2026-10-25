@@ -246,9 +246,11 @@ const READING = [
   'comms_orgs_list',
   'comms_org_show',
   'comms_profile',
+  'comms_activity',
 ];
 const CHANGING = [
   'comms_attach',
+  'comms_activity_settings',
   'comms_label',
   'comms_behaviour',
   'comms_org_add',
@@ -540,6 +542,7 @@ test('the doctor over MCP is the same report, and the keychain it probes is the 
       'standing approvals',
       'system keychain',
       'secret backend',
+      'activity',
       'update check',
     ]);
     const keychain = (report.checks as { name: string; ok: boolean; detail: string }[]).find(

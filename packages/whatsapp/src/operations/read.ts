@@ -1,4 +1,5 @@
 import { CommsError, wholeNumber } from '@agentcomms/core';
+import { recordWhatsApp } from '../activity.ts';
 import { chatRefOf, noSuchChat } from '../chat-ref.ts';
 import type { WhatsAppContext } from '../context.ts';
 import { WhatsAppIndex } from '../index-db.ts';
@@ -56,6 +57,21 @@ export async function listChats(
   context: WhatsAppContext,
   request: { account?: string | undefined; limit?: unknown; kind?: string | undefined },
 ): Promise<ChatsResult> {
+  // How many chats, never which (S4): see `recordWhatsApp`.
+  return recordWhatsApp(
+    context,
+    request.account,
+    'whatsapp.chats',
+    'read',
+    () => chatsOf(context, request),
+    (result) => ({ chats: result.chats.length }),
+  );
+}
+
+async function chatsOf(
+  context: WhatsAppContext,
+  request: { account?: string | undefined; limit?: unknown; kind?: string | undefined },
+): Promise<ChatsResult> {
   const limit = wholeNumber(request.limit ?? 50, { name: 'limit', min: 1, max: 500 }) as number;
   const kinds = kindsOf(request.kind);
   const { name, index } = await openIndex(context, request.account);
@@ -85,6 +101,21 @@ export interface ReadResult {
 }
 
 export async function readChat(
+  context: WhatsAppContext,
+  request: { account?: string | undefined; chat: string; limit?: unknown; before?: string | undefined },
+): Promise<ReadResult> {
+  // One chat and how many of its messages, never which chat (S4).
+  return recordWhatsApp(
+    context,
+    request.account,
+    'whatsapp.read',
+    'read',
+    () => chatOf(context, request),
+    (result) => ({ chats: 1, messages: result.messages.length }),
+  );
+}
+
+async function chatOf(
   context: WhatsAppContext,
   request: { account?: string | undefined; chat: string; limit?: unknown; before?: string | undefined },
 ): Promise<ReadResult> {
@@ -144,6 +175,28 @@ export function wordsOf(query: string): string[] {
 }
 
 export async function searchMessages(
+  context: WhatsAppContext,
+  request: {
+    account?: string | undefined;
+    query: string;
+    chat?: string | undefined;
+    sender?: string | undefined;
+    kind?: string | undefined;
+    limit?: unknown;
+  },
+): Promise<SearchResult> {
+  // How many messages in how many chats — and not the words searched for, which may be a name or a number (S4).
+  return recordWhatsApp(
+    context,
+    request.account,
+    'whatsapp.search',
+    'read',
+    () => searchOf(context, request),
+    (result) => ({ chats: new Set(result.results.map((hit) => hit.chat.id)).size, messages: result.results.length }),
+  );
+}
+
+async function searchOf(
   context: WhatsAppContext,
   request: {
     account?: string | undefined;

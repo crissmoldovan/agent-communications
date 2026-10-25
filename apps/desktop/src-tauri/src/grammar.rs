@@ -1,7 +1,7 @@
 //! The grammars every argument is checked against before a command is built (DA4), read from `grammar.json`, which
 //! `src/grammar.ts` reads too. Each is core's own: an approval id (`ids.ts`), a version-1 alias (`config.ts`), an
-//! account name (`name-grammar.ts`, its look-ahead written as a list of reserved words), and the two conversation
-//! forms (`operations/label.ts`).
+//! account name (`name-grammar.ts`, its look-ahead written as a list of reserved words), the two conversation forms
+//! (`operations/label.ts`), and an activity session's key (`activity.ts`).
 
 use regex::Regex;
 use serde::Deserialize;
@@ -21,6 +21,7 @@ struct Source {
     slack_conversation: String,
     mail_conversation: String,
     acts: Vec<String>,
+    session_key: String,
 }
 
 struct Grammar {
@@ -31,6 +32,7 @@ struct Grammar {
     slack_conversation: Regex,
     mail_conversation: Regex,
     acts: Vec<String>,
+    session_key: Regex,
 }
 
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
@@ -46,6 +48,7 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         slack_conversation: pattern(&source.slack_conversation),
         mail_conversation: pattern(&source.mail_conversation),
         acts: source.acts,
+        session_key: pattern(&source.session_key),
     }
 });
 
@@ -105,9 +108,35 @@ pub fn acts(value: &str) -> bool {
             .all(|(index, act)| !listed[..index].contains(act))
 }
 
+/// An activity session's key, as core makes it: sixteen lowercase hex digits (`activity.ts`, `SESSION_KEY`).
+pub fn session_key(value: &str) -> bool {
+    plain(value) && GRAMMAR.session_key.is_match(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_keys_are_sixteen_lowercase_hex_digits() {
+        for good in ["3f9a1c2e7b4d5a60", "0000000000000000", "ffffffffffffffff"] {
+            assert!(session_key(good), "{good}");
+        }
+        for bad in [
+            "",
+            "3f9a1c2e7b4d5a6",
+            "3f9a1c2e7b4d5a600",
+            "3F9A1C2E7B4D5A60",
+            "3f9a1c2e7b4d5a6g",
+            "-f9a1c2e7b4d5a60",
+            "3f9a1c2e 7b4d5a6",
+            "3f9a1c2e7b4d5a60\n",
+            "3f9a1c2e7b4d5a60 --json",
+            "../3f9a1c2e7b4d5",
+        ] {
+            assert!(!session_key(bad), "{bad}");
+        }
+    }
 
     #[test]
     fn approval_ids_are_core_s() {

@@ -30,5 +30,6 @@
   ],
   "slackConversation": "^[CGDUW][A-Z0-9]{2,}$",
   "mailConversation": "^(?:[^\\s@<>(),;:\"\\\\]+)?@[^\\s@<>(),;:\"\\\\]+$",
-  "acts": ["post", "reply", "reaction", "edit", "delete", "file", "send"]
+  "acts": ["post", "reply", "reaction", "edit", "delete", "file", "send"],
+  "sessionKey": "^[0-9a-f]{16}$"
 }

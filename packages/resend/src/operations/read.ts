@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import {
+  type ActivityItem,
   CommsError,
   createUniqueFile,
   domainOf,
@@ -18,6 +19,7 @@ import {
   wholeNumber,
 } from '@agentcomms/core';
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
+import { itemOf, plain, recorded, senderOf, senderOfField, unavailable } from '../activity.ts';
 import { type ResendTransport, resendDownload, resendRequest } from '../api/client.ts';
 import {
   addressesOf,
@@ -143,11 +145,26 @@ function domainRow(entry: Record<string, unknown>): DomainRow {
   };
 }
 
-/** The team's domains; with `domain`, that one with the DNS records it needs. */
+/** The team's domains; with `domain`, that one with the DNS records it needs. Recorded by how many there are. */
 export async function listDomains(
   context: ResendContext,
   name: string,
   options: { domain?: string | undefined } = {},
+): Promise<Readable<{ domains: DomainRow[]; records?: DomainRecord[] | undefined }>> {
+  return recorded(
+    context,
+    'resend.domains',
+    'read',
+    name,
+    () => domainsOf(context, name, options),
+    (result) => (result.available ? { count: result.domains.length } : unavailable(result)),
+  );
+}
+
+async function domainsOf(
+  context: ResendContext,
+  name: string,
+  options: { domain?: string | undefined },
 ): Promise<Readable<{ domains: DomainRow[]; records?: DomainRecord[] | undefined }>> {
   return whenReadable(context, name, async (named, transport) => {
     const page = await resendRequest<Page<Record<string, unknown>>>(transport, 'GET', '/domains');
@@ -233,10 +250,32 @@ function pageQuery(paging: Paging, fallback: number): { limit: number; after?: s
   return { limit: wholeNumber(paging.limit, LIMIT) ?? fallback, after: cursorOf(paging.after) };
 }
 
+/** A sent email as its activity line keeps it: its id, its subject and who it was from. */
+function sentItem(row: SentRow): ActivityItem {
+  return itemOf(row.id, row.subject, senderOfField(row.from));
+}
+
+/** The emails the team sent, recorded by each one's id, subject and sender. */
 export async function listSentEmails(
   context: ResendContext,
   name: string,
   paging: Paging = {},
+): Promise<Readable<{ emails: SentRow[]; hasMore: boolean; next: string | null; notice: string }>> {
+  return recorded(
+    context,
+    'resend.emails.list',
+    'read',
+    name,
+    () => sentEmailsOf(context, name, paging),
+    (result) =>
+      result.available ? { count: result.emails.length, items: result.emails.map(sentItem) } : unavailable(result),
+  );
+}
+
+async function sentEmailsOf(
+  context: ResendContext,
+  name: string,
+  paging: Paging,
 ): Promise<Readable<{ emails: SentRow[]; hasMore: boolean; next: string | null; notice: string }>> {
   const query = pageQuery(paging, 20);
   return whenReadable(context, name, async (_named, transport) => {
@@ -248,7 +287,23 @@ export async function listSentEmails(
   });
 }
 
+/** One sent email, recorded by its id, subject and sender. */
 export async function showSentEmail(
+  context: ResendContext,
+  name: string,
+  id: unknown,
+): Promise<Readable<{ email: SentRow & Record<string, unknown>; notice: string }>> {
+  return recorded(
+    context,
+    'resend.emails.show',
+    'read',
+    name,
+    () => sentEmailOf(context, name, id),
+    (result) => (result.available ? { items: [sentItem(result.email)] } : unavailable(result)),
+  );
+}
+
+async function sentEmailOf(
   context: ResendContext,
   name: string,
   id: unknown,
@@ -372,10 +427,32 @@ export interface ReceivedRow {
   attachments: number;
 }
 
+/** The emails the team received, recorded by each one's id, subject and sender. */
 export async function listReceived(
   context: ResendContext,
   name: string,
   paging: Paging = {},
+): Promise<Readable<{ emails: ReceivedRow[]; hasMore: boolean; next: string | null; notice: string }>> {
+  return recorded(
+    context,
+    'resend.received.list',
+    'read',
+    name,
+    () => receivedOf(context, name, paging),
+    (result) =>
+      result.available
+        ? {
+            count: result.emails.length,
+            items: result.emails.map((email) => itemOf(email.id, email.subject, senderOf(email.from))),
+          }
+        : unavailable(result),
+  );
+}
+
+async function receivedOf(
+  context: ResendContext,
+  name: string,
+  paging: Paging,
 ): Promise<Readable<{ emails: ReceivedRow[]; hasMore: boolean; next: string | null; notice: string }>> {
   const query = pageQuery(paging, 20);
   return whenReadable(context, name, async (named, transport) => {
@@ -411,7 +488,28 @@ export interface Authentication {
   evaluatedBy: 'resend' | null;
 }
 
+/** One received email, recorded by its id, subject and sender. */
 export async function showReceived(
+  context: ResendContext,
+  name: string,
+  id: unknown,
+): Promise<Readable<{ email: Record<string, unknown>; notice: string }>> {
+  return recorded(
+    context,
+    'resend.received.show',
+    'read',
+    name,
+    () => receivedEmailOf(context, name, id),
+    (result) => {
+      if (!result.available) return unavailable(result);
+      const email = result.email as { id?: unknown; subject?: unknown; from?: { address?: string; name?: string } };
+      const subject = typeof email.subject === 'string' ? email.subject : undefined;
+      return { items: [itemOf(String(email.id ?? ''), subject, senderOf(email.from))] };
+    },
+  );
+}
+
+async function receivedEmailOf(
   context: ResendContext,
   name: string,
   id: unknown,
@@ -531,11 +629,35 @@ export async function downloadsRoot(context: ResendContext): Promise<string> {
  * path is the sender's: see {@link storedName}. The names they gave, and the types they declared, come back as their
  * own fields, wrapped where they are text; their addresses are recorded as tainted before the result is returned.
  */
+/** Saves a received email's attachments, recorded by each file's id, the name its sender gave it, and its size. */
 export async function downloadReceived(
   context: ResendContext,
   name: string,
   id: unknown,
   options: { attachmentId?: unknown; out?: string | undefined } = {},
+): Promise<Readable<{ emailId: string; files: DownloadedFile[]; notice: string }>> {
+  return recorded(
+    context,
+    'resend.received.download',
+    'read',
+    name,
+    () => downloadReceivedOf(context, name, id, options),
+    (result) => {
+      if (!result.available) return unavailable(result);
+      const items = result.files.map((file): ActivityItem => {
+        const filename = plain(file.filename);
+        return { id: file.attachmentId, ...(filename === undefined ? {} : { name: filename }), size: file.size };
+      });
+      return { items, counts: { saved: items.length } };
+    },
+  );
+}
+
+async function downloadReceivedOf(
+  context: ResendContext,
+  name: string,
+  id: unknown,
+  options: { attachmentId?: unknown; out?: string | undefined },
 ): Promise<Readable<{ emailId: string; files: DownloadedFile[]; notice: string }>> {
   const emailId = resendId(id, 'email id');
   const only = options.attachmentId === undefined ? undefined : resendId(options.attachmentId, 'attachment id');
@@ -609,10 +731,26 @@ function dateOf(raw: unknown, name: string): string | undefined {
   return raw.trim();
 }
 
+/** The team's sending totals, recorded only as asked: they name no email. */
 export async function getMetrics(
   context: ResendContext,
   name: string,
   range: { start?: unknown; end?: unknown } = {},
+): Promise<Readable<{ start: string | null; end: string | null; totals: Record<string, number>; note: string }>> {
+  return recorded(
+    context,
+    'resend.metrics',
+    'read',
+    name,
+    () => metricsOf(context, name, range),
+    (result) => (result.available ? {} : unavailable(result)),
+  );
+}
+
+async function metricsOf(
+  context: ResendContext,
+  name: string,
+  range: { start?: unknown; end?: unknown },
 ): Promise<Readable<{ start: string | null; end: string | null; totals: Record<string, number>; note: string }>> {
   const start = dateOf(range.start, 'start');
   const end = dateOf(range.end, 'end');
@@ -644,10 +782,26 @@ export interface SuppressionRow {
 
 const ORIGINS = ['bounce', 'complaint', 'manual'];
 
+/** The addresses Resend will not send to, recorded by how many there are — never the addresses. */
 export async function listSuppressions(
   context: ResendContext,
   name: string,
   options: Paging & { origin?: unknown } = {},
+): Promise<Readable<{ suppressions: SuppressionRow[]; hasMore: boolean; next: string | null; notice: string }>> {
+  return recorded(
+    context,
+    'resend.suppressions',
+    'read',
+    name,
+    () => suppressionsOf(context, name, options),
+    (result) => (result.available ? { count: result.suppressions.length } : unavailable(result)),
+  );
+}
+
+async function suppressionsOf(
+  context: ResendContext,
+  name: string,
+  options: Paging & { origin?: unknown },
 ): Promise<Readable<{ suppressions: SuppressionRow[]; hasMore: boolean; next: string | null; notice: string }>> {
   const query = pageQuery(options, 20);
   if (options.origin !== undefined && !ORIGINS.includes(String(options.origin))) {
@@ -683,7 +837,25 @@ export async function listSuppressions(
 
 const SCHEDULED_PAGES = 3;
 
+/** The emails waiting to go, recorded by each one's id, subject and sender. */
 export async function listScheduled(
+  context: ResendContext,
+  name: string,
+): Promise<Readable<{ scheduled: (SentRow & { fromThisMachine: boolean })[]; complete: boolean; scanned: number }>> {
+  return recorded(
+    context,
+    'resend.scheduled.list',
+    'read',
+    name,
+    () => scheduledOf(context, name),
+    (result) =>
+      result.available
+        ? { count: result.scheduled.length, items: result.scheduled.map(sentItem) }
+        : unavailable(result),
+  );
+}
+
+async function scheduledOf(
   context: ResendContext,
   name: string,
 ): Promise<Readable<{ scheduled: (SentRow & { fromThisMachine: boolean })[]; complete: boolean; scanned: number }>> {

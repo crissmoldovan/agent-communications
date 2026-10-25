@@ -8,7 +8,7 @@ const FOLDERS = {
   secretsDir: '/example/home/.config/agent-communications/secrets',
 };
 
-test('opens on Overview with the seven sections', async ({ page }) => {
+test('opens on Overview with the eight sections', async ({ page }) => {
   await installMockIpc(page, {
     installation: {
       installed: true,
@@ -32,6 +32,7 @@ test('opens on Overview with the seven sections', async ({ page }) => {
     'Overview',
     'Accounts',
     'Approvals',
+    'Activity',
     'Agent',
     'Updates',
     'Events',

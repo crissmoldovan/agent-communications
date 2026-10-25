@@ -217,13 +217,23 @@ describe('the data the screens share', () => {
 });
 
 describe('the shell', () => {
-  it('the sidebar has the seven sections in order, then Settings', async () => {
+  it('the sidebar has the eight sections in order, Activity after Approvals, then Settings', async () => {
     renderApp(createFakeBridge());
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
     const items = within(navigation)
       .getAllByRole('button')
       .map((button) => button.textContent?.trim());
-    expect(items).toEqual(['Overview', 'Accounts', 'Approvals', 'Agent', 'Updates', 'Events', 'Doctor', 'Settings']);
+    expect(items).toEqual([
+      'Overview',
+      'Accounts',
+      'Approvals',
+      'Activity',
+      'Agent',
+      'Updates',
+      'Events',
+      'Doctor',
+      'Settings',
+    ]);
     // Each opens its screen.
     fireEvent.click(within(navigation).getByRole('button', { name: 'Doctor' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Doctor' })).toBeTruthy();

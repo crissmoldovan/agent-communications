@@ -9,6 +9,7 @@ import {
   TaintCollector,
   wrapUntrusted,
 } from '@agentcomms/core';
+import { itemOf, recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
 import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarnings } from '../domain/auth-results.ts';
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
@@ -275,6 +276,26 @@ export async function readThread(
   threadId: string,
   options: ReadRequest & { maxThreadChars?: number | undefined } = {},
 ): Promise<ReadThreadResult> {
+  // Recorded as each message read — its id, subject and sender — and how many the thread holds.
+  return recorded(
+    context,
+    'gmail.thread.read',
+    'read',
+    alias,
+    () => readWholeThread(context, alias, threadId, options),
+    (thread) => ({
+      count: thread.messageCount,
+      items: thread.messages.map((message) => itemOf(message.messageId, message.subject, message.from)),
+    }),
+  );
+}
+
+async function readWholeThread(
+  context: GmailContext,
+  alias: string,
+  threadId: string,
+  options: ReadRequest & { maxThreadChars?: number | undefined },
+): Promise<ReadThreadResult> {
   const { maxChars, offset } = bodyNumbers(context, options);
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'read');
@@ -336,12 +357,31 @@ export async function readThread(
   };
 }
 
-/** Reads one message. The result is returned only after the taint it observed has been recorded. */
+/**
+ * Reads one message. The result is returned only after the taint it observed has been recorded — and the read is
+ * recorded in the activity log by the message's id, subject and sender.
+ */
 export async function readMessage(
   context: GmailContext,
   alias: string,
   messageId: string,
   options: ReadRequest = {},
+): Promise<ReadMessageResult> {
+  return recorded(
+    context,
+    'gmail.message.read',
+    'read',
+    alias,
+    () => readOneMessage(context, alias, messageId, options),
+    (message) => ({ items: [itemOf(message.messageId, message.subject, message.from)] }),
+  );
+}
+
+async function readOneMessage(
+  context: GmailContext,
+  alias: string,
+  messageId: string,
+  options: ReadRequest,
 ): Promise<ReadMessageResult> {
   const numbers = bodyNumbers(context, options);
   const resolved = await context.inbox(alias);
