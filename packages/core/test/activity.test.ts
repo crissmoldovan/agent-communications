@@ -500,6 +500,10 @@ test('ps is read as macOS and Linux print it', { skip: process.platform === 'win
 
 // ── The operation and its surfaces ─────────────────────────────────────────────────────────────────────────────
 
+// The lines below are written at a fixed time (`line`'s `at`); mine looks back a day from `now`, so the reading is
+// pinned to that day, or the test would stop passing the day after it was written.
+const LINE_DAY = (): Date => new Date('2026-10-25T12:00:00.000Z');
+
 test('mine never returns another session’s line, whatever filters it is given', async () => {
   const m = machine();
   const mine = session({ key: '1111111111111111', folder: '/work/acme' });
@@ -511,7 +515,7 @@ test('mine never returns another session’s line, whatever filters it is given'
     line({ session: theirs, channel: 'slack', account: ACME_SLACK, operation: 'slack.read' }),
   );
 
-  const asMine = await activityMine(m.core, { surface: 'mcp' }, { identity: async () => mine });
+  const asMine = await activityMine(m.core, { surface: 'mcp' }, { identity: async () => mine, now: LINE_DAY });
   assert.equal(asMine.session.key, mine.key);
   assert.equal(asMine.lines.length, 1);
   assert.ok(asMine.lines.every((each) => each.session.key === mine.key));
@@ -522,13 +526,13 @@ test('mine never returns another session’s line, whatever filters it is given'
     { kind: 'read' },
     { since: '2000-01-01T00:00:00.000Z' },
   ]) {
-    const shown = await activityMine(m.core, { surface: 'mcp', ...filters }, { identity: async () => mine });
+    const shown = await activityMine(m.core, { surface: 'mcp', ...filters }, { identity: async () => mine, now: LINE_DAY });
     assert.ok(
       shown.lines.every((each) => each.session.key === mine.key),
       JSON.stringify(filters),
     );
   }
-  const asTheirs = await activityMine(m.core, { surface: 'mcp' }, { identity: async () => theirs });
+  const asTheirs = await activityMine(m.core, { surface: 'mcp' }, { identity: async () => theirs, now: LINE_DAY });
   assert.equal(asTheirs.lines.length, 2);
   assert.doesNotMatch(JSON.stringify(asTheirs), /"Mine"|Mine\n/);
 });

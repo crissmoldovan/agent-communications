@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { userInfo } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { knownClientConfigs } from '../src/mcp-clients.ts';
 import { homeForDiscovery, NO_REAL_HOME_VARIABLE, resolvePaths } from '../src/paths.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -81,7 +81,8 @@ test('REAL-HOME: a process that catches the refusal and goes on still fails, at 
     process.execPath,
     [
       '--import',
-      PRELOAD,
+      // On Windows an absolute path is not a URL the ESM loader takes: --import needs file://.
+      pathToFileURL(PRELOAD).href,
       '--experimental-strip-types',
       '--disable-warning=ExperimentalWarning',
       '--input-type=module',
