@@ -260,8 +260,9 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
 - **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
   refused with a closed reason (`MODEL_OUTPUT_NOT_JSON`, `MODEL_OUTPUT_SLOTS`, …), and the provider's own words are
   never kept. A suggestion you apply is your rule's text from then on, and you approve it with the rule.
-- **Who can run it: you.** `rule analyse` refuses inside the event service's MCP server, and no MCP tool runs it, so
-  an agent never reads a rule's counts and never spends your key.
+- **Who can run it: you.** It runs when you press Analyse in the app or run it at your terminal. `rule analyse`
+  refuses inside the event service's MCP server and in an agent's shell (an agent's marker, as for `judge setup`), and
+  no MCP tool runs it, so an agent never reads a rule's counts and never spends your key.
 
 ## What you can do with it
 

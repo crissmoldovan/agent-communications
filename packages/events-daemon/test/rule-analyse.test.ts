@@ -604,7 +604,7 @@ async function cli(
   return { code, stdout: out, stderr: err };
 }
 
-test('ANALYSE-CLI: rule analyse refuses inside the event service’s MCP server (10), and bad arguments are 64, before any owner', {
+test('ANALYSE-CLI: rule analyse refuses inside the event service’s MCP server and an agent’s shell (10), and bad arguments are 64, before any owner', {
   skip: WINDOWS_SKIP,
 }, async () => {
   const stateDir = await shortTempDir('aev-analyse-cli-');
@@ -614,6 +614,12 @@ test('ANALYSE-CLI: rule analyse refuses inside the event service’s MCP server 
     });
     assert.equal(refused.code, 10, refused.stderr);
     assert.match(refused.stderr, /analysing a rule is for a person, at a terminal or in the app/u);
+    // It runs on the person's own key when they press it: an agent's shell is refused too, before anything is read.
+    for (const marker of ['CLAUDECODE', 'CODEX_SANDBOX', 'CURSOR_AGENT']) {
+      const agent = await cli(['--state-dir', stateDir, 'rule', 'analyse', RULE, '--json'], { env: { [marker]: '1' } });
+      assert.equal(agent.code, 10, `${marker}: ${agent.stderr}`);
+      assert.match(agent.stderr, /only a person can analyse a rule/u);
+    }
     for (const [args, stdin] of [
       [['rule', 'analyse', RULE, '--provider', 'typesafe'], ''],
       [['rule', 'analyse', RULE, '--draft', 'draft.json'], ''],

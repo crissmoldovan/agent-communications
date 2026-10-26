@@ -491,6 +491,14 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (ruleId: string, options: Record<string, unknown>) => {
       ran = true;
       assertNotMcpServer(env, 'analyse');
+      // Analyse is a person's act (0.33.0 §3.3): it runs when they press it, on their own key, so an agent's shell is
+      // refused as well as the MCP server, before anything is read or sent.
+      const marker = agentMarker(env);
+      if (marker !== null)
+        throw new CommsError('APPROVAL_REQUIRED', 'only a person can analyse a rule, in the app or at their terminal', {
+          details: { marker },
+          hint: 'Ask the person to press Analyse on the rule in the app: Events → Rules.',
+        });
       const provider = options.provider as string | undefined;
       if (provider !== undefined && !isAnalyseProvider(provider))
         throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
