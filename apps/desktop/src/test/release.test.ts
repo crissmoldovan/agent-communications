@@ -353,6 +353,7 @@ describe('the desktop workflows', () => {
       'packages/core/package.json',
       'test/helpers/printed-command-guard.mjs',
       'scripts/channels.mjs',
+      'scripts/local-test-release.sh',
     ]) {
       outside.add(read);
     }
