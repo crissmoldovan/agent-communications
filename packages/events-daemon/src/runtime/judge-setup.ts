@@ -6,6 +6,7 @@ import {
   localSetupModel,
   type PersonSetupApprover,
   personSetupApprover,
+  ruleApprovalAtTerminal,
   type SetupJudgeKind,
   setupBudgetDocument,
   setupJudgeDocument,
@@ -275,6 +276,10 @@ export class JudgeSetupService {
           'APPROVAL_REQUIRED',
           'at your terminal, approve a rule with approve <approval-id>, which asks for its challenge',
         );
+      // Only an attested app — the release, or the test build for its own profile — approves here: an unattested
+      // origin (Windows, Linux) is sent to the terminal, so a standing disclosure is never approved on a missing
+      // marker alone, and the record's `approvedVia: app` always means the attested app (security review, finding 2).
+      if (approver === 'desktop-app (unattested)') throw ruleApprovalAtTerminal(approvalId);
       const row = this.#store.database
         .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
         .get(approvalId) as { document: string; digest: string; status: string } | undefined;
@@ -419,7 +424,13 @@ export class JudgeSetupService {
       await record('ok');
       return result;
     } catch (error) {
-      await record('failed');
+      // A refusal with its own reason is audited as one, with that reason; anything else as a failure.
+      const reason =
+        error instanceof CommsError && error.code === 'APPROVAL_REQUIRED'
+          ? (error.details as { reason?: unknown } | undefined)?.reason
+          : undefined;
+      if (typeof reason === 'string') await record('refused', reason);
+      else await record('failed');
       throw error;
     }
   }

@@ -17,7 +17,8 @@
  * The parent's path (`ps -o comm=`) is argv[0], which a process sets itself (`exec -a`): it is read only for the
  * refusal's message, and never decides anything. The launchers `exec` Node, so the app is this process's parent.
  * Windows and Linux are not checked (a known limit): there the caller keeps the marker checks, and says the approval
- * was the app's, unattested.
+ * was the app's, unattested. A caller that approves a standing disclosure must not take that for the app: the event
+ * service's `rule approve` sends an unattested origin to the terminal (security review of 0.33.0, finding 2).
  */
 import { execFile } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';

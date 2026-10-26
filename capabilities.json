@@ -2840,7 +2840,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
-      "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; at a terminal the person types the challenge with approve, and no tool performs either."
+      "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.rule.analyse",

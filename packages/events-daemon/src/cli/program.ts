@@ -18,6 +18,7 @@ import {
   localSetupModel,
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
+  ruleApprovalAtTerminal,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
@@ -888,6 +889,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (approvalId: string, options: { readonly digest: string }) => {
       ran = true;
       const origin = await personSetupOrigin('approve a rule', 'Events → Rules, Review and approve');
+      // Windows and Linux attest nothing: a standing disclosure is approved there at the terminal, never on a missing
+      // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
+      if (origin === PERSON_SETUP_ORIGINS.desktopAppUnattested) throw ruleApprovalAtTerminal(approvalId);
       print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
     });
 
