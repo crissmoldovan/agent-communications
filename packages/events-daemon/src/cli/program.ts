@@ -499,15 +499,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
     .action(async (ruleId: string, options: Record<string, unknown>) => {
       ran = true;
-      assertNotMcpServer(env, 'analyse');
-      // Analyse is a person's act (0.33.0 §3.3): it runs when they press it, on their own key, so an agent's shell is
-      // refused as well as the MCP server, before anything is read or sent.
-      const marker = agentMarker(env);
-      if (marker !== null)
-        throw new CommsError('APPROVAL_REQUIRED', 'only a person can analyse a rule, in the app or at their terminal', {
-          details: { marker },
-          hint: 'Ask the person to press Analyse on the rule in the app: Events → Rules.',
-        });
+      // Analyse is a person's act (0.33.0 §3.3): it runs when they press it, on their own key. As `provider key set`
+      // is, it is taken only from the Agent Comms app (attested on macOS) or an interactive terminal — one whose output
+      // the person reads, since a draft may come on stdin — and an agent's shell and the MCP server are refused before
+      // anything is read or sent (security review of 0.33.0, finding 10).
+      await personSetupOrigin('analyse a rule', 'Events → Rules, Analyse', 'analyse', 'output');
       const provider = options.provider as string | undefined;
       if (provider !== undefined && !isAnalyseProvider(provider))
         throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
@@ -766,10 +762,26 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
+  // Person-only reads and acts an agent has no tool for (security review of 0.33.0, finding 10): an agent's shell is
+  // refused too, by its agent marker — a speed bump against agents, not a boundary against code running as the person.
+  const refuseAgentShell = (what: string, where: string): void => {
+    const marker = agentMarker(env);
+    if (marker !== null)
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        `only a person can ${what}, in the app or at their terminal, not an agent`,
+        {
+          details: { marker },
+          hint: `Ask the person to do it in the app: ${where}.`,
+        },
+      );
+  };
   const personSetupOrigin = async (
     what: string,
     where = 'Events → Judges, and Settings → AI providers',
-    action: 'setup' | 'relay' = 'setup',
+    action: 'setup' | 'relay' | 'analyse' = 'setup',
+    // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
+    terminal: 'prompt' | 'output' = 'prompt',
   ): Promise<PersonSetupOrigin> => {
     assertNotMcpServer(env, action);
     const marker = agentMarker(env);
@@ -782,7 +794,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           hint: `Ask the person to do it in the app: ${where}.`,
         },
       );
-    if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
+    if (
+      terminal === 'prompt'
+        ? canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true })
+        : readsOutput(env, streams)
+    )
       return PERSON_SETUP_ORIGINS.terminal;
     // The config folder this run is for: a test build speaks only for a marked test profile's.
     const configDir = program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
@@ -891,8 +907,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--team <key>', 'linear: a team, by its key (such as CUE) or its id, whose labels to list')
     .action(async (name: string, options: { readonly team?: string }) => {
       ran = true;
-      // The person's view, at a terminal or in the app: never inside an MCP server's process.
+      // The person's view, at a terminal or in the app: never inside an MCP server's process, nor an agent's shell.
       assertNotMcpServer(env, name === 'agent-sessions' ? 'relay' : 'integration');
+      refuseAgentShell(
+        name === 'agent-sessions' ? 'see where your claude-stream relay is' : 'see what your Linear key can see',
+        'Settings → Integrations',
+      );
       if (name === 'agent-sessions') {
         if (options.team !== undefined)
           throw new CommsError('USAGE', 'integration show agent-sessions takes no --team');
@@ -946,6 +966,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async () => {
       ran = true;
       assertNotMcpServer(env, 'sessions');
+      // Every session's waiting matches are the person's; a bound window sees its own lane's with its MCP tool.
+      refuseAgentShell('list the matches waiting for every session', 'Events → Deliveries');
       print(await sessionQueueList(controlOptions(program)));
     });
   sessionQueue
@@ -954,6 +976,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (deliveryId: string) => {
       ran = true;
       assertNotMcpServer(env, 'sessions');
+      refuseAgentShell('drop a match waiting for a session', 'Events → Deliveries');
       print(await sessionQueueDrop(deliveryId, controlOptions(program)));
     });
 
@@ -1381,6 +1404,15 @@ async function stdinDocument(streams: EventsCliStreams, name: string): Promise<s
   const text = Buffer.concat(chunks).toString('utf8');
   if (text.trim() === '') throw new CommsError('USAGE', `${name} is required, on stdin`);
   return text;
+}
+
+/**
+ * Whether the person reads this run's output at a terminal: its output is a terminal's, and it is not CI. A command whose
+ * input may be a pipe (Analyse's draft) asks this rather than whether it can prompt.
+ */
+function readsOutput(env: NodeJS.ProcessEnv, streams: EventsCliStreams): boolean {
+  if (env.CI && env.CI !== '0' && env.CI !== 'false') return false;
+  return Boolean(streams.stdout.isTTY);
 }
 
 /** Analyse's draft (0.33.0 §3.3): one JSON rule document on stdin, as the app's editor sends it. */
