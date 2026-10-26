@@ -29,6 +29,7 @@ import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
+  approveRuleFromApp,
   disclosureChallenge,
   pendingRuleJudgeTest,
   pendingTargetTest,
@@ -369,6 +370,10 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       throw new CommsError('USAGE', `${name} must be valid JSON`);
     }
   };
+  // A document given as `-` is read from stdin (0.33.0 design §3.1): the desktop app hands the rule its editor made,
+  // and each target it needs, to `rule create|update -` and `target add|update -` there, so no document rides in argv.
+  const documentArgument = async (value: string, name: string): Promise<unknown> =>
+    value === '-' ? jsonArgument(await stdinDocument(streams, name), name) : jsonArgument(value, name);
   const catalogueArgument = (
     value: string,
   ): { readonly type: string; readonly version: number; readonly exampleIndex: number } => {
@@ -438,11 +443,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
-    print(await createRule(jsonArgument(document, 'rule document'), controlOptions(program)));
+    print(await createRule(await documentArgument(document, 'rule document'), controlOptions(program)));
   });
   rule.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateRule(jsonArgument(document, 'rule document'), controlOptions(program)));
+    print(await updateRule(await documentArgument(document, 'rule document'), controlOptions(program)));
   });
   rule.command('enable <rule-id> <version>').action(async (ruleId: string, version: string) => {
     ran = true;
@@ -526,7 +531,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   ] as const) {
     target.command(`${name} <document>`).action(async (document: string) => {
       ran = true;
-      print(await operation(jsonArgument(document, 'target document'), controlOptions(program)));
+      print(await operation(await documentArgument(document, 'target document'), controlOptions(program)));
     });
   }
   target.command('remove <target-id>').action(async (targetId: string) => {
@@ -748,7 +753,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
-  const personSetupOrigin = async (what: string, action: 'setup' | 'relay' = 'setup'): Promise<PersonSetupOrigin> => {
+  const personSetupOrigin = async (
+    what: string,
+    where = 'Events → Judges, and Settings → AI providers',
+    action: 'setup' | 'relay' = 'setup',
+  ): Promise<PersonSetupOrigin> => {
     assertNotMcpServer(env, action);
     const marker = agentMarker(env);
     if (marker !== null)
@@ -757,7 +766,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         `only a person can ${what}, in the app or at their terminal, not an agent`,
         {
           details: { marker },
-          hint: 'Ask the person to do it in the app: Events → Judges, and Settings → AI providers.',
+          hint: `Ask the person to do it in the app: ${where}.`,
         },
       );
     if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
@@ -773,7 +782,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       `only a person can ${what}: in the Agent Comms app, or at an interactive terminal`,
       {
         details: { reason: origin.reason },
-        hint: 'Do it in the app: Events → Judges, and Settings → AI providers; or run this at your own terminal.',
+        hint: `Do it in the app: ${where}; or run this at your own terminal.`,
       },
     );
   };
@@ -841,6 +850,18 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });
 
+  // A rule's activation, approved in the app after its preview (0.33.0 design §3.1): the person's own act, as judge
+  // setup is, from the same origins. At a terminal the person approves with `approve`, which asks for the challenge.
+  rule
+    .command('approve <approval-id>')
+    .description("approve a rule's activation from the Agent Comms app, after its preview, as the person")
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      const origin = await personSetupOrigin('approve a rule', 'Events → Rules, Review and approve');
+      print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+
   // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream
   // relay is (§3.5) — theirs to set, from the app or their terminal, like an AI provider's key — and the items waiting
   // for a busy session, theirs to read and drop.
@@ -880,7 +901,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (name: string, options: Record<string, unknown>) => {
       ran = true;
       if (name !== 'agent-sessions') throw new CommsError('USAGE', 'integration set takes agent-sessions');
-      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', 'relay');
+      const origin = await personSetupOrigin(
+        'change where Agent Comms finds your claude-stream relay',
+        'Settings → Integrations → Agent sessions',
+        'relay',
+      );
       const port = options.relayPort as string | undefined;
       print(
         await integrationSet(
@@ -1325,6 +1350,24 @@ function parseRelayPort(value: string): number {
   if (!/^[1-9][0-9]{0,4}$/u.test(value) || Number(value) > 65_535)
     throw new CommsError('USAGE', "the relay's port is a whole number from 1 to 65535, or default");
   return Number(value);
+}
+
+/** The most a document read from stdin may be: well past any rule, and short of filling memory. */
+const STDIN_DOCUMENT_MAX_BYTES = 1024 * 1024;
+
+/** A JSON document from stdin, as `-` names it: at most 1 MiB, its text as given. */
+async function stdinDocument(streams: EventsCliStreams, name: string): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > STDIN_DOCUMENT_MAX_BYTES) throw new CommsError('USAGE', `${name} on stdin is at most 1 MiB`);
+    chunks.push(bytes);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (text.trim() === '') throw new CommsError('USAGE', `${name} is required, on stdin`);
+  return text;
 }
 
 /** Analyse's draft (0.33.0 §3.3): one JSON rule document on stdin, as the app's editor sends it. */

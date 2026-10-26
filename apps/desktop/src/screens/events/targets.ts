@@ -25,10 +25,14 @@ const KIND_WORDS: Readonly<Record<string, string>> = {
   queue: 'Queue',
   webhook: 'Webhook',
   sse: 'Live stream',
+  linear: 'Linear issue',
+  session: 'Agent session',
 };
 
 /** Where a delivery went, in words: "Queue, lane billing", "Webhook, hooks.ci.example", "Dry-run log". */
 export function whereItWent(lists: EventsLists, row: DeliveryRow, known?: Partial<TargetView>): string {
+  // The issue a Linear delivery added names it best: "Linear, CUE-1".
+  if (row.linear !== null) return `Linear, ${row.linear.identifier}`;
   const target = targetOf(lists, row);
   const given = Object.fromEntries(
     Object.entries(known ?? {}).filter(([, value]) => value !== null && value !== undefined),

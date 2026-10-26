@@ -37,7 +37,7 @@ export interface DeliveryRow {
   nextAt: number | null;
   expiresAt: number | null;
   state: string;
-  /** `dry-run`, `webhook`, `sse` or `queue`; null from an events service older than 0.32.0. */
+  /** `dry-run`, `webhook`, `sse`, `queue`, or since 0.33.0 `linear` and `session`; null before 0.32.0. */
   targetKind: string | null;
   lastErrorCode: string | null;
   lastStatus: number | null;
@@ -46,6 +46,28 @@ export interface DeliveryRow {
   deliveredAt: number | null;
   /** When it failed for good; null while it has not (and from an events service older than 0.32.0). */
   deadLetteredAt: number | null;
+  /**
+   * The Linear issue a Linear delivery added (0.33.0): its identifier, and its address when it is one the app opens in
+   * the person's browser (`isLinearIssueLink`, as `links.rs` checks it); null for any other delivery.
+   */
+  linear: { identifier: string; url: string | null } | null;
+}
+
+/** A Linear issue's address as a delivery keeps it: `https://linear.app/[<workspace>/]issue/<TEAM-n>`, nothing else. */
+const LINEAR_ISSUE_LINK = /^https:\/\/linear\.app\/(?:[A-Za-z0-9_-]{1,64}\/)?issue\/[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u;
+const LINEAR_IDENTIFIER = /^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u;
+
+/** Whether the app opens `url`, a Linear issue's address, in the person's browser: Rust checks the same again. */
+export function isLinearIssueLink(url: string): boolean {
+  return LINEAR_ISSUE_LINK.test(url);
+}
+
+function linearOf(value: unknown): DeliveryRow['linear'] {
+  if (!isRecord(value)) return null;
+  const identifier = text(value.identifier);
+  if (identifier === null || !LINEAR_IDENTIFIER.test(identifier)) return null;
+  const url = text(value.url);
+  return { identifier, url: url !== null && isLinearIssueLink(url) ? url : null };
 }
 
 function rowOf(value: unknown): DeliveryRow | null {
@@ -71,6 +93,7 @@ function rowOf(value: unknown): DeliveryRow | null {
     eventId: text(value.eventId),
     deliveredAt: moment(value.deliveredAt),
     deadLetteredAt: moment(value.deadLetteredAt),
+    linear: linearOf(value.linear),
   };
 }
 

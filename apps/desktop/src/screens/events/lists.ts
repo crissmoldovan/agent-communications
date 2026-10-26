@@ -13,6 +13,7 @@ import { type RuleRow, type RuleVersionView, readRuleShow, readRulesList } from 
 import { useCall } from '../../hooks/use-call.ts';
 import { useReloadOnServiceTurn } from '../../hooks/use-reload-on-return.ts';
 import { type Call, type CliResult, errorMessage } from '../../ipc.ts';
+import type { EditTarget } from './RuleEditor.tsx';
 
 /** What a list says when its answer is not one the app can read. */
 export const UNREADABLE_LIST = 'The list could not be read.';
@@ -101,6 +102,9 @@ export interface EventsNav {
   /** The rule whose page is open, or null for the list of rules. */
   rule: string | null;
   openRule(id: string | null): void;
+  /** The rule being edited, or the new one being written (0.33.0); null when the editor is closed. */
+  editing: EditTarget | null;
+  edit(target: EditTarget | null): void;
   /** The delivery whose page is open, or null for the list of deliveries. */
   delivery: string | null;
   openDelivery(id: string | null): void;
@@ -112,6 +116,14 @@ export interface EventsNav {
 /** Where each tab stands; moving to another tab's page selects that tab. */
 export function useEventsNav(selectTab: (tab: 'rules' | 'deliveries') => void): EventsNav {
   const [rule, setRule] = useState<string | null>(null);
+  const [editing, setEditing] = useState<EditTarget | null>(null);
+  const edit = useCallback(
+    (target: EditTarget | null) => {
+      setEditing(target);
+      if (target !== null) selectTab('rules');
+    },
+    [selectTab],
+  );
   const [delivery, setDelivery] = useState<string | null>(null);
   const [deliveriesOf, setDeliveriesOf] = useState<string | null>(null);
   const openRule = useCallback(
@@ -136,7 +148,7 @@ export function useEventsNav(selectTab: (tab: 'rules' | 'deliveries') => void): 
     },
     [selectTab],
   );
-  return { rule, openRule, delivery, openDelivery, deliveriesOf, showDeliveriesOf };
+  return { rule, openRule, editing, edit, delivery, openDelivery, deliveriesOf, showDeliveriesOf };
 }
 
 /** A rule's versions, once read; null while they are not. */

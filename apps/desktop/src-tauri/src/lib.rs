@@ -13,6 +13,7 @@ pub mod links;
 pub mod login_item;
 pub mod paths;
 pub mod provider_keys;
+pub mod rule_editor;
 pub mod runner;
 pub mod settings;
 pub mod terminal;

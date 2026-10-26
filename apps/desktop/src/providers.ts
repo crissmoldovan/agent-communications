@@ -25,6 +25,34 @@ export function readProviders(value: unknown): Record<AiProvider, boolean> | nul
   return found as Record<AiProvider, boolean>;
 }
 
+/** `judges list`, read leniently: only to say whether Jev uses a key, and which judges a rule may ask. */
+export function readListedJudges(value: unknown): ListedJudge[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter(
+    (entry): entry is ListedJudge =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as ListedJudge).kind === 'string' &&
+      typeof (entry as ListedJudge).provider === 'string',
+  );
+}
+
+/** Whether `provider list` says `provider` has a key: false when it does not name it. */
+export function keyOf(value: unknown, provider: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const providers = (value as { providers?: unknown }).providers;
+  return (
+    Array.isArray(providers) &&
+    providers.some(
+      (entry) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        (entry as { id?: unknown }).id === provider &&
+        (entry as { hasKey?: unknown }).hasKey === true,
+    )
+  );
+}
+
 /** A judge as `judges list` gives it: content-free, the fields the Judges rows read. */
 export interface ListedJudge {
   readonly judgeId: string;
