@@ -26,10 +26,16 @@ export interface WhatsAppEventOperations {
  * The context is made when first used: an owner with no WhatsApp account never resolves this channel's folders (and,
  * under test, a test that never reaches WhatsApp never looks for them in the account's real home).
  */
-export function openWhatsAppEventOperations(input: Readonly<{ configDir: string }>): WhatsAppEventOperations {
+export function openWhatsAppEventOperations(
+  // `env` is a test seam: a test gives a temporary home, so this channel's other folders are never the person's own.
+  input: Readonly<{ configDir: string; env?: NodeJS.ProcessEnv | undefined }>,
+): WhatsAppEventOperations {
   let opened: WhatsAppContext | undefined;
   const context = (): WhatsAppContext => {
-    opened ??= new WhatsAppContext({ pathOverrides: { configDir: input.configDir } });
+    opened ??= new WhatsAppContext({
+      ...(input.env === undefined ? {} : { env: input.env }),
+      pathOverrides: { configDir: input.configDir },
+    });
     return opened;
   };
   return {

@@ -1,5 +1,5 @@
 import { homedir, userInfo } from 'node:os';
-import { join, resolve, sep } from 'node:path';
+import { join, resolve } from 'node:path';
 
 export const APP_DIR_NAME = 'agent-communications';
 
@@ -129,17 +129,25 @@ export function resolvePathIdentity(options: PathEnvironment = {}): ResolvedPath
     pathOverrides[key] = resolve(value);
   }
   const paths = { ...derived, ...pathOverrides };
-  // Under test, Agent Comms' own configuration and state are never taken from the account's real home: a test pins
-  // them, or gives a temporary home (`homeForDiscovery`); nor its secrets and data when nothing is pinned at all. The
+  // Under test, Agent Comms' own configuration and state are never derived from the account's real home: a test pins
+  // them (a variable or an override), or gives a temporary home (`homeForDiscovery`); nor its secrets and data when
+  // its configuration is not pinned either. A folder a variable names is the test's own word, wherever it is. The
   // downloads folder is only a default for saving, and is not checked here.
-  const root = resolve(home);
-  const configPinned = explicitConfigDir || pathOverrides.configDir !== undefined;
-  for (const key of ['configDir', 'stateDir', 'secretsDir', 'dataDir'] as const) {
-    if (configPinned && (key === 'secretsDir' || key === 'dataDir')) continue;
-    const dir = paths[key];
-    if (dir === derived[key] && (dir === root || dir.startsWith(`${root}${sep}`)))
-      homeForDiscovery(home, "Agent Comms' own folders", env);
-  }
+  // The environment's config folder is what state and secrets hang off (`localRoot`), whatever an override pins.
+  const envConfigFromHome = !explicitConfigDir && !env.XDG_CONFIG_HOME && !(platform === 'win32' && env.APPDATA);
+  const configFromHome = envConfigFromHome && !pathOverrides.configDir;
+  const localFromHome = platform === 'win32' && !explicitConfigDir ? !env.LOCALAPPDATA : envConfigFromHome;
+  const fromHome: Readonly<Record<'configDir' | 'stateDir' | 'secretsDir' | 'dataDir', boolean>> = {
+    configDir: configFromHome,
+    stateDir: !env.AGENT_COMMS_STATE_DIR && !pathOverrides.stateDir && localFromHome,
+    secretsDir: configFromHome && !pathOverrides.secretsDir && localFromHome,
+    dataDir:
+      configFromHome &&
+      !env.AGENT_COMMS_DATA_DIR &&
+      !pathOverrides.dataDir &&
+      (platform === 'win32' ? !env.LOCALAPPDATA : !env.XDG_DATA_HOME),
+  };
+  if (Object.values(fromHome).some(Boolean)) homeForDiscovery(home, "Agent Comms' own folders", env);
   return {
     paths,
     pathOverrides: Object.freeze(pathOverrides),
@@ -190,6 +198,7 @@ export const NO_REAL_HOME_VARIABLE: string = 'AGENTCOMMS_TEST_NO_REAL_HOME';
 
 /** Where each refused attempt is counted, so the preload fails a test process that caught the error and went on. */
 const REAL_HOME_ATTEMPTS = Symbol.for('agentcomms.test.real-home-attempts.v1');
+const REAL_HOME_STACKS = Symbol.for('agentcomms.test.real-home-stacks.v1');
 
 /**
  * `home`, about to have user state looked for under it: the claude-stream relay's token, the apps' MCP configs, a
@@ -211,9 +220,13 @@ export function homeForDiscovery(home: string, what: string, env: NodeJS.Process
   const store = globalThis as unknown as Record<symbol, string[] | undefined>;
   store[REAL_HOME_ATTEMPTS] ??= [];
   store[REAL_HOME_ATTEMPTS].push(what);
-  throw new Error(
+  const error = new Error(
     `under test, ${what} would have been looked for in the account's real home folder: give the test a temporary home`,
   );
+  // Where, for the preload to print at exit when a test caught the error and went on.
+  store[REAL_HOME_STACKS] ??= [];
+  store[REAL_HOME_STACKS].push(error.stack ?? what);
+  throw error;
 }
 
 /**

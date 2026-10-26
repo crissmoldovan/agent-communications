@@ -163,6 +163,8 @@ function guardRealHome() {
     process.stderr.write(
       `real-home guard: this process looked for ${[...new Set(attempts)].join('; ')} in the account's real home folder; give the test a temporary home\n`,
     );
+    const [first] = globalThis[Symbol.for('agentcomms.test.real-home-stacks.v1')] ?? [];
+    if (typeof first === 'string') process.stderr.write(`real-home guard: the first was\n${first}\n`);
     process.exitCode = 1;
   });
 }

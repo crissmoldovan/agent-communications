@@ -97,3 +97,20 @@ test('REAL-HOME: a process that catches the refusal and goes on still fails, at 
     /real-home guard: this process looked for a swallowed test folder in the account's real home/u,
   );
 });
+
+test('REAL-HOME: a folder a variable or an override names is the test’s word; one derived from the real home is not', () => {
+  // A folder a variable names, even inside the account's home (a repository's scratch folder, say), is pinned.
+  const inside = join(REAL, 'example-scratch', 'config');
+  assert.doesNotThrow(() =>
+    resolvePaths({
+      env: { AGENT_COMMS_CONFIG_DIR: inside, AGENT_COMMS_STATE_DIR: join(inside, 'state') },
+    }),
+  );
+  // The event service's own core pins its state and config by override: nothing else is checked then.
+  assert.doesNotThrow(() =>
+    resolvePaths({ env: {}, pathOverrides: { stateDir: join(inside, 'state'), configDir: inside } }),
+  );
+  // The config folder alone, by override, still leaves state to the environment's home.
+  assert.throws(() => resolvePaths({ env: {}, pathOverrides: { configDir: inside } }), refused(/own folders/u));
+  assert.deepEqual(taken(), ["Agent Comms' own folders"]);
+});

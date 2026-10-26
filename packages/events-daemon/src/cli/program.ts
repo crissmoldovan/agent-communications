@@ -846,9 +846,10 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         : readsOutput(env, streams)
     )
       return PERSON_SETUP_ORIGINS.terminal;
-    // The config folder this run is for: a test build speaks only for a marked test profile's.
-    const configDir = program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir })))();
+    // The config folder this run is for, found only when the app's origin is checked: a test build speaks only for a
+    // marked test profile's.
+    const configDir = () => program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
+    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir: configDir() })))();
     if (origin.ok)
       return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
     if (origin.reason === 'unattested-platform') {
