@@ -30,7 +30,8 @@ impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
     /// `mcpInstall` of the same app and the same servers in the same order, `updateApproved` the `update` the app
     /// prepared (0.34.0), and `eventsRuleApprove` the rule activation `eventsRuleEnable` came back with, for the same
-    /// digest (0.33.0). None for every other call.
+    /// digest (0.33.0); and a label change with `appApproval` the same change without it (0.34.0, `label`). None for
+    /// every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -48,7 +49,8 @@ impl Call {
             // A rule's activation the app prepared with `eventsRuleEnable`, for this very digest (0.33.0): what
             // `Prepared::record` keeps for it is the approval that may answer it.
             Call::EventsRuleApprove { approval_id, .. } => Some((approval_id, self.clone())),
-            _ => None,
+            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
+            _ => self.answers_label_approval(),
         }
     }
 }

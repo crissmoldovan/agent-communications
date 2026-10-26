@@ -70,6 +70,16 @@ Inside the event service's MCP server both refuse, so no agent reads the log thr
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
 cannot run, the approval says why and still asks for its challenge.
 
+In the desktop app, **Events → Service → Switch on…** does the first two lines of step 3 for you: it runs `enable-all`, shows you
+the approval's preview — the rules collection starts for — and, when you press Approve, approves exactly that approval
+with `agent-events collection approve <approval-id> --digest <digest>`, the digest its preview showed. That command is
+the app's own: it refuses an agent's shell and the event service's MCP server, and on macOS it first checks that the app
+started it (core's `desktopAppOrigin`), a speed bump against agents, not a boundary against code running as you. On
+Windows and Linux nothing attests the app, so it is refused with `APPROVAL_REQUIRED` (exit 10, reason
+`ORIGIN_UNATTESTED`), naming `approve <approval-id>`, and the app offers Do it in Terminal, where you type the challenge
+as above. **Switch off** is `disable-all`: it takes away, so it applies at once, from anywhere, and its result's `said` tells you
+in plain words what it did.
+
 An approval that `rule enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
 approve it, nothing is turned on. On its next tick, or when it next starts, the service cancels the activation that
 was waiting for it, and `status` stops counting it as pending. Run `rule enable` again for a new approval. An update
@@ -357,7 +367,9 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
     Earlier tries are counted, not kept one by one.
 - **Control:**
   - `pause` / `resume`;
-  - `disable-all`, which stops collection and purges pending work at once;
+  - `disable-all`, which stops collection and purges pending work at once, and says so in its result's `said`: your
+    rules are kept; deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are cleared;
+    each lane's window is unbound; and switching on again needs your approval;
   - `doctor`, a content-free health report.
   
   Every command takes `--json`. The [CLI reference](../../docs/reference/events-daemon-cli.md) lists them all.
@@ -380,7 +392,11 @@ channel servers applies, and the result tells you to restart the client. The
   against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's enablement,
   and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and unbind it.
 - **An agent can never:**
-  - approve anything;
+  - approve anything. `events_approval_view`, and `approval view` run in a shell that carries an agent's marker or
+    inside the event service's MCP server, give an approval's preview without a challenge and issue none (0.34.0), so
+    nothing an agent reads there answers an approval or replaces the challenge you are typing at your terminal. A shell
+    that drops the marker runs as you and still gets your view, challenge included: the marker is a speed bump, not a
+    boundary;
   - bind a lane, or read a lane another window is bound to;
   - read what the dry-run log kept, one delivery's details, or what a queue item says outside its own lane;
   - see, set or rotate a webhook secret or stream token;
@@ -468,12 +484,18 @@ model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
 refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
 where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
-key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its pid; the local test
-build counts only for its own marked test profile). Windows and Linux check nothing, so there these changes go
-through a terminal: a command that is neither at an interactive terminal nor attested as the app's is refused with
+key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a
+boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its
+pid). The local test build counts only for its own marked test profile: the command's state folder must be in that
+profile with its config folder (`outside-test-profile` otherwise, naming the folder), and the event service takes it
+only when its own state folder holds the profile's mark and is not your real, default one (`NOT_A_TEST_PROFILE`
+otherwise; from 0.34.0, `scripts/local-test-release.sh` marks both folders). Windows and Linux check nothing, so there
+these changes go through a terminal: a command that is neither at an interactive terminal nor attested as the app's is
+refused with
 `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
 says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
-`integration set agent-sessions` and `rule approve`. `rule analyse` changes nothing and still runs from the app there.
+`integration set agent-sessions`, `rule approve` and `collection approve`. `rule analyse` changes nothing and still
+runs from the app there.
 The result and the audit line say where you were — `desktop-app`, `desktop-app (test build)` or `terminal` — as the
 CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
 refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`

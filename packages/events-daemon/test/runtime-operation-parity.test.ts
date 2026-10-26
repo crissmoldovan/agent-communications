@@ -50,6 +50,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'provider',
     'integration',
     'session-queue',
+    'collection',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }

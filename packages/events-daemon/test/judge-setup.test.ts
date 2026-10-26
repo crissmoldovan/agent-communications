@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile, rm } from 'node:fs/promises';
+import { readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
+import { CommsError, type DesktopOrigin, openCore, TEST_PROFILE_MARKER } from '@agentcomms/core';
 import { type EventsCliStreams, run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { localSetupEndpoint } from '../src/domain/judge-setup.ts';
@@ -177,14 +177,16 @@ test('judge setup carries where the person was: a terminal approves its enableme
     assert.equal(unattested.code, APPROVAL_EXIT, unattested.stderr);
     assert.match(unattested.stderr, /at your terminal, with the event service's judge setup local-endpoint/u);
     // From the attested app: the result says which — the test build or the release — and its enablements are the app's.
+    // The test build speaks for its own test profile only: its folders together, its event service's state folder marked.
+    await writeFile(join(stateDir, TEST_PROFILE_MARKER), '');
     for (const [origin, approvedBy, port] of [
       [{ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }, 'desktop-app (test build)', 8080],
       [{ ok: true, build: 'release', identifier: 'com.cueplusplus.agentcomms' }, 'desktop-app', 8082],
     ] as const) {
-      const ran = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', `http://[::1]:${port}`], {
-        stateDir,
-        desktopOrigin: async () => origin as DesktopOrigin,
-      });
+      const ran = await cli(
+        ['--config-dir', configDir, '--json', 'judge', 'setup', 'local-endpoint', '--url', `http://[::1]:${port}`],
+        { stateDir, desktopOrigin: async () => origin as DesktopOrigin },
+      );
       assert.equal(ran.code, 0, ran.stderr);
       assert.equal((JSON.parse(ran.stdout) as { approvedBy: string }).approvedBy, approvedBy);
     }
@@ -484,7 +486,8 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       readSecret: async () => TYPESAFE_KEY,
     });
     assert.equal(typedAgain.code, 0, typedAgain.stderr);
-    const fromTestBuild = await cli(['--json', 'provider', 'key', 'remove', 'typesafe'], {
+    await writeFile(join(stateDir, TEST_PROFILE_MARKER), '');
+    const fromTestBuild = await cli(['--config-dir', configDir, '--json', 'provider', 'key', 'remove', 'typesafe'], {
       stateDir,
       desktopOrigin: async () => ({ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }),
     });

@@ -47,7 +47,11 @@ export function ChangePreview({
         failed: (message: string) => string;
         /** Applied: core's answer. */
         onApproved: (result: Extract<CliResult, { status: 'ok' }>) => void;
-        /** The approval is void (`APPROVAL_VOID`): the screen prepares the change again (0.34.0). */
+        /**
+         * Core voided the approval (`APPROVAL_VOID`, 0.34.0): it was handed one prepared for another change. Nothing was
+         * applied and the approval is spent, so the screen prepares the change again and shows its new preview. Without
+         * it, the refusal is said here.
+         */
         onVoid?: () => void;
         /** Refused for any other reason, once that is said: the screen reads again what it shows (0.34.0). */
         onRefused?: () => void;
@@ -114,7 +118,7 @@ export function ChangePreview({
         here.onApproved(result);
         return;
       }
-      // Void: core will take nothing for it again, and there is nothing to revoke. The screen prepares it afresh.
+      // Voided by core: spent, with nothing to revoke; the screen prepares the change again.
       if (result.status === 'failed' && result.code === 'APPROVAL_VOID' && here.onVoid !== undefined) {
         here.onVoid();
         return;

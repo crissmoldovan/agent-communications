@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
+import { CommsError, type DesktopOrigin, openCore, TEST_PROFILE_MARKER } from '@agentcomms/core';
 import { run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { dryRun, RULE, rule, withLaneOwner } from './support/lane-harness.ts';
@@ -99,15 +100,26 @@ test('SEC-3: on Windows and Linux an agent-prepared rule activation is never app
       'the owner audits the refusal with the real origin',
     );
 
-    // The attested test build, for its own profile, approves — recorded via the app, audited as the test build.
+    // The attested test build, for its own profile — its config and state folders together, its event service's state
+    // folder marked as the test profile's — approves: recorded via the app, audited as the test build.
     const testBuild = async (): Promise<DesktopOrigin> => ({
       ok: true,
       build: 'test',
       identifier: 'com.cueplusplus.agentcomms.test',
     });
+    await writeFile(join(stateDir, TEST_PROFILE_MARKER), '');
     const approved = await cliAs(
       stateDir,
-      ['--json', 'rule', 'approve', planned.approvalId, '--digest', planned.binding.digest],
+      [
+        '--config-dir',
+        join(stateDir, '..', 'config'),
+        '--json',
+        'rule',
+        'approve',
+        planned.approvalId,
+        '--digest',
+        planned.binding.digest,
+      ],
       testBuild,
     );
     assert.equal(approved.code, 0, approved.err);

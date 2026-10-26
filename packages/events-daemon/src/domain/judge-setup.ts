@@ -67,6 +67,27 @@ export function personSetupApprover(origin: string | undefined): PersonSetupAppr
   }
 }
 
+/**
+ * The surface a person-only change's audit line names (security review of 0.34.0, finding 2): `app` only for an attested
+ * app — the release, or the test build in its own test profile — and `cli` for a terminal. Any other caller (a control
+ * client of no known origin, the app unattested, a test build elsewhere) names none, and the line's reason says why.
+ */
+export function personSetupSurface(
+  approver: PersonSetupApprover | null,
+  testProfile: () => boolean,
+): 'app' | 'cli' | undefined {
+  switch (approver) {
+    case 'terminal':
+      return 'cli';
+    case 'desktop-app':
+      return 'app';
+    case 'desktop-app (test build)':
+      return testProfile() ? 'app' : undefined;
+    default:
+      return undefined;
+  }
+}
+
 const APPROVAL_ID_WORD = /^ap_[0-9A-HJKMNP-TV-Z]{26}$/u;
 
 /**
@@ -92,7 +113,9 @@ export function changeAtTerminal(
   );
 }
 
-/** The words `rule approve` sends the person to type: the approval's own `approve <approval-id>`. */
+/**
+ * The words `rule approve` and `collection approve` send the person to type: the approval's own `approve <approval-id>`.
+ */
 export function ruleApprovalWords(approvalId: unknown): string {
   const id = typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>';
   return `approve ${id}, which shows its preview and asks for its challenge`;
@@ -103,6 +126,38 @@ export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
   return changeAtTerminal('approve a rule', ruleApprovalWords(approvalId), {
     approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
   });
+}
+
+/**
+ * `collection approve`'s refusal of an unattested origin (0.34.0 design B4), as the CLI and the owner give it: switching
+ * the event service on is approved at the terminal there, with the approval's own `approve <approval-id>`.
+ */
+export function enableAllApprovalAtTerminal(approvalId: unknown): CommsError {
+  return changeAtTerminal('switch the event service on', ruleApprovalWords(approvalId), {
+    approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
+  });
+}
+
+/** The test build's request to an event service whose state folder is not a test profile's (0.34.0 review, finding 1). */
+export function testBuildElsewhere(): CommsError {
+  return new CommsError(
+    'APPROVAL_REQUIRED',
+    'the Agent Comms test build changes only its own test profile, and this event service is not one: use Agent Comms itself, or your terminal',
+    { details: { reason: 'NOT_A_TEST_PROFILE' } },
+  );
+}
+
+/**
+ * The CLI's refusal of a test build's command that touches a folder outside its test profile (security review of 0.34.0,
+ * finding 1) — here the state folder, whose event service the act would reach — with core's reason for it,
+ * `outside-test-profile`, and which folder in `details.outside`.
+ */
+export function testBuildOutsideProfile(outside: string): CommsError {
+  return new CommsError(
+    'APPROVAL_REQUIRED',
+    `the Agent Comms test build changes only its own test profile, and this command's ${outside} is not in it: run it with the test profile's folders, or use Agent Comms itself`,
+    { details: { reason: 'outside-test-profile', outside } },
+  );
 }
 
 /** The two kinds `judge setup` sets up. Laya is not one: no release offers it yet. */

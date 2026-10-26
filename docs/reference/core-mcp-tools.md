@@ -278,13 +278,14 @@ Forget an organisation profile, and delete the OAuth clients it made here with t
 
 ### `comms_server_install`
 
-Register a channel’s MCP server — `gmail`, `resend`, `slack`, `whatsapp`, or `core` (this one) — with an MCP client, and prove it starts. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. `print` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its `details`. The new server appears after the client is restarted — tell the person.
+Register a channel’s MCP server — `gmail`, `resend`, `slack`, `whatsapp`, or `core` (this one) — with an MCP client, and prove it starts. Several at once: `servers` in place of `channel`, one preview naming each, one approval, each registered in that order, and the first that fails stops the rest — the error says which were registered and which were not. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. `print` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its `details`. The new server appears after the client is restarted — tell the person.
 
 *writes*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
-| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` \\| `events` | **yes** | which server |
+| `channel` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` \\| `events` | no | which server; or give several as `servers` |
+| `servers` | `core` \\| `gmail` \\| `resend` \\| `slack` \\| `whatsapp` \\| `events`[] | no | several servers for one client, in the order to register them, each once: in place of `channel`, and with no `name`, `account`, `inbox`, `workspace` or `readOnly`, which are for one server |
 | `client` | `claude-code` \\| `claude-desktop` \\| `codex` \\| `cursor` \\| `gemini` \\| `vscode` \\| `json` | **yes** | which MCP client to register it with |
 | `name` | string | no | the name the client shows; the channel’s own when left out. 1–64 of A–Z a–z 0–9 . _ - |
 | `account` | string | no | a channel server that declares accounts: serve this one, named `organisation/<channel>` — the same as `inbox` for Gmail and `workspace` for Slack |

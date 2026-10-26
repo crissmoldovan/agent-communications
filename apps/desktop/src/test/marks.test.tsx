@@ -23,9 +23,8 @@ import { renderApp } from './render.tsx';
 const queueBridge = (): FakeBridge =>
   createFakeBridge({ installation: async () => QUEUE_INSTALLATION }, { ...fakeQueue(), version: () => '0.30.0' });
 
-/** The five screens whose tab strips are the page's own, each with its strip's name and a bridge that shows it. */
+/** The four screens whose tab strips are the page's own, each with its strip's name and a bridge that shows it. */
 const STRIPS = [
-  ['agent', 'Agent', createFakeBridge],
   ['approvals', 'Approvals', createFakeBridge],
   ['queue', 'Queue', queueBridge],
   ['events', 'Events', createFakeBridge],
