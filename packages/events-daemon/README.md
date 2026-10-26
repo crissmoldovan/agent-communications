@@ -218,8 +218,11 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   code (`LINEAR_INVALID_INPUT`, `LINEAR_AUTHENTICATION_ERROR`, …). The issue's id is chosen from the delivery's, and each
   try first looks for it, so a retry after a lost answer never adds a second issue. With no key, a delivery waits
   (`LINEAR_KEY_MISSING`) and sends nothing.
-- **What is kept.** `deliveries list` and `delivery show` give a Linear delivery's issue as `linear: { identifier,
-  url }`, its address without the title's words. Nothing the issue says is kept.
+- **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
+  added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
+  is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the
+  rule's delivery retention: `deliveries list` and `delivery show` give them as `linear: { identifier, url }`, the
+  address without the title's words. Nothing the issue says is kept.
 
 ## What happened to a message
 
