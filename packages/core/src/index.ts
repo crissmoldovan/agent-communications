@@ -250,6 +250,8 @@ export {
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';
+// The take steps, the gate every act that answers a message passes, and a read's `taken`: one way for every channel.
+export * from './take-flow.ts';
 /*
  * Taking messages (design 2026-10-26-taking-messages): the take store — one record per message, the first take winning
  * under its lock — who a caller is (`takerIdentity`, never an argument), the gate every act that answers a message
