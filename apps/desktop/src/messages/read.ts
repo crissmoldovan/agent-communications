@@ -107,10 +107,13 @@ export interface MessageEvent {
   kept: SenderView | null;
 }
 
+/** Where a page ended, as `--before` takes it: the event service's cursor (`<observedAt ms>:<eventId>`), or a time. */
+export type PageCursor = Millis | string;
+
 export interface MessagesPage {
   messages: MessageEvent[];
   /** The `--before` that reads the next, older page; null when there is none the app can ask for. */
-  before: Millis | null;
+  before: PageCursor | null;
   /** More events are older than this page, whether or not the app can page to them. */
   more: boolean;
 }
@@ -138,7 +141,10 @@ export interface ItemLine {
   subject: string | null;
   from: { name: string | null; address: string | null } | null;
   replyTo: { messageId: string; threadId: string | null } | null;
-  /** A Slack post's parent ts: null for a new message, or when the line does not say. */
+  /**
+   * The thread a Slack post went into: as `activity items` names it, the parent message, `<channelId>/<ts>` — or its
+   * ts alone, as a line itself keeps it. Null for a new message, or when the line does not say.
+   */
   thread: string | null;
   draftId: string | null;
   threadId: string | null;
@@ -203,7 +209,8 @@ function judgeOf(value: unknown): JudgeAnswer | null {
     answer,
     confidence: finite(value.confidence),
     question: word(value.question),
-    uncalibrated: value.uncalibrated === true,
+    // The event service says whether the number is a probability (`calibrated`); a local endpoint's score is not.
+    uncalibrated: value.uncalibrated === true || value.calibrated === false,
   };
 }
 
@@ -322,16 +329,30 @@ function messageOf(value: unknown): MessageEvent | null {
   };
 }
 
+/** The event service's cursor: the 13 digits of a time in milliseconds, `:`, and an event id. */
+const CURSOR = /^([1-9][0-9]{12}):[0-9a-f]{32}$/;
+
+/** A page's `next`, as `--before` takes it again: the cursor as it came, or a time; null for anything else. */
+function cursorOf(value: unknown): PageCursor | null {
+  if (typeof value === 'string' && CURSOR.test(value)) return value;
+  return millisOf(value);
+}
+
+/** The time a page ended at, by its cursor. */
+export function cursorMillis(cursor: PageCursor): Millis {
+  return typeof cursor === 'number' ? cursor : Number(CURSOR.exec(cursor)?.[1] ?? 0);
+}
+
 /**
  * `messages list --json`, read: `{ messages: [...], next }`, or null when it is not that answer at all. `next` is the
- * cursor to the next page: a time in milliseconds, which the next read passes as `--before`.
+ * cursor to the next page, `<observedAt ms>:<eventId>` (or a time), which the next read passes as `--before`.
  */
 export function readMessagesPage(value: unknown): MessagesPage | null {
   if (!isRecord(value) || !Array.isArray(value.messages)) return null;
   const more = value.next !== null && value.next !== undefined && value.next !== false;
   return {
     messages: value.messages.flatMap((each) => messageOf(each) ?? []),
-    before: more ? millisOf(value.next) : null,
+    before: more ? cursorOf(value.next) : null,
     more,
   };
 }

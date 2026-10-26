@@ -160,9 +160,9 @@ export type Call =
   | { kind: 'laneList' }
   | { kind: 'laneUnbind'; lane: string }
   // The Messages screen (0.32.0, spec §3.6): the event service's messages and one message, and core's activity by
-  // message, each the person's read. Times are whole milliseconds, the event 32 hex digits, each id a Gmail message's
-  // or a Slack `<channel>/<ts>`, all checked in Rust.
-  | { kind: 'eventsMessagesList'; since: number; before?: number; limit?: number }
+  // message, each the person's read. Times are whole milliseconds, a page's `before` a time or the cursor the last page
+  // gave, the event 32 hex digits, each id a Gmail message's or a Slack `<channel>/<ts>`, all checked in Rust.
+  | { kind: 'eventsMessagesList'; since: number; before?: number | string; limit?: number }
   | { kind: 'eventsMessageShow'; eventId: string }
   | { kind: 'activityItems'; since: number; ids?: string[] }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.

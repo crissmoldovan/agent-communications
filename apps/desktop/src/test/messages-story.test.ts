@@ -173,10 +173,26 @@ describe('a story', () => {
     ]);
     // Each says where: the event service, the judge's question as the rule's author wrote it, and the window.
     expect(said(entries[0]?.sub ?? [])).toBe('Seen by the event service');
-    expect(said(entries[2]?.sub ?? [])).toBe('“⟨Is this asking me to pay or send something?⟩”');
+    // The event service gives no judge's question: none is shown (one that comes is the rule author's; below).
+    expect(entries[2]?.sub).toBeNull();
     expect(said(entries[3]?.sub ?? [])).toBe('For the agent bound to billing');
     expect(said(entries[4]?.sub ?? [])).toBe('~/work/acme · claude-code 2.1.0');
     expect(said(entries[6]?.sub ?? [])).toBe('~/work/acme · claude-code 2.1.0 · through Agent Comms Gmail');
+  });
+
+  it('a judge’s question, when the answer carries one, is the rule author’s words, in quotes', () => {
+    const event = invoice.event;
+    if (event === null) throw new Error('the invoice has its event');
+    const decision = event.decisions[0];
+    if (decision === undefined || decision.judge === null) throw new Error('the invoice was judged');
+    const asked = {
+      ...invoice,
+      event: {
+        ...event,
+        decisions: [{ ...decision, judge: { ...decision.judge, question: 'Is this <b>urgent</b>?' } }],
+      },
+    };
+    expect(said(timeline(asked, CONTEXT)[2]?.sub ?? [])).toBe('“⟨Is this <b>urgent</b>?⟩”');
   });
 
   it('without the approval’s time, the send says it came after your approval', () => {

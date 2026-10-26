@@ -211,7 +211,8 @@ describe('Messages', () => {
 
   it('older events page by the cursor, and a message only an agent read waits for its page', SLOW, async () => {
     const [first, ...rest] = messagesList.messages;
-    const cursor = 1792926000000;
+    // The event service's cursor: where the page ended, `<observedAt ms>:<eventId>`.
+    const cursor = '1792928402000:e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
     const bridge = bridgeAt('0.32.0', {
       eventsMessagesList: (call: Call) =>
         (call as Extract<Call, { kind: 'eventsMessagesList' }>).before === undefined

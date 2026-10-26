@@ -8,6 +8,7 @@
       "occurredAt": 1792928400000,
       "observedAt": 1792928402000,
       "source": {
+        "channel": "gmail",
         "messageId": "18c2f0a1b2c3d4e5"
       },
       "decisions": [
@@ -16,11 +17,10 @@
           "ruleVersion": 1,
           "outcome": "matched",
           "judge": {
-            "id": "jev-invoices",
             "kind": "typesafe",
             "answer": "yes",
             "confidence": 0.86,
-            "question": "Is this asking me to pay or send something?"
+            "calibrated": true
           }
         }
       ],
@@ -75,6 +75,7 @@
       "occurredAt": 1792927860000,
       "observedAt": 1792927862000,
       "source": {
+        "channel": "slack",
         "channelId": "D0EXAMPLE1",
         "ts": "1792927860.000100"
       },
@@ -131,6 +132,7 @@
       "occurredAt": 1792864800000,
       "observedAt": 1792864804000,
       "source": {
+        "channel": "whatsapp",
         "chatId": "447700900123@s.whatsapp.net",
         "messageId": "3EB0EXAMPLE0001"
       },
@@ -174,6 +176,7 @@
       "occurredAt": 1792921200000,
       "observedAt": 1792921203000,
       "source": {
+        "channel": "gmail",
         "messageId": "18c2f0a1b2c3d400"
       },
       "decisions": [
@@ -196,6 +199,7 @@
       "occurredAt": 1792915200000,
       "observedAt": 1792915201000,
       "source": {
+        "channel": "slack",
         "channelId": "C0EXAMPLE2",
         "ts": "1792915200.000200"
       },
@@ -205,12 +209,10 @@
           "ruleVersion": 3,
           "outcome": "matched",
           "judge": {
-            "id": "local-deploys",
             "kind": "local-endpoint",
             "answer": "yes",
             "confidence": 0.71,
-            "uncalibrated": true,
-            "question": "Does this ask about a deploy?"
+            "calibrated": false
           }
         }
       ],
@@ -253,6 +255,7 @@
       "occurredAt": 1792912800000,
       "observedAt": 1792912802000,
       "source": {
+        "channel": "gmail",
         "messageId": "18c2f0a1b2c3d300"
       },
       "decisions": [

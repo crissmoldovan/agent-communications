@@ -29,6 +29,7 @@ import {
 } from '../messages/join.ts';
 import {
   type ActivityItems,
+  cursorMillis,
   type MessageEvent,
   type MessagesPage,
   type Millis,
@@ -352,8 +353,9 @@ function MessagesView({
     if (events !== 'off' && events.state !== 'ready') return null;
     const loaded: readonly MessageEvent[] = events === 'off' ? [] : events.value.messages;
     const more = events !== 'off' && events.value.more;
+    // The event service pages by when it observed each event: the oldest observed so far is where this page ends.
     const oldest = loaded.reduce<Millis | null>((least, each) => {
-      const at = each.occurredAt ?? each.observedAt;
+      const at = each.observedAt ?? each.occurredAt;
       return at === null ? least : least === null ? at : Math.min(least, at);
     }, null);
     return join(loaded, activity.value, { aliases: accounts.aliases, cutoff: more ? oldest : null });
@@ -371,7 +373,7 @@ function MessagesView({
   const counts = joined === null ? null : showCounts(joined, account);
   const shown = joined === null ? [] : filterMessages(joined, { show, account });
   const page = events !== 'off' && events.state === 'ready' ? events.value : null;
-  const pageable = page?.more === true && page.before !== null && page.before > reads.since;
+  const pageable = page?.more === true && page.before !== null && cursorMillis(page.before) > reads.since;
   const opened = open === null ? undefined : joined?.find((message) => message.key === open);
 
   if (opened !== undefined) {

@@ -6,7 +6,11 @@
  * What links a reply to what it answers:
  * - **Gmail:** a reply draft's line (`gmail.draft.reply`, or a send prepared as a reply) names the message in
  *   `replyTo`, and its draft by `draftId` (or as its item); the send's line (`gmail.send.execute`) names the same draft.
- * - **Slack:** a post's line names its parent's ts in `thread`, and its conversation by `channelId` (or its item's).
+ * - **Slack:** a post's line names the message it went under in `thread`: `<channelId>/<ts>`, as `activity items`
+ *   normalises it, or the parent's ts alone, in the conversation of `channelId` or of its item.
+ *
+ * `activity items` lists a line under every item it names — the reply draft under the message it answers too, a send
+ * under its draft, a post under its thread — so each line counts once, however many items it is listed under.
  * - **A Slack acknowledgement** is listed under the message it acknowledged, and — when it replied — under the reply
  *   too, a later ts in the same conversation; a line that says what it did (`act`) is taken at its word.
  *
@@ -125,6 +129,24 @@ const SLACK_POSTS: ReadonlySet<string> = new Set(['slack.post', 'slack.post.send
 
 const ok = (line: ItemLine) => line.outcome === 'ok';
 
+/** One line, however many items it is listed under: its window, its time, what it did and what it links. */
+function identity(line: ItemLine): string {
+  return [line.session.key, line.at, line.operation, line.draftId, line.replyTo?.messageId, line.thread].join('|');
+}
+
+/** The message a Slack post went under, as `<channelId>/<ts>`; null for a new message or one it cannot name. */
+function threadOf(line: ItemLine): string | null {
+  if (line.thread === null) return null;
+  if (line.thread.includes('/')) return line.thread;
+  const channelId = line.channelId ?? slackParts(line.itemId)?.channelId ?? null;
+  return channelId === null ? null : `${channelId}/${line.thread}`;
+}
+
+/** Whether the line is listed under `itemId` because it links to it — the message a reply answers, a post's thread. */
+function linksTo(line: ItemLine, itemId: string): boolean {
+  return line.replyTo?.messageId === itemId || threadOf(line) === itemId;
+}
+
 function isRead(line: ItemLine): boolean {
   if (!ok(line)) return false;
   return line.kind === null ? READS.has(line.operation) : line.kind === 'read';
@@ -165,6 +187,12 @@ function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
   else list.push(value);
 }
 
+/** Adds a line under `key` once: a line listed under two items is still one line. */
+function pushOnce(map: Map<string, ItemLine[]>, key: string, line: ItemLine): void {
+  const list = map.get(key) ?? [];
+  if (!list.some((each) => identity(each) === identity(line))) map.set(key, [...list, line]);
+}
+
 function indexActivity(byItem: ActivityItems): ActivityIndex {
   const windows = new Map<string, WindowRef>();
   const replyLines = new Map<string, ItemLine[]>();
@@ -182,13 +210,12 @@ function indexActivity(byItem: ActivityItems): ActivityIndex {
       ) {
         windows.set(line.session.key, line.session);
       }
-      if (OWN.test(line.operation) && line.operation !== 'slack.ack') own.add(itemId);
-      if (line.replyTo !== null && line.channel === 'gmail') push(replyLines, line.replyTo.messageId, line);
-      if (line.operation === 'gmail.send.execute' && ok(line)) push(sendsByDraft, draftOf(line), line);
-      if (SLACK_POSTS.has(line.operation) && ok(line) && line.thread !== null) {
-        const channelId = line.channelId ?? slackParts(itemId)?.channelId ?? null;
-        if (channelId !== null) push(threadPosts, `${channelId}/${line.thread}`, line);
-      }
+      // An agent's own message, draft or send — not one it is listed under because it links to it.
+      if (OWN.test(line.operation) && line.operation !== 'slack.ack' && !linksTo(line, itemId)) own.add(itemId);
+      if (line.replyTo !== null && line.channel === 'gmail') pushOnce(replyLines, line.replyTo.messageId, line);
+      if (line.operation === 'gmail.send.execute' && ok(line)) pushOnce(sendsByDraft, draftOf(line), line);
+      const thread = SLACK_POSTS.has(line.operation) && ok(line) ? threadOf(line) : null;
+      if (thread !== null) pushOnce(threadPosts, thread, line);
       if (line.operation === 'slack.ack') {
         push(acks, `${line.session.key}|${line.at}|${line.operation}`, line);
         if (line.act === 'reply') ackReplied.add(itemId);

@@ -11,6 +11,7 @@ import {
 } from '../messages/join.ts';
 import {
   type ActivityItems,
+  cursorMillis,
   type HistoryLine,
   type ItemLine,
   type MessageEvent,
@@ -133,16 +134,18 @@ describe('reading the three answers', () => {
         ruleVersion: 1,
         outcome: 'matched',
         judge: {
-          id: 'jev-invoices',
+          id: null,
           kind: 'typesafe',
           answer: 'yes',
           confidence: 0.86,
-          question: 'Is this asking me to pay or send something?',
+          question: null,
           uncalibrated: false,
         },
         at: null,
       },
     ]);
+    // A judge's number that is no probability says so: `calibrated: false`.
+    expect(page.messages[4]?.decisions[0]?.judge).toMatchObject({ kind: 'local-endpoint', uncalibrated: true });
     expect(gmail?.deliveries[0]).toMatchObject({ targetKind: 'queue', lane: 'billing', state: 'delivered' });
     expect(gmail?.queueItem?.history.map((each) => each.kind)).toEqual(['woken', 'read', 'done']);
     expect(gmail?.queueItem?.history[0]?.windowKey).toBe('3f9a1c2e7b4d5a60');
@@ -153,8 +156,13 @@ describe('reading the three answers', () => {
     expect(page.more).toBe(false);
   });
 
-  it('messages list: the cursor is a time for --before; one the app cannot page by still says there are more', () => {
+  it('messages list: the cursor is passed on as it came, or a time; one the app cannot page by still says there are more', () => {
     const base = { messages: [] };
+    // The event service's own: `<observedAt ms>:<eventId>`.
+    const cursor = '1792900000000:e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+    expect(readMessagesPage({ ...base, next: cursor })).toEqual({ messages: [], before: cursor, more: true });
+    expect(cursorMillis(cursor)).toBe(1792900000000);
+    expect(cursorMillis(1792900000000)).toBe(1792900000000);
     expect(readMessagesPage({ ...base, next: 1792900000000 })).toEqual({
       messages: [],
       before: 1792900000000,
@@ -179,9 +187,9 @@ describe('reading the three answers', () => {
     expect(page?.messages.map((each) => [each.eventId, each.openable])).toEqual([['not-hex', false]]);
   });
 
-  it('message show: the entry itself, or under `message`', () => {
+  it('message show: `{ message }`, as the event service answers, or the entry itself', () => {
     expect(readMessageShow(messageShow)?.queueItem?.history).toHaveLength(4);
-    expect(readMessageShow({ message: messageShow })?.eventId).toBe('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1');
+    expect(readMessageShow(messageShow.message)?.eventId).toBe('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1');
     expect(readMessageShow({ messages: [] })).toBeNull();
   });
 
@@ -207,10 +215,15 @@ describe('reading the three answers', () => {
       draftId: 'r-2000000000000000001',
       session: { key: '3f9a1c2e7b4d5a60', folder: '/example/home/work/acme' },
     });
-    expect(read.get('C0EXAMPLE2/1792915500.000300')?.[0]).toMatchObject({
-      thread: '1792915200.000200',
-      channelId: 'C0EXAMPLE2',
-    });
+    // A post names the thread it went into as the message it is: `<channelId>/<ts>`.
+    expect(read.get('C0EXAMPLE2/1792915500.000300')?.[0]).toMatchObject({ thread: 'C0EXAMPLE2/1792915200.000200' });
+    // A line is listed under every item it names: the reply draft under the message it answers, too.
+    expect(read.get('18c2f0a1b2c3d4e5')?.map((line) => line.operation)).toEqual([
+      'gmail.message.read',
+      'gmail.draft.reply',
+      'gmail.send.prepare',
+      'gmail.thread.read',
+    ]);
   });
 
   it('activity items: a line with no window key core makes, or no time, is left out', () => {
@@ -394,6 +407,37 @@ describe('the status order', () => {
     expect(join([event({ eventId: 'b', ...SLACK_MESSAGE })], items({ ...ack, act: 'reply' }))[0]?.status.kind).toBe(
       'replied',
     );
+  });
+
+  it('a line listed under each item it names counts once: the reply draft, its prepare, its send and a thread post', () => {
+    const answers = { messageId: 'm1', threadId: 't1' };
+    const drafted = line('r-1', 'gmail.draft.reply', '2026-10-25T10:05:00Z', { replyTo: answers, draftId: 'r-1' });
+    const prepared = line('r-1', 'gmail.send.prepare', '2026-10-25T10:05:30Z', { replyTo: answers, draftId: 'r-1' });
+    const sent = line('s-1', 'gmail.send.execute', '2026-10-25T10:06:00Z', { draftId: 'r-1' });
+    // As core lists them: under the draft, under the message they answer, and the send under its draft too.
+    const listed = items(drafted, prepared, { ...drafted, itemId: 'm1' }, { ...prepared, itemId: 'm1' }, sent, {
+      ...sent,
+      itemId: 'r-1',
+    });
+    const joined = join([event({ eventId: 'a' })], listed)[0];
+    expect(joined?.touches.map((each) => each.kind)).toEqual(['drafted', 'prepared', 'sent']);
+    expect(joined?.status.kind).toBe('replied');
+    // A message only an agent read and replied to is still a message that came in, and replied.
+    const read = line('m1', 'gmail.message.read', '2026-10-25T10:01:00Z');
+    const alone = join([], items(read, ...[...listed.values()].flat()));
+    expect(alone.map((each) => [each.key, each.status.kind])).toEqual([['item:m1', 'replied']]);
+    // Slack: a post names its thread as the message it is, and is listed under it too.
+    const post = line('C0EXAMPLE2/1792915300.000300', 'slack.post.send', '2026-10-25T08:02:00Z', {
+      thread: 'C0EXAMPLE2/1792915200.000200',
+    });
+    const thread = line('C0EXAMPLE2/1792915200.000200', 'slack.thread', '2026-10-25T08:01:00Z');
+    const slack = join(
+      [event({ eventId: 'b', ...SLACK_MESSAGE })],
+      items(thread, post, { ...post, itemId: 'C0EXAMPLE2/1792915200.000200' }),
+    );
+    expect(slack.map((each) => each.key)).toEqual(['event:b']);
+    expect(slack[0]?.touches.map((each) => each.kind)).toEqual(['read', 'sent']);
+    expect(slack[0]?.status).toEqual({ kind: 'replied', at: at('2026-10-25T08:02:00Z'), via: 'slack-thread' });
   });
 
   it('Acknowledged: a Slack acknowledgement by reaction', () => {

@@ -113,6 +113,62 @@ checked_word!(
     "a message's id"
 );
 
+checked_word!(
+    /// Where the last page of `messages list` ended, as the event service gave it in `next` (0.32.0):
+    /// `<observedAt ms>:<eventId>`, the time in 2020 to 2099.
+    MessagesCursor,
+    messages_cursor,
+    "a messages cursor"
+);
+
+/// A messages cursor: the 13 digits of a time in 2020 to 2099, in milliseconds, `:`, and an event id.
+static MESSAGES_CURSOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^([1-9][0-9]{12}):[0-9a-f]{32}$").expect("a pattern"));
+
+fn messages_cursor(value: &str) -> bool {
+    grammar::plain(value)
+        && MESSAGES_CURSOR
+            .captures(value)
+            .and_then(|parts| parts.get(1)?.as_str().parse::<u64>().ok())
+            .is_some_and(|ms| EpochMs::try_from(ms).is_ok())
+}
+
+impl MessagesCursor {
+    /// The time the cursor's page ended at.
+    fn ms(&self) -> u64 {
+        self.0
+            .split(':')
+            .next()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(0)
+    }
+}
+
+/// Where a page of `messages list` ends (`--before`): a time, or the cursor the last page gave.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PageBefore {
+    At(EpochMs),
+    Cursor(MessagesCursor),
+}
+
+impl PageBefore {
+    fn ms(&self) -> u64 {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms),
+            PageBefore::Cursor(cursor) => cursor.ms(),
+        }
+    }
+
+    /// As `--before` takes it: the time, or the cursor as it came.
+    fn word(&self) -> String {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms).to_string(),
+            PageBefore::Cursor(cursor) => cursor.as_str().to_string(),
+        }
+    }
+}
+
 /// An event id: 32 lowercase hex digits (D3's truncated SHA-256).
 static EVENT_ID_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new("^[0-9a-f]{32}$").expect("a pattern"));
@@ -742,14 +798,14 @@ pub enum Call {
     /// and gives nothing, a tightening, so the app applies it itself (DA10); the screen asks first. Binding is never a
     /// call: the person binds at a terminal (`TerminalCommand::LaneBind`), so no agent can bind itself.
     LaneUnbind { lane: LaneName },
-    /// The events service's `messages list --since <ms> [--before <ms>] [--limit <n>]` (0.32.0, spec §3.6): the events
-    /// it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
-    /// person's read, refused inside an MCP server; every argument is a checked number, and a page ends after its
-    /// window starts.
+    /// The events service's `messages list --since <ms> [--before <ms|cursor>] [--limit <n>]` (0.32.0, spec §3.6): the
+    /// events it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
+    /// person's read, refused inside an MCP server; every argument is a checked number or the cursor the last page
+    /// gave, and a page ends after its window starts.
     EventsMessagesList {
         since: EpochMs,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        before: Option<EpochMs>,
+        before: Option<PageBefore>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         limit: Option<MessagesLimit>,
     },
@@ -1034,22 +1090,28 @@ impl Call {
                 before,
                 limit,
             } => {
-                if before.is_some_and(|before| before <= *since) {
+                if before
+                    .as_ref()
+                    .is_some_and(|before| before.ms() <= u64::from(*since))
+                {
                     return Err(AppError::refused(
                         "a page of messages ends after its window starts",
                     ));
                 }
-                let option = |flag: &str, value: Option<u64>| {
+                let option = |flag: &str, value: Option<String>| {
                     value
-                        .map(|value| [flag.to_string(), value.to_string()])
+                        .map(|value| [flag.to_string(), value])
                         .into_iter()
                         .flatten()
                 };
                 with(
                     events(&["messages", "list", "--since"]),
                     std::iter::once(u64::from(*since).to_string())
-                        .chain(option("--before", before.map(u64::from)))
-                        .chain(option("--limit", limit.map(u64::from))),
+                        .chain(option("--before", before.as_ref().map(PageBefore::word)))
+                        .chain(option(
+                            "--limit",
+                            limit.map(|limit| u64::from(limit).to_string()),
+                        )),
                 )
             }
             Call::EventsMessageShow { event_id } => events(&["message", "show", event_id.as_str()]),
@@ -1209,6 +1271,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "laneUnbind", "lane": "david" }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": BEFORE_MS, "limit": 100 }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": "1792972800000:0123456789abcdef0123456789abcdef" }),
         json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
         json!({ "kind": "activityItems", "since": SINCE_MS }),
         json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"] }),
@@ -3000,6 +3063,28 @@ mod tests {
                 "100"
             ]
         );
+        // The next page, by the cursor the last one gave: `<observedAt ms>:<eventId>`, passed on as it came.
+        let cursor = format!("{BEFORE_MS}:{EVENT_ID}");
+        assert_eq!(
+            events_line(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ),
+            [
+                "messages",
+                "list",
+                "--since",
+                since.as_str(),
+                "--before",
+                cursor.as_str()
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(call(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ))
+            .expect("json"),
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+        );
         for (limit, word) in [(1u64, "1"), (100, "100"), (500, "500")] {
             assert_eq!(
                 events_line(
@@ -3111,14 +3196,40 @@ mod tests {
         refused(json!({ "kind": "eventsMessagesList" }));
         refused(json!({ "kind": "activityItems" }));
         refused(json!({ "kind": "activityItems", "ids": ["18c2f0a1b2c3d4e5"] }));
-        // A page ends after the window starts.
-        for before in [SINCE_MS, SINCE_MS - 1] {
+        // A page ends after the window starts, by a time or by a cursor.
+        for before in [
+            json!(SINCE_MS),
+            json!(SINCE_MS - 1),
+            json!(format!("{SINCE_MS}:{EVENT_ID}")),
+            json!(format!("{}:{EVENT_ID}", SINCE_MS - 1)),
+        ] {
             assert!(
                 call(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": before }))
                     .words()
                     .is_err(),
                 "before {before}"
             );
+        }
+        // A cursor is exactly the event service's: whole milliseconds in 2020 to 2099, `:`, and an event id.
+        for cursor in [
+            format!("{BEFORE_MS}:"),
+            format!(":{EVENT_ID}"),
+            format!("{BEFORE_MS}:{}", EVENT_ID.to_uppercase()),
+            format!("{BEFORE_MS}:{}", &EVENT_ID[1..]),
+            format!("{BEFORE_MS}:{EVENT_ID}0"),
+            format!("{BEFORE_MS}:{EVENT_ID}:x"),
+            format!("{BEFORE_MS}-{EVENT_ID}"),
+            format!("{BEFORE_MS} :{EVENT_ID}"),
+            format!("-{BEFORE_MS}:{EVENT_ID}"),
+            format!("{BEFORE_MS}:{EVENT_ID}\n"),
+            format!("{BEFORE_MS}:{EVENT_ID} --limit 5"),
+            format!("0{BEFORE_MS}:{EVENT_ID}"),
+            format!("4102444800000:{EVENT_ID}"),
+            format!("1577836799999:{EVENT_ID}"),
+            "next".to_string(),
+            String::new(),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor }));
         }
         for limit in [
             json!(0),
