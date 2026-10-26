@@ -6,7 +6,7 @@ import {
   type DisclosureVersionKind,
   neutralise,
 } from '@agentcomms/core';
-import { isJsonValue, type JsonValue } from '@agentcomms/events';
+import { describeRule, isJsonValue, type JsonValue } from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
@@ -1578,6 +1578,19 @@ export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
 }
 
+/**
+ * A rule's preview in plain words (0.32.0, owner feedback §3.4), above the canonical JSON, which stays: the JSON is what
+ * is approved. Rule-author text is written escaped, as in the JSON, so a line break or a quote in an operand or the
+ * judge's question cannot start a line of its own and pass for part of the preview.
+ */
+function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  const text = describeRule(document.rule)
+    .map((part) => (part.kind === 'untrusted' ? JSON.stringify(part.text).slice(1, -1) : part.text))
+    .join('');
+  return [`In plain words: ${neutralise(text).text}`];
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -1647,6 +1660,7 @@ export function renderB3ApprovalPreviewV1(
     terminal: [
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
+      ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...lanes,
       ...laya,

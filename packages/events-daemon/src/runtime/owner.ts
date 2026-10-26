@@ -123,6 +123,7 @@ import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
+import { RuleReader } from './rule-show.ts';
 import { EventScheduler } from './scheduler.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
@@ -1121,8 +1122,12 @@ async function startOwnerWithLock(
   });
   // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
   const lanes = new LaneService({ store: database, queue, now });
-  // One delivery as the person reads it (0.32.0, owner feedback §3.5): reached only from the CLI and the app.
-  const deliveryReader = new DeliveryReader({ store: database, cipher, now });
+  // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
+  // and each rule version with its times, its plain-words summary and its last 7 days.
+  const readers: OwnerReaders = {
+    deliveries: new DeliveryReader({ store: database, cipher, now }),
+    rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+  };
   notifyLaneAppend = () => lanes.notifyAppended();
   const webhook = new WebhookDispatcher({
     store: database,
@@ -1617,7 +1622,7 @@ async function startOwnerWithLock(
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
-          deliveryReader,
+          readers,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1687,6 +1692,12 @@ async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise
   }
 }
 
+/** The person's reads that need the owner's clock or cipher (0.32.0). */
+interface OwnerReaders {
+  readonly deliveries: DeliveryReader;
+  readonly rules: RuleReader;
+}
+
 async function handleControl(
   owner: EventOwner,
   lifecycle: EventLifecycle,
@@ -1701,7 +1712,7 @@ async function handleControl(
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
-  deliveryReader?: DeliveryReader,
+  readers?: OwnerReaders,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1745,8 +1756,8 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
     case OWNER_CONTROL_WIRES.deliveryShow:
-      if (deliveryReader === undefined) throw new CommsError('USAGE', 'delivery show is not available');
-      return deliveryReader.show(requiredText(request.args.deliveryId, 'delivery id'));
+      if (readers === undefined) throw new CommsError('USAGE', 'delivery show is not available');
+      return readers.deliveries.show(requiredText(request.args.deliveryId, 'delivery id'));
     // The action queue. Content reads are reached only from the CLI (Q1); every state change is the person's own.
     case OWNER_CONTROL_WIRES.queueList:
       return queue.list(request.args);
@@ -1812,7 +1823,8 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow:
-      return ruleShow(database, requiredText(request.args.ruleId, 'rule id'));
+      if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
+      return readers.rules.show(requiredText(request.args.ruleId, 'rule id'));
     case OWNER_CONTROL_WIRES.createRule:
     case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);
@@ -1934,22 +1946,6 @@ function ruleRows(database: Awaited<ReturnType<typeof openEventDatabase>>): unkn
       'SELECT rule_id, version, digest, state, approval_id, authorization_activation_id FROM rule_versions ORDER BY rule_id, version',
     )
     .all();
-}
-
-function ruleShow(database: Awaited<ReturnType<typeof openEventDatabase>>, ruleId: string): unknown[] {
-  const rows = database.database
-    .prepare(
-      'SELECT document, digest, state, approval_id, authorization_activation_id FROM rule_versions WHERE rule_id = ? ORDER BY version',
-    )
-    .all(ruleId) as Array<{
-    document: string;
-    digest: string;
-    state: string | null;
-    approval_id: string | null;
-    authorization_activation_id: string | null;
-  }>;
-  if (rows.length === 0) throw new CommsError('NOT_FOUND', 'the requested rule does not exist');
-  return rows.map((row) => ({ ...row, document: JSON.parse(row.document) }));
 }
 
 /**

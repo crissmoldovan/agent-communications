@@ -34,11 +34,13 @@ export interface FieldLabels {
 /** The part of a target document a sentence names. */
 export interface DescribableTarget {
   readonly targetId: string;
+  readonly version?: number | undefined;
   readonly kind: string;
+  readonly retentionMs?: number | undefined;
+  readonly show?: string | undefined;
   readonly lane?: { readonly name: string } | undefined;
   readonly url?: unknown;
   readonly subscriberId?: string | undefined;
-  readonly [field: string]: unknown;
 }
 
 /**
@@ -55,14 +57,12 @@ export interface DescribableRuleDocument {
   readonly condition: CanonicalCondition;
   readonly agentic?:
     | {
-        readonly judge: { readonly judgeId: string; readonly kind?: unknown; readonly [field: string]: unknown };
+        readonly judge: { readonly judgeId: string; readonly version?: number | undefined; readonly kind?: unknown };
         readonly question: string;
         readonly onUncertain?: string | undefined;
-        readonly [field: string]: unknown;
       }
     | undefined;
   readonly targets: readonly DescribableTarget[];
-  readonly [field: string]: unknown;
 }
 
 const plain = (text: string): RulePart => ({ text, kind: 'plain' });

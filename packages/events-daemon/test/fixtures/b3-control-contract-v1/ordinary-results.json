@@ -362,7 +362,56 @@
         "digest": "fe5203032150c71328d2119f8f5eccb6d254cf48682191558469d48509ef8068",
         "state": null,
         "approval_id": null,
-        "authorization_activation_id": null
+        "authorization_activation_id": null,
+        "activatedAt": null,
+        "supersededAt": null,
+        "revokedAt": null,
+        "summary": [
+          {
+            "text": "When mail arrives in ",
+            "kind": "plain"
+          },
+          {
+            "text": "account-1",
+            "kind": "value"
+          },
+          {
+            "text": " where ",
+            "kind": "plain"
+          },
+          {
+            "text": "the subject",
+            "kind": "plain"
+          },
+          {
+            "text": " is present",
+            "kind": "plain"
+          },
+          {
+            "text": ", ",
+            "kind": "plain"
+          },
+          {
+            "text": "record it in the ",
+            "kind": "plain"
+          },
+          {
+            "text": "Dry-run log",
+            "kind": "value"
+          },
+          {
+            "text": ".",
+            "kind": "plain"
+          }
+        ],
+        "counts7d": {
+          "matched": 0,
+          "judgedYes": 0,
+          "judgedNo": 0,
+          "held": 0,
+          "delivered": 0,
+          "failed": 0
+        }
       }
     ]
   },
