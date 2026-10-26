@@ -118,6 +118,7 @@ import {
 import { EventProjectionStore } from './projections.ts';
 import { type QueueScope, QueueStore } from './queue.ts';
 import { QueueDispatcher } from './queue-dispatcher.ts';
+import { PERSON, type QueueActor } from './queue-history.ts';
 import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
@@ -1752,12 +1753,19 @@ async function handleControl(
     }
     case OWNER_CONTROL_WIRES.queueCounts:
       return queue.counts(callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueDone:
-      return queue.done(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueDismiss:
-      return queue.dismiss(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueReopen:
-      return queue.reopen(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
+    // Who marked it goes into the item's history: the window a call names, or the person, who names none (§3.6).
+    case OWNER_CONTROL_WIRES.queueDone: {
+      const { caller } = splitCaller(request.args);
+      return queue.done(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
+    case OWNER_CONTROL_WIRES.queueDismiss: {
+      const { caller } = splitCaller(request.args);
+      return queue.dismiss(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
+    case OWNER_CONTROL_WIRES.queueReopen: {
+      const { caller } = splitCaller(request.args);
+      return queue.reopen(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
     case OWNER_CONTROL_WIRES.queueClear:
       return queue.clear();
     // Routing's lanes. `lane bind` is the person's (B1) and carries the window to bind, never a caller; `lane list`
@@ -1875,6 +1883,11 @@ function callerScope(lanes: LaneService, caller: LaneWindowIdentity | undefined)
     if (!isCommsError(error)) throw error;
   }
   return lanes.scopeFor(caller);
+}
+
+/** A queue change's actor: the agent window a call names, by its activity session key, or else the person. */
+function actorOf(caller: LaneWindowIdentity | undefined): QueueActor {
+  return caller === undefined ? PERSON : { actor: 'window', windowKey: caller.activityKey };
 }
 
 /** The client name chooses only the receipt channel; same-user token holders remain inside B3's trust boundary. */

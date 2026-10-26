@@ -901,6 +901,36 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '25' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // A queue item's history (0.32.0 spec §3.6): a window woken for it, a window reading it, and Done, Dismiss and
+    // Reopen, each with who did it — an agent window by its activity session key, or the person (no key). Ids and times
+    // only. It goes with its item: the trigger runs on every delete of an item row, whichever path purges it (expiry,
+    // revocation, account removal, queue clear). Never read over MCP, and never written to core's activity log.
+    version: 26,
+    name: 'event-queue-item-history-v1',
+    statements: [
+      `CREATE TABLE queue_item_history (
+        item_id TEXT NOT NULL CHECK (
+          length(item_id) = 29 AND substr(item_id, 1, 3) = 'qi_' AND substr(item_id, 4) NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*'
+        ),
+        at INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('woken', 'read', 'done', 'dismissed', 'reopened')),
+        actor TEXT NOT NULL CHECK (actor IN ('person', 'window')),
+        window_key TEXT CHECK (
+          window_key IS NULL OR (length(window_key) = 16 AND window_key NOT GLOB '*[^0-9a-f]*')
+        ),
+        CHECK ((actor = 'window') = (window_key IS NOT NULL)),
+        CHECK (actor = 'window' OR kind NOT IN ('woken', 'read'))
+      ) STRICT`,
+      'CREATE INDEX queue_item_history_item ON queue_item_history(item_id, at)',
+      `CREATE TRIGGER queue_item_history_goes_with_its_item
+        AFTER DELETE ON queue_items
+        BEGIN
+          DELETE FROM queue_item_history WHERE item_id = OLD.id;
+        END`,
+      "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {
