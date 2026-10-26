@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import { inspect } from 'node:util';
 import {
   assertLoopbackRelayUrl,
+  isPromptableSession,
   locateRelay,
   RELAY_DEFAULT_PORT,
   RELAY_RUN_END_TYPES,
@@ -196,6 +197,37 @@ test('RELAY-5: sessions, a snapshot, a new session, and a run whose startId make
       relay.requests.every((request) => !request.path.includes(FAKE_RELAY_TOKEN)),
       'the token is never in a URL',
     );
+  });
+});
+
+test('RELAY-5b: only a live run’s 409 is busy; a watched, fenced or moved session’s 409 is a refusal', async () => {
+  await withRelay(async (relay, root) => {
+    const client = await clientFor(relay, root);
+    const start = () => ({ prompt: 'hello', requestedMode: 'manual', startId: randomUUID() });
+    const busy = relay.addSession({ cwd: '/example/home/acme' });
+    relay.startRunElsewhere(busy.id);
+    assert.deepEqual(await client.startRun(busy.id, start()), { kind: 'busy' });
+    const watched = relay.addSession({ cwd: '/example/home/acme', attached: 'observer' });
+    const fenced = relay.addSession({ cwd: '/example/home/acme', executor: { generation: 2, state: 'fenced' } });
+    const moved = relay.addSession({ cwd: '/example/home/acme', executor: { generation: 3, state: 'moved' } });
+    for (const [session, code] of [
+      [watched, 'conflict'],
+      [fenced, 'session_fenced'],
+      [moved, 'session_moved'],
+    ] as const)
+      await assert.rejects(client.startRun(session.id, start()), (error: unknown) => {
+        assert.ok(error instanceof RelayError);
+        assert.equal(error.reason, 'RELAY_REFUSED');
+        assert.equal(error.relayCode, code);
+        return true;
+      });
+    // The relay's snapshot says so too, and none of them is chosen for a prompt.
+    const listed = new Map((await client.sessions()).map((session) => [session.id, session]));
+    assert.deepEqual(
+      [busy, watched, fenced, moved].map((session) => isPromptableSession(listed.get(session.id) as never)),
+      [true, false, false, false],
+    );
+    assert.equal(relay.runs.filter((run) => run.sessionId !== busy.id).length, 0, 'nothing was started');
   });
 });
 

@@ -270,6 +270,16 @@ export interface RelaySessionV1 {
   readonly activeRunId?: string | undefined;
   readonly requestedMode?: string | undefined;
   readonly attached?: 'observer' | undefined;
+  /** Who runs it (claude-stream 0b): absent, or `active`, is this relay; `fenced` or `moved` takes no prompt here. */
+  readonly executor?: { readonly state: string } | undefined;
+}
+
+/**
+ * Whether a session can take a prompt from this client: one the relay runs here — not one it only watches
+ * (`attached: observer`, which answers a prompt with 409), and not one fenced or moved to another executor.
+ */
+export function isPromptableSession(session: RelaySessionV1): boolean {
+  return session.attached !== 'observer' && (session.executor === undefined || session.executor.state === 'active');
 }
 
 export interface RelayRunV1 {
@@ -341,6 +351,9 @@ function session(value: unknown): RelaySessionV1 {
     ...(activeRunId === undefined ? {} : { activeRunId }),
     ...(optionalText(value.requestedMode) === undefined ? {} : { requestedMode: value.requestedMode as string }),
     ...(value.attached === 'observer' ? { attached: 'observer' as const } : {}),
+    ...(isRecord(value.executor) && typeof value.executor.state === 'string'
+      ? { executor: { state: value.executor.state } }
+      : {}),
   };
 }
 
@@ -476,7 +489,16 @@ export class RelayClient {
       { ...input, sender: AGENT_COMMS_SENDER },
       [200, 202, 409],
     );
-    if (body.status === 409) return { kind: 'busy' };
+    if (body.status === 409) {
+      // Busy is the relay's one refusal of a live run: `conflict`, "… already has active run …". Every other 409 — a
+      // watched session, a fenced or moved one, a stale generation — is a refusal, retried or failed, never waited on
+      // (security review of 0.33.0, finding 3).
+      const error = isRecord(body.value) && isRecord(body.value.error) ? body.value.error : {};
+      const code = typeof error.code === 'string' ? error.code : undefined;
+      const message = typeof error.message === 'string' ? error.message : '';
+      if (code === 'conflict' && /\balready has active run\b/u.test(message)) return { kind: 'busy' };
+      throw refusedBy(409, code ?? null);
+    }
     if (!isRecord(body.value)) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a started run oddly');
     return { kind: 'started', run: run(body.value.run), repeated: body.value.repeated === true };
   }

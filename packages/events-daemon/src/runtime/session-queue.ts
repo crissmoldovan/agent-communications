@@ -139,8 +139,9 @@ export class SessionQueue {
   }
 
   /**
-   * Lets the session's next item go, if one waits and none already let go is still on its way: its delivery is due now.
-   * Returns the delivery let go, or null.
+   * Lets the session's next item go, if one waits and none already let go is still on its way: its delivery is due
+   * after a backoff that grows with its tries, so a session that is busy again at once cannot spin it (security review
+   * of 0.33.0, finding 3). Returns the delivery let go, or null.
    */
   release(relaySessionId: string): string | null {
     return this.#store.immediate(() => {
@@ -151,19 +152,25 @@ export class SessionQueue {
       if (inFlight !== undefined) return null;
       const head = database
         .prepare(
-          `SELECT delivery_id FROM session_queue WHERE relay_session_id = ? AND released_at IS NULL
-            ORDER BY queued_at, delivery_id LIMIT 1`,
+          `SELECT q.delivery_id, d.attempts FROM session_queue q JOIN deliveries d ON d.id = q.delivery_id
+            WHERE q.relay_session_id = ? AND q.released_at IS NULL
+            ORDER BY q.queued_at, q.delivery_id LIMIT 1`,
         )
-        .get(relaySessionId) as { delivery_id: string } | undefined;
+        .get(relaySessionId) as { delivery_id: string; attempts: number } | undefined;
       if (head === undefined) return null;
       const now = this.#now();
       database.prepare('UPDATE session_queue SET released_at = ? WHERE delivery_id = ?').run(now, head.delivery_id);
       database
         .prepare("UPDATE deliveries SET next_at = ? WHERE id = ? AND state IN ('queued', 'retryable')")
-        .run(now, head.delivery_id);
+        .run(now + releaseBackoffMs(head.attempts), head.delivery_id);
       return head.delivery_id;
     });
   }
+}
+
+/** How long a let-go item waits before it is tried: none after its first try, then doubling, up to five minutes. */
+export function releaseBackoffMs(attempts: number): number {
+  return attempts <= 1 ? 0 : Math.min(1_000 * 2 ** (attempts - 2), 5 * 60_000);
 }
 
 /**
@@ -222,6 +229,7 @@ export class SessionQueueFollower {
   readonly #reconcileMs: number;
   readonly #retryMs: number;
   readonly #seen = new Set<string>();
+  readonly #releasedAt = new Map<string, number>();
   #running: Promise<void> | undefined;
   #abort: AbortController | undefined;
   #stopped = false;
@@ -247,15 +255,18 @@ export class SessionQueueFollower {
     });
   }
 
-  /** Asks each waiting session whether its run is over, letting the next item go for each that is free. */
-  async reconcile(): Promise<number> {
+  /**
+   * Asks each waiting session whether its run is over, letting the next item go for each that is free. The interval's
+   * own reconcile is paced by its timer; one on a (re)connect goes through the same pacing as a run end.
+   */
+  async reconcile(timed = false): Promise<number> {
     const ready = await this.#sessions.relay();
     let cursor = 0;
     for (const sessionId of this.#queue.waitingSessions()) {
       const snapshot = await ready.client.snapshot(sessionId);
       if (snapshot !== null) cursor = Math.max(cursor, snapshot.cursor);
       // A session that is gone lets its item go too: the dispatcher finds, or starts, another.
-      if (snapshot === null || snapshot.session.activeRunId === undefined) this.#release(sessionId);
+      if (snapshot === null || snapshot.session.activeRunId === undefined) this.#release(sessionId, timed);
     }
     return cursor;
   }
@@ -271,8 +282,19 @@ export class SessionQueueFollower {
     return this.#abort !== undefined && !this.#abort.signal.aborted;
   }
 
-  #release(sessionId: string): void {
-    if (this.#queue.release(sessionId) !== null) this.#onReleased?.();
+  /**
+   * Lets the session's next item go — at most once per reconcile interval for each session, however many run ends or
+   * reconnects the relay makes, so a relay that repeats them cannot drive the loop faster than the interval (security
+   * review of 0.33.0, finding 3). The interval's own reconcile is the pace, so it is never held back.
+   */
+  #release(sessionId: string, timed = false): void {
+    const now = Date.now();
+    const last = this.#releasedAt.get(sessionId);
+    if (!timed && last !== undefined && now - last < this.#reconcileMs) return;
+    if (this.#queue.release(sessionId) === null) return;
+    this.#releasedAt.set(sessionId, now);
+    if (this.#releasedAt.size > 1_024) this.#releasedAt.delete(this.#releasedAt.keys().next().value as string);
+    this.#onReleased?.();
   }
 
   async #loop(): Promise<void> {
@@ -280,7 +302,7 @@ export class SessionQueueFollower {
       const abort = new AbortController();
       this.#abort = abort;
       const timer = setInterval(() => {
-        void this.reconcile().catch(() => undefined);
+        void this.reconcile(true).catch(() => undefined);
       }, this.#reconcileMs);
       timer.unref?.();
       try {
