@@ -213,9 +213,16 @@ export async function gatedChangeAtTerminal<T>(
      * typed code is what that policy means. It counts only for a person; an agent still gets the approval id.
      */
     answered?: boolean | undefined;
+    /**
+     * The approval the desktop app prepared for this change and the person approved there (0.32.0, `mcp install
+     * --app-approval <id>`): approved through the app channel and claimed by this change, as judge setup's are. Refused
+     * to an agent's shell and inside an MCP server's process; never with `approvalId`.
+     */
+    appApproval?: string | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
+  if (options.appApproval !== undefined) return appliedFromApp(core, change, options, options.appApproval);
   const streams = options.streams ?? defaultStreams;
   // Decided before anything is prepared, so the preview a person here reads says their yes is given here.
   const person =
@@ -364,6 +371,70 @@ export async function approveChangeAtTerminal(
 
 function cancelled(): CommsError {
   return new CommsError('USAGE', 'cancelled: nothing was changed');
+}
+
+/** The environment variable an MCP server sets in its own process, which every program it starts inherits. */
+const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
+
+/**
+ * A change the desktop app prepared, approved there by the person (0.32.0, design 2026-10-26-owner-feedback-0320
+ * §3.3, §5 question 3), as judge setup's enablements are approved through the app channel (events design D2's note of
+ * 2026-10-26): the app showed core's preview, the person pressed its confirm, and the app runs the same command with
+ * the approval it was given. This issues the approval's code and answers it at once, so the record says
+ * `approvedVia: 'app'` and the audit line `approvedBy: desktop-app`; then this change claims it, once, and applies.
+ *
+ * Who may: the person, and only where an agent is not — refused to an agent's shell (its marker) and inside an MCP
+ * server's process, before the approval is touched, and the refusal audited. As at a terminal, that is a speed bump an
+ * agent's shell could get past, not a boundary. What: only the change the approval was prepared for — the claim voids
+ * it for any other — and only on a command that passes this option (`mcp install`); no MCP tool does.
+ */
+async function appliedFromApp<T>(
+  core: Core,
+  change: GatedChange<T>,
+  options: {
+    channel: string;
+    approvalId?: string | undefined;
+    env: NodeJS.ProcessEnv;
+    output: { platform?: NodeJS.Platform | undefined };
+  },
+  approvalId: string,
+): Promise<T> {
+  const platform = options.output.platform;
+  if (options.approvalId !== undefined) {
+    throw new CommsError('USAGE', 'an approval given in the app is not carried with --approval as well', {
+      hint: 'Pass one of them: --app-approval is the app approving its own change.',
+    });
+  }
+  try {
+    const marker = agentMarker(options.env);
+    if (marker !== null) {
+      throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a change in the app, not an agent', {
+        hint: 'Ask the person to approve it in the Agent Comms app, or at their own terminal.',
+        details: { marker },
+      });
+    }
+    const server = options.env[MCP_SERVER_MARKER];
+    if (server !== undefined && server !== '') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "only a person can approve a change in the app, and an MCP server's process is not the app",
+        { details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER } },
+      );
+    }
+  } catch (error) {
+    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app' });
+    throw error;
+  }
+  const prompt = await beginChangeApproval(core, approvalId, { surface: 'app', platform });
+  await finishChangeApproval(core, approvalId, prompt.challenge, { surface: 'app', platform, via: 'app' });
+  const outcome = await gatedChange(core, change, {
+    surface: 'app',
+    channel: options.channel,
+    approvalId,
+    platform,
+  });
+  if (outcome.status !== 'applied') throw new CommsError('UNEXPECTED', 'the approved change asked for approval again');
+  return outcome.result;
 }
 
 async function askLine(streams: Streams, question: string): Promise<string> {

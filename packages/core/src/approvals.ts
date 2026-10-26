@@ -412,8 +412,10 @@ export interface ApprovalRecord {
   /**
    * Where a person approved, or answered: the terminal, or a trusted client's form. Absent on a chat-route claim.
    * `standing` on a standing approval's child, and on nothing else: the person approved it in advance, at a terminal.
+   * `app` on a change, and on no other kind: the person approved it in the desktop app (0.32.0, `mcp install`'s
+   * `--app-approval`), the way judge setup's disclosures are approved there.
    */
-  approvedVia?: ApprovalChannel | 'standing' | undefined;
+  approvedVia?: ApprovalChannel | 'standing' | 'app' | undefined;
   /** A send's or a change's approval: when, and the binding the person approved, which must still be the record's. */
   approvedAt?: string | undefined;
   /** `approvedAt + approvedMs`: until when an approved send or change may be claimed. */
@@ -1452,7 +1454,7 @@ export class ApprovalStore {
    */
   async approve(
     approvalId: string,
-    via: ApprovalChannel,
+    via: ApprovalChannel | 'app',
     live: LiveDraft,
     answer: string,
     kind: ApprovalKind = 'send',
@@ -1465,6 +1467,13 @@ export class ApprovalStore {
         'nothing was disclosed: a standing disclosure approval is only accepted on the trusted terminal or app route',
       );
     }
+    // The desktop app approves a change and nothing else (0.32.0): a send, a standing approval or a download it shows
+    // is approved at a terminal or in a trusted form, as before. Refused before the record is touched.
+    if (via === 'app' && kind !== 'change') {
+      throw new CommsError('APPROVAL_REQUIRED', 'nothing was approved: only a change is approved in the desktop app', {
+        details: { approvalId, kind },
+      });
+    }
     let failure: Failure | null = null;
     const done = await this.#transition(
       approvalId,
@@ -1476,9 +1485,9 @@ export class ApprovalStore {
         if (!current.challengeHash)
           throw refusalFor(current)('APPROVAL_REQUIRED', 'no challenge was issued for this approval', current);
         const at = this.#now();
-        // A change's confirm means a person at a terminal, and nothing else approves one: a form approval is voided
-        // here, before it could be written as approval evidence no change may carry.
-        if (kind === 'change' && via !== 'terminal') {
+        // A change's confirm means a person at a terminal, or in the desktop app (0.32.0), and nothing else approves one:
+        // a form approval is voided here, before it could be written as approval evidence no change may carry.
+        if (kind === 'change' && via !== 'terminal' && via !== 'app') {
           failure = {
             code: 'APPROVAL_VOID',
             reason: 'the change policy is confirm, and this was not approved at a terminal',
@@ -1844,9 +1853,9 @@ export class ApprovalStore {
             options.pendingHint ?? approvePendingHint(options.handoffs ?? this.#handoffs, approvalId, options.platform),
           );
         }
-        // `confirm` means a person at a terminal. An approval given any other way — a form in a client window, which
-        // is how a send may be approved — is not what the policy asked for.
-        if (current.approvedVia !== 'terminal') {
+        // `confirm` means a person at a terminal, or in the desktop app (0.32.0). An approval given any other way — a
+        // form in a client window, which is how a send may be approved — is not what the policy asked for.
+        if (current.approvedVia !== 'terminal' && current.approvedVia !== 'app') {
           return voidWith('the change policy is confirm, and this was not approved at a terminal');
         }
       }
