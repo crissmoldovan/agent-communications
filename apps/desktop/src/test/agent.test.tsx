@@ -1,12 +1,17 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { CSPProvider } from '@base-ui/react/csp-provider';
+import { ThemeProvider } from '@cueplusplus/ui/system';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
-import type { BehaviourReport } from '../cli-types.ts';
+import { BridgeProvider } from '../bridge-context.tsx';
+import type { BehaviourReport, StandingReport } from '../cli-types.ts';
 import { ACTS_HINT, CONVERSATION_HINT } from '../components/RuleForm.tsx';
 import { COPY } from '../copy.ts';
+import { useCall } from '../hooks/use-call.ts';
 import type { Call, CliResult } from '../ipc.ts';
+import { Rules, Standing } from '../screens/Agent.tsx';
+import { STORAGE_KEY, THEME_DEFAULTS, THEMES } from '../theme.ts';
 import { cliKinds, createFakeBridge, type FakeBridge, failed, ok } from './fake-bridge.ts';
 import behaviour from './fixtures/behaviour.json';
-import { renderApp } from './render.tsx';
 
 const ID = 'ap_0123456789ABCDEFGHJKMNPQRS';
 const STANDING = 'ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F';
@@ -28,16 +33,39 @@ function applied(note: string | null = null): CliResult {
   return ok({ change: 'setRule', changed: true, note, ...(behaviour as BehaviourReport) });
 }
 
-/** Each section of the Agent screen, and the tab that shows it (D7): its name, then any count. */
-const TABS = {
-  'The label': /^Label/,
-  'Behaviour rules': /^Behaviour rules/,
-  'Standing approvals': /^Standing approvals/,
-} as const;
+/**
+ * The old Agent screen's behaviour rules and standing approvals, as `Agent.tsx` still exports them for the account
+ * pages (0.34.0): each in the region its view had, both mounted at once, as its tab panels were.
+ */
+function Parts() {
+  const rules = useCall<BehaviourReport>({ kind: 'behaviour' });
+  const standing = useCall<StandingReport>({ kind: 'standingList' });
+  return (
+    <>
+      <section aria-label="Behaviour rules">
+        <Rules read={rules} />
+      </section>
+      <section aria-label="Standing approvals">
+        <Standing read={standing} />
+      </section>
+    </>
+  );
+}
 
-/** The section of the Agent screen called `name`, shown by choosing its tab. */
-async function section(name: keyof typeof TABS): Promise<HTMLElement> {
-  fireEvent.click(await screen.findByRole('tab', { name: TABS[name] }));
+function renderParts(bridge: FakeBridge): void {
+  render(
+    <CSPProvider disableStyleElements>
+      <ThemeProvider themes={THEMES} storageKey={STORAGE_KEY} {...THEME_DEFAULTS}>
+        <BridgeProvider bridge={bridge}>
+          <Parts />
+        </BridgeProvider>
+      </ThemeProvider>
+    </CSPProvider>,
+  );
+}
+
+/** The part called `name`. */
+async function section(name: 'Behaviour rules' | 'Standing approvals'): Promise<HTMLElement> {
   return screen.findByRole('region', { name });
 }
 
@@ -60,49 +88,10 @@ async function fillRule(form: HTMLElement, account: string, acts: string[], conv
   for (const act of acts) fireEvent.click(within(form).getByRole('checkbox', { name: act }));
 }
 
-describe('Agent: the label', () => {
-  it('the label shows word, name, rules and Slack style', async () => {
-    const bridge = createFakeBridge();
-    renderApp(bridge, { screen: 'agent' });
-    const label = await section('The label');
-    expect(await within(label).findByText('agent')).toBeTruthy();
-    expect(within(label).getByText('Jo Example')).toBeTruthy();
-    expect(within(label).getByText('example/gmail: sent as Jo Example')).toBeTruthy();
-    const styles = within(label).getByRole('table', { name: 'Slack style' });
-    const slack = within(styles).getByText('example/slack').closest('tr') as HTMLElement;
-    expect(within(slack).getByText('app')).toBeTruthy();
-    // Gmail has no Slack style.
-    expect(within(styles).queryByText('example/gmail')).toBeNull();
-    expect(count(bridge, 'label')).toBe(1);
-  });
-
-  it('a rule that matches nothing says so, and no name says it is not set', async () => {
-    const bridge = createFakeBridge(
-      {},
-      {
-        label: {
-          word: 'assistant',
-          words: ['agent', 'assistant'],
-          name: null,
-          rules: [{ rule: { account: 'gone/gmail', as: 'me' }, text: 'gone/gmail: sent as you', matches: false }],
-          accounts: [],
-          ignored: [],
-        },
-      },
-    );
-    renderApp(bridge, { screen: 'agent' });
-    const label = await section('The label');
-    expect(await within(label).findByText('assistant')).toBeTruthy();
-    expect(within(label).getByText('Not set')).toBeTruthy();
-    expect(within(label).getByText('matches no account')).toBeTruthy();
-    expect(within(label).getByText('No Slack workspace is connected.')).toBeTruthy();
-  });
-});
-
 describe('Agent: the behaviour rules', () => {
   it('lists each rule: its account, conversation and acts', async () => {
     const bridge = createFakeBridge();
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     // The table renders once the rules are read, which may be after the section shows.
     const rules = await within(await section('Behaviour rules')).findByRole('table', { name: 'Rules' });
     const slack = (await within(rules).findByText('example/slack')).closest('tr') as HTMLElement;
@@ -118,7 +107,7 @@ describe('Agent: the behaviour rules', () => {
         ? applied('It replaced example/slack: reply, reaction: one place has one rule.')
         : undefined,
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
     await waitFor(() => expect(count(bridge, 'behaviour')).toBe(1));
@@ -138,7 +127,7 @@ describe('Agent: the behaviour rules', () => {
 
   it('no acts ticked allows nothing, and a conversation is passed on', async () => {
     const bridge = bridgeAnswering((call) => (call.kind === 'behaviourAllow' ? applied() : undefined));
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const form = await within(await section('Behaviour rules')).findByRole('form', { name: 'Add or change a rule' });
     await fillRule(form, 'example/gmail', [], '@example.org');
     fireEvent.click(within(form).getByRole('button', { name: 'Save rule' }));
@@ -152,7 +141,7 @@ describe('Agent: the behaviour rules', () => {
 
   it('a form that names no account, or a conversation that is not one, sends nothing', async () => {
     const bridge = createFakeBridge();
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const form = await within(await section('Behaviour rules')).findByRole('form', { name: 'Add or change a rule' });
     fireEvent.click(within(form).getByRole('button', { name: 'Save rule' }));
     expect(await within(form).findByText('Choose an account.')).toBeTruthy();
@@ -164,7 +153,7 @@ describe('Agent: the behaviour rules', () => {
 
   it('a loosening rule shows its preview under Approve this in Terminal, and the button revokes then opens the change', async () => {
     const bridge = bridgeAnswering((call) => (call.kind === 'behaviourAllow' ? pending() : undefined));
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
     await fillRule(form, 'example/slack', ['post']);
@@ -201,7 +190,7 @@ describe('Agent: the behaviour rules', () => {
         ? pending(ID, 'Remove the behaviour rule for example/gmail in @example.com')
         : applied();
     });
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const table = await within(rules).findByRole('table', { name: 'Rules' });
     const gmail = (await within(table).findByText('example/gmail')).closest('tr') as HTMLElement;
@@ -237,7 +226,7 @@ describe('Agent: the behaviour rules', () => {
       },
       revokePreview: async () => failed('TRANSIENT', 'the approvals store is busy', 'Try again in a moment.', 75),
     });
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
     await fillRule(form, 'example/slack', ['post']);
@@ -260,7 +249,7 @@ describe('Agent: the behaviour rules', () => {
   it('opening a picker adds no inline style, which the content policy would refuse', async () => {
     // `style-src 'self'`: Base UI's Select writes a <style> to hide its scrollbar unless the app says not to.
     const before = document.querySelectorAll('style').length;
-    renderApp(createFakeBridge(), { screen: 'agent' });
+    renderParts(createFakeBridge());
     const rules = await section('Behaviour rules');
     const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
     fireEvent.click(within(form).getByRole('combobox', { name: 'Account' }));
@@ -275,7 +264,7 @@ describe('Agent: the behaviour rules', () => {
         ? failed('USAGE', 'example/gmail does not post', 'Its acts are: reply, send.')
         : undefined,
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
     await fillRule(form, 'example/gmail', ['post']);
@@ -295,7 +284,7 @@ describe('Agent: the behaviour rules', () => {
         },
       },
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     expect(await within(rules).findByText('No rules: agents may do whatever each account allows.')).toBeTruthy();
     expect(within(rules).getByText('the behaviour rules are not a list')).toBeTruthy();
@@ -305,7 +294,7 @@ describe('Agent: the behaviour rules', () => {
     const bridge = bridgeAnswering((call) =>
       call.kind === 'behaviour' ? failed('CONFIG', 'the configuration cannot be read') : undefined,
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     expect(await within(await section('Behaviour rules')).findByText('the configuration cannot be read')).toBeTruthy();
   });
 });
@@ -336,7 +325,7 @@ describe('Agent: what the grammar refuses', () => {
         },
       },
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const rules = await section('Behaviour rules');
     const rule = (await within(rules).findByText('Not A Name')).closest('tr') as HTMLElement;
     fireEvent.click(within(rule).getByRole('button', { name: 'Remove' }));
@@ -354,7 +343,7 @@ describe('Agent: what the grammar refuses', () => {
 describe('Agent: standing approvals', () => {
   it('standing: revoke one, end them all', async () => {
     const bridge = createFakeBridge({}, { standingRevoke: { approvals: [] }, standingOff: { approvals: [] } });
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const standing = await section('Standing approvals');
     const table = await within(standing).findByRole('list', { name: 'Standing approvals' });
     const active = within(table).getByText(STANDING).closest('li') as HTMLElement;
@@ -386,7 +375,7 @@ describe('Agent: standing approvals', () => {
 
   it('none, and a failed read, say so', async () => {
     const bridge = createFakeBridge({}, { standingList: { approvals: [] } });
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const standing = await section('Standing approvals');
     expect(await within(standing).findByText('No standing approvals.')).toBeTruthy();
     expect(within(standing).queryByRole('button', { name: COPY.endEveryStanding })).toBeNull();
@@ -395,7 +384,7 @@ describe('Agent: standing approvals', () => {
   it('ending them all says what could not be done all the same', async () => {
     const note = `${STANDING} could not be written down as ended (EACCES); the raised standing epoch ends it.`;
     const bridge = createFakeBridge({}, { standingOff: { approvals: [], partial: [note] } });
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const standing = await section('Standing approvals');
     await within(standing).findByRole('list', { name: 'Standing approvals' });
     fireEvent.click(within(standing).getByRole('button', { name: COPY.endEveryStanding }));
@@ -408,7 +397,7 @@ describe('Agent: standing approvals', () => {
     const bridge = bridgeAnswering((call) =>
       call.kind === 'standingRevoke' ? failed('NOT_FOUND', 'there is no standing approval with that id') : undefined,
     );
-    renderApp(bridge, { screen: 'agent' });
+    renderParts(bridge);
     const standing = await section('Standing approvals');
     const table = await within(standing).findByRole('list', { name: 'Standing approvals' });
     const active = within(table).getByText(STANDING).closest('li') as HTMLElement;
@@ -416,29 +405,6 @@ describe('Agent: standing approvals', () => {
     expect(await within(standing).findByText('there is no standing approval with that id')).toBeTruthy();
   });
 });
-
-/** The Agent screen's tab called `name` (its name, then any count). */
-async function tab(name: RegExp): Promise<HTMLElement> {
-  return screen.findByRole('tab', { name });
-}
-
-/** A tab's count, as it shows and as it is said: its number, its tone, and its words for a screen reader. */
-function countOf(each: HTMLElement): { shown: string; tone: string | null; says: string } | null {
-  const badge = each.querySelector<HTMLElement>('[data-slot="tab-count"]');
-  if (badge === null) return null;
-  return {
-    shown: badge.querySelector('[aria-hidden="true"]')?.textContent ?? '',
-    tone: badge.getAttribute('data-tone'),
-    says: badge.querySelector('.sr-only')?.textContent ?? '',
-  };
-}
-
-/** A tab's mark for a view this CLI is too old for: its tone, and its words for a screen reader. */
-function gateOf(each: HTMLElement): { tone: string | null; says: string } | null {
-  const mark = each.querySelector<HTMLElement>('[data-slot="tab-gate"]');
-  if (mark === null) return null;
-  return { tone: mark.getAttribute('data-tone'), says: mark.textContent ?? '' };
-}
 
 /** Opens the hint beside a label, as a pointer resting on it does, and gives its text. */
 async function hintOf(trigger: HTMLElement): Promise<string> {
@@ -448,195 +414,9 @@ async function hintOf(trigger: HTMLElement): Promise<string> {
   return (await screen.findByRole('tooltip', {}, { timeout: 3000 })).textContent ?? '';
 }
 
-describe('Agent: the tabs (D7)', () => {
-  it('three views, the label first and chosen; each read once, and only the chosen view shows', async () => {
-    const bridge = createFakeBridge();
-    renderApp(bridge, { screen: 'agent' });
-    const list = await screen.findByRole('tablist', { name: 'Agent' });
-    const tabs = within(list).getAllByRole('tab');
-    expect(tabs.map((each) => each.textContent?.replace(/\d.*$/, '').trim())).toEqual([
-      'Label',
-      'Behaviour rules',
-      'Standing approvals',
-    ]);
-    expect(tabs.map((each) => each.getAttribute('aria-selected'))).toEqual(['true', 'false', 'false']);
-    expect(await screen.findByRole('region', { name: 'The label' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Behaviour rules' })).toBeNull();
-    expect(screen.queryByRole('region', { name: 'Standing approvals' })).toBeNull();
-    // Every view is read when the screen opens, as on one page, so each tab can say what it holds.
-    await waitFor(() => expect(count(bridge, 'standingList')).toBe(1));
-    expect(count(bridge, 'label')).toBe(1);
-    expect(count(bridge, 'behaviour')).toBe(1);
-
-    fireEvent.click(await tab(/^Standing approvals/));
-    expect(await screen.findByRole('region', { name: 'Standing approvals' })).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'The label' })).toBeNull();
-    // Choosing a tab reads nothing again.
-    expect(count(bridge, 'standingList')).toBe(1);
-    expect(count(bridge, 'label')).toBe(1);
-  });
-
-  it('counts: the rules, and the standing approvals that have not ended; none on a label with nothing to look at', async () => {
-    renderApp(createFakeBridge(), { screen: 'agent' });
-    const rules = await tab(/^Behaviour rules/);
-    await waitFor(() => expect(countOf(rules)).toEqual({ shown: '2', tone: 'neutral', says: '2 rules' }));
-    // The fixture's two standing approvals: one active, one ended.
-    await waitFor(() =>
-      expect(countOf(screen.getByRole('tab', { name: /^Standing approvals/ }))).toEqual({
-        shown: '1',
-        tone: 'neutral',
-        says: '1 active',
-      }),
-    );
-    expect(countOf(screen.getByRole('tab', { name: /^Label/ }))).toBeNull();
-    expect(screen.getByRole('tab', { name: /^Standing approvals/ }).textContent).toContain('1 active');
-  });
-
-  it('warn counts: a label rule that matches no account, and rules to look at; none when nothing is left', async () => {
-    const bridge = createFakeBridge(
-      {},
-      {
-        label: {
-          word: 'agent',
-          words: ['agent'],
-          name: null,
-          rules: [{ rule: { account: 'gone/gmail', as: 'me' }, text: 'gone/gmail: sent as you', matches: false }],
-          accounts: [],
-          ignored: [],
-        },
-        behaviour: {
-          rules: [
-            { account: 'example/slack', acts: ['reply'], orphan: false },
-            { account: 'old/gmail', acts: [], orphan: true },
-          ],
-          unreadable: [{ account: null, reason: 'the behaviour rules are not a list' }],
-          accounts: [],
-        },
-        standingList: {
-          approvals: [
-            {
-              id: STANDING,
-              workspace: 'example/slack',
-              state: 'pending',
-              contents: [],
-              places: { kind: 'threads-i-am-in' },
-              limits: { perThread: 1, perHour: 10, perDay: 30, expiresDays: 7 },
-              expiresAt: null,
-              usesToday: 0,
-            },
-          ],
-        },
-      },
-    );
-    renderApp(bridge, { screen: 'agent' });
-    await waitFor(() =>
-      expect(countOf(screen.getByRole('tab', { name: /^Label/ }))).toEqual({
-        shown: '1',
-        tone: 'warn',
-        says: '1 rule matches no account',
-      }),
-    );
-    // One rule this release cannot read and one that names no connected account: two to look at, over the count.
-    expect(countOf(screen.getByRole('tab', { name: /^Behaviour rules/ }))).toEqual({
-      shown: '2',
-      tone: 'warn',
-      says: '2 rules to look at',
-    });
-    // One waiting for its approval at a terminal counts too.
-    expect(countOf(screen.getByRole('tab', { name: /^Standing approvals/ }))).toEqual({
-      shown: '1',
-      tone: 'neutral',
-      says: '1 pending',
-    });
-    // The warnings themselves are in the views.
-    const rules = await section('Behaviour rules');
-    expect(within(rules).getByText('not connected')).toBeTruthy();
-    expect(within(rules).getByText('the behaviour rules are not a list')).toBeTruthy();
-  });
-
-  it('a read that failed is marked on its tab, and said in its view', async () => {
-    const bridge = bridgeAnswering((call) =>
-      call.kind === 'standingList' ? failed('CONFIG', 'the standing approvals cannot be read') : undefined,
-    );
-    renderApp(bridge, { screen: 'agent' });
-    const standing = await tab(/^Standing approvals/);
-    await waitFor(() => expect(within(standing).getByRole('status').textContent).toBe('could not be read'));
-    expect(countOf(standing)).toBeNull();
-    // The other tabs are not marked.
-    expect(within(await tab(/^Behaviour rules/)).queryByRole('status')).toBeNull();
-    const view = await section('Standing approvals');
-    expect(within(view).getByText('the standing approvals cannot be read')).toBeTruthy();
-    // There may be one to end: ending them all is still offered.
-    expect(within(view).getByRole('button', { name: COPY.endEveryStanding })).toBeTruthy();
-  });
-
-  it('a preview waiting in one view stays, and keeps its approval, while another view is looked at', async () => {
-    const bridge = bridgeAnswering((call) => (call.kind === 'behaviourAllow' ? pending() : undefined));
-    renderApp(bridge, { screen: 'agent' });
-    const rules = await section('Behaviour rules');
-    const form = await within(rules).findByRole('form', { name: 'Add or change a rule' });
-    await fillRule(form, 'example/slack', ['post']);
-    fireEvent.click(within(form).getByRole('button', { name: 'Save rule' }));
-    expect(await within(rules).findByText(COPY.approveThisInTerminal)).toBeTruthy();
-
-    fireEvent.click(await tab(/^Standing approvals/));
-    await screen.findByRole('region', { name: 'Standing approvals' });
-    fireEvent.click(await tab(/^Behaviour rules/));
-    const again = await screen.findByRole('region', { name: 'Behaviour rules' });
-    expect(within(again).getByText(COPY.approveThisInTerminal)).toBeTruthy();
-    expect(again.textContent).toContain(PREVIEW);
-    // Nothing revoked it: it is still the person's to approve or cancel.
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(bridge.calls.filter((call) => call.command === 'revokePreview')).toEqual([]);
-  });
-
-  it('a gated view says so behind its tab, and reads nothing', async () => {
-    const bridge = createFakeBridge({
-      installation: async () => ({ ...(await createFakeBridge().installation()), version: '0.22.0' }),
-    });
-    renderApp(bridge, { screen: 'agent' });
-    const standing = await section('Standing approvals');
-    expect(await within(standing).findByText(COPY.updateToUse)).toBeTruthy();
-    expect(within(standing).getByText('Needs 0.23.0 or later; this machine has 0.22.0.')).toBeTruthy();
-    // Its tab is marked, so the line is not hidden behind it: a warn dot, said as "needs an update".
-    const standingTab = await tab(/^Standing approvals/);
-    expect(countOf(standingTab)).toBeNull();
-    expect(gateOf(standingTab)).toEqual({ tone: 'warn', says: 'needs an update' });
-    expect(standingTab.textContent).toBe('Standing approvals needs an update');
-    // The rules, which 0.22.0 has, are read and counted, and their tab is not marked.
-    await waitFor(() => expect(countOf(screen.getByRole('tab', { name: /^Behaviour rules/ }))?.shown).toBe('2'));
-    expect(gateOf(screen.getByRole('tab', { name: /^Behaviour rules/ }))).toBeNull();
-    expect(cliKinds(bridge)).not.toContain('standingList');
-  });
-
-  it('on a CLI too old for both, each gated tab is marked "needs an update", and the label tab is not', async () => {
-    const bridge = createFakeBridge({
-      installation: async () => ({ ...(await createFakeBridge().installation()), version: '0.21.0' }),
-    });
-    renderApp(bridge, { screen: 'agent' });
-    // The label, which every version has, is read; its tab carries no mark.
-    await waitFor(() => expect(count(bridge, 'label')).toBe(1));
-    expect(gateOf(await tab(/^Label/))).toBeNull();
-    for (const [name, line] of [
-      [/^Behaviour rules/, 'Needs 0.22.0 or later; this machine has 0.21.0.'],
-      [/^Standing approvals/, 'Needs 0.23.0 or later; this machine has 0.21.0.'],
-    ] as const) {
-      const each = await tab(name);
-      expect(gateOf(each)).toEqual({ tone: 'warn', says: 'needs an update' });
-      expect(countOf(each)).toBeNull();
-      // What the mark points at, behind the tab.
-      fireEvent.click(each);
-      expect(await screen.findByText(line)).toBeTruthy();
-    }
-    expect(screen.getByRole('tab', { name: 'Behaviour rules needs an update' })).toBeTruthy();
-    expect(screen.getByRole('tab', { name: 'Standing approvals needs an update' })).toBeTruthy();
-    expect(cliKinds(bridge).filter((kind) => kind === 'behaviour' || kind === 'standingList')).toEqual([]);
-  });
-});
-
 describe('Agent: the hints', () => {
   it('what a conversation may be, and what the acts are, are a hover or focus away beside their labels', async () => {
-    renderApp(createFakeBridge(), { screen: 'agent' });
+    renderParts(createFakeBridge());
     const form = await within(await section('Behaviour rules')).findByRole('form', { name: 'Add or change a rule' });
     // The lines that stay: what an empty conversation means, and what no acts ticked means.
     expect(within(form).getByText('Optional. Leave it empty for the whole account.')).toBeTruthy();
@@ -648,7 +428,7 @@ describe('Agent: the hints', () => {
   });
 
   it('the acts hint', async () => {
-    renderApp(createFakeBridge(), { screen: 'agent' });
+    renderParts(createFakeBridge());
     const form = await within(await section('Behaviour rules')).findByRole('form', { name: 'Add or change a rule' });
     expect(await hintOf(within(form).getByRole('button', { name: 'About the acts' }))).toBe(ACTS_HINT);
     expect(ACTS_HINT).toBe('What an agent may start there.');

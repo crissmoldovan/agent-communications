@@ -146,6 +146,25 @@ export type QueueListCall = {
   limit?: number;
 };
 
+/** The word after the person's name, as core lists them (0.34.0, `label.rs`, `LabelWord`). In core's order. */
+export const LABEL_WORDS = ['agent', 'assistant', 'twin', 'minion', 'bot', 'fake', 'AI'] as const;
+export type LabelWord = (typeof LABEL_WORDS)[number];
+
+/**
+ * `label rule add|remove` (0.34.0, Your agents): an exception to the tag on an account, or in one conversation of it,
+ * for some kinds of message (a comma list of core's act kinds) or every kind; `as` says who they appear to come from.
+ * Without `appApproval` it is prepared, or applied at once when it only takes away; with it, the person approved in
+ * the app the change the app prepared.
+ */
+export type LabelRuleCall<K extends 'labelRuleAdd' | 'labelRuleRemove'> = {
+  kind: K;
+  account: string;
+  as: 'agent' | 'me';
+  conversation?: string;
+  kinds?: string;
+  appApproval?: string;
+};
+
 /**
  * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
  * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
@@ -240,6 +259,13 @@ export type Call =
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
   | { kind: 'judgeShow'; judgeId: string; version?: number }
+  // Your agents (0.34.0, B1): the label's word, name and exceptions. A loosening is prepared without `appApproval`, then
+  // approved by the person's press in the app with it, only for the approval the app prepared for that same change; a
+  // tightening applies at once and never carries one.
+  | { kind: 'labelWord'; word: LabelWord; appApproval?: string }
+  | { kind: 'labelName'; name: string; appApproval?: string }
+  | LabelRuleCall<'labelRuleAdd'>
+  | LabelRuleCall<'labelRuleRemove'>
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
