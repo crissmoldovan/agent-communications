@@ -183,7 +183,8 @@
         },
         "operation": "slack.ack",
         "at": "2026-10-25T11:32:40.000Z",
-        "outcome": "ok"
+        "outcome": "ok",
+        "act": "reaction"
       }
     ],
     "C0EXAMPLE2/1792915200.000200": [

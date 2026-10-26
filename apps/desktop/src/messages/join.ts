@@ -12,7 +12,8 @@
  * `activity items` lists a line under every item it names — the reply draft under the message it answers too, a send
  * under its draft, a post under its thread — so each line counts once, however many items it is listed under.
  * - **A Slack acknowledgement** is listed under the message it acknowledged, and — when it replied — under the reply
- *   too, a later ts in the same conversation; a line that says what it did (`act`) is taken at its word.
+ *   too, a later ts in the same conversation, so the earliest is the message. Its `act` says whether it replied or
+ *   reacted; an older line without one replied when it is listed under two messages.
  *
  * A message only an agent read, with no event, is included: an item an ok read names that is none of an agent's own
  * drafts, sends, posts or acknowledgement replies.
@@ -170,6 +171,8 @@ interface ActivityIndex {
   sendsByDraft: Map<string, ItemLine[]>;
   /** Each ok Slack post in a thread, by `<channelId>/<parent ts>`. */
   threadPosts: Map<string, ItemLine[]>;
+  /** The message each acknowledgement acknowledged, by the acknowledgement's line (`ackKey`). */
+  ackTargets: Map<string, string>;
   /** The acknowledged messages whose acknowledgement replied. */
   ackReplied: Set<string>;
   /** Items an agent made: never a message that came in. */
@@ -179,6 +182,11 @@ interface ActivityIndex {
 /** The draft a reply line made or prepared: its own `draftId`, or the draft it was listed under. */
 function draftOf(line: ItemLine): string {
   return line.draftId ?? line.itemId;
+}
+
+/** An acknowledgement, however many items it is listed under: its window, its time. */
+function ackKey(line: ItemLine): string {
+  return `${line.session.key}|${line.at}|${line.operation}`;
 }
 
 function push<K, V>(map: Map<K, V[]>, key: K, value: V): void {
@@ -198,6 +206,7 @@ function indexActivity(byItem: ActivityItems): ActivityIndex {
   const replyLines = new Map<string, ItemLine[]>();
   const sendsByDraft = new Map<string, ItemLine[]>();
   const threadPosts = new Map<string, ItemLine[]>();
+  const ackTargets = new Map<string, string>();
   const ackReplied = new Set<string>();
   const own = new Set<string>();
   // One acknowledgement is one line, listed under each item it names: the message, and the reply when it made one.
@@ -216,22 +225,29 @@ function indexActivity(byItem: ActivityItems): ActivityIndex {
       if (line.operation === 'gmail.send.execute' && ok(line)) pushOnce(sendsByDraft, draftOf(line), line);
       const thread = SLACK_POSTS.has(line.operation) && ok(line) ? threadOf(line) : null;
       if (thread !== null) pushOnce(threadPosts, thread, line);
-      if (line.operation === 'slack.ack') {
-        push(acks, `${line.session.key}|${line.at}|${line.operation}`, line);
-        if (line.act === 'reply') ackReplied.add(itemId);
-      }
+      if (line.operation === 'slack.ack') push(acks, ackKey(line), line);
     }
   }
-  for (const lines of acks.values()) {
-    const ids = [...new Set(lines.map((line) => line.itemId))].filter((id) => slackParts(id) !== null);
-    if (ids.length < 2) continue;
-    const [first, ...rest] = ids.sort((a, b) => tsValue(a) - tsValue(b));
-    if (first === undefined || rest.some((id) => slackParts(id)?.channelId !== slackParts(first)?.channelId)) continue;
-    if (lines.some((line) => line.act === 'reaction')) continue;
-    ackReplied.add(first);
-    for (const id of rest) own.add(id);
+  /*
+   * Each acknowledgement: which message it acknowledged, and whether it replied. Where the line is listed says which —
+   * the message, and its reply when it made one, a later ts in the same conversation, so the earliest is the message.
+   * What it did is the line's `act` when it says (0.32.0); an older line, which does not, replied when it is listed
+   * under two messages of one conversation, and reacted when under one.
+   */
+  for (const [key, lines] of acks) {
+    const ids = [...new Set(lines.map((line) => line.itemId))].sort((a, b) => tsValue(a) - tsValue(b));
+    const first = ids[0];
+    if (first === undefined) continue;
+    const together = ids.every(
+      (id) => slackParts(id) !== null && slackParts(id)?.channelId === slackParts(first)?.channelId,
+    );
+    const act = lines.find((line) => line.act !== null)?.act ?? null;
+    const replied = act === null ? together && ids.length > 1 : act === 'reply';
+    ackTargets.set(key, first);
+    if (replied) ackReplied.add(first);
+    if (together) for (const id of ids.slice(1)) own.add(id);
   }
-  return { byItem, windows, replyLines, sendsByDraft, threadPosts, ackReplied, own };
+  return { byItem, windows, replyLines, sendsByDraft, threadPosts, ackTargets, ackReplied, own };
 }
 
 // ── One message's steps ────────────────────────────────────────────────────────────────────────────────────────
@@ -273,7 +289,8 @@ function touchesOf(id: string | null, queueItem: QueueItemView | null, index: Ac
   if (id !== null) {
     for (const line of index.byItem.get(id) ?? []) {
       if (isRead(line)) touches.push(activityTouch('read', line));
-      else if (line.operation === 'slack.ack' && ok(line)) {
+      // An acknowledgement, of this message: not the one it is listed under because its reply is this one.
+      else if (line.operation === 'slack.ack' && ok(line) && index.ackTargets.get(ackKey(line)) === id) {
         touches.push(activityTouch('acknowledged', line, { replied: index.ackReplied.has(id) }));
       }
     }

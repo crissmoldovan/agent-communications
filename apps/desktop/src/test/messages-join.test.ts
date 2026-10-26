@@ -215,6 +215,12 @@ describe('reading the three answers', () => {
       draftId: 'r-2000000000000000001',
       session: { key: '3f9a1c2e7b4d5a60', folder: '/example/home/work/acme' },
     });
+    // An acknowledgement says what it did: a reply or a reaction; a word that is neither is none.
+    expect(read.get('D0EXAMPLE1/1792927860.000100')?.[1]).toMatchObject({ operation: 'slack.ack', act: 'reaction' });
+    const odd = readActivityItems({
+      items: { m1: [{ session: W1, operation: 'slack.ack', at: '2026-10-25T10:00:00.000Z', act: 'delete' }] },
+    });
+    expect(odd?.get('m1')?.[0]?.act).toBeNull();
     // A post names the thread it went into as the message it is: `<channelId>/<ts>`.
     expect(read.get('C0EXAMPLE2/1792915500.000300')?.[0]).toMatchObject({ thread: 'C0EXAMPLE2/1792915200.000200' });
     // A line is listed under every item it names: the reply draft under the message it answers, too.
@@ -407,6 +413,34 @@ describe('the status order', () => {
     expect(join([event({ eventId: 'b', ...SLACK_MESSAGE })], items({ ...ack, act: 'reply' }))[0]?.status.kind).toBe(
       'replied',
     );
+  });
+
+  it('an acknowledgement’s `act` says reply or reaction; where it is listed says only which message it acknowledged', () => {
+    const slack = event({ eventId: 'b', ...SLACK_MESSAGE });
+    const ack = line('C0EXAMPLE2/1792915200.000200', 'slack.ack', '2026-10-25T08:01:00Z');
+    const reply = 'C0EXAMPLE2/1792915260.000400';
+    // `act: 'reply'`, listed under the message and its reply: the earlier one is the message, and it was replied to.
+    const replied = join([slack], items({ ...ack, act: 'reply' }, { ...ack, act: 'reply', itemId: reply }));
+    expect(replied.map((each) => [each.key, each.status.kind])).toEqual([['event:b', 'replied']]);
+    // `act: 'reaction'` is a reaction, however the line is listed: the word wins over the listing.
+    const reacted = join([slack], items({ ...ack, act: 'reaction' }, { ...ack, act: 'reaction', itemId: reply }));
+    expect(reacted[0]?.status).toEqual({ kind: 'acknowledged', at: at('2026-10-25T08:01:00Z') });
+    // The reply, were the event service to see it come in, is not itself acknowledged: the line acknowledged the other.
+    const echoed = event({
+      eventId: 'c',
+      ...SLACK_MESSAGE,
+      source: { messageId: null, channelId: 'C0EXAMPLE2', ts: '1792915260.000400' },
+      sourceId: reply,
+      occurredAt: at('2026-10-25T08:01:01Z'),
+    });
+    const both = join([slack, echoed], items({ ...ack, act: 'reply' }, { ...ack, act: 'reply', itemId: reply }));
+    expect(both.map((each) => [each.key, each.status.kind])).toEqual([
+      ['event:b', 'replied'],
+      ['event:c', 'not-seen'],
+    ]);
+    // An older line, with no `act`, is read as before: listed under two messages, it replied; under one, it reacted.
+    expect(join([slack], items(ack, { ...ack, itemId: reply }))[0]?.status.kind).toBe('replied');
+    expect(join([slack], items(ack))[0]?.status.kind).toBe('acknowledged');
   });
 
   it('a line listed under each item it names counts once: the reply draft, its prepare, its send and a thread post', () => {
