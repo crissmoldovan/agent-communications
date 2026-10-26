@@ -29,7 +29,14 @@ import {
   renderB3ApprovalPreviewV1,
 } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
-import { decideHeld, deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
+import {
+  decideHeld,
+  deliveriesList,
+  deliveryShow,
+  dropDelivery,
+  heldList,
+  retryDelivery,
+} from '../operations/deliveries.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
@@ -678,7 +685,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(await deliveriesList(controlOptions(program)));
   });
-  const delivery = program.command('delivery').description('retry or drop one exact delivery');
+  const delivery = program.command('delivery').description('show, retry or drop one exact delivery');
+  delivery
+    .command('show <delivery-id>')
+    .description('show one delivery: its decision, the event and its source ids, and its target (a person only)')
+    .action(async (deliveryId: string) => {
+      ran = true;
+      // The person's view, at a terminal or in the app (0.32.0, §3.5): never inside an MCP server's process.
+      assertNotMcpServer(env, 'delivery');
+      print(await deliveryShow(deliveryId, controlOptions(program)));
+    });
   delivery.command('retry <delivery-id>').action(async (deliveryId: string) => {
     ran = true;
     print(await retryDelivery(deliveryId, controlOptions(program)));

@@ -109,6 +109,11 @@ const EXPECTED_QUEUE_ROWS = [
   ['events-daemon.queue.clear', 'queue clear', null, 'exception', 'queueClear'],
 ] as const;
 
+/** 0.32.0 (owner feedback §3.5): one delivery's details are the person's, at a terminal or in the app. */
+const EXPECTED_READABLE_ROWS = [
+  ['events-daemon.delivery.show', 'delivery show', null, 'exception', 'deliveryShow'],
+] as const;
+
 /**
  * Routing's lanes (0.31.0): the person lists, binds and unbinds; binding is terminal-only (B1); an agent window's own
  * identity, watch, long-poll and lane read are MCP-only exceptions, each with its reason (§3.7).
@@ -144,6 +149,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
   ...shapedRows(EXPECTED_B3_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
+  ...shapedRows(EXPECTED_READABLE_ROWS),
   ...shapedRows(EXPECTED_QUEUE_ROWS),
   ...shapedRows(EXPECTED_LANE_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
@@ -265,6 +271,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.approve',
     'events-daemon.dryrun.list',
     'events-daemon.dryrun.show',
+    'events-daemon.delivery.show',
     'events-daemon.queue.list',
     'events-daemon.queue.show',
     'events-daemon.queue.clear',

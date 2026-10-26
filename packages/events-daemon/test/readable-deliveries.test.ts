@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
+import { run } from '../src/cli/program.ts';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
+import { MCP_SERVER_MARKER } from '../src/targets/queue.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /**
@@ -138,4 +141,50 @@ test('0.32 B2: deliveries list rows carry the target kind, the last answer, the 
     const after = (await control.handle({ operation: 'deliveriesList', args: {} })) as Array<Record<string, unknown>>;
     assert.equal(after[0]?.deliveredAt, null);
   });
+});
+
+/** The CLI as the app runs it: no terminal, stdin closed, `--json`. */
+async function cli(argv: readonly string[], env: NodeJS.ProcessEnv, tty = false) {
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  let out = '';
+  let err = '';
+  stdout.on('data', (chunk) => {
+    out += chunk;
+  });
+  stderr.on('data', (chunk) => {
+    err += chunk;
+  });
+  const code = await run(argv, {
+    env,
+    streams: {
+      stdin: Object.assign(new PassThrough(), { isTTY: tty }),
+      stdout: Object.assign(stdout, { isTTY: tty }),
+      stderr: Object.assign(stderr, { isTTY: tty }),
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  return { code, out, err };
+}
+
+// With no owner running, a read the gate lets through gets as far as asking it, and exits 66 "not running".
+test('0.32 B3: delivery show refuses inside the event service’s MCP server, and is the person’s with --json outside it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-delivery-gate-');
+  try {
+    const argv = ['--state-dir', stateDir, 'delivery', 'show', 'delivery-1', '--json'];
+    const refused = await cli(argv, { [MCP_SERVER_MARKER]: 'events' });
+    assert.equal(refused.code, 10, refused.err);
+    assert.match(refused.err, /the event service's MCP server cannot read them/u);
+    assert.equal(refused.out, '', 'nothing is printed');
+    // The app's call: no terminal, --json, no agent marker.
+    const app = await cli(argv, {});
+    assert.equal(app.code, 66, app.err);
+    assert.match(app.err, /not running/u);
+    // A shell an agent runs is the person's own: this gate does not pretend otherwise (Q1's trade).
+    assert.equal((await cli(argv, { CLAUDECODE: '1' })).code, 66);
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
 });

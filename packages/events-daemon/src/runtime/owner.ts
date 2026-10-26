@@ -96,6 +96,7 @@ import {
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { DELIVERY_ACTIVITY_INTERVAL_MS, DeliveryActivity } from './delivery-activity.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
+import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
@@ -1120,6 +1121,8 @@ async function startOwnerWithLock(
   });
   // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
   const lanes = new LaneService({ store: database, queue, now });
+  // One delivery as the person reads it (0.32.0, owner feedback §3.5): reached only from the CLI and the app.
+  const deliveryReader = new DeliveryReader({ store: database, cipher, now });
   notifyLaneAppend = () => lanes.notifyAppended();
   const webhook = new WebhookDispatcher({
     store: database,
@@ -1614,6 +1617,7 @@ async function startOwnerWithLock(
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
+          deliveryReader,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1697,6 +1701,7 @@ async function handleControl(
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
+  deliveryReader?: DeliveryReader,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1739,6 +1744,9 @@ async function handleControl(
       return dispatcher.list();
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
+    case OWNER_CONTROL_WIRES.deliveryShow:
+      if (deliveryReader === undefined) throw new CommsError('USAGE', 'delivery show is not available');
+      return deliveryReader.show(requiredText(request.args.deliveryId, 'delivery id'));
     // The action queue. Content reads are reached only from the CLI (Q1); every state change is the person's own.
     case OWNER_CONTROL_WIRES.queueList:
       return queue.list(request.args);

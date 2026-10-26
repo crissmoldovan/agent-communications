@@ -56,7 +56,7 @@ Scripts should read these rather than parse output.
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
-| [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
+| [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
@@ -614,10 +614,18 @@ agent-events deliveries list [options]
 
 ### `agent-events delivery`
 
-retry or drop one exact delivery
+show, retry or drop one exact delivery
 
 ```
 agent-events delivery [options] [command]
+```
+
+### `agent-events delivery show`
+
+show one delivery: its decision, the event and its source ids, and its target (a person only)
+
+```
+agent-events delivery show [options] <delivery-id>
 ```
 
 ### `agent-events delivery retry`

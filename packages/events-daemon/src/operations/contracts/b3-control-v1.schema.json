@@ -786,7 +786,7 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
-            "operation": { "enum": ["retryDelivery", "dropDelivery", "dryrun-show"] },
+            "operation": { "enum": ["retryDelivery", "dropDelivery", "dryrun-show", "delivery-show"] },
             "args": {
               "type": "object",
               "additionalProperties": false,
@@ -1407,6 +1407,172 @@
         }
       }
     },
+    "nullableCount": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
+    "nullableId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue"] },
+    "eventSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "messageId"],
+          "properties": { "channel": { "const": "gmail" }, "messageId": { "$ref": "#/$defs/id" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "channelId", "ts"],
+          "properties": {
+            "channel": { "const": "slack" },
+            "channelId": { "$ref": "#/$defs/id" },
+            "ts": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "chatId", "messageId"],
+          "properties": {
+            "channel": { "const": "whatsapp" },
+            "chatId": { "$ref": "#/$defs/id" },
+            "messageId": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "emailId"],
+          "properties": { "channel": { "const": "resend" }, "emailId": { "$ref": "#/$defs/id" } }
+        }
+      ]
+    },
+    "deliveryRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveryId",
+        "accountId",
+        "ruleId",
+        "ruleVersion",
+        "targetId",
+        "targetVersion",
+        "subscriberId",
+        "subscriberVersion",
+        "attempts",
+        "nextAt",
+        "expiresAt",
+        "state",
+        "switchGeneration",
+        "deadLetterExpiresAt",
+        "targetKind",
+        "lastErrorCode",
+        "lastStatus",
+        "decisionId",
+        "eventId",
+        "deliveredAt"
+      ],
+      "properties": {
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "accountId": { "$ref": "#/$defs/id" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "$ref": "#/$defs/positive" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "targetVersion": { "$ref": "#/$defs/positive" },
+        "subscriberId": { "$ref": "#/$defs/nullableId" },
+        "subscriberVersion": { "$ref": "#/$defs/nullableCount" },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "nextAt": { "$ref": "#/$defs/nullableCount" },
+        "expiresAt": { "type": "integer", "minimum": 0 },
+        "state": { "$ref": "#/$defs/id" },
+        "switchGeneration": { "type": "integer", "minimum": 0 },
+        "deadLetterExpiresAt": { "$ref": "#/$defs/nullableCount" },
+        "targetKind": { "$ref": "#/$defs/deliveryTargetKind" },
+        "lastErrorCode": { "$ref": "#/$defs/nullableId" },
+        "lastStatus": { "$ref": "#/$defs/nullableCount" },
+        "decisionId": { "$ref": "#/$defs/id" },
+        "eventId": { "$ref": "#/$defs/nullableId" },
+        "deliveredAt": { "$ref": "#/$defs/nullableCount" }
+      }
+    },
+    "deliveryShow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delivery", "decision", "event", "target", "dryRun"],
+      "properties": {
+        "delivery": { "$ref": "#/$defs/deliveryRow" },
+        "decision": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["outcome", "decidedAt", "judge"],
+              "properties": {
+                "outcome": { "$ref": "#/$defs/id" },
+                "decidedAt": { "$ref": "#/$defs/nullableCount" },
+                "judge": {
+                  "oneOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "answer", "confidence", "calibrated"],
+                      "properties": {
+                        "kind": { "$ref": "#/$defs/id" },
+                        "answer": { "enum": ["yes", "no", null] },
+                        "confidence": { "type": ["number", "null"] },
+                        "calibrated": { "type": ["boolean", "null"] }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "event": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["eventId", "type", "accountId", "occurredAt", "observedAt", "source"],
+              "properties": {
+                "eventId": { "$ref": "#/$defs/id" },
+                "type": { "$ref": "#/$defs/id" },
+                "accountId": { "$ref": "#/$defs/id" },
+                "occurredAt": { "type": "integer", "minimum": 0 },
+                "observedAt": { "type": "integer", "minimum": 0 },
+                "source": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/eventSource" }] }
+              }
+            }
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "version"],
+          "properties": {
+            "kind": { "$ref": "#/$defs/deliveryTargetKind" },
+            "id": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "host": { "$ref": "#/$defs/id" },
+            "lane": { "$ref": "#/$defs/laneName" }
+          }
+        },
+        "dryRun": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["expiresAt"],
+              "properties": { "expiresAt": { "$ref": "#/$defs/nullableCount" } }
+            }
+          ]
+        }
+      }
+    },
     "resultsByOperation": {
       "$defs": {
         "status": {
@@ -1704,6 +1870,7 @@
         "migrateSecrets": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "dryrun-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
         "dryrun-show": { "$ref": "#/$defs/dryrunRecord" },
+        "delivery-show": { "$ref": "#/$defs/deliveryShow" },
         "queue-list": {
           "type": "object",
           "additionalProperties": false,
@@ -1896,6 +2063,7 @@
                     "dropDelivery",
                     "dryrun-list",
                     "dryrun-show",
+                    "delivery-show",
                     "queue-list",
                     "queue-show",
                     "queue-items",
@@ -2052,6 +2220,10 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "dryrun-show" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dryrun-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "delivery-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/delivery-show" } } }
             },
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-list" } } } } },

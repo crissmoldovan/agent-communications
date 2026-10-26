@@ -24,6 +24,8 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   // centrally leased cipher.
   'packages/events-daemon/src/runtime/queue-dispatcher.ts',
   'packages/events-daemon/src/runtime/queue.ts',
+  // `delivery show` (0.32.0): reads a decision's judge answer through the same centrally leased cipher.
+  'packages/events-daemon/src/runtime/delivery-show.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',
