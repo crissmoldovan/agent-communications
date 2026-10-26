@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { canonicalJson } from '@agentcomms/core';
-import { getPointer, type JsonValue, relatePointers } from '@agentcomms/events';
+import { getPointer, type JsonValue, RULE_RETENTION_DEFAULTS, relatePointers } from '@agentcomms/events';
 import { isLaneName } from './lanes.ts';
 import { EventDomainError } from './lifecycle.ts';
 
@@ -11,10 +11,13 @@ import { EventDomainError } from './lifecycle.ts';
 
 const DAY_MS = 86_400_000;
 
-/** A queue retention is 1 to 30 days and defaults to 7, on the target version and on the rule's `queueMs` alike. */
+/**
+ * A queue retention is 1 to 30 days and defaults to 7, on the target version and on the rule's `queueMs` alike. The
+ * default is `@agentcomms/events`' `RULE_RETENTION_DEFAULTS.queueMs`, the one copy the rule text fills from too.
+ */
 export const QUEUE_RETENTION_MIN_MS: number = DAY_MS;
 export const QUEUE_RETENTION_MAX_MS: number = 30 * DAY_MS;
-export const QUEUE_RETENTION_DEFAULT_MS: number = 7 * DAY_MS;
+export const QUEUE_RETENTION_DEFAULT_MS: number = RULE_RETENTION_DEFAULTS.queueMs;
 
 /** What an item shows: `summary` (from whom, subject or first words, and a link) or `minimal` (no first words, no link). */
 export const QUEUE_SHOW_VALUES: readonly ['summary', 'minimal'] = Object.freeze(['summary', 'minimal'] as const);

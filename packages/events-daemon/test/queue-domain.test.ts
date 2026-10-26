@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { canonicalJson, sha256Hex } from '@agentcomms/core';
+import { RULE_RETENTION_DEFAULTS } from '@agentcomms/events';
 import {
   activationDocumentDigest,
   canonicalFullRuleDocument,
@@ -74,6 +75,7 @@ test('QUEUE-A: a queue target document is local, secretless and bounded to 1–3
     show: 'summary',
   });
   assert.equal(QUEUE_RETENTION_DEFAULT_MS, 7 * DAY);
+  assert.equal(QUEUE_RETENTION_DEFAULT_MS, RULE_RETENTION_DEFAULTS.queueMs, 'one owner: @agentcomms/events');
   assert.equal(QUEUE_RETENTION_MIN_MS, DAY);
   assert.equal(QUEUE_RETENTION_MAX_MS, 30 * DAY);
   assert.equal(canonicalTarget({ ...queueTarget, show: 'minimal' }).kind, 'queue');

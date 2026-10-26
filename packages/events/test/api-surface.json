@@ -42,6 +42,7 @@
   "PointerPatternToken",
   "Provenance",
   "RESEND_BODY_MAX_CODE_POINTS",
+  "RULE_RETENTION_DEFAULTS",
   "Representation",
   "ResendEmailReceivedV1",
   "ResendEmailStatusChangedV1",

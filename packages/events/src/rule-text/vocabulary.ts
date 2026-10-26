@@ -1,5 +1,6 @@
 /** The rule text's words: what the printer writes and the parser reads, kept in one place so the two agree. */
 import type { JsonValue } from '../json.ts';
+import { RULE_RETENTION_DEFAULTS } from '../retention.ts';
 import { WORD_CHARACTERS } from './lines.ts';
 
 /**
@@ -41,20 +42,10 @@ export const DURATION_UNITS: readonly (readonly [singular: string, plural: strin
   ['millisecond', 'milliseconds', 1],
 ];
 
-/**
- * The retention a rule has when its text has no `keep for` lines: the defaults the owner set on 2026-10-06
- * (local-event-emission design, D2), and the action queue's 7 days for a rule with a queue target (Q2).
- */
-export const DEFAULT_RETENTION: Readonly<Record<string, number>> = Object.freeze({
-  ingestMs: 7 * DAY,
-  holdMs: 7 * DAY,
-  deliveryMs: 7 * DAY,
-  dryrunMs: DAY,
-  sseReplayMs: 7 * DAY,
-  deadLetterMs: 7 * DAY,
-  decisionMetadataMs: 90 * DAY,
-});
-export const DEFAULT_QUEUE_RETENTION: number = 7 * DAY;
+/** The retention a rule has when its text has no `keep for` lines, without the queue's, which only a queued rule has. */
+const { queueMs: queueDefault, ...ruleDefaults } = RULE_RETENTION_DEFAULTS;
+export const DEFAULT_RETENTION: Readonly<Record<string, number>> = Object.freeze(ruleDefaults);
+export const DEFAULT_QUEUE_RETENTION: number = queueDefault;
 
 /** The `keep for` lines, in the order they are printed, with the retention field each sets. */
 export const RETENTION_LINES: readonly (readonly [words: readonly string[], field: string])[] = [

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CATALOGUE, type JsonObject, parseRuleText, printRuleText } from '../src/index.ts';
+import { CATALOGUE, type JsonObject, parseRuleText, printRuleText, RULE_RETENTION_DEFAULTS } from '../src/index.ts';
 
 /**
  * The rule text (0.33.0 design §3.2): `printRuleText` writes a rule document as the prototype's small language, and
@@ -534,6 +534,11 @@ test('at most, cloud event type: the hourly cap and the CloudEvent type the rule
   const text = roundTrip(rule({ deliveryRateCap: 1, cloudEventType: 'com.example.invoice' }));
   assert.equal(section(text, 'at')[0], 'at most 1 an hour');
   assert.equal(section(text, 'cloud')[0], 'cloud event type "com.example.invoice"');
+});
+
+test('the retention defaults have one owner, this package, and the rule text fills from it', () => {
+  assert.deepEqual(RULE_RETENTION_DEFAULTS, { ...DEFAULT_RETENTION, queueMs: 7 * DAY });
+  assert.ok(Object.isFrozen(RULE_RETENTION_DEFAULTS));
 });
 
 test('keep for: retention says only what differs from the defaults, and the parser fills the rest', () => {
