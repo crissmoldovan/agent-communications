@@ -20,6 +20,7 @@ import {
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
+import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
@@ -751,7 +752,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       const url = options.url as string | undefined;
       const model = options.model as string | undefined;
       // The words are checked here too, so a mistyped one exits 64 without reaching the owner.
-      if (kind === 'typesafe') {
+      if (kind === JUDGE_KIND_TYPESAFE) {
         if (url !== undefined || model !== undefined)
           throw new CommsError('USAGE', 'Jev takes --provider, not --url or --model');
         if (provider !== undefined && !isJevProvider(provider))
@@ -781,7 +782,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (provider: string) => {
       ran = true;
       const origin = await personSetupOrigin("set an AI provider's key");
-      if (provider !== 'typesafe' && provider !== 'openrouter')
+      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
         throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
       print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
@@ -792,7 +793,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (provider: string) => {
       ran = true;
       const origin = await personSetupOrigin("remove an AI provider's key");
-      if (provider !== 'typesafe' && provider !== 'openrouter')
+      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
         throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });

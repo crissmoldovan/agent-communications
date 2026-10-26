@@ -1,8 +1,9 @@
 import type { DatabaseSync } from 'node:sqlite';
-import { JUDGE_KINDS } from '../domain/lifecycle.ts';
+import { JUDGE_KIND_TYPESAFE, JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
 const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
+const PROVIDER_KEY_SQL_VALUES = [JUDGE_KIND_TYPESAFE, 'openrouter'].map((id) => `'${id}'`).join(', ');
 
 export interface EventMigration {
   readonly version: number;
@@ -928,7 +929,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
           (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
           OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
           OR (owner_kind = 'judge' AND purpose = 'judge-key')
-          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN ('typesafe', 'openrouter'))
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${PROVIDER_KEY_SQL_VALUES}))
         )
       ) STRICT`,
       `INSERT INTO event_secret_generations_v26

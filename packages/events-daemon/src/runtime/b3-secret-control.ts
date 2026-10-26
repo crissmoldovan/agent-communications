@@ -40,7 +40,7 @@ export interface ProviderKeyReceipt {
   readonly judges: number;
 }
 
-/** A live Jev judge version, and the provider that serves it (a document from before 2026-10-26 names `typesafe`). */
+/** A live Jev judge version, and the provider that serves it (a document from before 2026-10-26 names no provider: TypeSafe serves it). */
 interface HostedJudgeVersion {
   readonly judgeId: string;
   readonly version: number;

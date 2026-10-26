@@ -171,7 +171,7 @@ export class JudgeSetupService {
     if (kind === JUDGE_KIND_TYPESAFE) {
       if (args.url !== undefined || args.model !== undefined)
         throw new CommsError('USAGE', 'Jev takes --provider, not a URL or a model');
-      const chosen = args.provider ?? 'typesafe';
+      const chosen = args.provider ?? JUDGE_KIND_TYPESAFE;
       if (!isJevProvider(chosen)) throw new CommsError('USAGE', 'Jev’s provider is typesafe or openrouter');
       jevProvider = chosen;
       wanted = setupJudgeDocument({ kind, provider: chosen });

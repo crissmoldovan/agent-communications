@@ -65,13 +65,13 @@ export function isSetupJudgeKind(value: unknown): value is SetupJudgeKind {
 /** The judge each kind's setup makes and keeps: Jev, as the README names it, and the person's local model server. */
 export const SETUP_JUDGE_IDS: Readonly<Record<SetupJudgeKind, string>> = Object.freeze({
   typesafe: 'jev',
-  'local-endpoint': 'local-model',
+  [JUDGE_KIND_LOCAL_ENDPOINT]: 'local-model',
 });
 
 /** The prompt templates the two judges are made with, as the README's Jev document and the local examples name them. */
 export const SETUP_PROMPT_TEMPLATES: Readonly<Record<SetupJudgeKind, string>> = Object.freeze({
   typesafe: 'typesafe-jev-noul-v1',
-  'local-endpoint': 'local-noul-v1',
+  [JUDGE_KIND_LOCAL_ENDPOINT]: 'local-noul-v1',
 });
 
 /** Ollama's System One path, the only one a local `noul` judge is called at (provider record, read 2026-10-10). */
@@ -173,13 +173,13 @@ export function setupJudgeDocument(
     };
   }
   return {
-    judgeId: SETUP_JUDGE_IDS['local-endpoint'],
+    judgeId: SETUP_JUDGE_IDS[JUDGE_KIND_LOCAL_ENDPOINT],
     kind: JUDGE_KIND_LOCAL_ENDPOINT,
     provider: 'ollama',
     model: input.model,
     endpoint: input.endpoint.endpoint,
     approvedAddressSet: [input.endpoint.address],
-    promptTemplate: SETUP_PROMPT_TEMPLATES['local-endpoint'],
+    promptTemplate: SETUP_PROMPT_TEMPLATES[JUDGE_KIND_LOCAL_ENDPOINT],
     protocol: 'noul',
   };
 }

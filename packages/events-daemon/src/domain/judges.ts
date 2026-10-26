@@ -46,8 +46,8 @@ export const OPENROUTER_SYSTEM_ONE_ENDPOINT = 'https://openrouter.ai/api/v1/syst
 export const APPROVED_OPENROUTER_JEV_MODELS = ['typesafe/jev-1.14'] as const;
 type ApprovedOpenRouterJevModel = (typeof APPROVED_OPENROUTER_JEV_MODELS)[number];
 
-/** Who serves a `typesafe` (Jev) judge: TypeSafe itself, or OpenRouter, which passes the request to TypeSafe's Jev. */
-export const JEV_PROVIDERS = ['typesafe', 'openrouter'] as const;
+/** Who serves a Jev judge: TypeSafe itself, or OpenRouter, which passes the request to TypeSafe's Jev. */
+export const JEV_PROVIDERS: readonly [typeof JUDGE_KIND_TYPESAFE, 'openrouter'] = [JUDGE_KIND_TYPESAFE, 'openrouter'];
 export type JevProvider = (typeof JEV_PROVIDERS)[number];
 
 export function isJevProvider(value: unknown): value is JevProvider {
@@ -78,7 +78,7 @@ interface JevJudgeBase {
   readonly protocol: 'noul';
 }
 
-/** Jev, a `typesafe` judge: served by TypeSafe itself, or through OpenRouter (2026-10-26). */
+/** Jev, the TypeSafe judge kind: served by TypeSafe itself, or through OpenRouter (2026-10-26). */
 export type TypeSafeJudgeDocument =
   | (JevJudgeBase & {
       readonly provider: typeof JUDGE_KIND_TYPESAFE;

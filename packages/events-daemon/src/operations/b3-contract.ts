@@ -31,6 +31,7 @@ import {
   type LaneListResultV1,
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
+import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -1055,7 +1056,7 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
 
 /** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
 function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
-  if (value.kind !== 'typesafe' && value.kind !== 'local-endpoint')
+  if (value.kind !== JUDGE_KIND_TYPESAFE && value.kind !== JUDGE_KIND_LOCAL_ENDPOINT)
     throw new TypeError('a judge setup kind is unknown');
   if (value.enabled !== true || typeof value.enabledNow !== 'boolean')
     throw new TypeError('a judge setup result says the kind is on');
@@ -1531,14 +1532,15 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
       for (const entry of value.providers) {
         assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
-        if (entry.id !== 'typesafe' && entry.id !== 'openrouter') throw new TypeError('a listed provider is unknown');
+        if (entry.id !== JUDGE_KIND_TYPESAFE && entry.id !== 'openrouter')
+          throw new TypeError('a listed provider is unknown');
         assertText(entry.name, 'a listed provider name');
         if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
       }
       return;
     case 'provider-key-set':
     case 'provider-key-remove':
-      if (value.provider !== 'typesafe' && value.provider !== 'openrouter')
+      if (value.provider !== JUDGE_KIND_TYPESAFE && value.provider !== 'openrouter')
         throw new TypeError('a provider key result names a known provider');
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
@@ -1837,7 +1839,7 @@ function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
 function hostedJudgeDestination(document: ActivationDocumentV1): readonly string[] {
   if (document.kind !== 'rule' || document.rule.agentic === undefined) return [];
   const judge = document.rule.agentic.judge;
-  if (judge.kind !== 'typesafe') return [];
+  if (judge.kind !== JUDGE_KIND_TYPESAFE) return [];
   const named = `Judge ${judge.judgeId}@${judge.version}`;
   return [
     judge.provider === 'openrouter'
