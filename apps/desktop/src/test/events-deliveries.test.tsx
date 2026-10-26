@@ -8,12 +8,25 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import { recordFields } from '../events-deliveries.ts';
 import type { Call } from '../ipc.ts';
-import { cliKinds, createFakeBridge, type FakeBridge, type Fixture, failed } from './fake-bridge.ts';
+import type { Destination } from '../navigation.tsx';
+import { messageStoryOpener } from '../screens/events/DeliveryDetail.tsx';
+import { STORY_COPY } from '../screens/MessageStory.tsx';
+import {
+  cliKinds,
+  createFakeBridge,
+  EXAMPLE_INSTALLATION,
+  type FakeBridge,
+  type Fixture,
+  failed,
+} from './fake-bridge.ts';
+import activityItems from './fixtures/activity-items.json';
 import deliveries from './fixtures/events-deliveries.v032.json';
 import deliveryShows from './fixtures/events-delivery-show.v032.json';
 import dryrunShow from './fixtures/events-dryrun-show.v032.json';
 import shows from './fixtures/events-rule-show.v032.json';
 import rules from './fixtures/events-rules.v032.json';
+import messageShow from './fixtures/message-show.json';
+import messagesList from './fixtures/messages-list.json';
 import { renderApp } from './render.tsx';
 
 const ID = {
@@ -212,7 +225,8 @@ describe('Events → Deliveries', () => {
     const boxed = [...message.querySelectorAll('[data-slot="from-outside"]')].map((each) => each.textContent);
     expect(boxed).toEqual(['From outside: Jo Example <jo@example.com>', 'From outside: test: does the rule fire?']);
     expect(within(message).getByText('From outside')).toBeTruthy();
-    // No address is known for this account: no link to Gmail. And the message's story, inert until it has a screen.
+    // No address is known for this account: no link to Gmail. And the message's story is inert: `evt-03` is no event id
+    // the event service makes, so there is no story to open (one with a real id opens it: below).
     expect(within(message).queryByRole('button', { name: 'Open in Gmail' })).toBeNull();
     const story = within(message).getByText('See everything that happened to this message');
     expect(story.closest('button')).toBeNull();
@@ -534,5 +548,59 @@ describe('Events → Deliveries', () => {
     renderApp(deliveriesBridge({ eventsDeliveries: 'not a list' }), { screen: 'events' });
     view = await openTab('Deliveries');
     expect(await within(view).findByText('The list could not be read.')).toBeTruthy();
+  });
+
+  it("a delivery's page opens its message's story on the Messages screen: See everything that happened to this message", async () => {
+    // The dry run's page, its event the one whose story the Messages fixtures tell.
+    const eventId = 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1';
+    const shown = (deliveryShows as Record<string, { delivery: object; event: object }>)[ID.dry];
+    if (shown === undefined) throw new Error('the dry run has its page');
+    const bridge = deliveriesBridge(
+      {
+        eventsDeliveryShow: (call: Call) =>
+          deliveryId(call) === ID.dry
+            ? {
+                ...shown,
+                delivery: { ...shown.delivery, eventId },
+                event: { ...shown.event, eventId },
+              }
+            : (deliveryShows as Shows)[deliveryId(call)],
+        eventsMessagesList: messagesList,
+        eventsMessageShow: messageShow,
+        activityItems,
+        approvalsFinished: [],
+      },
+      { installation: async () => ({ ...EXAMPLE_INSTALLATION, version: '0.32.0' }) },
+    );
+    renderApp(bridge, { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery(ID.dry);
+    const message = await within(page).findByRole('region', { name: 'The message' });
+    fireEvent.click(
+      await within(message).findByRole('button', { name: 'See everything that happened to this message' }),
+    );
+    // Messages opens at that message's story.
+    const heading = await screen.findByRole('heading', { level: 1, name: /^A message from/ });
+    expect(heading.textContent).toBe('A message from From outside: David Example');
+    const navigation = screen.getByRole('navigation', { name: 'Sections' });
+    expect(
+      within(navigation)
+        .getByRole('button', { name: /^Messages/ })
+        .getAttribute('aria-current'),
+    ).toBe('page');
+    expect(await screen.findByRole('region', { name: STORY_COPY.happened })).toBeTruthy();
+    await waitFor(() => expect(cliCalls(bridge)).toContainEqual({ kind: 'eventsMessageShow', eventId }));
+  });
+
+  it('the story opener is navigation to Messages at an event id, and nothing for an id that is none', () => {
+    const asked: Destination[] = [];
+    const navigate = (to: Destination) => asked.push(to);
+    messageStoryOpener('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1', navigate)?.();
+    expect(asked).toEqual([{ screen: 'messages', eventId: 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1' }]);
+    expect(messageStoryOpener(null, navigate)).toBeNull();
+    expect(messageStoryOpener('evt-03', navigate)).toBeNull();
+    expect(messageStoryOpener('E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1E1', navigate)).toBeNull();
+    // Shown without the shell, there is nowhere to go.
+    expect(messageStoryOpener('e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1', null)).toBeNull();
   });
 });

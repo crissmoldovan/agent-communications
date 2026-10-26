@@ -68,7 +68,8 @@ describe('Activity', () => {
     const names = within(navigation)
       .getAllByRole('button')
       .map((button) => button.textContent?.trim());
-    expect(names.slice(3, 6)).toEqual(['Approvals', 'Activity', 'Agent']);
+    const approvals = names.indexOf('Approvals');
+    expect(names.slice(approvals, approvals + 3)).toEqual(['Approvals', 'Activity', 'Agent']);
     fireEvent.click(within(navigation).getByRole('button', { name: 'Activity' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Activity' })).toBeTruthy();
     await within(main()).findByText(COPY.updateToUse);

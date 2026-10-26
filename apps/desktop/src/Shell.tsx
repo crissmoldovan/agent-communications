@@ -6,6 +6,7 @@ import {
   History,
   Inbox,
   LayoutDashboard,
+  MessagesSquare,
   Plug,
   RefreshCw,
   Settings,
@@ -25,6 +26,7 @@ import { isMac } from './platform.ts';
 const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
   queue: Inbox,
+  messages: MessagesSquare,
   accounts: Users,
   connections: Plug,
   approvals: CheckCheck,
@@ -38,8 +40,8 @@ const ICONS: Record<Screen, ComponentType> = {
 
 /**
  * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the
- * sections with Settings at its foot, Queue's with its open count. On macOS the header leaves the traffic lights their
- * room.
+ * sections with Settings at its foot, Queue's with its open count and a new section's with a New tag. On macOS the
+ * header leaves the traffic lights their room.
  *
  * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns
  * under it, the brand over the sidebar's ground and the menu over the page's, and text the screens leave unsized is the

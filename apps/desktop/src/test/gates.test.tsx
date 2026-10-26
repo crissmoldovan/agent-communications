@@ -15,6 +15,7 @@ async function advance(ms: number): Promise<void> {
 const LABELS: Record<Screen, string> = {
   overview: 'Overview',
   queue: 'Queue',
+  messages: 'Messages New',
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).
   connections: 'Connections New',
@@ -47,11 +48,16 @@ describe('what each CLI version supports', () => {
       queue: '0.30.0',
       lanes: '0.31.0',
       judgeSetup: '0.32.0',
+      messages: '0.32.0',
     });
     // Judge setup and AI provider keys are the event service's from 0.32.0, a pull request's build of it included.
     expect(supports('0.31.0', 'judgeSetup')).toBe(false);
     expect(supports('0.32.0', 'judgeSetup')).toBe(true);
     expect(supports('0.32.0-feat-0.32-judges', 'judgeSetup')).toBe(true);
+    // Messages reads core's activity by message and the event service's messages, each from 0.32.0.
+    expect(supports('0.31.0', 'messages')).toBe(false);
+    expect(supports('0.32.0', 'messages')).toBe(true);
+    expect(supports('0.32.0-feat-0.32', 'messages')).toBe(true);
     // Lanes are the event service's from 0.31.0, read from its own version, a pull request's build of it included.
     expect(supports('0.30.0', 'lanes')).toBe(false);
     expect(supports('0.30.9', 'lanes')).toBe(false);

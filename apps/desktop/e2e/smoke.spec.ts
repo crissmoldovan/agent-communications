@@ -31,6 +31,7 @@ test('opens on Overview with its sections', async ({ page }) => {
   await expect(sections).toHaveText([
     'Overview',
     'Queue',
+    'Messages New',
     'Accounts',
     'Connections New',
     'Approvals',

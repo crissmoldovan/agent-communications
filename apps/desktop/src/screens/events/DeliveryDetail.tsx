@@ -35,6 +35,8 @@ import { atLeast } from '../../gates.ts';
 import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
+import { isEventId } from '../../messages/read.ts';
+import { type Destination, useNavigate } from '../../navigation.tsx';
 import { type EventsLists, type EventsNav, UNREADABLE_LIST } from './lists.ts';
 import { BackTo, FromOutsideMark, Problem, SenderText, Sentence, Short } from './parts.tsx';
 import { documentOf, madeAtOf, targetOf, whereItWent } from './targets.ts';
@@ -255,21 +257,24 @@ function StateChip({ row, kind }: { row: DeliveryRow; kind: string | null }) {
 }
 
 /**
- * What opens this message's story on the Messages screen (§3.6), at the message with this event id; null while the app
- * cannot open it there, and the link is then its words alone.
+ * What opens this message's story on the Messages screen (§3.6): `navigate({ screen: 'messages', eventId })`, through the
+ * app's navigation (`navigation.tsx`). Messages reads that destination as it mounts and opens the story of the event
+ * with this id — from its list, or from `message show` when the list's page does not hold it.
  *
- * Null for now: the Messages screen is the Messages builder's (`feat/0.32-ui-messages`), not on this branch, and it
- * reads no destination — its open story is its own state, keyed by its join. Once it is merged: `Destination`
- * (`navigation.tsx`) gains `{ screen: 'messages'; eventId }`, Messages opens the story whose event has that id as it
- * mounts (`takeDestination('messages')`), and this returns `() => navigate({ screen: 'messages', eventId })`.
+ * Null, and the link is then its words alone, when there is no event id the event service makes (32 lowercase hex
+ * digits), or no navigation (a page shown without the shell).
  */
-export function messageStoryOpener(_eventId: string | null): (() => void) | null {
-  return null;
+export function messageStoryOpener(
+  eventId: string | null,
+  navigate: ((to: Destination) => void) | null,
+): (() => void) | null {
+  if (eventId === null || navigate === null || !isEventId(eventId)) return null;
+  return () => navigate({ screen: 'messages', eventId });
 }
 
-/** The link to the message's story, when `messageStoryOpener` gives one; until then, its words alone. */
+/** The link to the message's story, when `messageStoryOpener` gives one; otherwise its words alone. */
 function Story({ eventId }: { eventId: string | null }) {
-  const open = messageStoryOpener(eventId);
+  const open = messageStoryOpener(eventId, useNavigate());
   if (open === null) {
     return (
       <p data-slot="message-story" aria-disabled="true" className="text-(length:--cue-text-label) text-fg-muted">

@@ -1,0 +1,259 @@
+{
+  "items": {
+    "18c2f0a1b2c3d4e5": [
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.message.read",
+        "at": "2026-10-25T11:41:10.000Z",
+        "outcome": "ok",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nCan you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">",
+        "from": {
+          "name": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"m5gT2kQa\">",
+          "address": "david@example.com"
+        }
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.draft.reply",
+        "at": "2026-10-25T11:43:30.000Z",
+        "outcome": "ok",
+        "replyTo": {
+          "messageId": "18c2f0a1b2c3d4e5",
+          "threadId": "18c2f0a1b2c3d4e5"
+        },
+        "draftId": "r-2000000000000000001"
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.send.prepare",
+        "at": "2026-10-25T11:43:40.000Z",
+        "outcome": "ok",
+        "replyTo": {
+          "messageId": "18c2f0a1b2c3d4e5",
+          "threadId": "18c2f0a1b2c3d4e5"
+        },
+        "draftId": "r-2000000000000000001"
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.thread.read",
+        "at": "2026-10-25T11:46:00.000Z",
+        "outcome": "ok",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nCan you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+      }
+    ],
+    "r-2000000000000000001": [
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.draft.reply",
+        "at": "2026-10-25T11:43:30.000Z",
+        "outcome": "ok",
+        "replyTo": {
+          "messageId": "18c2f0a1b2c3d4e5",
+          "threadId": "18c2f0a1b2c3d4e5"
+        },
+        "draftId": "r-2000000000000000001",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nRe: Can you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.send.prepare",
+        "at": "2026-10-25T11:43:40.000Z",
+        "outcome": "ok",
+        "replyTo": {
+          "messageId": "18c2f0a1b2c3d4e5",
+          "threadId": "18c2f0a1b2c3d4e5"
+        },
+        "draftId": "r-2000000000000000001",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nRe: Can you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.send.execute",
+        "at": "2026-10-25T11:45:13.000Z",
+        "outcome": "ok",
+        "draftId": "r-2000000000000000001"
+      }
+    ],
+    "18c2f0a1b2c3d4f0": [
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.send.execute",
+        "at": "2026-10-25T11:45:13.000Z",
+        "outcome": "ok",
+        "draftId": "r-2000000000000000001",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nRe: Can you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "gmail.thread.read",
+        "at": "2026-10-25T11:46:00.000Z",
+        "outcome": "ok",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nCan you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+      }
+    ],
+    "D0EXAMPLE1/1792927860.000100": [
+      {
+        "session": {
+          "key": "7c1d2e3f4a5b6c70",
+          "folder": "/example/home/work/david-site",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "slack.read",
+        "at": "2026-10-25T11:32:00.000Z",
+        "outcome": "ok",
+        "from": {
+          "name": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"m5gT2kQa\">"
+        }
+      },
+      {
+        "session": {
+          "key": "7c1d2e3f4a5b6c70",
+          "folder": "/example/home/work/david-site",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "slack.ack",
+        "at": "2026-10-25T11:32:40.000Z",
+        "outcome": "ok",
+        "act": "reaction"
+      }
+    ],
+    "C0EXAMPLE2/1792915200.000200": [
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "slack.thread",
+        "at": "2026-10-25T08:05:00.000Z",
+        "outcome": "ok",
+        "from": {
+          "name": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-name\">\nSam Example\n</untrusted-content boundary=\"m5gT2kQa\">"
+        }
+      },
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "slack.post.send",
+        "at": "2026-10-25T08:05:00.000Z",
+        "outcome": "ok",
+        "thread": "C0EXAMPLE2/1792915200.000200"
+      }
+    ],
+    "C0EXAMPLE2/1792915500.000300": [
+      {
+        "session": {
+          "key": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "operation": "slack.post.send",
+        "at": "2026-10-25T08:05:00.000Z",
+        "outcome": "ok",
+        "thread": "C0EXAMPLE2/1792915200.000200"
+      }
+    ],
+    "18c2f0a1b2c3e000": [
+      {
+        "session": {
+          "key": "9a8b7c6d5e4f3a20",
+          "folder": "/example/home/work/personal",
+          "client": {
+            "name": "codex",
+            "version": "0.9.0"
+          }
+        },
+        "operation": "gmail.search",
+        "at": "2026-10-25T10:55:00.000Z",
+        "outcome": "ok",
+        "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nYour receipt #1042\n</untrusted-content boundary=\"m5gT2kQa\">",
+        "from": {
+          "name": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-name\">\nReceipts\n</untrusted-content boundary=\"m5gT2kQa\">",
+          "address": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-address\">\nreceipts@shop.example\n</untrusted-content boundary=\"m5gT2kQa\">"
+        }
+      }
+    ]
+  }
+}

@@ -8,7 +8,9 @@ use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNI
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 macro_rules! checked_word {
@@ -106,6 +108,98 @@ checked_word!(
     grammar::window_id,
     "a window id"
 );
+checked_word!(
+    /// An observed event's id (0.32.0, spec §3.6): 32 lowercase hex digits, as the event service derives it
+    /// (`packages/events/src/identity/event-id.ts`).
+    EventId,
+    event_id,
+    "an event id"
+);
+checked_word!(
+    /// A message as core's `activity items` names one (0.32.0, spec §3.6): a Gmail message's id, or a Slack message's
+    /// `<channel>/<ts>`. Neither has a comma, so a list of them is one `--ids` word.
+    ItemId,
+    item_id,
+    "a message's id"
+);
+
+checked_word!(
+    /// Where the last page of `messages list` ended, as the event service gave it in `next` (0.32.0):
+    /// `<observedAt ms>:<eventId>`, the time in 2020 to 2099.
+    MessagesCursor,
+    messages_cursor,
+    "a messages cursor"
+);
+
+/// A messages cursor: the 13 digits of a time in 2020 to 2099, in milliseconds, `:`, and an event id.
+static MESSAGES_CURSOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^([1-9][0-9]{12}):[0-9a-f]{32}$").expect("a pattern"));
+
+fn messages_cursor(value: &str) -> bool {
+    grammar::plain(value)
+        && MESSAGES_CURSOR
+            .captures(value)
+            .and_then(|parts| parts.get(1)?.as_str().parse::<u64>().ok())
+            .is_some_and(|ms| EpochMs::try_from(ms).is_ok())
+}
+
+impl MessagesCursor {
+    /// The time the cursor's page ended at.
+    fn ms(&self) -> u64 {
+        self.0
+            .split(':')
+            .next()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(0)
+    }
+}
+
+/// Where a page of `messages list` ends (`--before`): a time, or the cursor the last page gave.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PageBefore {
+    At(EpochMs),
+    Cursor(MessagesCursor),
+}
+
+impl PageBefore {
+    fn ms(&self) -> u64 {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms),
+            PageBefore::Cursor(cursor) => cursor.ms(),
+        }
+    }
+
+    /// As `--before` takes it: the time, or the cursor as it came.
+    fn word(&self) -> String {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms).to_string(),
+            PageBefore::Cursor(cursor) => cursor.as_str().to_string(),
+        }
+    }
+}
+
+/// An event id: 32 lowercase hex digits (D3's truncated SHA-256).
+static EVENT_ID_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^[0-9a-f]{32}$").expect("a pattern"));
+
+/// A Gmail message's id, as the activity log and a queue item's link carry one: 1 to 128 letters, digits, `_` and `-`.
+static GMAIL_MESSAGE_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^[0-9A-Za-z_-]{1,128}$").expect("a pattern"));
+
+/// A Slack message, as an event and `activity items` name one: the conversation's id (`C…`, `G…` or `D…`), `/`, and
+/// its ts, seconds and six digits of microseconds.
+static SLACK_ITEM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[CDG][A-Z0-9]{2,31}/[0-9]{1,12}\.[0-9]{6}$").expect("a pattern")
+});
+
+fn event_id(value: &str) -> bool {
+    grammar::plain(value) && EVENT_ID_PATTERN.is_match(value)
+}
+
+fn item_id(value: &str) -> bool {
+    grammar::plain(value) && (GMAIL_MESSAGE_ID.is_match(value) || SLACK_ITEM.is_match(value))
+}
 checked_word!(
     /// A local model server's URL, for judge setup (0.32.0): plain HTTP to the literal `127.0.0.1` or `[::1]`, with
     /// its port. The event service checks it again.
@@ -446,6 +540,105 @@ impl From<QueueLimit> for u64 {
     }
 }
 
+/// The most messages one `messages list` reads: the event service caps it there (plan, Task C).
+pub const MESSAGES_LIMIT_MAX: u64 = 500;
+
+/// How many messages `messages list --limit` reads: a whole number from 1 to `MESSAGES_LIMIT_MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct MessagesLimit(u64);
+
+impl TryFrom<u64> for MessagesLimit {
+    type Error = AppError;
+
+    fn try_from(limit: u64) -> Result<Self, Self::Error> {
+        if (1..=MESSAGES_LIMIT_MAX).contains(&limit) {
+            Ok(MessagesLimit(limit))
+        } else {
+            Err(AppError::refused("a messages list reads 1 to 500 messages"))
+        }
+    }
+}
+
+impl From<MessagesLimit> for u64 {
+    fn from(limit: MessagesLimit) -> u64 {
+        limit.0
+    }
+}
+
+/// The first and the last millisecond a Messages time may be: 2020 to the end of 2099.
+const EARLIEST_MS: u64 = 1_577_836_800_000;
+const LATEST_MS: u64 = 4_102_444_800_000;
+
+/// A moment as the Messages screen's reads take one (`--since`, `--before`): whole milliseconds since the epoch, in
+/// 2020 to 2099. It is written as the number it is; no text the window sends reaches the words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct EpochMs(u64);
+
+impl TryFrom<u64> for EpochMs {
+    type Error = AppError;
+
+    fn try_from(ms: u64) -> Result<Self, Self::Error> {
+        if (EARLIEST_MS..LATEST_MS).contains(&ms) {
+            Ok(EpochMs(ms))
+        } else {
+            Err(AppError::refused(
+                "a time is whole milliseconds since 1970, in 2020 to 2099",
+            ))
+        }
+    }
+}
+
+impl From<EpochMs> for u64 {
+    fn from(ms: EpochMs) -> u64 {
+        ms.0
+    }
+}
+
+/// The most messages one `activity items --ids` names.
+pub const ITEM_IDS_MAX: usize = 50;
+
+/// The messages `activity items --ids` reads: 1 to `ITEM_IDS_MAX` ids, none twice, written as one comma list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<ItemId>", into = "Vec<ItemId>")]
+pub struct ItemIds(Vec<ItemId>);
+
+impl TryFrom<Vec<ItemId>> for ItemIds {
+    type Error = AppError;
+
+    fn try_from(ids: Vec<ItemId>) -> Result<Self, Self::Error> {
+        let repeated = ids
+            .iter()
+            .enumerate()
+            .any(|(index, id)| ids[..index].contains(id));
+        if ids.is_empty() || ids.len() > ITEM_IDS_MAX || repeated {
+            Err(AppError::refused(
+                "an activity read names 1 to 50 messages, each once",
+            ))
+        } else {
+            Ok(ItemIds(ids))
+        }
+    }
+}
+
+impl From<ItemIds> for Vec<ItemId> {
+    fn from(ids: ItemIds) -> Vec<ItemId> {
+        ids.0
+    }
+}
+
+impl ItemIds {
+    /// The ids as `--ids` takes them: one comma list.
+    fn word(&self) -> String {
+        self.0
+            .iter()
+            .map(ItemId::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 /// The first and the last second a start of today may be: 2020 to the end of 2099.
 const EARLIEST_TODAY: u64 = 1_577_836_800;
 const LATEST_TODAY: u64 = 4_102_444_800;
@@ -719,6 +912,26 @@ pub enum Call {
         server: McpServer,
         approval_id: ApprovalId,
     },
+    /// The events service's `messages list --since <ms> [--before <ms|cursor>] [--limit <n>]` (0.32.0, spec §3.6): the
+    /// events it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
+    /// person's read, refused inside an MCP server; every argument is a checked number or the cursor the last page
+    /// gave, and a page ends after its window starts.
+    EventsMessagesList {
+        since: EpochMs,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<PageBefore>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<MessagesLimit>,
+    },
+    /// The events service's `message show <eventId>` (0.32.0): one event's entry, with its queue item's full history.
+    EventsMessageShow { event_id: EventId },
+    /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
+    /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
+    ActivityItems {
+        since: EpochMs,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ids: Option<ItemIds>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -749,6 +962,10 @@ pub const DELIVERY_DETAIL_VERSION: &str = "0.32.0";
 /// The first release of the events service with judge setup and AI provider keys (owner decision 2026-10-26): its
 /// `judge setup`, `provider list` and `provider key set|remove`. An older one keeps Turn on in Terminal (DA12).
 pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
+
+/// The first release with the Messages screen's reads (spec 2026-10-26-owner-feedback-0320 §3.6): the events service's
+/// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
+pub const MESSAGES_VERSION: &str = "0.32.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1094,6 +1311,41 @@ impl Call {
                     approval_id.as_str(),
                 ])
             },
+            Call::EventsMessagesList {
+                since,
+                before,
+                limit,
+            } => {
+                if before
+                    .as_ref()
+                    .is_some_and(|before| before.ms() <= u64::from(*since))
+                {
+                    return Err(AppError::refused(
+                        "a page of messages ends after its window starts",
+                    ));
+                }
+                let option = |flag: &str, value: Option<String>| {
+                    value
+                        .map(|value| [flag.to_string(), value])
+                        .into_iter()
+                        .flatten()
+                };
+                with(
+                    events(&["messages", "list", "--since"]),
+                    std::iter::once(u64::from(*since).to_string())
+                        .chain(option("--before", before.as_ref().map(PageBefore::word)))
+                        .chain(option(
+                            "--limit",
+                            limit.map(|limit| u64::from(limit).to_string()),
+                        )),
+                )
+            }
+            Call::EventsMessageShow { event_id } => events(&["message", "show", event_id.as_str()]),
+            Call::ActivityItems { since, ids } => with(
+                core(&["activity", "items", "--since"]),
+                std::iter::once(u64::from(*since).to_string())
+                    .chain(ids.iter().flat_map(|ids| ["--ids".to_string(), ids.word()])),
+            ),
         })
     }
 
@@ -1145,6 +1397,9 @@ impl Call {
             }
             Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
             Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
+            Call::EventsMessagesList { .. }
+            | Call::EventsMessageShow { .. }
+            | Call::ActivityItems { .. } => Some(MESSAGES_VERSION),
             _ => None,
         }
     }
@@ -1279,6 +1534,12 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
         json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
         json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": BEFORE_MS, "limit": 100 }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": "1792972800000:0123456789abcdef0123456789abcdef" }),
+        json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+        json!({ "kind": "activityItems", "since": SINCE_MS }),
+        json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"] }),
     ];
     values
         .into_iter()
@@ -1368,6 +1629,16 @@ pub(crate) const DELIVERY: &str = "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70";
 /// The start of 2026-10-25 in UTC, as seconds since the epoch: a today, for the tests.
 #[cfg(test)]
 pub(crate) const TODAY: u64 = 1_792_886_400;
+
+/// A well-formed event id, for the tests: 32 lowercase hex digits, as the event service makes them.
+#[cfg(test)]
+pub(crate) const EVENT_ID: &str = "0123456789abcdef0123456789abcdef";
+
+/// The start of 2026-10-25 in UTC, and of the next day, as milliseconds: a window for the Messages screen's tests.
+#[cfg(test)]
+pub(crate) const SINCE_MS: u64 = 1_792_886_400_000;
+#[cfg(test)]
+pub(crate) const BEFORE_MS: u64 = 1_792_972_800_000;
 
 #[cfg(test)]
 mod tests {
@@ -3385,6 +3656,327 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    /// The Messages screen's calls (0.32.0, spec §3.6): the events service's `messages list` and `message show`, and
+    /// core's `activity items`, each read for the same window. Each is its launcher, its words, `--json` and the pins,
+    /// and nothing else; none prepares a change, and each needs the release that ships it.
+    #[test]
+    fn messages_calls_build_exactly_their_words() {
+        let since = SINCE_MS.to_string();
+        let before = BEFORE_MS.to_string();
+        assert_eq!(
+            events_line(json!({ "kind": "eventsMessagesList", "since": SINCE_MS })),
+            ["messages", "list", "--since", since.as_str()]
+        );
+        assert_eq!(
+            events_line(json!({
+                "kind": "eventsMessagesList",
+                "since": SINCE_MS,
+                "before": BEFORE_MS,
+                "limit": 100
+            })),
+            [
+                "messages",
+                "list",
+                "--since",
+                since.as_str(),
+                "--before",
+                before.as_str(),
+                "--limit",
+                "100"
+            ]
+        );
+        // The next page, by the cursor the last one gave: `<observedAt ms>:<eventId>`, passed on as it came.
+        let cursor = format!("{BEFORE_MS}:{EVENT_ID}");
+        assert_eq!(
+            events_line(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ),
+            [
+                "messages",
+                "list",
+                "--since",
+                since.as_str(),
+                "--before",
+                cursor.as_str()
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(call(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ))
+            .expect("json"),
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+        );
+        for (limit, word) in [(1u64, "1"), (100, "100"), (500, "500")] {
+            assert_eq!(
+                events_line(
+                    json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "limit": limit })
+                ),
+                [
+                    "messages",
+                    "list",
+                    "--since",
+                    since.as_str(),
+                    "--limit",
+                    word
+                ]
+            );
+        }
+        // The earliest and the latest a time may be: 2020, and the last millisecond before 2100.
+        for at in [1_577_836_800_000u64, 4_102_444_799_999] {
+            let word = at.to_string();
+            assert_eq!(
+                events_line(json!({ "kind": "eventsMessagesList", "since": at })),
+                ["messages", "list", "--since", word.as_str()]
+            );
+        }
+        assert_eq!(
+            events_line(json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID })),
+            ["message", "show", EVENT_ID]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activityItems", "since": SINCE_MS })),
+            ["activity", "items", "--since", since.as_str()]
+        );
+        assert_eq!(
+            whole_line(json!({
+                "kind": "activityItems",
+                "since": SINCE_MS,
+                "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"]
+            })),
+            [
+                "activity",
+                "items",
+                "--since",
+                since.as_str(),
+                "--ids",
+                "18c2f0a1b2c3d4e5,C0123ABCD/1792886400.000100"
+            ]
+        );
+        let fifty: Vec<String> = (0..50).map(|n| format!("18c2f0a1b2c3{n:04}")).collect();
+        let line = whole_line(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": fifty }));
+        assert_eq!(line[4], "--ids");
+        assert_eq!(line[5], fifty.join(","));
+        // A field left out, or given as null, is no option: the words carry none.
+        assert_eq!(
+            events_line(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": null, "limit": null })
+            ),
+            ["messages", "list", "--since", since.as_str()]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": null })),
+            ["activity", "items", "--since", since.as_str()]
+        );
+        for value in [
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+            json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+            json!({ "kind": "activityItems", "since": SINCE_MS }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.32.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(MESSAGES_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", MESSAGES_VERSION));
+        assert!(!crate::version::at_least("0.31.9", MESSAGES_VERSION));
+        assert!(crate::version::at_least("0.32.0", MESSAGES_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32",
+            MESSAGES_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches the Messages calls' words unchecked: each time is a whole number of milliseconds
+    /// in 2020 to 2099, `before` after `since`, the limit 1 to 500, the event id the event service's 32 lowercase hex
+    /// digits, each item id a Gmail message's or a Slack `<channel>/<ts>`, at most fifty and none twice; and no call
+    /// takes a field it does not name.
+    #[test]
+    fn messages_calls_refuse_bad_numbers_ids_and_extra_fields() {
+        for since in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(1_577_836_799_999u64),
+            json!(4_102_444_800_000u64),
+            json!(u64::MAX),
+            json!("1792886400000"),
+            json!("30d"),
+            json!(null),
+            json!([SINCE_MS]),
+            json!({ "ms": SINCE_MS }),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": since }));
+            refused(json!({ "kind": "activityItems", "since": since }));
+            // `before` is optional, so a null one is no option (above); any other of these is refused.
+            if !since.is_null() {
+                refused(
+                    json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": since }),
+                );
+            }
+        }
+        // The window is always said: the two reads cover the same one.
+        refused(json!({ "kind": "eventsMessagesList" }));
+        refused(json!({ "kind": "activityItems" }));
+        refused(json!({ "kind": "activityItems", "ids": ["18c2f0a1b2c3d4e5"] }));
+        // A page ends after the window starts, by a time or by a cursor.
+        for before in [
+            json!(SINCE_MS),
+            json!(SINCE_MS - 1),
+            json!(format!("{SINCE_MS}:{EVENT_ID}")),
+            json!(format!("{}:{EVENT_ID}", SINCE_MS - 1)),
+        ] {
+            assert!(
+                call(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": before }))
+                    .words()
+                    .is_err(),
+                "before {before}"
+            );
+        }
+        // A cursor is exactly the event service's: whole milliseconds in 2020 to 2099, `:`, and an event id.
+        for cursor in [
+            format!("{BEFORE_MS}:"),
+            format!(":{EVENT_ID}"),
+            format!("{BEFORE_MS}:{}", EVENT_ID.to_uppercase()),
+            format!("{BEFORE_MS}:{}", &EVENT_ID[1..]),
+            format!("{BEFORE_MS}:{EVENT_ID}0"),
+            format!("{BEFORE_MS}:{EVENT_ID}:x"),
+            format!("{BEFORE_MS}-{EVENT_ID}"),
+            format!("{BEFORE_MS} :{EVENT_ID}"),
+            format!("-{BEFORE_MS}:{EVENT_ID}"),
+            format!("{BEFORE_MS}:{EVENT_ID}\n"),
+            format!("{BEFORE_MS}:{EVENT_ID} --limit 5"),
+            format!("0{BEFORE_MS}:{EVENT_ID}"),
+            format!("4102444800000:{EVENT_ID}"),
+            format!("1577836799999:{EVENT_ID}"),
+            "next".to_string(),
+            String::new(),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor }));
+        }
+        for limit in [
+            json!(0),
+            json!(501),
+            json!(-1),
+            json!(1.5),
+            json!("100"),
+            json!([100]),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "limit": limit }));
+        }
+        let long_hex = "a".repeat(33);
+        for event in [
+            json!(""),
+            json!("0123456789abcdef0123456789abcde"),
+            json!(long_hex),
+            json!("0123456789ABCDEF0123456789ABCDEF"),
+            json!("0123456789abcdef0123456789abcdeg"),
+            json!("-123456789abcdef0123456789abcdef"),
+            json!("0123456789abcdef0123456789abcdef\n"),
+            json!(" 0123456789abcdef0123456789abcdef"),
+            json!("0123456789abcdef0123456789abcdef --json"),
+            json!("qi_01J9Z8QF0000000000000000AB"),
+            json!("../0123456789abcdef0123456789ab"),
+            json!(7),
+            json!(null),
+            json!([EVENT_ID]),
+            json!({ "id": EVENT_ID }),
+        ] {
+            refused(json!({ "kind": "eventsMessageShow", "eventId": event }));
+        }
+        // The event is never left out, and is named `eventId`, nothing else.
+        refused(json!({ "kind": "eventsMessageShow" }));
+        refused(json!({ "kind": "eventsMessageShow", "id": EVENT_ID }));
+        refused(json!({ "kind": "eventsMessageShow", "event": EVENT_ID }));
+        let long_id = "a".repeat(129);
+        for id in [
+            json!(""),
+            json!("-18c2f0a1b2c3d4e5"),
+            json!("--json"),
+            json!("18c2f0a1b2c3d4e5,18c2f0a1b2c3d4e6"),
+            json!("18c2 f0a1"),
+            json!("18c2f0a1b2c3d4e5\n"),
+            json!("18c2f0a1b2c3d4e5\u{202e}"),
+            json!("18c2f0a1/../x"),
+            json!(long_id),
+            json!("C0123ABCD/1792886400"),
+            json!("C0123ABCD/1792886400.00010"),
+            json!("c0123abcd/1792886400.000100"),
+            json!("X0123ABCD/1792886400.000100"),
+            json!("C0123ABCD/1792886400.000100/x"),
+            json!("C0123ABCD/"),
+            json!(7),
+            json!(null),
+            json!(["18c2f0a1b2c3d4e5"]),
+        ] {
+            refused(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": [id] }));
+        }
+        let fifty_one: Vec<String> = (0..51).map(|n| format!("18c2f0a1b2c3{n:04}")).collect();
+        for ids in [
+            json!([]),
+            json!(fifty_one),
+            json!(["18c2f0a1b2c3d4e5", "18c2f0a1b2c3d4e5"]),
+            json!("18c2f0a1b2c3d4e5"),
+            json!("18c2f0a1b2c3d4e5,C0123ABCD/1792886400.000100"),
+            json!(7),
+        ] {
+            refused(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ids }));
+        }
+        for (field, value) in [
+            ("approval", json!(ID)),
+            ("approvalId", json!(ID)),
+            ("args", json!(["--all"])),
+            ("json", json!(false)),
+            ("session", json!(SESSION)),
+            ("channel", json!("gmail")),
+            ("account", json!("example/gmail")),
+            ("cursor", json!("next")),
+            ("all", json!(true)),
+            ("content", json!(true)),
+        ] {
+            for base in [
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+                json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+                json!({ "kind": "activityItems", "since": SINCE_MS }),
+            ] {
+                let mut given = base;
+                given[field] = value.clone();
+                refused(given);
+            }
+        }
+        refused(json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID, "since": SINCE_MS }));
+        refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "eventId": EVENT_ID }));
+        refused(
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5"] }),
+        );
+        refused(json!({ "kind": "activityItems", "since": SINCE_MS, "before": BEFORE_MS }));
+        refused(json!({ "kind": "activityItems", "since": SINCE_MS, "limit": 100 }));
+        // What the two services have besides, the app never calls from here.
+        for kind in [
+            "eventsMessages",
+            "eventsMessage",
+            "eventsMessagesShow",
+            "eventsMessageList",
+            "messagesList",
+            "messageShow",
+            "activityItem",
+            "activityItemsAll",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "since": SINCE_MS }));
+            refused(json!({ "kind": kind, "eventId": EVENT_ID }));
+        }
+        assert_eq!(
+            MessagesLimit::try_from(0).expect_err("none").code,
+            "APP_REFUSED"
+        );
+        assert_eq!(
+            MessagesLimit::try_from(MESSAGES_LIMIT_MAX)
+                .map(u64::from)
+                .ok(),
+            Some(500)
+        );
     }
 
     /// Today's start is written as core reads an ISO time, in UTC, for any day from 2020 to 2099.
