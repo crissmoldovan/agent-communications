@@ -646,6 +646,18 @@
       "reason": "`agentcomms mcp install` registers the core server; comms_server_install registers any channel's, and with `channel: \"core\"` is this command."
     },
     {
+      "id": "core.mcp.install.several",
+      "package": "core",
+      "cli": "mcp install",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "operation": "serverInstallsChange",
+      "argv": ["--client", "claude-code", "--server", "gmail,slack"],
+      "args": { "servers": ["gmail", "slack"], "client": "claude-code" },
+      "expect": { "request.servers": ["gmail", "slack"], "request.client": "claude-code" },
+      "reason": "Several servers for one client as one change (design 2026-10-26-desktop-0340, B3): `agentcomms mcp install --server <a,b,…>` and comms_server_install with `servers` run the same operation — one plan, one preview naming every server, one approval, each registered in order, the first failure stopping the rest. One server stays the single-install row's operation."
+    },
+    {
       "id": "core.mcp.prune",
       "package": "core",
       "cli": "mcp prune",

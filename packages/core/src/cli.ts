@@ -6,7 +6,12 @@ import type { PublicApprovalView } from './approval-outcome.ts';
 import { kindOf } from './approval-stored.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
 import type { BehaviourAct } from './behaviour.ts';
-import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
+import {
+  type AppOriginCheck,
+  approveChangeAtTerminal,
+  gatedChangeAtTerminal,
+  refuseUnclaimedApproval,
+} from './change-flow.ts';
 import type { PreparedChange } from './changes.ts';
 import {
   colorEnabled,
@@ -101,6 +106,7 @@ import {
   type ServerUninstallRequest,
   type ServerUninstallResult,
   serverInstallChange,
+  serverInstallsChange,
   serverPruneChange,
   serverUninstallChange,
 } from './operations/servers.ts';
@@ -129,6 +135,7 @@ import {
   escapeForDisplay,
   renderDoctor,
   renderInstall,
+  renderInstalls,
   renderPrune,
   renderUpdate,
   renderUpdateCheck,
@@ -267,11 +274,13 @@ Usage — run these with this CLI, each as the words after its program:
                                 start the missing profile file for that place from a starter, and print
                                 its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
-  mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
+  mcp install --client <client> [--server <server>[,<server>…]] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
-                                register the core server, or another declared server, and prove it starts;
-                                the desktop app passes --app-approval <id>, the person's approval in the app
+                                register the core server, or other declared servers, and prove each starts;
+                                several, separated by commas, are one preview and one approval, registered
+                                in that order and stopped at the first that fails; --name and the pins are
+                                for one server on its own
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
                                 remove the managed runtimes that nothing uses: every managed server's,
                                 listed by server, or with --server that one's
@@ -311,6 +320,11 @@ deny add, label rule add --as agent, label rule remove --as me, label style app,
 activity retention — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
 may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
 once when it only narrows.
+
+The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, update and mcp
+install itself: it shows the same preview and, once you press its confirm, runs the same command with --app-approval
+<id>. That counts only on macOS, from the app itself; anywhere else the command says to approve it at your terminal
+instead. It never goes with --approval, and a tightening takes neither: it applies at once.
 
 A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
 places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the
@@ -387,7 +401,8 @@ function parse(argv: string[]) {
       // No longer answers anything: kept so that it is refused with what to do instead, not as an unknown option.
       yes: { type: 'boolean', default: false },
       approval: { type: 'string' },
-      // `mcp install` only (0.32.0): the approval the desktop app prepared and the person approved there.
+      // The approval the desktop app prepared and the person approved there: `mcp install` (0.32.0), and `label`,
+      // `behaviour allow|clear` and `update` (0.34.0); refused on every other command (`takesAppApproval`).
       'app-approval': { type: 'string' },
       client: { type: 'string' },
       server: { type: 'string' },
@@ -510,6 +525,25 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
     hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
+}
+
+/**
+ * Whether a command takes `--app-approval`: a change the desktop app makes as the person's own act, approved there
+ * (design 2026-10-26-desktop-0340 §3) — `mcp install` (0.32.0); `label word|name|rule|icon|style`, `behaviour
+ * allow|clear` and `update` itself (0.34.0). A report takes none, and `update` refuses it beside any of its other modes.
+ */
+function takesAppApproval(command: string | undefined, sub: string | undefined): boolean {
+  switch (command) {
+    case 'mcp':
+      return sub === 'install';
+    case 'label':
+    case 'behaviour':
+      return sub !== undefined;
+    case 'update':
+      return true;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -675,6 +709,11 @@ export async function main(
     update?: UpdateDeps | undefined;
     /** The terminal `approve` asks at: the process's own unless a test brings one. */
     streams?: Streams | undefined;
+    /**
+     * Where an `--app-approval` came from (`desktopAppOrigin`): injected by tests only, which cannot be the signed app.
+     * The program itself never passes it, so a real run always asks codesign.
+     */
+    appOrigin?: AppOriginCheck | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -717,10 +756,12 @@ export async function main(
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
-    if (values['app-approval'] !== undefined && !(command === 'mcp' && sub === 'install')) {
-      throw new CommsError('USAGE', '--app-approval is an option of the mcp install command only', {
-        hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`),
-      });
+    if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
+      throw new CommsError(
+        'USAGE',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update and mcp install only',
+        { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+      );
     }
   } catch (error) {
     return writeError(error as CommsError, output);
@@ -729,7 +770,15 @@ export async function main(
   // Opened with core's own caller, so these are always there: every command this prints is located from here.
   const handoffs = core.handoffs as CliHandoffs;
   // Every change this CLI prepares is core's own: its approval records `core` as its channel.
-  const approval = { channel: 'core', approvalId: values.approval, env, output };
+  const approval = {
+    channel: 'core',
+    approvalId: values.approval,
+    env,
+    output,
+    ...(deps.appOrigin === undefined ? {} : { appOrigin: deps.appOrigin }),
+  };
+  /** The approval the desktop app passed, which only the commands `takesAppApproval` names get this far with. */
+  const appApproval = values['app-approval'];
   /** An exit status for a command that printed its result and still did not do what was asked. */
   let softExit: number = EXIT_CODES.OK;
 
@@ -1195,7 +1244,12 @@ export async function main(
         } else {
           throw usage('usage: label [word|name|rule add|rule remove|icon|style]');
         }
-        const result = await gatedChangeAtTerminal(core, labelChange(core, request, 'cli'), { ...approval, rerun });
+        // Approved in the desktop app when it passes its approval: the change's own audit line says so.
+        const result = await gatedChangeAtTerminal(
+          core,
+          labelChange(core, request, appApproval === undefined ? 'cli' : 'app'),
+          { ...approval, rerun, appApproval },
+        );
         writeResult(result, output, renderLabelChange);
         return;
       }
@@ -1232,7 +1286,11 @@ export async function main(
         } else {
           throw usage('usage: behaviour [allow|clear]');
         }
-        const result = await gatedChangeAtTerminal(core, behaviourChange(core, request, 'cli'), { ...approval, rerun });
+        const result = await gatedChangeAtTerminal(
+          core,
+          behaviourChange(core, request, appApproval === undefined ? 'cli' : 'app'),
+          { ...approval, rerun, appApproval },
+        );
         writeResult(result, output, renderBehaviourChange);
         return;
       }
@@ -1348,6 +1406,10 @@ export async function main(
           }
           const words = ['mcp', 'install', '--client', values.client];
           if (values.server) words.push('--server', values.server);
+          // Several servers, separated by commas (0.34.0, design 2026-10-26-desktop-0340 B3): one plan, one preview and
+          // one approval for all of them, registered in order. One server is the install it always was.
+          const several =
+            values.server?.includes(',') === true ? values.server.split(',').map((server) => server.trim()) : undefined;
           if (values.name) words.push('--name', values.name);
           if (values.account) words.push('--account', values.account);
           if (values.inbox) words.push('--inbox', values.inbox);
@@ -1356,6 +1418,33 @@ export async function main(
           if (values.launcher) words.push('--launcher', values.launcher);
           if (values.force) words.push('--force');
           if (values['no-verify']) words.push('--no-verify');
+          if (several !== undefined) {
+            const result = await gatedChangeAtTerminal(
+              core,
+              serverInstallsChange(
+                core,
+                env,
+                {
+                  servers: several,
+                  client: values.client as SupportedClient,
+                  // Refused by the operation, in the words the tool gets too: each names one server's entry.
+                  name: values.name,
+                  account: values.account,
+                  inbox: values.inbox,
+                  workspace: values.workspace,
+                  readOnly: values['read-only'],
+                  launcher: values.launcher as Launcher | undefined,
+                  force: values.force,
+                  print: values.print,
+                  noVerify: values['no-verify'],
+                },
+                installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+              ),
+              { ...approval, rerun: words, appApproval, appReach: { clients: true } },
+            );
+            writeResult(result, output, (r) => renderInstalls(r, output.color));
+            return;
+          }
           const result = await gatedChangeAtTerminal(
             core,
             serverInstallChange(
@@ -1378,7 +1467,7 @@ export async function main(
               installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
             ),
             // The desktop app's own approval, when it passes one: approved in the app, and claimed here.
-            { ...approval, rerun: words, appApproval: values['app-approval'] },
+            { ...approval, rerun: words, appApproval, appReach: { clients: true } },
           );
           // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
           // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.
@@ -1485,6 +1574,13 @@ export async function main(
             '--dry-run is for --background; the update itself shows every step and asks before it changes anything',
           );
         }
+        // The app approves the update itself (0.34.0), and none of the other modes: each is refused it, never left to
+        // drop it.
+        if (appApproval !== undefined && modes > 0) {
+          throw usage(
+            '--app-approval is for the update itself: --check, --status, --level, --pause, --resume, --rollback, --background-job and --background take none',
+          );
+        }
         if (values.status) {
           // Where updates stand, from local files: no change, so nothing for an approval to be for (DA13).
           if (values.approval !== undefined) throw usage('--status only reads, so it takes no --approval');
@@ -1566,10 +1662,9 @@ export async function main(
         const result = await gatedChangeAtTerminal(
           core,
           updateChange(core, env, { noVerify: values['no-verify'] }, deps.update ?? coreUpdateDeps(core)),
-          {
-            ...approval,
-            rerun: words,
-          },
+          // The desktop app's own approval, when it passes one (0.34.0): approved in the app, and claimed here. It
+          // registers servers again and updates global packages, so the test build is held to those folders too.
+          { ...approval, rerun: words, appApproval, appReach: { clients: true, npmGlobal: true } },
         );
         // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
         softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;
