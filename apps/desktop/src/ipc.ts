@@ -299,7 +299,16 @@ export type TerminalCommand =
    * the app (Windows and Linux): the events service's `approve <approval-id>`, which shows its preview and asks for its
    * challenge there. Rust opens only an approval it recorded for `eventsRuleEnable`; the app never answers it.
    */
-  | { kind: 'ruleApprove'; approvalId: string };
+  | { kind: 'ruleApprove'; approvalId: string }
+  /**
+   * A person-only setup at a terminal, where the app cannot attest the person (0.33.0): judge setup, a provider's key
+   * removed, or where the relay is — the call's own words — and setting a key, which the terminal asks for, hidden.
+   */
+  | {
+      kind: 'atTerminal';
+      call: Extract<Call, { kind: 'judgeSetup' | 'providerKeyRemove' | 'integrationSetAgentSessions' }>;
+    }
+  | { kind: 'providerKeySet'; provider: KeyProvider };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 

@@ -18,9 +18,10 @@ import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
-import { AI_PROVIDERS, type AiProvider, type Call, errorMessage } from '../ipc.ts';
+import { AI_PROVIDERS, type AiProvider, type Call, errorMessage, type TerminalCommand } from '../ipc.ts';
 import { takeDestination, useNavigate } from '../navigation.tsx';
 import { keyOf, providerInUse, readListedJudges, readProviders } from '../providers.ts';
+import { DoInTerminal, refusedAsUnattested, setupsAtTerminal } from './DoInTerminal.tsx';
 import { keyLabel, keyPlaceholder, PROVIDERS_COPY, removeKeyTitle } from './judges/copy.ts';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
@@ -183,6 +184,18 @@ function ProviderRow({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
   const field = useRef<HTMLInputElement>(null);
+  // Where the app cannot attest the person, a key is set or removed in a terminal, which asks for it there: the app
+  // never has it. On macOS too, once the event service refuses the app for that reason.
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
+  const [pending, setPending] = useState<TerminalCommand | null>(null);
+  const setAtTerminal: TerminalCommand = { kind: 'providerKeySet', provider };
+  const removeAtTerminal: TerminalCommand = { kind: 'atTerminal', call: { kind: 'providerKeyRemove', provider } };
+  const openForm = () => {
+    setProblem(null);
+    if (atTerminal) setPending(setAtTerminal);
+    else setForm(true);
+  };
 
   const empty = () => {
     if (field.current !== null) field.current.value = '';
@@ -197,8 +210,14 @@ function ProviderRow({
     setProblem(null);
     try {
       const result = await bridge.providerKeySet(provider, value);
-      if (result.status === 'failed') setProblem({ message: result.message, hint: result.hint });
-      else setForm(false);
+      if (result.status === 'failed') {
+        setProblem({ message: result.message, hint: result.hint });
+        if (refusedAsUnattested(result.code)) {
+          setRefused(true);
+          setForm(false);
+          setPending(setAtTerminal);
+        }
+      } else setForm(false);
     } catch (error) {
       setProblem({ message: errorMessage(error), hint: null });
     } finally {
@@ -208,10 +227,20 @@ function ProviderRow({
   };
 
   const remove = async () => {
-    setBusy(true);
     setProblem(null);
+    if (atTerminal) {
+      setPending(removeAtTerminal);
+      return;
+    }
+    setBusy(true);
     const outcome = await run({ kind: 'providerKeyRemove', provider });
-    if (outcome.state === 'failed') setProblem({ message: outcome.message, hint: outcome.hint });
+    if (outcome.state === 'failed') {
+      setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) {
+        setRefused(true);
+        setPending(removeAtTerminal);
+      }
+    }
     await reload();
     setBusy(false);
   };
@@ -299,12 +328,23 @@ function ProviderRow({
             </form>
           ) : null}
           <SetupProblem problem={problem} />
+          {pending === null ? null : (
+            <DoInTerminal
+              command={pending}
+              asksForKey={pending.kind === 'providerKeySet'}
+              onCancel={() => setPending(null)}
+              onDone={() => {
+                setPending(null);
+                void reload();
+              }}
+            />
+          )}
         </div>
-        {form ? null : (
+        {form || pending !== null ? null : (
           <div className="flex shrink-0 items-center gap-(--cue-space-2)">
             {hasKey ? (
               <>
-                <Button size="sm" disabled={busy} onClick={() => setForm(true)}>
+                <Button size="sm" disabled={busy} onClick={openForm}>
                   {PROVIDERS_COPY.replace}
                 </Button>
                 <AlertDialog.Root>
@@ -330,7 +370,7 @@ function ProviderRow({
                 </AlertDialog.Root>
               </>
             ) : (
-              <Button size="sm" disabled={busy} onClick={() => setForm(true)}>
+              <Button size="sm" disabled={busy} onClick={openForm}>
                 {PROVIDERS_COPY.addKey}
               </Button>
             )}

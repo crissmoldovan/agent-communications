@@ -10,8 +10,8 @@ use std::fmt;
 
 pub use crate::allowlist::{
     AccountName, ActivityChannel, ActivityKind, ActivityOutcome, ActivitySince, Acts, ApprovalId,
-    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, LaneName, PauseDays,
-    QueueChannel, QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday,
+    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, KeyProvider, LaneName,
+    PauseDays, QueueChannel, QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday,
     UpdateLevel, WindowId,
 };
 pub use crate::launchers::Product;
@@ -179,6 +179,14 @@ pub enum TerminalCommand {
     /// asks for its challenge there. Only an approval `eventsRuleEnable` recorded opens; nothing is revoked first, and
     /// the record is kept, so the review's Back can still revoke it. The app never answers the challenge.
     RuleApprove { approval_id: ApprovalId },
+    /// A person-only setup, done at a terminal where the app cannot attest the person (Windows and Linux; 0.33.0): the
+    /// events service's `judge setup …`, `provider key remove <provider>` or `integration set agent-sessions
+    /// --relay-home …`, as the allow-list builds that call. Only those three calls are taken; the terminal's run is the
+    /// person's own, and the app records, revokes and answers nothing.
+    AtTerminal { call: Call },
+    /// Setting a provider's key at a terminal (0.33.0): the events service's `provider key set <provider>`, which asks
+    /// for the key there, hidden. The app never has the key: this takes no key, only which provider's.
+    ProviderKeySet { provider: KeyProvider },
 }
 
 /// What opening the terminal came to.

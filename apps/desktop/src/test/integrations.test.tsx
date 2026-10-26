@@ -6,11 +6,19 @@
  * service's builders' shapes (`linear-integration.ts`, `agent-sessions.ts`).
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '../ipc.ts';
 import { createFakeBridge } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 import { LINEAR, SESSIONS } from './rule-editor-bridge.ts';
+
+// The app acts as the person only on macOS, which attests it; elsewhere each setup is offered at the terminal. These
+// tests run as macOS unless one says otherwise.
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock('../platform.ts', () => ({ isMac: () => platform.mac }));
+afterEach(() => {
+  platform.mac = true;
+});
 
 /** A fake event service whose Linear is connected once a key is set, and disconnected once it is removed. */
 function integrationsBridge(version = '0.33.0') {
@@ -140,6 +148,37 @@ describe('Settings → Integrations', () => {
     expect(integrations.textContent).toContain(
       'Later: GitHub issues, Notion pages, calendars. Comes in a later release.',
     );
+  });
+
+  it('on Windows and Linux, Linear and the relay are set at the terminal: no key field, and the app sets nothing', async () => {
+    platform.mac = false;
+    const bridge = integrationsBridge();
+    renderApp(bridge, { screen: 'settings' });
+    const integrations = await section();
+    const terminal = () => bridge.calls.filter((each) => each.command === 'openInTerminal').map((each) => each.args);
+    const linear = await within(integrations).findByRole('region', { name: 'Linear' });
+    await within(linear).findByText('Not connected');
+    fireEvent.click(within(linear).getByRole('button', { name: 'Connect Linear…' }));
+    expect(within(linear).queryByLabelText('Linear personal API key')).toBeNull();
+    fireEvent.click(within(linear).getByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() => expect(terminal()).toEqual([{ kind: 'providerKeySet', provider: 'linear' }]));
+    const sessions = await within(integrations).findByRole('region', { name: 'Agent sessions' });
+    await within(sessions).findByText('claude-stream: Ready');
+    fireEvent.change(within(sessions).getByRole('textbox', { name: 'Or name its home folder' }), {
+      target: { value: '/example/home/relay' },
+    });
+    fireEvent.click(within(sessions).getByRole('button', { name: 'Use this folder' }));
+    fireEvent.click(await within(sessions).findByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() =>
+      expect(terminal()).toContainEqual({
+        kind: 'atTerminal',
+        call: { kind: 'integrationSetAgentSessions', relayHome: '/example/home/relay' },
+      }),
+    );
+    expect(bridge.calls.some((each) => each.command === 'providerKeySet')).toBe(false);
+    expect(
+      bridge.calls.some((each) => each.command === 'cli' && (each.args as Call).kind === 'integrationSetAgentSessions'),
+    ).toBe(false);
   });
 
   it('before 0.33.0 the section says what it needs, and reads nothing', async () => {

@@ -9,7 +9,7 @@ import { type Call, errorMessage } from '../ipc.ts';
 export type ChangeOutcome =
   | { state: 'applied'; data: unknown }
   | { state: 'needsTerminal'; call: Call; approvalId: string; preview: string }
-  | { state: 'failed'; message: string; hint: string | null };
+  | { state: 'failed'; message: string; hint: string | null; code: string | null };
 
 /**
  * Runs a change from the allow-list once, and says what it came to. It never runs it again with an approval: a change
@@ -28,12 +28,12 @@ export function useChange(): { run(call: Call): Promise<ChangeOutcome> } {
             case 'approvalPending':
               return { state: 'needsTerminal', call, approvalId: result.approvalId, preview: result.preview };
             case 'failed':
-              return { state: 'failed', message: result.message, hint: result.hint };
+              return { state: 'failed', message: result.message, hint: result.hint, code: result.code };
             case 'version':
-              return { state: 'failed', message: 'That was not a change.', hint: null };
+              return { state: 'failed', message: 'That was not a change.', hint: null, code: null };
           }
         } catch (error) {
-          return { state: 'failed', message: errorMessage(error), hint: null };
+          return { state: 'failed', message: errorMessage(error), hint: null, code: null };
         }
       },
     }),
