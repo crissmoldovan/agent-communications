@@ -108,7 +108,10 @@ export function editorBridge(
       eventsRuleAnalyse: analyse,
       integrationSetAgentSessions: (call: Call) => ({
         ...SESSIONS,
-        home: (call as Extract<Call, { kind: 'integrationSetAgentSessions' }>).home,
+        settings: {
+          ...SESSIONS.settings,
+          relayHome: (call as Extract<Call, { kind: 'integrationSetAgentSessions' }>).relayHome,
+        },
       }),
       providerKeyRemove: (call: Call) => ({
         provider: (call as Extract<Call, { kind: 'providerKeyRemove' }>).provider,

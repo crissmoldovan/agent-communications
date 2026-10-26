@@ -17,7 +17,7 @@ import {
   whereTheyGo,
 } from '../events-rules.ts';
 import { canonical, isObject, type JsonObject, targetsIn } from './model.ts';
-import { linearView, sessionView } from './targets.ts';
+import { linearView, SESSION_MODE_WORDS, sessionView } from './targets.ts';
 
 const plain = (text: string): RulePart => ({ text, kind: 'plain' });
 const value = (text: string): RulePart => ({ text, kind: 'value' });
@@ -224,10 +224,7 @@ export function whatLeaves(rule: JsonObject): RulePart[][] {
           ...(session.findBy === 'lane'
             ? [plain('bound to lane '), authored(session.where)]
             : [plain('in '), authored(session.where)]),
-          plain(', which can act'),
-          ...(session.mode === null
-            ? [plain(' as claude-stream lets it by default.')]
-            : [plain(' in its mode '), value(session.mode), plain('.')]),
+          plain(`, where ${SESSION_MODE_WORDS[session.mode]}.`),
         ]);
         for (const part of session.context ?? []) {
           if (part.kind === 'generate')

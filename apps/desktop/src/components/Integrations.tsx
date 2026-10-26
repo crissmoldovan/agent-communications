@@ -4,10 +4,10 @@ import {
   Chip,
   Field,
   FieldLabel,
+  Input,
   Panel,
   PasswordInput,
   SectionHeader,
-  SegmentedControl,
 } from '@cueplusplus/ui';
 import { type ReactNode, useEffect, useId, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
@@ -17,8 +17,8 @@ import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
-import { RELAY_WORDS, readAgentSessions, readLinear, type SessionsState } from '../integrations.ts';
-import { type Call, errorMessage, type RelayHome } from '../ipc.ts';
+import { readAgentSessions, readLinear, type SessionsState, SOURCE_WORDS } from '../integrations.ts';
+import { type Call, errorMessage } from '../ipc.ts';
 import { takeDestination } from '../navigation.tsx';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
@@ -57,20 +57,31 @@ export const INTEGRATIONS_COPY = {
   changeTeams: 'Change teams…',
   disconnect: 'Disconnect',
   disconnectTitle: 'Disconnect Linear?',
-  disconnectBody: (rules: number) =>
+  disconnectBody: (rules: number | null) =>
     rules === 0
       ? 'Your key is removed from this Mac. No rule uses it.'
-      : `Your key is removed from this Mac, and ${rules === 1 ? 'the rule that uses it adds' : `the ${rules} rules that use it add`} no issue until you connect it again.`,
+      : rules === null
+        ? 'Your key is removed from this Mac, and a rule that adds Linear issues adds none until you connect it again.'
+        : `Your key is removed from this Mac, and ${rules === 1 ? 'the rule that uses it adds' : `the ${rules} rules that use it add`} no issue until you connect it again.`,
   sessions: 'Agent sessions',
   sessionsBody:
     'A rule can hand a message to a Claude Code or Codex session that claude-stream runs on this Mac. Agent Comms reads claude-stream’s token as you, and never shows it.',
   relay: 'claude-stream',
+  ready: 'Ready',
+  notReady: 'Not ready',
+  notFound: 'Not found on this Mac',
+  state: 'State',
+  foundAt: 'Found at',
   useRelayAt: 'Use claude-stream at',
-  homes: { 'claude-stream': 'claude-stream’s own home', pilot: 'The Pilot app’s home' },
+  wherever: 'Wherever it is: claude-stream’s own home, then the Pilot app’s.',
+  findIt: 'Find it for me instead',
+  relayFolder: 'Or name its home folder',
+  relayFolderHint: 'The folder that holds claude-stream’s control.token',
+  useFolder: 'Use this folder',
   version: 'Version',
   allowed: 'Folders a session may work in',
   noFolders: 'None yet',
-  notFound: 'not found here',
+  waiting: 'Waiting for a busy session',
   later: 'Later: GitHub issues, Notion pages, calendars.',
   laterRelease: 'Comes in a later release',
   unreadable: 'This could not be read.',
@@ -267,7 +278,9 @@ function Linear() {
         />
         <AlertDialog.Content>
           <AlertDialog.Title>{INTEGRATIONS_COPY.disconnectTitle}</AlertDialog.Title>
-          <AlertDialog.Description>{INTEGRATIONS_COPY.disconnectBody(read.usedBy.length)}</AlertDialog.Description>
+          <AlertDialog.Description>
+            {INTEGRATIONS_COPY.disconnectBody(read.usedBy?.length ?? null)}
+          </AlertDialog.Description>
           <AlertDialog.Footer>
             <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
             <AlertDialog.Action tone="danger" onClick={() => void disconnect()}>
@@ -292,13 +305,17 @@ function Linear() {
               INTEGRATIONS_COPY.teams,
               <UntrustedText key="t" text={read.teams.map((team) => team.key).join(', ') || '—'} />,
             ],
-            [
-              INTEGRATIONS_COPY.usedBy,
-              <UntrustedText
-                key="u"
-                text={read.usedBy.length === 0 ? INTEGRATIONS_COPY.noRule : read.usedBy.join(', ')}
-              />,
-            ],
+            ...(read.usedBy === null
+              ? []
+              : [
+                  [
+                    INTEGRATIONS_COPY.usedBy,
+                    <UntrustedText
+                      key="u"
+                      text={read.usedBy.length === 0 ? INTEGRATIONS_COPY.noRule : read.usedBy.join(', ')}
+                    />,
+                  ] as [string, ReactNode],
+                ]),
           ]}
         />
       ) : null}
@@ -342,11 +359,11 @@ function Linear() {
   );
 }
 
-function homeLabel(state: SessionsState, home: RelayHome): string {
-  const entry = state.homes.find((each) => each.home === home);
-  const where = entry?.path ?? '';
-  const missing = entry?.found === false ? ` (${INTEGRATIONS_COPY.notFound})` : '';
-  return `${INTEGRATIONS_COPY.homes[home]}${where === '' ? '' : `, ${where}`}${missing}`;
+/** The relay's state in words: ready, or why not, in the event service's closed word. */
+function relayWords(state: SessionsState): string {
+  if (state.ready) return INTEGRATIONS_COPY.ready;
+  if (!state.found) return INTEGRATIONS_COPY.notFound;
+  return state.problem === null ? INTEGRATIONS_COPY.notReady : `${INTEGRATIONS_COPY.notReady}: ${state.problem}`;
 }
 
 function AgentSessions() {
@@ -355,11 +372,12 @@ function AgentSessions() {
   useReloadOnReturn(shown.reload);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
+  const [folder, setFolder] = useState('');
   const read = shown.result.state === 'ready' ? readAgentSessions(shown.result.value) : null;
-  const choose = async (home: RelayHome) => {
+  const choose = async (relayHome: string) => {
     setBusy(true);
     setProblem(null);
-    const outcome = await run({ kind: 'integrationSetAgentSessions', home });
+    const outcome = await run({ kind: 'integrationSetAgentSessions', relayHome });
     if (outcome.state === 'failed') setProblem({ message: outcome.message, hint: outcome.hint });
     await shown.reload();
     setBusy(false);
@@ -377,28 +395,28 @@ function AgentSessions() {
       </Card>
     );
   const chip = (
-    <Chip tone={read.relay === 'running' ? 'ok' : 'warn'} variant="tag">
-      {`${INTEGRATIONS_COPY.relay}: ${RELAY_WORDS[read.relay]}`}
+    <Chip tone={read.ready ? 'ok' : 'warn'} variant="tag">
+      {`${INTEGRATIONS_COPY.relay}: ${read.ready ? INTEGRATIONS_COPY.ready : INTEGRATIONS_COPY.notReady}`}
     </Chip>
   );
-  const homes = read.homes.length > 0 ? read.homes.map((entry) => entry.home) : read.home === null ? [] : [read.home];
+  const typed = folder.trim();
+  const whole = isWholeFolder(typed);
   return (
     <Card letter="A" title={INTEGRATIONS_COPY.sessions} chip={chip} body={INTEGRATIONS_COPY.sessionsBody}>
-      {homes.length === 0 ? null : (
-        <div className="flex flex-col gap-(--cue-space-1)">
-          <span className="text-(length:--cue-text-label) text-fg-muted">{INTEGRATIONS_COPY.useRelayAt}</span>
-          <SegmentedControl
-            aria-label={INTEGRATIONS_COPY.useRelayAt}
-            size="sm"
-            className="self-start"
-            value={read.home ?? ''}
-            items={homes.map((home) => ({ value: home, label: homeLabel(read, home), disabled: busy }))}
-            onValueChange={(home) => void choose(home as RelayHome)}
-          />
-        </div>
-      )}
       <Facts
         rows={[
+          [INTEGRATIONS_COPY.state, <UntrustedText key="s" text={relayWords(read)} />],
+          [
+            INTEGRATIONS_COPY.foundAt,
+            <UntrustedText
+              key="h"
+              text={
+                read.home === null
+                  ? '—'
+                  : `${read.home}${read.source === null ? '' : ` (${SOURCE_WORDS[read.source]})`}`
+              }
+            />,
+          ],
           [INTEGRATIONS_COPY.version, <UntrustedText key="v" text={read.version ?? '—'} />],
           [
             INTEGRATIONS_COPY.allowed,
@@ -407,9 +425,59 @@ function AgentSessions() {
               text={read.allowedRoots.length === 0 ? INTEGRATIONS_COPY.noFolders : read.allowedRoots.join(', ')}
             />,
           ],
+          [INTEGRATIONS_COPY.waiting, String(read.waiting)],
         ]}
       />
+      <div className="flex flex-col gap-(--cue-space-2)">
+        <span className="text-(length:--cue-text-label) text-fg-muted">{INTEGRATIONS_COPY.useRelayAt}</span>
+        <p data-slot="relay-home" className="text-fg">
+          <UntrustedText text={read.relayHome ?? INTEGRATIONS_COPY.wherever} />
+        </p>
+        {read.relayHome === null ? null : (
+          <div>
+            <Button size="sm" variant="ghost" disabled={busy} onClick={() => void choose('default')}>
+              {INTEGRATIONS_COPY.findIt}
+            </Button>
+          </div>
+        )}
+        <form
+          className="flex flex-wrap items-end gap-(--cue-space-2)"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (whole) void choose(typed).then(() => setFolder(''));
+          }}
+        >
+          <Field name="relay-home" className="min-w-64 flex-1" invalid={typed !== '' && !whole}>
+            <FieldLabel>{INTEGRATIONS_COPY.relayFolder}</FieldLabel>
+            <Input
+              value={folder}
+              spellCheck={false}
+              autoComplete="off"
+              placeholder={INTEGRATIONS_COPY.relayFolderHint}
+              onValueChange={(value: string) => setFolder(value)}
+            />
+          </Field>
+          <Button type="submit" size="sm" disabled={busy || !whole}>
+            {INTEGRATIONS_COPY.useFolder}
+          </Button>
+        </form>
+      </div>
       <SetupProblem problem={problem} />
     </Card>
+  );
+}
+
+/** A folder written whole: absolute, with no `.` or `..` step and no repeated or trailing `/`, as Rust checks it too. */
+function isWholeFolder(value: string): boolean {
+  return (
+    value.startsWith('/') &&
+    value !== '/' &&
+    !value.endsWith('/') &&
+    !value.includes('//') &&
+    !/[\p{Cc}\p{Cf}]/u.test(value) &&
+    value
+      .slice(1)
+      .split('/')
+      .every((step) => step !== '.' && step !== '..')
   );
 }

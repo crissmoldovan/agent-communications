@@ -10,7 +10,7 @@ use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNI
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
-use crate::rule_editor::{Integration, RelayHome, RuleDocument, RuleVersion, TargetDocument};
+use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -215,6 +215,13 @@ checked_word!(
     LocalModel,
     grammar::local_model,
     "a local model's name"
+);
+checked_word!(
+    /// Where the event service finds the person's claude-stream relay (0.33.0, design §3.5): `default`, or the relay's
+    /// home folder, whole and normal (`rule_editor::relay_home_setting`).
+    RelayHomeSetting,
+    crate::rule_editor::relay_home_setting,
+    "the relay's home: default, or a whole folder"
 );
 checked_word!(
     /// The fingerprint of a rule's activation, as `rule enable` binds it and its preview shows it (0.33.0): 64
@@ -1008,20 +1015,24 @@ pub enum Call {
         approval_id: ApprovalId,
         digest: Digest,
     },
-    /// The events service's `rule analyse <rule> [--draft -]` (0.33.0, design §3.3): suggestions for a rule, or for the
-    /// unsaved draft on stdin. The person's read, refused inside an MCP server; it applies nothing.
+    /// The events service's `rule analyse <rule> [--draft -] [--provider <openrouter|anthropic>]` (0.33.0, design
+    /// §3.3): suggestions for a rule, or for the unsaved draft on stdin, its model on the provider the person picked.
+    /// The person's read, refused inside an MCP server and to an agent's shell; it applies nothing.
     EventsRuleAnalyse {
         rule_id: RuleId,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         draft: Option<RuleDocument>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<AnalyseProvider>,
     },
     /// The events service's `integration show <linear|agent-sessions>` (0.33.0, design §3.4, §3.5): whether Linear is
     /// connected and the workspace and teams its key sees, or the relay the agent-session target reaches and how it
     /// answers. Never a key or a token.
     IntegrationShow { integration: Integration },
-    /// The events service's `integration set agent-sessions --home <claude-stream|pilot>` (0.33.0, design §3.5): whose
-    /// relay home the agent-session target reads its token from. A closed word: the app names no folder.
-    IntegrationSetAgentSessions { home: RelayHome },
+    /// The events service's `integration set agent-sessions --relay-home <default|folder>` (0.33.0, design §3.5): where
+    /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
+    /// to a process the app did not start). The token in that folder is never a call's.
+    IntegrationSetAgentSessions { relay_home: RelayHomeSetting },
     /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
     /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
     ActivityItems {
@@ -1482,24 +1493,31 @@ impl Call {
                 ])
             },
             // A model may write some of its suggestions: as long as a doctor's.
-            Call::EventsRuleAnalyse { rule_id, draft } => Words {
+            Call::EventsRuleAnalyse {
+                rule_id,
+                draft,
+                provider,
+            } => Words {
                 timeout: DOCTOR_TIMEOUT,
                 ..with(
                     events(&["rule", "analyse", rule_id.as_str()]),
                     draft
                         .iter()
-                        .flat_map(|_| ["--draft".to_string(), "-".to_string()]),
+                        .flat_map(|_| ["--draft".to_string(), "-".to_string()])
+                        .chain(provider.iter().flat_map(|provider| {
+                            ["--provider".to_string(), provider.word().to_string()]
+                        })),
                 )
             },
             Call::IntegrationShow { integration } => {
                 events(&["integration", "show", integration.word()])
             }
-            Call::IntegrationSetAgentSessions { home } => events(&[
+            Call::IntegrationSetAgentSessions { relay_home } => events(&[
                 "integration",
                 "set",
                 "agent-sessions",
-                "--home",
-                home.word(),
+                "--relay-home",
+                relay_home.as_str(),
             ]),
         })
     }
@@ -1738,10 +1756,17 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }),
         json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices" }),
         json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "draft": RULE_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "provider": "anthropic" }),
+        json!({
+            "kind": "eventsRuleAnalyse",
+            "ruleId": "invoices",
+            "draft": RULE_DOCUMENT.clone(),
+            "provider": "openrouter"
+        }),
         json!({ "kind": "integrationShow", "integration": "linear" }),
         json!({ "kind": "integrationShow", "integration": "agent-sessions" }),
-        json!({ "kind": "integrationSetAgentSessions", "home": "claude-stream" }),
-        json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }),
+        json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
+        json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
     ];
     values
         .into_iter()
@@ -3967,6 +3992,26 @@ mod tests {
             ["rule", "analyse", "invoices", "--draft", "-"]
         );
         assert!(call(draft).input().is_some());
+        assert_eq!(
+            call(json!({
+                "kind": "eventsRuleAnalyse",
+                "ruleId": "invoices",
+                "draft": RULE_DOCUMENT.clone(),
+                "provider": "anthropic"
+            }))
+            .words()
+            .expect("words")
+            .words,
+            [
+                "rule",
+                "analyse",
+                "invoices",
+                "--draft",
+                "-",
+                "--provider",
+                "anthropic"
+            ]
+        );
         assert!(
             call(json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices" }))
                 .input()
@@ -3978,10 +4023,10 @@ mod tests {
                 ["integration", "show", integration]
             );
         }
-        for home in ["claude-stream", "pilot"] {
+        for home in ["default", "/example/home/.local/state/agent-relay"] {
             assert_eq!(
-                line(json!({ "kind": "integrationSetAgentSessions", "home": home })),
-                ["integration", "set", "agent-sessions", "--home", home]
+                line(json!({ "kind": "integrationSetAgentSessions", "relayHome": home })),
+                ["integration", "set", "agent-sessions", "--relay-home", home]
             );
         }
         for provider in ["anthropic", "linear"] {
@@ -4018,7 +4063,7 @@ mod tests {
             assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
             assert!(!sample.prepares_change(), "{value}");
         }
-        assert_eq!(seen, 14);
+        assert_eq!(seen, 16);
         assert_eq!(RULE_EDITOR_VERSION, "0.33.0");
         assert!(!crate::version::at_least("0.32.0", RULE_EDITOR_VERSION));
         assert!(crate::version::at_least(
@@ -4083,19 +4128,30 @@ mod tests {
         refused(
             json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "draft": "rule invoices" }),
         );
-        refused(
-            json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "provider": "openrouter" }),
-        );
+        for provider in ["typesafe", "linear", "OpenRouter", "", "--json"] {
+            refused(
+                json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "provider": provider }),
+            );
+        }
+        refused(json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "model": "claude" }));
         refused(json!({ "kind": "eventsRuleAnalyse" }));
         for integration in ["Linear", "github", "", "agent_sessions"] {
             refused(json!({ "kind": "integrationShow", "integration": integration }));
         }
-        for home in ["/example/home/.claude-stream", "~", "Pilot", "", "--json"] {
-            refused(json!({ "kind": "integrationSetAgentSessions", "home": home }));
+        for home in [
+            "~/.local/state/agent-relay",
+            "pilot",
+            "",
+            "--json",
+            "/example/../etc",
+            "/example/home/",
+        ] {
+            refused(json!({ "kind": "integrationSetAgentSessions", "relayHome": home }));
         }
         refused(json!({ "kind": "integrationSetAgentSessions" }));
+        refused(json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }));
         refused(
-            json!({ "kind": "integrationSetAgentSessions", "home": "pilot", "path": "/example" }),
+            json!({ "kind": "integrationSetAgentSessions", "relayHome": "default", "token": "fake-token" }),
         );
         refused(json!({ "kind": "integrationShow", "integration": "linear", "key": "fake-key" }));
         refused(json!({ "kind": "eventsTargetsList", "targetId": "x" }));

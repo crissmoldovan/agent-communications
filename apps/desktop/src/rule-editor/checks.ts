@@ -119,13 +119,15 @@ function sessionChecks(session: NonNullable<ReturnType<typeof sessionView>>, con
   }
   if (session.windowOnly) return checks;
   const sessions = context.sessions;
-  if (sessions !== null && sessions.relay !== 'running')
+  if (sessions !== null && !sessions.ready)
     checks.push({
       tone: 'warn',
-      parts: [plain("Agent sessions aren't ready: claude-stream isn't running here.")],
+      parts: [plain("Agent sessions aren't ready: Agent Comms can't reach claude-stream here.")],
       fix: 'integrations',
     });
   const roots = sessions?.allowedRoots ?? [];
+  // A file part may be read from the relay's folders, or a folder the person added for it.
+  const fileRoots = [...roots, ...(sessions?.allowedFolders ?? [])];
   if (session.findBy === 'folder' && sessions !== null && !insideAny(session.where, roots, context.home))
     checks.push({
       tone: 'warn',
@@ -133,7 +135,7 @@ function sessionChecks(session: NonNullable<ReturnType<typeof sessionView>>, con
     });
   for (const part of session.context ?? []) {
     if (part.kind !== 'file') continue;
-    if (sessions !== null && !insideAny(part.path, roots, context.home))
+    if (sessions !== null && !insideAny(part.path, fileRoots, context.home))
       checks.push({
         tone: 'warn',
         parts: [plain('The file '), authored(part.path), plain(' is outside the folders a session may be given.')],

@@ -58,12 +58,12 @@ export type AiProvider = (typeof AI_PROVIDERS)[number];
 export const KEY_PROVIDERS = ['typesafe', 'openrouter', 'anthropic', 'linear'] as const;
 export type KeyProvider = (typeof KEY_PROVIDERS)[number];
 
+/** The providers Analyse's model runs on (0.33.0, `rule_editor.rs`, `AnalyseProvider`), each on the person's own key. */
+export const ANALYSE_PROVIDERS = ['openrouter', 'anthropic'] as const;
+export type AnalyseProvider = (typeof ANALYSE_PROVIDERS)[number];
+
 /** What Settings → Integrations shows (0.33.0, `rule_editor.rs`, `Integration`): Linear, and agent sessions. */
 export type Integration = 'linear' | 'agent-sessions';
-
-/** Whose relay home the agent-session target uses (0.33.0, `rule_editor.rs`, `RelayHome`): a closed word, never a path. */
-export const RELAY_HOMES = ['claude-stream', 'pilot'] as const;
-export type RelayHome = (typeof RELAY_HOMES)[number];
 
 /** A rule or target document the rule editor wrote, as JSON: Rust checks its shape again and hands it over on stdin. */
 export type JsonDocument = Record<string, unknown>;
@@ -234,9 +234,9 @@ export type Call =
   | { kind: 'eventsRuleEnable'; ruleId: string; version: number }
   | { kind: 'eventsApprovalView'; approvalId: string; digest: string }
   | { kind: 'eventsRuleApprove'; approvalId: string; digest: string }
-  | { kind: 'eventsRuleAnalyse'; ruleId: string; draft?: JsonDocument }
+  | { kind: 'eventsRuleAnalyse'; ruleId: string; draft?: JsonDocument; provider?: AnalyseProvider }
   | { kind: 'integrationShow'; integration: Integration }
-  | { kind: 'integrationSetAgentSessions'; home: RelayHome }
+  | { kind: 'integrationSetAgentSessions'; relayHome: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };

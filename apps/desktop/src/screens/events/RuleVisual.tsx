@@ -60,6 +60,8 @@ import {
 import {
   type ContextView,
   linearView,
+  SESSION_MODE_WORDS,
+  SESSION_MODES,
   type SessionView,
   sessionView,
   setLinear,
@@ -728,9 +730,14 @@ function SessionAction({
             />
           </Line>
           <Line label={COPY.mode}>
-            <span className="text-fg-muted">
-              {view.mode === null ? COPY.modeDefault : <UntrustedText text={view.mode} />}
-            </span>
+            <SegmentedControl
+              aria-label={COPY.mode}
+              size="sm"
+              value={view.mode}
+              items={SESSION_MODES.map((mode) => ({ value: mode, label: COPY.modes[mode] }))}
+              onValueChange={(mode) => set({ mode: mode as SessionView['mode'] })}
+            />
+            <span className="text-(length:--cue-text-label) text-fg-muted">{SESSION_MODE_WORDS[view.mode]}</span>
           </Line>
           <Line label={COPY.giveIt}>
             {view.context === null ? (

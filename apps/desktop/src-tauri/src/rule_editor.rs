@@ -184,26 +184,68 @@ impl Integration {
     }
 }
 
-/// Whose relay home the agent-session target reads its token from (design §3.5): claude-stream's default, or the Pilot
-/// app's. Closed: the app never names a folder of its own.
+/// The provider Analyse's model runs on (design §3.3, `rule analyse --provider`): OpenRouter or Anthropic, each with the
+/// person's own key. Closed; with none named, the event service picks one that has a key.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RelayHome {
-    #[serde(rename = "claude-stream")]
-    ClaudeStream,
-    #[serde(rename = "pilot")]
-    Pilot,
+#[serde(rename_all = "lowercase")]
+pub enum AnalyseProvider {
+    Openrouter,
+    Anthropic,
 }
 
-impl RelayHome {
-    pub const ALL: [RelayHome; 2] = [RelayHome::ClaudeStream, RelayHome::Pilot];
+impl AnalyseProvider {
+    pub const ALL: [AnalyseProvider; 2] = [AnalyseProvider::Openrouter, AnalyseProvider::Anthropic];
 
-    /// The home as `integration set agent-sessions --home` takes it.
+    /// The provider as `rule analyse --provider` takes it.
     pub fn word(self) -> &'static str {
         match self {
-            RelayHome::ClaudeStream => "claude-stream",
-            RelayHome::Pilot => "pilot",
+            AnalyseProvider::Openrouter => "openrouter",
+            AnalyseProvider::Anthropic => "anthropic",
         }
     }
+}
+
+/// Where the event service finds the person's claude-stream relay, as `integration set agent-sessions --relay-home`
+/// takes it (design §3.5): `default` — claude-stream's own home, then the Pilot app's — or the relay's home folder,
+/// written whole: absolute, with no `.` or `..` step, no repeated or trailing `/`, no control or format character, and
+/// at most 1,024 bytes, as the event service checks it again. The folder is a setting; the token in it is never read
+/// here.
+pub fn relay_home_setting(value: &str) -> bool {
+    if value == "default" {
+        return true;
+    }
+    value.len() <= 1024
+        && value.starts_with('/')
+        && value != "/"
+        && !value.ends_with('/')
+        && !value.contains("//")
+        && !value
+            .chars()
+            .any(|character| character.is_control() || is_format(character))
+        && value[1..]
+            .split('/')
+            .all(|step| step != "." && step != "..")
+}
+
+/// Unicode's format characters (Cf): bidi controls, zero-width text, the BOM.
+fn is_format(character: char) -> bool {
+    matches!(
+        character,
+        '\u{00AD}'
+            | '\u{0600}'..='\u{0605}'
+            | '\u{061C}'
+            | '\u{06DD}'
+            | '\u{070F}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}'
+            | '\u{FFF9}'..='\u{FFFB}'
+            | '\u{E0001}'
+            | '\u{E0020}'..='\u{E007F}'
+    )
 }
 
 /// Whether `value` is a digest as the event service makes them: 64 lowercase hex digits.
@@ -334,6 +376,35 @@ mod tests {
             json!([]),
         ] {
             assert_eq!(prepared_activation(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_relay_home_is_default_or_a_whole_normal_folder() {
+        for good in [
+            "default",
+            "/example/home/.local/state/agent-relay",
+            "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        ] {
+            assert!(relay_home_setting(good), "{good}");
+        }
+        let long = format!("/{}", "a".repeat(1024));
+        for bad in [
+            "",
+            "/",
+            "Default",
+            "~/.local/state/agent-relay",
+            "relative/home",
+            "--json",
+            "/example/home/",
+            "/example//home",
+            "/example/home/../etc",
+            "/example/./home",
+            "/example/home\n",
+            "/example/home\u{202e}",
+            long.as_str(),
+        ] {
+            assert!(!relay_home_setting(bad), "{bad:?}");
         }
     }
 

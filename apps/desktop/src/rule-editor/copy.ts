@@ -87,7 +87,7 @@ export const EDITOR_COPY = {
   ifBusy: "If it's busy",
   busy: { queue: 'queue it until the session is free', 'queue-only': 'leave it in the Queue' },
   mode: 'Mode',
-  modeDefault: "claude-stream's most restrained mode",
+  modes: { manual: 'Asks first', acceptEdits: 'May edit files', plan: 'Only plans' },
   windowOnly: 'An agent window you opened, bound to this lane: it is woken through the lane, and given the item there.',
   giveIt: 'Give it',
   context: {
@@ -159,11 +159,21 @@ export const ANALYSE_COPY = {
   backToEditing: 'Back to editing',
   title: (id: string) => `Analyse ${id}`,
   suggestions: (n: number) => (n === 1 ? '1 suggestion' : `${n} suggestions`),
+  howMadeTitle: 'How this was made',
   howMade:
     "Analyse read the rule and its last 30 days on this Mac: counts, the judge's answers and what you dismissed, never the messages themselves. A model tuned for each part then rewrote it: Jev's question guide for the judge, and a prompt optimiser for what a session is told.",
-  ranOn: (provider: string, model: string | null) =>
-    `Ran on ${provider}${model === null ? '' : `, ${model}`} · sent the rule and its counts only`,
-  ranHere: 'Ran on this Mac · sent nothing',
+  ranOn: (name: string, model: string | null) => `Ran on ${name}${model === null ? '' : `, ${model}`}.`,
+  noKey:
+    'No model ran: there is no OpenRouter or Anthropic key on this Mac. These suggestions come from the counts alone.',
+  addKey: 'Add a key',
+  noModelParts: 'No model ran: nothing in this rule is a model’s to rewrite.',
+  noModel: 'No model ran.',
+  runOn: 'Run on',
+  byModel: 'Written by a model',
+  counted: (decisions: number, days: number) =>
+    `${decisions === 1 ? '1 message' : `${decisions} messages`} reached it in the last ${days} days.`,
+  domains: 'Sending domains the judge was asked about',
+  domainCounts: (judged: number, yes: number, no: number) => `judged ${judged}: yes ${yes}, no ${no}`,
   keepThis: 'Keep this change',
   apply: 'Apply',
   skip: 'Skip',

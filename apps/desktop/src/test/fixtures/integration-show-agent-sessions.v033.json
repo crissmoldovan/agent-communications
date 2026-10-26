@@ -1,13 +1,15 @@
 {
   "integration": "agent-sessions",
-  "home": "claude-stream",
-  "homes": [
-    { "home": "claude-stream", "path": "/example/home/.agent-relay", "found": true },
-    {
-      "home": "pilot",
-      "path": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
-      "found": false
-    }
-  ],
-  "relay": { "state": "running", "version": "0.2.20", "protocol": 1, "allowedRoots": ["/example/home/work"] }
+  "settings": { "relayHome": null, "relayPort": null, "allowedFolders": ["/example/home/notes"] },
+  "relay": {
+    "found": true,
+    "home": "/example/home/.local/state/agent-relay",
+    "source": "default",
+    "url": "http://127.0.0.1:4318",
+    "ready": true,
+    "version": "0.2.20",
+    "allowedRoots": ["/example/home/work"],
+    "problem": null
+  },
+  "waiting": 2
 }

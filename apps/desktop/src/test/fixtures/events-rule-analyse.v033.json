@@ -1,27 +1,83 @@
 {
+  "ruleId": "invoices",
+  "analysed": { "source": "stored", "version": 2 },
+  "counts": {
+    "windowDays": 30,
+    "since": 1790424000000,
+    "decisions": 13,
+    "outcomes": { "matched": 5, "no-match": 8, "mapping-rejected": 0, "retention-expired": 0, "hold": 0 },
+    "judge": {
+      "answered": 12,
+      "yes": 5,
+      "no": 7,
+      "held": 0,
+      "spread": [1, 2, 2, 1, 1, 0, 0, 2, 1, 2],
+      "lowest": 0.05,
+      "highest": 0.95
+    },
+    "domainsKnown": 9,
+    "domains": [
+      {
+        "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nbank.example\n</untrusted-content boundary=\"BOUNDARY\">",
+        "judged": 4,
+        "yes": 0,
+        "no": 4
+      },
+      {
+        "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\n<img src=x onerror=alert(1)>.example\n</untrusted-content boundary=\"BOUNDARY\">",
+        "judged": 3,
+        "yes": 0,
+        "no": 3
+      }
+    ],
+    "queue": { "open": 1, "done": 2, "dismissed": 2, "lowestDone": 0.86, "highestDismissed": 0.73 }
+  },
   "suggestions": [
     {
-      "part": "/agentic/question",
+      "part": "condition",
+      "before": "match any\n  subject contains \"invoice\"\n  subject contains \"payment\"",
+      "after": "match all\n  any\n    subject contains \"invoice\"\n    subject contains \"payment\"\n  not from.address has domain \"bank.example\"",
+      "why": "The judge said no to all 4 messages from this sending domain in the last 30 days, and yes to none. Leaving it out before the judge is asked saves about 4 judge calls a month.",
+      "evidence": { "by": "counts", "windowDays": 30, "judgedNo": 4 }
+    },
+    {
+      "part": "judge.threshold",
+      "before": "yes at 0.7, if unsure drop",
+      "after": "yes at 0.79, if unsure drop",
+      "why": "Every one of the 2 messages you kept scored 0.86 or more, and the 2 you dismissed scored 0.73 at most. A bar of 0.79, between them, keeps the first and leaves out the second.",
+      "evidence": {
+        "by": "counts",
+        "windowDays": 30,
+        "kept": 2,
+        "dismissed": 2,
+        "lowestKept": 0.86,
+        "highestDismissed": 0.73,
+        "threshold": 0.7
+      }
+    },
+    {
+      "part": "judge.question",
       "before": "Is this asking me to pay or send something?",
       "after": "Is the sender asking me to pay them, or to send them an invoice?",
-      "why": "Jev answers one yes-or-no question best when it names who asks and for what.",
-      "evidence": { "matched": 14, "judgedYes": 6, "judgedNo": 8 }
+      "why": "<img src=x onerror=alert(1)> It names who asks for what.",
+      "evidence": { "by": "model", "provider": "openrouter", "model": "anthropic/claude-sonnet-5.5" }
     },
     {
-      "part": "/agentic/threshold",
-      "before": 0.7,
-      "after": 0.75,
-      "why": "Every yes you kept was above 0.85. The two you dismissed were 0.71 and 0.73.",
-      "evidence": { "kept": 4, "dismissed": 2 }
-    },
-    {
-      "part": "/agentic/inputs",
-      "before": ["/subject", "/snippet"],
-      "after": ["/from/address", "/subject", "/snippet"],
-      "why": "<img src=x onerror=alert(1)> Real invoice requests came from 5 domains.",
-      "evidence": { "domains": 5 }
+      "part": "general",
+      "before": null,
+      "after": null,
+      "why": "This rule has no history on this Mac yet, so there is nothing to count: the suggestions come from its text alone.",
+      "evidence": { "by": "counts", "windowDays": 30, "decisions": 0, "matched": 0 }
     }
   ],
-  "provider": "openrouter",
-  "model": "anthropic/claude-sonnet"
+  "model": {
+    "provider": "openrouter",
+    "name": "OpenRouter",
+    "model": "anthropic/claude-sonnet-5.5",
+    "noKey": ["anthropic"],
+    "sent": "The rule's own text and content-free counts of its last 30 days: never a message, a sender, a subject, a body or an address.",
+    "ran": true,
+    "reason": null,
+    "parts": [{ "part": "judge.question", "at": {}, "outcome": "suggested" }]
+  }
 }

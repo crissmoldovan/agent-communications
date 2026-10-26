@@ -1,16 +1,13 @@
 /**
  * Settings → Integrations (0.33.0, design 2026-10-26-rules-that-act-0330 §3.4, §3.5), as the event service's
  * `integration show <linear|agent-sessions> --json` answers. Read leniently: a field the app cannot read says nothing,
- * and an answer that is not one of these at all is unreadable. Neither ever holds a key or a token.
+ * and an answer that is not one of these at all is unreadable. Neither ever holds a key or a token. The shapes are
+ * the event service's builders' (`linear-integration.ts`, `agent-sessions.ts`):
  *
- *   linear          { integration, connected, workspace: { name, urlKey } | null, teams: [{ id, key, name }],
- *                     usedBy: [ruleId] }
- *   agent-sessions  { integration, home: 'claude-stream' | 'pilot', homes: [{ home, path, found }],
- *                     relay: { state, version, protocol, allowedRoots: [path] } }
- *
- * The shapes are the spec's words made concrete while its builders write them: the lead settles any difference.
+ *   linear          { integration, connected, workspace: string | null, teams: [{ id, key, name }], labels? }
+ *   agent-sessions  { integration, settings: { relayHome, relayPort, allowedFolders },
+ *                     relay: { found, home, source, url, ready, version, allowedRoots, problem }, waiting }
  */
-import { RELAY_HOMES, type RelayHome } from './ipc.ts';
 
 type Json = Record<string, unknown>;
 const isRecord = (value: unknown): value is Json =>
@@ -30,12 +27,13 @@ export interface LinearState {
   connected: boolean;
   workspace: string | null;
   teams: LinearTeam[];
-  usedBy: string[];
+  /** The rules that add issues, when the answer names them; null when it does not say. */
+  usedBy: string[] | null;
 }
 
 export function readLinear(value: unknown): LinearState | null {
   if (!isRecord(value) || typeof value.connected !== 'boolean') return null;
-  const workspace = isRecord(value.workspace) ? text(value.workspace.name) : null;
+  const workspace = text(value.workspace) ?? (isRecord(value.workspace) ? text(value.workspace.name) : null);
   const teams = Array.isArray(value.teams)
     ? value.teams.flatMap((team): LinearTeam[] => {
         if (!isRecord(team)) return [];
@@ -44,56 +42,61 @@ export function readLinear(value: unknown): LinearState | null {
         return id === null || key === null ? [] : [{ id, key, name: text(team.name) ?? key }];
       })
     : [];
-  return { connected: value.connected, workspace, teams, usedBy: texts(value.usedBy) };
-}
-
-/** Where the relay stands, in the app's words. */
-export type RelayState = 'running' | 'not-running' | 'no-token' | 'unsupported' | 'not-found' | 'unknown';
-
-export interface SessionsState {
-  home: RelayHome | null;
-  homes: { home: RelayHome; path: string | null; found: boolean | null }[];
-  relay: RelayState;
-  version: string | null;
-  /** The folders the relay lets a session work in, and so the files it may be given. */
-  allowedRoots: string[];
-}
-
-const RELAY_STATES: readonly RelayState[] = ['running', 'not-running', 'no-token', 'unsupported', 'not-found'];
-
-const relayHome = (value: unknown): RelayHome | null =>
-  (RELAY_HOMES as readonly unknown[]).includes(value) ? (value as RelayHome) : null;
-
-export function readAgentSessions(value: unknown): SessionsState | null {
-  if (!isRecord(value)) return null;
-  const homes = Array.isArray(value.homes)
-    ? value.homes.flatMap((entry): SessionsState['homes'] => {
-        if (!isRecord(entry)) return [];
-        const home = relayHome(entry.home);
-        if (home === null) return [];
-        return [{ home, path: text(entry.path), found: typeof entry.found === 'boolean' ? entry.found : null }];
-      })
-    : [];
-  const relay = isRecord(value.relay) ? value.relay : {};
-  const state = RELAY_STATES.find((each) => each === relay.state) ?? 'unknown';
-  if (homes.length === 0 && relayHome(value.home) === null) return null;
   return {
-    home: relayHome(value.home),
-    homes,
-    relay: state,
-    version: text(relay.version),
-    allowedRoots: texts(relay.allowedRoots),
+    connected: value.connected,
+    workspace,
+    teams,
+    usedBy: Array.isArray(value.usedBy) ? texts(value.usedBy) : null,
   };
 }
 
-/** What the relay's state says, for a person. */
-export const RELAY_WORDS: Readonly<Record<RelayState, string>> = {
-  running: 'Running',
-  'not-running': 'Not running',
-  'no-token': 'No token yet: start claude-stream once',
-  unsupported: 'Too old for Agent Comms',
-  'not-found': 'Not found',
-  unknown: 'Unknown',
+/** Where the relay was found: the folder the person set, claude-stream's own home, or the Pilot app's. */
+export type RelaySource = 'setting' | 'default' | 'pilot';
+
+export interface SessionsState {
+  /** The relay's home the person set, or null for the defaults. */
+  relayHome: string | null;
+  found: boolean;
+  ready: boolean;
+  /** Where the relay is, and how it was found. */
+  home: string | null;
+  source: RelaySource | null;
+  version: string | null;
+  /** Why it cannot be used, as the event service's closed reason; null when it is ready. */
+  problem: string | null;
+  /** The folders the relay lets a session work in. */
+  allowedRoots: string[];
+  /** The folders the person added that a session's file parts may be read from, besides those. */
+  allowedFolders: string[];
+  /** Items waiting for a busy session. */
+  waiting: number;
+}
+
+const SOURCES: readonly RelaySource[] = ['setting', 'default', 'pilot'];
+
+export function readAgentSessions(value: unknown): SessionsState | null {
+  if (!isRecord(value) || !isRecord(value.relay)) return null;
+  const settings = isRecord(value.settings) ? value.settings : {};
+  const relay = value.relay;
+  return {
+    relayHome: text(settings.relayHome),
+    found: relay.found === true,
+    ready: relay.ready === true,
+    home: text(relay.home),
+    source: SOURCES.find((source) => source === relay.source) ?? null,
+    version: text(relay.version),
+    problem: text(relay.problem),
+    allowedRoots: texts(relay.allowedRoots),
+    allowedFolders: texts(settings.allowedFolders),
+    waiting: typeof value.waiting === 'number' && Number.isSafeInteger(value.waiting) ? value.waiting : 0,
+  };
+}
+
+/** Where the relay was found, for a person. */
+export const SOURCE_WORDS: Readonly<Record<RelaySource, string>> = {
+  setting: 'the folder you set',
+  default: 'claude-stream’s own home',
+  pilot: 'the Pilot app’s home',
 };
 
 /** Whether `path` is inside one of `roots`, with `~` read as `home`. A path that steps out with `..` is in none. */

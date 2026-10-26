@@ -139,7 +139,14 @@ export const PROVIDERS_COPY = {
       /** OpenRouter's key settings, which its Jev page names (read 2026-10-26); `links.rs` opens exactly this. */
       keys: 'https://openrouter.ai/settings/keys',
     },
+    anthropic: {
+      name: 'Anthropic',
+      where: 'The makers of Claude. With an Anthropic key, Analyse can run on Claude directly (0.33.0).',
+      getKey: null,
+      keys: null,
+    },
   },
+  usedByAnalyse: 'Analyse may run on it',
   unreadable: 'Your keys could not be read.',
   removeBodyUsed: (name: string) =>
     `Jev uses your ${name} key. Removing it turns Jev off through ${name}: it answers nothing until you add a key again.`,

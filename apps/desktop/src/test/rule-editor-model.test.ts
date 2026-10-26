@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { insideAny, readAgentSessions, readLinear } from '../integrations.ts';
-import { applySuggestions, readAnalyse, valueAt } from '../rule-editor/analyse.ts';
+import { applySuggestions, readAnalyse } from '../rule-editor/analyse.ts';
 import {
   canonical,
   type JsonObject,
@@ -110,26 +110,47 @@ describe('the rule editor model', () => {
     expect(readActivation({ approvalId: 'ap_x', binding: { digest: 'short' } })).toBeNull();
   });
 
-  it('applies a suggestion only where its part still holds what Analyse read', () => {
+  it('applies a suggestion only where its part still holds what Analyse read, the rule text parts through the text', () => {
     const read = readAnalyse(analyse);
-    expect(read?.provider).toBe('openrouter');
-    expect(read?.suggestions).toHaveLength(3);
-    const { document, notApplied } = applySuggestions(invoices, read?.suggestions ?? []);
-    expect(valueAt(document, '/agentic/question')).toBe(
-      'Is the sender asking me to pay them, or to send them an invoice?',
-    );
-    expect(valueAt(document, '/agentic/threshold')).toBe(0.75);
+    expect(read?.model).toMatchObject({ provider: 'openrouter', name: 'OpenRouter', ran: true, noKey: ['anthropic'] });
+    expect(read?.counts.domains).toHaveLength(2);
+    const suggestions = read?.suggestions ?? [];
+    expect(suggestions.map((each) => each.part)).toEqual(['condition', 'judge.threshold', 'judge.question', 'general']);
+    const { document, notApplied } = applySuggestions(invoices, suggestions.slice(0, 3));
     expect(notApplied).toEqual([]);
+    const agentic = document.agentic as JsonObject;
+    expect(agentic.question).toBe('Is the sender asking me to pay them, or to send them an invoice?');
+    expect(agentic.threshold).toBe(0.79);
+    expect(document.condition).toEqual({
+      all: [
+        {
+          any: [
+            { path: '/subject', op: 'contains', value: 'invoice', caseSensitive: false },
+            { path: '/subject', op: 'contains', value: 'payment', caseSensitive: false },
+          ],
+        },
+        { not: { path: '/from/address', op: 'domainIs', value: 'bank.example', includeSubdomains: false } },
+      ],
+    });
+    // Nothing else of the rule moved.
+    expect(canonical({ ...document, condition: invoices.condition, agentic: invoices.agentic })).toBe(
+      canonical(invoices),
+    );
+    // A part that no longer holds its before is left, and given back; a note is never applied.
     const stale = applySuggestions(invoices, [
-      { part: '/agentic/question', before: 'x', after: 'y', why: '', evidence: null },
+      { part: 'judge.question', before: 'x', after: 'y', why: '', evidence: {} },
+      {
+        part: 'judge.threshold',
+        before: 'yes at 0.5, if unsure drop',
+        after: 'yes at 0.6, if unsure drop',
+        why: '',
+        evidence: {},
+      },
+      { part: 'linear.title', before: 'a', after: 'b', why: '', evidence: { targetId: 'no-such-target' } },
+      { part: 'general', before: null, after: null, why: 'note', evidence: {} },
     ]);
-    expect(stale.notApplied).toHaveLength(1);
+    expect(stale.notApplied).toHaveLength(4);
     expect(canonical(stale.document)).toBe(canonical(invoices));
-    // A pointer that leaves the document, or names no parent, changes nothing.
-    expect(
-      applySuggestions(invoices, [{ part: '/nope/deeper', before: null, after: 1, why: '', evidence: null }])
-        .notApplied,
-    ).toHaveLength(1);
   });
 
   it('says what leaves this Mac for a hosted judge, Linear and a session, and nothing for the dry-run log', () => {
@@ -163,7 +184,7 @@ describe('the rule editor model', () => {
     } as unknown as JsonObject;
     const lines = text(whatLeaves(acting));
     expect(lines[0]).toContain('An issue is added in Linear (api.linear.app), team CUE');
-    expect(lines[1]).toContain('go to a Claude Code session in /example/home/work/acme, which can act');
+    expect(lines[1]).toContain('go to a Claude Code session in /example/home/work/acme, where it asks before it acts.');
     expect(lines[2]).toBe('The file /example/home/work/acme/HOW.md goes to the session.');
     const quiet = {
       ...invoices,
@@ -174,10 +195,18 @@ describe('the rule editor model', () => {
   });
 
   it('reads Integrations, and tells a folder inside the relay’s from one outside it', () => {
-    expect(readLinear(linear)).toMatchObject({ connected: true, workspace: 'Example Co' });
+    expect(readLinear(linear)).toMatchObject({ connected: true, workspace: 'Example Co', usedBy: null });
+    expect(readLinear({ connected: true, workspace: { name: 'Old shape' }, teams: [] })?.workspace).toBe('Old shape');
     expect(readLinear({ connected: 'yes' })).toBeNull();
     const relay = readAgentSessions(sessions);
-    expect(relay).toMatchObject({ home: 'claude-stream', relay: 'running', allowedRoots: ['/example/home/work'] });
+    expect(relay).toMatchObject({
+      relayHome: null,
+      ready: true,
+      source: 'default',
+      allowedRoots: ['/example/home/work'],
+      allowedFolders: ['/example/home/notes'],
+      waiting: 2,
+    });
     expect(readAgentSessions({ home: '/example/home' })).toBeNull();
     const roots = ['/example/home/work'];
     expect(insideAny('/example/home/work/acme', roots, null)).toBe(true);

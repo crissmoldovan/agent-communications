@@ -168,8 +168,12 @@ function lineOf(node: unknown): ConditionLine | null {
   const op = text(node.op);
   if (op === null || !TESTS.some((test) => test.op === op) || typeof node.path !== 'string') return null;
   if (typeof node.value !== 'string') return null;
-  // The shapes the visual line writes back exactly: a case-blind text test, or a domain without its subdomains.
-  if (op === 'domainIs') return keys === 'op,path,value' ? { path: node.path, op, value: node.value } : null;
+  // The shapes the visual line writes back exactly: a case-blind text test, or a domain without its subdomains, as the
+  // rule text writes one (`includeSubdomains: false`).
+  if (op === 'domainIs')
+    return keys === 'includeSubdomains,op,path,value' && node.includeSubdomains === false
+      ? { path: node.path, op, value: node.value }
+      : null;
   if (keys !== 'caseSensitive,op,path,value' || node.caseSensitive !== false) return null;
   return { path: node.path, op, value: node.value };
 }
@@ -190,7 +194,7 @@ export function whichView(document: JsonObject): WhichView | null {
 
 function nodeOf(line: ConditionLine): JsonObject {
   return line.op === 'domainIs'
-    ? { path: line.path, op: line.op, value: line.value }
+    ? { path: line.path, op: line.op, value: line.value, includeSubdomains: false }
     : { path: line.path, op: line.op, value: line.value, caseSensitive: false };
 }
 
@@ -342,6 +346,7 @@ export function newTarget(kind: Exclude<ActionKind, 'webhook'>, targetId: string
         find: { folder: '' },
         ifNone: 'start',
         provider: 'claude',
+        mode: 'manual',
         ifBusy: 'queue',
         context: [{ fields: ['/from', '/subject', '/snippet'] }],
       };
@@ -351,8 +356,8 @@ export function newTarget(kind: Exclude<ActionKind, 'webhook'>, targetId: string
         version: 1,
         kind: 'linear',
         team: { id: '', key: '' },
-        title: '{{subject}}',
-        description: '',
+        title: { text: '{{subject}}' },
+        description: { text: '' },
         labels: [],
         assignee: 'me',
       };

@@ -3,13 +3,14 @@
  * an agent session and a Linear issue. Their documents are the spec's:
  *
  *   { kind: 'session', find: { folder } | { lane }, ifNone: 'start' | 'queue-only', provider: 'claude' | 'codex',
- *     mode, ifBusy: 'queue' | 'queue-only', context: ContextPart[] }      — or a window's: { kind: 'session', find: { lane } }
- *   { kind: 'linear', team: { id, key }, title: Template, description: Template, labels: [{ id, name }],
+ *     mode: 'manual' | 'acceptEdits' | 'plan', ifBusy: 'queue' | 'queue-only', context: ContextPart[], instruction? }
+ *   { kind: 'linear', team: { id, key }, title: { text }, description: { text }, labels: [{ id, name }],
  *     assignee: 'me' | { id } | null }
  *
- * A context part is `{ text }`, `{ fields: [pointer] }`, `{ generate: { provider, model, instruction, from } }` or
- * `{ file: path }`; a template is text with `{{field}}` slots, or `{ generate: … }`. Anything else of theirs is edited as
- * text, and kept as it was.
+ * as the event service's builders wrote them (`session-target.ts`, `linear-target.ts`). A context part is `{ text }`,
+ * `{ fields: [pointer] }`, `{ generate: { provider, model, instruction, from } }` or `{ file: path }`; a template is
+ * `{ text }` with `{{field}}` slots (a model-written one comes later). Anything else of theirs is edited as text, and
+ * kept as it was.
  */
 import { copyOf, isObject, type Json, type JsonObject } from './model.ts';
 
@@ -59,6 +60,17 @@ export function contextDocument(part: ContextView): JsonObject {
   }
 }
 
+/** The relay's modes a session target may fix, most restrained first (`session-target.ts`, `SESSION_MODES`). */
+export const SESSION_MODES = ['manual', 'acceptEdits', 'plan'] as const;
+export type SessionMode = (typeof SESSION_MODES)[number];
+
+/** What each mode lets the session do, as the D2 preview says it. */
+export const SESSION_MODE_WORDS: Readonly<Record<SessionMode, string>> = {
+  manual: 'it asks before it acts',
+  acceptEdits: 'it may edit files without asking, and asks before anything else',
+  plan: 'it only plans, and changes nothing',
+};
+
 /** What a session target's card reads. */
 export interface SessionView {
   findBy: 'folder' | 'lane';
@@ -68,7 +80,7 @@ export interface SessionView {
   ifNone: 'start' | 'queue-only';
   provider: 'claude' | 'codex';
   ifBusy: 'queue' | 'queue-only';
-  mode: string | null;
+  mode: SessionMode;
   /** Its context, part by part; null when a part has no control here (edited as text). */
   context: ContextView[] | null;
 }
@@ -88,7 +100,7 @@ export function sessionView(target: JsonObject): SessionView | null {
     ifNone: target.ifNone === 'queue-only' ? 'queue-only' : 'start',
     provider: target.provider === 'codex' ? 'codex' : 'claude',
     ifBusy: target.ifBusy === 'queue-only' ? 'queue-only' : 'queue',
-    mode: typeof target.mode === 'string' ? target.mode : null,
+    mode: SESSION_MODES.find((mode) => mode === target.mode) ?? 'manual',
     context: context.every((part): part is ContextView => part !== null) ? context : null,
   };
 }
@@ -103,6 +115,7 @@ export function setSession(target: JsonObject, view: SessionView): JsonObject {
   }
   next.ifNone = view.ifNone;
   next.provider = view.provider;
+  next.mode = view.mode;
   next.ifBusy = view.ifBusy;
   if (view.context !== null) next.context = view.context.map(contextDocument);
   return next;
@@ -116,11 +129,12 @@ export type TemplateView =
 function templateOf(value: unknown): TemplateView | null {
   if (typeof value === 'string') return { kind: 'text', text: value };
   const part = contextPart(value);
-  return part?.kind === 'generate' ? part : null;
+  return part?.kind === 'generate' || part?.kind === 'text' ? part : null;
 }
 
+/** A template as the Linear target writes one: `{ text }`; a generator as itself. */
 function templateDocument(view: TemplateView): Json {
-  return view.kind === 'text' ? view.text : contextDocument(view);
+  return view.kind === 'text' ? { text: view.text } : contextDocument(view);
 }
 
 /** What a Linear target's card reads. */
