@@ -2,14 +2,16 @@ import assert from 'node:assert/strict';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import { test } from 'node:test';
+import { repositoryTestSources, ruleLiteralSites } from '../scripts/rule-fixtures/sites.ts';
 import { type JsonObject, parseRuleText, printRuleText } from '../src/index.ts';
 import { PACKAGE_ROOT } from './support/realm.ts';
 
 /**
  * Every rule fixture in the repository round-trips through the rule text (0.33.0 design §3.2): printing then parsing
  * gives the same document, and printing is stable. The rules the TypeScript tests build are harvested into
- * `fixtures/rule-text/repository-rules.json`; the JSON fixtures are read where they are, so a new one is covered as
- * soon as it lands.
+ * `fixtures/rule-text/repository-rules.json` by `scripts/rule-fixtures/harvest.mjs`, and counted again here, file by
+ * file, so a rule literal added anywhere fails until it is harvested. The JSON fixtures are read where they are, so a
+ * new one is covered as soon as it lands.
  */
 
 const REPOSITORY = join(PACKAGE_ROOT, '..', '..');
@@ -75,7 +77,10 @@ function jsonFixtures(): Fixture[] {
 
 const HARVESTED = JSON.parse(
   readFileSync(join(PACKAGE_ROOT, 'test', 'fixtures', 'rule-text', 'repository-rules.json'), 'utf8'),
-) as { readonly rules: readonly { readonly from: readonly string[]; readonly document: JsonObject }[] };
+) as {
+  readonly literals: Readonly<Record<string, number>>;
+  readonly rules: readonly { readonly from: readonly string[]; readonly document: JsonObject }[];
+};
 
 const FIXTURES: readonly Fixture[] = [
   ...HARVESTED.rules.map((rule) => ({ from: rule.from[0] as string, document: rule.document })),
@@ -89,33 +94,33 @@ const FIXTURES: readonly Fixture[] = [
  */
 const ESCAPED: Readonly<Record<string, readonly string[]>> = {
   // `event: { version: 1 }` with no type, and no source: the test adds them per channel.
-  'packages/events-daemon/test/activation-documents.test.ts:109': ['raw /event =', 'raw /source absent'],
+  'packages/events-daemon/test/activation-documents.test.ts': ['raw /event =', 'raw /source absent'],
   // An empty condition, refused by the consumer contract.
-  'packages/events-daemon/test/b3-consumer-contract.test.ts:16': ['match raw'],
+  'packages/events-daemon/test/b3-consumer-contract.test.ts': ['match raw'],
   // `options: {}` and the event as a test parameter.
-  'packages/events-daemon/test/d-source-events.test.ts:65': ['raw /event =', 'raw /source ='],
+  'packages/events-daemon/test/d-source-events.test.ts': ['raw /event =', 'raw /source ='],
   // A rule with no targets, for a source-option check.
-  'packages/events-daemon/test/disclosure-fence.test.ts:126': ['raw /targets ='],
+  'packages/events-daemon/test/disclosure-fence.test.ts': ['raw /targets ='],
   // The common part of a rule; each case adds its source and event.
-  'packages/events-daemon/test/event-taint-platform.test.ts:71': ['raw /event absent', 'raw /source absent'],
+  'packages/events-daemon/test/event-taint-platform.test.ts': ['raw /event absent', 'raw /source absent'],
   // An authoring condition: contains without caseSensitive.
-  'packages/events-daemon/test/judge-documents.test.ts:36': ['match raw'],
+  'packages/events-daemon/test/judge-documents.test.ts': ['match raw'],
   // Retention with only the fields the store reads.
-  'packages/events-daemon/test/lane-store.test.ts:65': ['raw /retention ='],
-  'packages/events-daemon/test/queue-store.test.ts:29': ['raw /retention ='],
+  'packages/events-daemon/test/lane-store.test.ts': ['raw /retention ='],
+  'packages/events-daemon/test/queue-store.test.ts': ['raw /retention ='],
   // A queue rule whose retention has no queueMs.
-  'packages/events-daemon/test/queue-domain.test.ts:38': ['raw /retention ='],
+  'packages/events-daemon/test/queue-domain.test.ts': ['raw /retention ='],
   // A rule with no targets yet.
-  'packages/events-daemon/test/phase-d-owner-e2e.test.ts:239': ['raw /targets ='],
+  'packages/events-daemon/test/phase-d-owner-e2e.test.ts': ['raw /targets ='],
   // Partial rules written straight into the store.
-  'packages/events-daemon/test/sse-persistence-auth.test.ts:37': [
+  'packages/events-daemon/test/sse-persistence-auth.test.ts': [
     'raw /condition absent',
     'raw /event absent',
     'raw /judges absent',
     'raw /retention =',
     'raw /source absent',
   ],
-  'packages/events-daemon/test/support/browser-sse-fixture.ts:101': [
+  'packages/events-daemon/test/support/browser-sse-fixture.ts': [
     'raw /condition absent',
     'raw /event absent',
     'raw /judges absent',
@@ -165,18 +170,52 @@ test('only a fixture the event service would refuse needs the escape form, and o
   const found: Record<string, string[]> = {};
   for (const { from, document } of FIXTURES) {
     const lines = escapes(printRuleText(document));
-    if (lines.length > 0) found[from] = [...new Set([...(found[from] ?? []), ...lines])].sort();
+    // A harvested literal by its file, so an edit above it in the test does not move it; a JSON one by its place.
+    const where = from.includes('#') ? from : (from.split(':')[0] as string);
+    if (lines.length > 0) found[where] = [...new Set([...(found[where] ?? []), ...lines])].sort();
   }
   assert.deepEqual(found, ESCAPED);
 });
 
-test('each test file that builds a rule document has its rules in the harvest', () => {
-  const harvested = new Set(HARVESTED.rules.flatMap((rule) => rule.from.map((from) => from.split(':')[0])));
-  // A rule literal: `deliveryRateCap` as a key, a shorthand or a parameter, not inside a JSON string written to SQL.
-  const literal = /(^|[^"\w])deliveryRateCap\s*[:,=]/m;
-  const building = testFiles(['.ts', '.mjs', '.tsx']).filter((path) =>
-    literal.test(readFileSync(join(REPOSITORY, path), 'utf8')),
+test('the harvest holds every rule literal of every test file: a fresh count, file by file, matches it', () => {
+  const counted = Object.fromEntries(
+    [...ruleLiteralSites(repositoryTestSources(REPOSITORY))].map(([path, file]) => [path, file.sites.length]),
   );
-  const missing = building.filter((path) => !harvested.has(path));
-  assert.deepEqual(missing, [], 'add these files’ rule documents to fixtures/rule-text/repository-rules.json');
+  assert.deepEqual(
+    counted,
+    HARVESTED.literals,
+    'a test file has a rule literal the harvest does not: run pnpm build, then pnpm --filter @agentcomms/events harvest:rule-fixtures',
+  );
+});
+
+test('the count sees a literal added to a file it already counts, a spread copy, a helper, and a new file', () => {
+  const counted = ruleLiteralSites([
+    {
+      path: 'packages/x/test/one.test.ts',
+      text: [
+        'const rule = { ruleId: "a", version: 1, targets: [], deliveryRateCap: 1 };',
+        'function ruleFor(cap: number) { return { ...rule, deliveryRateCap: cap }; }',
+        'const shorthand = (deliveryRateCap: number) => ({ ruleId: "b", targets: [], deliveryRateCap });',
+        'const notARule = { deliveryRateCap: 1 };',
+        'const sql = \'{"deliveryRateCap":1,"targets":[]}\';',
+        'ruleFor(2);',
+      ].join('\n'),
+    },
+    { path: 'packages/x/test/two.test.mjs', text: 'export const r = { targets: [], deliveryRateCap: 3 };' },
+    { path: 'packages/x/test/none.test.ts', text: 'const deliveryRateCap = 1;' },
+  ]);
+  assert.deepEqual(
+    Object.fromEntries(
+      [...counted].map(([path, file]) => [path, file.sites.map((site) => [site.line, site.helper ?? null])]),
+    ),
+    {
+      'packages/x/test/one.test.ts': [
+        [1, null],
+        [2, 'ruleFor'],
+        [3, 'shorthand'],
+      ],
+      'packages/x/test/two.test.mjs': [[1, null]],
+    },
+  );
+  assert.equal(counted.get('packages/x/test/one.test.ts')?.calls.length, 1, 'the helper call the harvester tries');
 });

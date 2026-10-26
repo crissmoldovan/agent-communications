@@ -35,7 +35,8 @@
     "build": "tsdown",
     "typecheck": "tsc -p tsconfig.json && tsc -p test/tsconfig.json",
     "test": "node --experimental-strip-types --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
-    "verify:browser": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verify-browser.mjs"
+    "verify:browser": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/verify-browser.mjs",
+    "harvest:rule-fixtures": "node --experimental-strip-types --disable-warning=ExperimentalWarning scripts/rule-fixtures/harvest.mjs"
   },
   "dependencies": {
     "zod": "catalog:"
