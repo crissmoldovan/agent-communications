@@ -1,11 +1,19 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Call, CliResult, Installation, McpServer, TerminalCommand } from '../ipc.ts';
 import { CONNECTIONS_COPY } from '../screens/Connections.tsx';
 import { createFakeBridge, EXAMPLE_INSTALLATION, type FakeBridge, failed, ok } from './fake-bridge.ts';
 import sessions from './fixtures/activity-sessions-clients.json';
 import channels from './fixtures/channels.json';
 import { renderApp } from './render.tsx';
+
+// Core takes the app's own approval only where the app is attested (macOS); elsewhere an install is approved at the
+// terminal. These tests run as macOS unless one says otherwise.
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock('../platform.ts', () => ({ isMac: () => platform.mac }));
+afterEach(() => {
+  platform.mac = true;
+});
 
 /** A screen that reads under a loaded machine: each test is given room. */
 const SLOW = { timeout: 30_000 };
@@ -307,6 +315,52 @@ describe('Connections (spec §3.3)', () => {
     await waitFor(() => expect(bridge.calls).toContainEqual({ command: 'revokePreview', args: OTHER_ID }));
     expect(approvedInApp(bridge)).toEqual([]);
     expect(terminals(bridge)).toEqual([]);
+  });
+
+  it('on Windows and Linux an install is approved at the terminal: the app answers no approval', SLOW, async () => {
+    platform.mac = false;
+    const bridge = bridgeAt();
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Core' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const preview = await view.findByRole('region', { name: 'Add Core to Claude Desktop' });
+    expect(within(preview).queryByRole('button', { name: CONNECTIONS_COPY.approveAndAdd })).toBeNull();
+    fireEvent.click(within(preview).getByRole('button', { name: 'Approve in Terminal' }));
+    await waitFor(() =>
+      expect(terminals(bridge)).toEqual([
+        { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-desktop', server: 'core' }, revoke: ID },
+      ]),
+    );
+    expect(approvedInApp(bridge)).toEqual([]);
+  });
+
+  it("on macOS, core's refusal of the app's approval as unattested offers Approve in Terminal", SLOW, async () => {
+    const bridge = bridgeAt('0.32.0', {
+      approved: () => ({
+        status: 'failed',
+        exit: 10,
+        code: 'APPROVAL_REQUIRED',
+        message: 'nothing on this platform attests that the Agent Comms app started this',
+        hint: 'Approve it at the terminal.',
+      }),
+    });
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Core' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const preview = await view.findByRole('region', { name: 'Add Core to Claude Desktop' });
+    fireEvent.click(within(preview).getByRole('button', { name: CONNECTIONS_COPY.approveAndAdd }));
+    const terminal = await within(preview).findByRole('button', { name: 'Approve in Terminal' });
+    expect(within(preview).queryByRole('button', { name: CONNECTIONS_COPY.approveAndAdd })).toBeNull();
+    fireEvent.click(terminal);
+    await waitFor(() =>
+      expect(terminals(bridge)).toEqual([
+        { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-desktop', server: 'core' }, revoke: ID },
+      ]),
+    );
   });
 
   it('an install core did not apply says why, and its approval can still be cancelled', SLOW, async () => {
