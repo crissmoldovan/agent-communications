@@ -169,6 +169,7 @@ At least one target, in order. Blank lines between them are ignored.
 | `queue <id>, version <n>[, in lane <name>][, keep <duration>][, show <what>]` | `queue`, `lane`, `retentionMs`, `show` (`summary` when not said) |
 | `webhook <id>, version <n>[, plain\|enveloped][, retrying up to <n> times]` | `webhook`, `representation`, `retryLimit` |
 | `stream <id>, version <n>[, to subscriber <id> version <n>][, plain\|enveloped]` | `sse`, `subscriberId`, `subscriberVersion` |
+| `session <id>, version <n>, working in <folder>\|in lane <name>[, with <provider>]` | `session`, `find`, `provider` (see [The session target](#the-session-target)) |
 | `linear issue <id>, version <n>[, in team <key>][, label <name>\|labels <name> and <name>…][, assigned to me\|nobody\|user <id>]` | `linear`, `team.key`, `labels[].name`, `assignee` |
 | `raw <JSON>` | the target as given |
 
@@ -197,6 +198,42 @@ below it the ids Linear knows them by, and its title and description:
 - The prototype's short line, `linear issue in team CUE, label Billing, assigned to me`, with no id or version and no
   ids below it, parses too: it gives `team: { "key": "CUE" }` and `labels: [{ "name": "Billing" }]`, and the app fills
   the rest from Linear; the event service refuses what it leaves out. Such a target prints as `raw`.
+
+### The session target
+
+An agent session claude-stream runs (0.33.0 design §3.5–§3.6): found by its folder, or by the window bound to a lane.
+
+```
+  session <id>, version <n>, working in <folder>|in lane <name>[, with claude-code|codex]
+    if none start with claude-code|codex      (or: if none leave it in the queue)
+    if busy wait                              (or: if busy leave it in the queue)
+    mode <mode>
+    give
+      fields <field>, <field>…
+      text "<text>"
+      written by <model> via <provider>, asking "<instruction>", from <field>, <field>…
+      file <path>
+      raw <JSON>
+    instruction "<text>"
+```
+
+| Text | Target |
+|---|---|
+| `working in <folder>` · `in lane <name>` | `find: { folder }` · `find: { lane }` |
+| `with claude-code` · `with codex` | `provider`: `claude` · `codex` |
+| `if none start with <provider>` · `if none leave it in the queue` | `ifNone`: `start` (and `provider`) · `queue-only` |
+| `if busy wait` · `if busy leave it in the queue` | `ifBusy`: `queue` · `queue-only` |
+| `mode <mode>` | `mode`, the relay's `requestedMode` |
+| `give`, its parts indented | `context`, in order: `{ fields }`, `{ text }`, `{ generate: { model, provider, instruction, from } }`, `{ file }`, or a part as given |
+| `instruction "<text>"` | `instruction`, the prompt's last words |
+
+The provider is said once: in `if none start with`, or with `, with` on the first line. A lane's session is its bound
+window's, so the printer writes `if none` for a lane only when it is not `leave it in the queue`. The parser fills
+`ifNone: "queue-only"`, `ifBusy: "queue"`, `mode: "manual"` and `context: []` when the text says nothing of them, and
+the printer leaves out exactly those (`if busy` is always written, as the prototype draws it). A part the readable
+form has no words for is `raw <JSON>` in its place; a target it cannot say at all is `raw` whole. A session target
+that leaves an item in the Queue — found by a lane, or with either `leave it in the queue` — gives its rule a queue
+retention, as a queue target does (`targetQueues`, exported by this package).
 
 ### `subscriber` — `subscribers`
 
@@ -252,15 +289,17 @@ keep for
 
 Only what differs from the defaults is written, and the parser fills the rest: 7 days each, except dry runs (1 day)
 and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a rule with a
-queue target, queue items 7 days (action queue design, Q2). With no `keep for`, the rule has the defaults. They are
-`RULE_RETENTION_DEFAULTS`, exported by this package, the one copy the event service uses too.
+queue target or a session target that leaves items in the Queue, queue items 7 days (action queue design, Q2). With
+no `keep for`, the rule has the defaults. They are `RULE_RETENTION_DEFAULTS`, exported by this package, the one copy
+the event service uses too.
 
 ## What the parser fills
 
 When the text says nothing of them: `judges` is `[]`, `subscribers` is `[]`, `retention` is the defaults above, a
-queue's `show` is `summary`, a webhook's `signing` and `ordering` are `standard-webhooks` and `strict`, a Linear issue's
-`labels` are `[]` and its `assignee` is `null`, Gmail's `includeSpamTrash` is `false`, and a condition's `caseSensitive`
-is `false`. The printer leaves each out only when the
+queue's `show` is `summary`, a session's `ifNone`, `ifBusy`, `mode` and `context` are `queue-only`, `queue`, `manual`
+and `[]`, a webhook's `signing` and `ordering` are `standard-webhooks` and `strict`, a Linear issue's `labels` are `[]`
+and its `assignee` is `null`, Gmail's `includeSpamTrash` is `false`, and a condition's `caseSensitive` is `false`. The
+printer leaves each out only when the
 document holds exactly that value.
 
 ## The escape form
@@ -286,21 +325,3 @@ after a mistake:
 - a section given twice, an option given twice, and quoted text without its closing quote are refused where they
   stand.
 
-## Reserved for the session target
-
-`session` is kept for the agent-session target (design §3.5–§3.6), drawn in the prototype as:
-
-```
-  session working in /example/home/acme
-    if none start with claude-code
-    if busy wait
-    give
-      the message's sender, subject, first 300 characters
-      text "Check the invoice against Stripe before replying."
-      written by claude "Say in one line what the sender wants."
-      file /example/home/acme/billing/HOW-WE-INVOICE.md
-```
-
-Until its document is final, the parser refuses the word with a note to use `raw`, and the printer writes any target
-kind it does not know as `raw <JSON>`, so such a rule already round-trips. The Linear issue has its words above; the
-prototype's `title written by …` waits with the session target for the context it shares.

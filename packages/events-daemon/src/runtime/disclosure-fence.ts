@@ -7,6 +7,7 @@ import {
   type DisclosureBinding,
   sha256Hex,
 } from '@agentcomms/core';
+import { targetQueues } from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   activationDocumentDigest,
@@ -314,8 +315,8 @@ function withoutRetiredQueueRetention(
   parent: CanonicalFullRuleDocument,
   child: CanonicalFullRuleDocument,
 ): CanonicalFullRuleDocument {
-  const parentQueued = parent.targets.some((target) => target.kind === 'queue');
-  const childQueued = child.targets.some((target) => target.kind === 'queue');
+  const parentQueued = parent.targets.some(targetQueues);
+  const childQueued = child.targets.some(targetQueues);
   if (!parentQueued || childQueued || parent.retention.queueMs === undefined) return parent;
   const { queueMs: _retired, ...retention } = parent.retention;
   return { ...parent, retention };

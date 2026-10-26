@@ -129,6 +129,22 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   },
   // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see. The person's read, CLI and app.
   { capabilityOperation: 'integrationShow', wireOperation: 'integration-show', desktopCallable: true, family: 'owner' },
+  // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
+  // their terminal (its show is `integration-show` above) — and the busy queue, the person's to read and drop from; a
+  // bound window sees its own lane's.
+  { capabilityOperation: 'integrationSet', wireOperation: 'integration-set', desktopCallable: true, family: 'owner' },
+  {
+    capabilityOperation: 'sessionQueueList',
+    wireOperation: 'session-queue-list',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'sessionQueueDrop',
+    wireOperation: 'session-queue-drop',
+    desktopCallable: true,
+    family: 'owner',
+  },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

@@ -2,6 +2,7 @@ import { CommsError, isCommsError, sessionIdentity, warmSessionIdentity } from '
 import { McpServer, ProtocolError, ProtocolErrorCode, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { isClaudeCodeSessionId, type LaneClientInfo, type LaneWindowIdentity } from '../domain/lanes.ts';
+import { sessionQueueList } from '../operations/agent-sessions.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import type { B3ControlOperation, B3McpRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
@@ -688,6 +689,19 @@ function buildEventsMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (_args, ctx) => reply(await queueCounts(await scoped(ctx))),
+  );
+  // The busy queue (0.33.0 §3.5): a bound window sees only its own lane's waiting matches (routing B4), content-free;
+  // dropping one, and every other lane's, is the person's.
+  server.registerTool(
+    'events_session_queue_list',
+    {
+      title: 'List matches waiting for a busy session',
+      description:
+        'Lists the matches of the lane bound to this window that wait for its agent session to finish its run: ids and times, never what they say. Each is passed on when the run ends; only the person drops one.',
+      inputSchema: z.strictObject({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (_args, ctx) => reply(await sessionQueueList(await scoped(ctx))),
   );
   for (const [name, title, description, operation] of [
     ['events_queue_done', 'Mark queue item done', 'Marks one queue item done; it stays for its retention.', queueDone],

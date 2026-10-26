@@ -16,11 +16,13 @@ import {
   canonicalTarget,
   type JudgeBudgetDocument,
   normaliseActivationDocument,
+  type SessionTargetDocument,
   type SubscriberDocument,
   type TargetDocument,
+  targetLane,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import { ANALYSE_PROVIDERS, type AnalyseProvider } from '../domain/analyse-model.ts';
+import { ANALYSE_PROVIDERS, ANALYSE_ROUTES, type AnalyseProvider } from '../domain/analyse-model.ts';
 import { PERSON_SETUP_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
 import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
@@ -56,6 +58,7 @@ import {
   type QueueStateFilter,
 } from '../domain/queue-target.ts';
 import { ANALYSE_WINDOW_DAYS, RULE_ANALYSE_PARTS, type RuleAnalyseResultV1 } from '../domain/rule-analyse.ts';
+import type { AgentSessionsIntegrationV1 } from '../runtime/agent-sessions.ts';
 import {
   type B3ControlWireOperation,
   type DesktopControlWireOperation,
@@ -74,6 +77,7 @@ import type {
   QueueStateChangeResultV1,
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
+import type { SessionQueueDropResultV1, SessionQueueListResultV1 } from '../runtime/session-queue.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
@@ -575,7 +579,10 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
-  readonly 'integration-show': IntegrationShowResultV1;
+  readonly 'integration-show': IntegrationShowResultV1 | AgentSessionsIntegrationV1;
+  readonly 'integration-set': AgentSessionsIntegrationV1;
+  readonly 'session-queue-list': SessionQueueListResultV1;
+  readonly 'session-queue-drop': SessionQueueDropResultV1;
   readonly 'rule-analyse': RuleAnalyseResultV1;
 };
 
@@ -744,7 +751,22 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
   /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, and one team's labels. */
-  readonly 'integration-show': { readonly integration: 'linear'; readonly team?: string | undefined };
+  readonly 'integration-show':
+    | { readonly integration: 'linear'; readonly team?: string | undefined }
+    | { readonly integration: 'agent-sessions' };
+  /**
+   * Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is, theirs to see and to set from the
+   * app or their terminal; and the busy queue, theirs to read and to drop from. No token is in any of them.
+   */
+  readonly 'integration-set': {
+    readonly integration: 'agent-sessions';
+    readonly relayHome?: string | undefined;
+    readonly relayPort?: number | 'default' | undefined;
+    readonly allowFolders?: readonly string[] | undefined;
+    readonly removeFolders?: readonly string[] | undefined;
+  };
+  readonly 'session-queue-list': Record<string, never>;
+  readonly 'session-queue-drop': { readonly deliveryId: string };
   /**
    * Analyse (0.33.0 design §3.3): the person's view of one rule, or a draft of it from the editor, and the provider its
    * model runs on when they pick one. It writes nothing.
@@ -986,7 +1008,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -1078,8 +1100,8 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   assertPositiveInteger(target.version, 'a shown target version');
   if (target.host !== undefined && (target.kind !== 'webhook' || typeof target.host !== 'string' || target.host === ''))
     throw new TypeError('only a webhook target shows its host');
-  if (target.lane !== undefined && (target.kind !== 'queue' || !isLaneName(target.lane)))
-    throw new TypeError('only a queue target shows its lane');
+  if (target.lane !== undefined && ((target.kind !== 'queue' && target.kind !== 'session') || !isLaneName(target.lane)))
+    throw new TypeError('only a queue or session target shows its lane');
   if (value.dryRun !== null) {
     assertClosedRecord(value.dryRun, ['expiresAt'], 'a shown dry-run entry');
     if (target.kind !== 'dry-run') throw new TypeError('only a dry-run delivery shows a log entry');
@@ -1152,6 +1174,67 @@ function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void 
   // on Windows and Linux, or a terminal.
   if (!(PERSON_SETUP_APPROVERS as readonly unknown[]).includes(value.approvedBy))
     throw new TypeError('a judge setup is approved by the person, in the app or at a terminal');
+}
+
+/** `integration show|set agent-sessions` (0.33.0 §3.5): the settings and what the relay said; never its token. */
+function assertAgentSessionsIntegration(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(value, ['integration', 'settings', 'relay', 'waiting'], 'the agent sessions integration');
+  if (value.integration !== 'agent-sessions') throw new TypeError('an integration result names agent-sessions');
+  assertClosedRecord(value.settings, ['relayHome', 'relayPort', 'allowedFolders'], 'agent session settings');
+  assertNullable(value.settings.relayHome, assertText, 'the relay home setting');
+  assertNullable(value.settings.relayPort, assertPositiveInteger, 'the relay port setting');
+  if (!Array.isArray(value.settings.allowedFolders) || value.settings.allowedFolders.some((f) => typeof f !== 'string'))
+    throw new TypeError('the allowed folders are a list of folders');
+  assertClosedRecord(
+    value.relay,
+    ['found', 'home', 'source', 'url', 'ready', 'version', 'allowedRoots', 'problem'],
+    'the relay as found',
+  );
+  const relay = value.relay;
+  for (const field of ['found', 'ready'])
+    if (typeof relay[field] !== 'boolean') throw new TypeError(`the relay's ${field} is true or false`);
+  for (const field of ['home', 'url', 'version', 'problem'])
+    assertNullable(relay[field], assertText, `the relay ${field}`);
+  if (relay.source !== null && !['setting', 'default', 'pilot'].includes(relay.source as string))
+    throw new TypeError("the relay's home is the setting's, the default or the Pilot app's");
+  if (typeof relay.url === 'string' && !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}$/u.test(relay.url))
+    throw new TypeError('the relay is reached on loopback only');
+  if (
+    relay.allowedRoots !== null &&
+    (!Array.isArray(relay.allowedRoots) || relay.allowedRoots.some((r) => typeof r !== 'string'))
+  )
+    throw new TypeError("the relay's allowed roots are a list of folders");
+  assertNonNegativeInteger(value.waiting, 'the items waiting for a busy session');
+}
+
+/** One `session-queue list` item: ids, a lane and times, content-free. */
+function assertSessionQueueItem(value: unknown): void {
+  assertClosedRecord(
+    value,
+    [
+      'deliveryId',
+      'relaySessionId',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+      'lane',
+      'queuedAt',
+      'released',
+      'expiresAt',
+    ],
+    'a waiting session item',
+  );
+  for (const field of ['deliveryId', 'ruleId', 'targetId']) assertText(value[field], `a waiting session item ${field}`);
+  if (typeof value.relaySessionId !== 'string' || !/^sess_[0-9a-f-]{36}$/u.test(value.relaySessionId))
+    throw new TypeError('a waiting session item names its relay session');
+  for (const field of ['ruleVersion', 'targetVersion'])
+    assertPositiveInteger(value[field], `a waiting session item ${field}`);
+  if (value.lane !== null && !isLaneName(value.lane))
+    throw new TypeError('a waiting session item has a malformed lane');
+  assertIsoTime(value.queuedAt, 'a waiting session item queuedAt');
+  assertIsoTime(value.expiresAt, 'a waiting session item expiresAt');
+  if (typeof value.released !== 'boolean') throw new TypeError('a waiting session item says whether it was let go');
 }
 
 /** A lane's binding, as `lane list` and `lane bind` give it (routing design §6's JSON contract). */
@@ -1336,6 +1419,9 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
   'integration-show': ['integration', 'connected', 'workspace', 'teams'],
+  'integration-set': ['integration', 'settings', 'relay', 'waiting'],
+  'session-queue-list': ['items'],
+  'session-queue-drop': ['deliveryId', 'dropped'],
   'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
   'dryrun-show': [
     'deliveryId',
@@ -1542,7 +1628,8 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     return;
   }
   if (operation === 'integration-show' && isRecord(value)) {
-    assertIntegrationShow(value);
+    if (value.integration === 'agent-sessions') assertAgentSessionsIntegration(value);
+    else assertIntegrationShow(value);
     return;
   }
   assertClosedRecord(value, fields, `a ${operation} result`);
@@ -1704,6 +1791,17 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');
+      return;
+    case 'integration-set':
+      assertAgentSessionsIntegration(value);
+      return;
+    case 'session-queue-list':
+      if (!Array.isArray(value.items)) throw new TypeError('a session queue list needs its items');
+      for (const item of value.items) assertSessionQueueItem(item);
+      return;
+    case 'session-queue-drop':
+      assertText(value.deliveryId, 'a dropped session item id');
+      if (value.dropped !== true) throw new TypeError('a session queue drop says it dropped the item');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);
@@ -2007,6 +2105,56 @@ function hostedJudgeDestination(document: ActivationDocumentV1): readonly string
   ];
 }
 
+const SESSION_PROVIDER_WORDS: Readonly<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex' };
+const SESSION_MODE_PREVIEW: Readonly<Record<string, string>> = {
+  manual: 'the session asks before it acts',
+  acceptEdits: 'the session may edit files without asking, and asks before anything else',
+  plan: 'the session only plans, and changes nothing',
+};
+
+/** A context part as the preview names it, every rule-author string one literal it cannot close. */
+function contextPartPreview(part: SessionTargetDocument['context'][number]): string {
+  if ('text' in part) return `fixed text ${authorLiteral(part.text)}`;
+  if ('fields' in part) return `the mapped fields ${part.fields.map(authorLiteral).join(', ')}`;
+  if ('file' in part) return `the file ${authorLiteral(part.file)}, read when the match is passed on (at most 64 KB)`;
+  const route = ANALYSE_ROUTES[part.generate.provider];
+  return `what ${authorLiteral(part.generate.model)} writes, asked ${authorLiteral(part.generate.instruction)} — it is sent the mapped fields ${part.generate.from
+    .map(authorLiteral)
+    .join(', ')} through ${route.name} (${route.host}), on your own key`;
+}
+
+/**
+ * The agent-session disclosure (0.33.0 §3.5): plainly, that matches' mapped fields and the listed context go to a
+ * coding-agent session in the named folder — or the session behind the window bound to a lane — which can act with the
+ * named mode; whether one is started, what happens while it is busy, every context part, and its instruction.
+ */
+function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  return document.rule.targets.flatMap((target) => {
+    if (target.kind !== 'session') return [];
+    const named = `Session ${target.targetId}@${target.version}`;
+    const provider = SESSION_PROVIDER_WORDS[target.provider] ?? target.provider;
+    const where =
+      'folder' in target.find
+        ? `a ${provider} session working in ${authorLiteral(target.find.folder)}`
+        : `the ${provider} session behind the agent window bound to lane ${target.find.lane}`;
+    const lines = [
+      `${named}: each match's mapped fields and the context below go to ${where}, a coding agent there, which may act: ${SESSION_MODE_PREVIEW[target.mode] ?? target.mode}.`,
+      target.ifNone === 'start'
+        ? `${named}: if there is no such session, one is started with ${provider} in that folder.`
+        : 'lane' in target.find
+          ? `${named}: if the bound window is not a session claude-stream runs, the match is a lane item in lane ${target.find.lane}, as today.`
+          : `${named}: if there is no such session, the match is left in the Queue.`,
+      target.ifBusy === 'queue'
+        ? `${named}: while the session is busy, the match waits for it, and goes when its run ends.`
+        : `${named}: while the session is busy, the match is left in the Queue.`,
+      ...target.context.map((part, index) => `${named}: context part ${index + 1}, ${contextPartPreview(part)}.`),
+      ...(target.instruction === undefined ? [] : [`${named}: it is told last ${authorLiteral(target.instruction)}.`]),
+    ];
+    return lines.map((line) => neutralise(line).text);
+  });
+}
+
 /**
  * What each Linear target of a rule does (0.33.0 design §3.4): the team, its labels and who it is assigned to, and which
  * mapped fields fill the title and the description. Every value is the approved document's, through `neutralise`.
@@ -2058,9 +2206,10 @@ export function renderB3ApprovalPreviewV1(
     document.kind === 'rule'
       ? [
           ...new Set(
-            document.rule.targets.flatMap((target) =>
-              target.kind === 'queue' && target.lane !== undefined ? [target.lane.name] : [],
-            ),
+            document.rule.targets.flatMap((target) => {
+              const lane = targetLane(target);
+              return lane === undefined ? [] : [lane];
+            }),
           ),
         ].map((name) => {
           const binding = context.lanes?.find((lane) => lane.name === name)?.binding ?? null;
@@ -2090,6 +2239,7 @@ export function renderB3ApprovalPreviewV1(
       ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
+      ...sessionDisclosure(document),
       ...linearTargetLines(document),
       ...lanes,
       ...laya,

@@ -50,10 +50,11 @@ export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
   readonly signal?: AbortSignal;
   /**
-   * Global-only only: `analyse` admits Analyse's model endpoints, and only them; `linear` admits Linear's GraphQL
-   * endpoint, and only it; omitted, a judge's two.
+   * Global-only only: `analyse` admits Analyse's model endpoints, and only them; `session-context` admits the same two
+   * for a rule's `generate` context part (0.33.0 §3.6), and only them; `linear` admits Linear's GraphQL endpoint, and
+   * only it; omitted, a judge's two.
    */
-  readonly hostedPurpose?: 'analyse' | 'linear' | undefined;
+  readonly hostedPurpose?: 'analyse' | 'session-context' | 'linear' | undefined;
 };
 
 export interface PinnedTcpOptions {
@@ -153,10 +154,14 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   if (options.hostedPurpose !== undefined && !globalOnly)
     throw new AddressPolicyError('a hosted purpose is for global-only address mode');
   if (globalOnly) {
-    if (options.hostedPurpose === 'analyse') {
-      // Analyse's model: exactly its fixed endpoints, and never a judge's.
+    if (options.hostedPurpose === 'analyse' || options.hostedPurpose === 'session-context') {
+      // Analyse's model, or a generate part's: exactly the fixed model endpoints, and never a judge's.
       if (!(ANALYSE_GLOBAL_ONLY_ENDPOINTS as readonly string[]).includes(url.href))
-        throw new AddressPolicyError('global-only address mode for Analyse is reserved for its fixed model endpoints');
+        throw new AddressPolicyError(
+          options.hostedPurpose === 'analyse'
+            ? 'global-only address mode for Analyse is reserved for its fixed model endpoints'
+            : 'global-only address mode for a generate part is reserved for the fixed model endpoints',
+        );
     } else if (options.hostedPurpose === 'linear') {
       // A Linear target's issues and the Linear integration's read: exactly Linear's GraphQL endpoint.
       if (url.href !== LINEAR_GLOBAL_ONLY_ENDPOINT)

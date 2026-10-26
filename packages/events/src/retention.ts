@@ -27,3 +27,19 @@ export const RULE_RETENTION_DEFAULTS: Readonly<{
   decisionMetadataMs: 90 * DAY,
   queueMs: 7 * DAY,
 });
+
+/**
+ * Whether a target can put an item in the person's Queue, so that its rule keeps queue items and sets `queueMs`: a
+ * queue target; or an agent-session target (0.33.0 design §3.5) that is found by a lane — its window's items are lane
+ * queue items, as a queue target's are — or that leaves the item in the Queue when no session is found or one is busy.
+ * The event service and the rule text both ask this, so the two agree on which rules have a queue retention.
+ */
+export function targetQueues(target: unknown): boolean {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) return false;
+  const record = target as Readonly<Record<string, unknown>>;
+  if (record.kind === 'queue') return true;
+  if (record.kind !== 'session') return false;
+  const find = record.find;
+  const byLane = typeof find === 'object' && find !== null && Object.hasOwn(find, 'lane');
+  return byLane || record.ifNone === 'queue-only' || record.ifBusy === 'queue-only';
+}

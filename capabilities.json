@@ -2865,6 +2865,47 @@
       "reason": "What Linear shows the person — their workspace, its teams and a team's labels, fetched with their own Linear key — is for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reaches it; events_provider_list tells an agent whether a Linear key is kept."
     },
     {
+      "id": "events-daemon.integration.show-agent-sessions",
+      "package": "events-daemon",
+      "cli": "integration show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "integrationShow",
+      "argv": ["agent-sessions"],
+      "expect": { "integration": "agent-sessions" },
+      "reason": "Where Agent Comms finds the person's claude-stream relay — its home folder and its port — is the person's own setting, shown in the app's Settings → Integrations or at their terminal. That folder holds the relay's control token, so an agent cannot read the setting: no tool shows it (0.33.0 design §3.5)."
+    },
+    {
+      "id": "events-daemon.integration.set",
+      "package": "events-daemon",
+      "cli": "integration set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "integrationSet",
+      "argv": ["agent-sessions", "--relay-port", "4318"],
+      "expect": { "integration": "agent-sessions" },
+      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a rule can prompt, with that relay's control token, so it is the person's, from the app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
+    },
+    {
+      "id": "events-daemon.session-queue.list",
+      "package": "events-daemon",
+      "cli": "session-queue list",
+      "mcp": "events_session_queue_list",
+      "status": "both",
+      "operation": "sessionQueueList"
+    },
+    {
+      "id": "events-daemon.session-queue.drop",
+      "package": "events-daemon",
+      "cli": "session-queue drop",
+      "mcp": null,
+      "status": "exception",
+      "operation": "sessionQueueDrop",
+      "argv": ["0f8fad5b-d9cb-469f-a165-70867728950e"],
+      "expect": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" },
+      "reason": "A match waiting for a busy agent session is passed on when the session's run ends; dropping one is the person's, in the app or at their terminal, as clearing the queue is: an agent must not be able to make what is waiting for a session disappear. A bound window sees its own lane's waiting matches with events_session_queue_list (0.33.0 design §3.5)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

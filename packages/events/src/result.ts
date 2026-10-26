@@ -61,7 +61,9 @@ export type IssueCode =
   /** A rule-defined CloudEvent type is not a non-empty string. */
   | 'CLOUD_EVENT_TYPE_INVALID'
   /** An untrusted extension pointer is not present in data as a string. */
-  | 'UNTRUSTED_POINTER_INVALID';
+  | 'UNTRUSTED_POINTER_INVALID'
+  /** A target's context (0.33.0 design §3.6) is not a list of its four part shapes, within their limits. */
+  | 'CONTEXT_INVALID';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

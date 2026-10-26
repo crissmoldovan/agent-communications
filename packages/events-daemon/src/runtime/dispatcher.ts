@@ -89,6 +89,8 @@ export interface DeliveryDispatcherOptions {
   readonly sse: DeliveryDispatchHandler;
   /** The action queue's local adapter; a queue delivery is refused, never claimed by another, when it is absent. */
   readonly queue?: DeliveryDispatchHandler | undefined;
+  /** The agent-session adapter (0.33.0 §3.5); a session delivery is refused, never claimed by another, without it. */
+  readonly session?: DeliveryDispatchHandler | undefined;
   /** The Linear target's adapter (0.33.0); a Linear delivery is refused, never claimed by another, when it is absent. */
   readonly linear?: DeliveryDispatchHandler | undefined;
   readonly now?: (() => number) | undefined;
@@ -114,6 +116,7 @@ export class DeliveryDispatcher {
   readonly #webhook: DeliveryDispatchHandler;
   readonly #sse: DeliveryDispatchHandler;
   readonly #queue: DeliveryDispatchHandler | undefined;
+  readonly #session: DeliveryDispatchHandler | undefined;
   readonly #linear: DeliveryDispatchHandler | undefined;
   readonly #now: () => number;
   readonly #assertObjectSecretReady: DeliveryDispatcherOptions['assertObjectSecretReady'];
@@ -124,6 +127,7 @@ export class DeliveryDispatcher {
     this.#webhook = options.webhook;
     this.#sse = options.sse;
     this.#queue = options.queue;
+    this.#session = options.session;
     this.#linear = options.linear;
     this.#now = options.now ?? Date.now;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
@@ -173,6 +177,11 @@ export class DeliveryDispatcher {
       if (this.#queue === undefined)
         throw new CommsError('CONFIG', 'this owner has no queue adapter for a queue delivery');
       return this.#queue;
+    }
+    if (targetKey.startsWith('session:')) {
+      if (this.#session === undefined)
+        throw new CommsError('CONFIG', 'this owner has no session adapter for a session delivery');
+      return this.#session;
     }
     if (targetKey.startsWith('linear:')) {
       if (this.#linear === undefined)
