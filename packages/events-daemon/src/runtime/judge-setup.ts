@@ -307,9 +307,12 @@ export class JudgeSetupService {
         throw new CommsError(
           'APPROVAL_VOID',
           'this approval is no longer waiting: it was approved, cancelled or replaced',
+          { details: { reason: 'APPROVAL_NOT_WAITING' } },
         );
       if (row.digest !== digest)
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after you saw its preview: review it again');
+        throw new CommsError('APPROVAL_VOID', 'the rule changed after you saw its preview: review it again', {
+          details: { reason: 'DIGEST_MISMATCH' },
+        });
       const document = JSON.parse(row.document) as { kind?: unknown; rule?: { ruleId?: unknown; version?: unknown } };
       const ruleId = document.kind === 'rule' ? document.rule?.ruleId : undefined;
       const version = document.kind === 'rule' ? document.rule?.version : undefined;
@@ -371,11 +374,13 @@ export class JudgeSetupService {
         throw new CommsError(
           'APPROVAL_VOID',
           'this approval is no longer waiting: it was approved, cancelled or replaced',
+          { details: { reason: 'APPROVAL_NOT_WAITING' } },
         );
       if (row.digest !== digest)
         throw new CommsError(
           'APPROVAL_VOID',
           'what switching on covers changed after you saw its preview: review it again',
+          { details: { reason: 'DIGEST_MISMATCH' } },
         );
       const document = JSON.parse(row.document) as { kind?: unknown; ruleVersions?: unknown };
       const ruleVersions =
@@ -529,10 +534,16 @@ export class JudgeSetupService {
       await record('ok');
       return result;
     } catch (error) {
-      // A refusal with its own reason is audited as one, with that reason; anything else as a failure.
+      // A refusal with its own reason is audited as one, with that reason — an approval this person-only path refuses
+      // because it is not waiting or was not the one the person saw included (0.34.0 review, finding 4); anything else
+      // as a failure.
+      const given =
+        error instanceof CommsError ? (error.details as { reason?: unknown } | undefined)?.reason : undefined;
       const reason =
-        error instanceof CommsError && error.code === 'APPROVAL_REQUIRED'
-          ? (error.details as { reason?: unknown } | undefined)?.reason
+        error instanceof CommsError &&
+        (error.code === 'APPROVAL_REQUIRED' ||
+          (error.code === 'APPROVAL_VOID' && (given === 'DIGEST_MISMATCH' || given === 'APPROVAL_NOT_WAITING')))
+          ? given
           : undefined;
       if (typeof reason === 'string') await record('refused', reason);
       else await record('failed');

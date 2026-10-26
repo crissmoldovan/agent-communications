@@ -301,7 +301,7 @@ test('the app switches the event service on: only the enable-all approval it was
     assert.deepEqual(
       lines.map((line) => [line.outcome, line.reason ?? null, (line.ids as { approvedBy?: string }).approvedBy]),
       [
-        ['failed', null, 'desktop-app'],
+        ['refused', 'DIGEST_MISMATCH', 'desktop-app'],
         ['refused', 'NOT_ENABLE_ALL', 'desktop-app'],
         ['refused', 'PERSON_SETUP_ONLY', undefined],
         ['refused', 'PERSON_SETUP_ONLY', undefined],

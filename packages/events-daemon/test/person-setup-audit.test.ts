@@ -103,3 +103,62 @@ test('a person-only change is audited as the app only from an attested app, as t
     ]);
   });
 });
+
+test('an approval from the app for a digest the person did not see, or one no longer waiting, is audited as refused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Security review of 0.34.0, finding 4 (INFO): a digest mismatch on collection approve, as on rule approve, was
+  // audited as `failed`. Nothing was done: it is a refusal, with its reason.
+  await withLaneOwner(async (harness) => {
+    const { stateDir } = harness;
+    const configDir = join(stateDir, '..', 'config');
+    await harness.control.request('target-add', { document: dryRun });
+    await harness.control.request('rule-create', { document: rule(1, [dryRun]) });
+    const ruleOn = (await harness.control.request('rule-enable', { ruleId: rule(1, []).ruleId, version: 1 })) as {
+      approvalId: string;
+      binding: { digest: string };
+    };
+    const app = new EventControlClient({ stateDir, clientName: 'person-setup:desktop-app' });
+    const outcome = (operation: string, args: Record<string, unknown>) =>
+      app.request(operation, args).then(
+        () => 'ok',
+        (error: unknown) => (error as { details?: { reason?: string } }).details?.reason ?? 'no reason',
+      );
+    const wrong = '0'.repeat(64);
+    assert.equal(await outcome('rule-approve', { approvalId: ruleOn.approvalId, digest: wrong }), 'DIGEST_MISMATCH');
+    assert.equal(await outcome('rule-approve', { approvalId: ruleOn.approvalId, digest: ruleOn.binding.digest }), 'ok');
+    assert.equal(
+      await outcome('rule-approve', { approvalId: ruleOn.approvalId, digest: ruleOn.binding.digest }),
+      'APPROVAL_NOT_WAITING',
+    );
+    const switchOn = (await harness.control.request('enable-all')) as {
+      approvalId: string;
+      binding: { digest: string };
+    };
+    assert.equal(
+      await outcome('enable-all-approve', { approvalId: switchOn.approvalId, digest: wrong }),
+      'DIGEST_MISMATCH',
+    );
+    assert.equal(
+      await outcome('enable-all-approve', { approvalId: switchOn.approvalId, digest: switchOn.binding.digest }),
+      'ok',
+    );
+    assert.equal(
+      await outcome('enable-all-approve', { approvalId: switchOn.approvalId, digest: switchOn.binding.digest }),
+      'APPROVAL_NOT_WAITING',
+    );
+    const lines = (
+      (await openCore({ pathOverrides: { stateDir, configDir } }).audit.tail({ limit: 100 })) as unknown as Line[]
+    )
+      .filter((line) => line.operation === 'events.ruleApprove' || line.operation === 'events.enableAllApprove')
+      .map((line) => [line.operation, line.outcome, line.reason ?? null]);
+    assert.deepEqual(lines, [
+      ['events.ruleApprove', 'refused', 'DIGEST_MISMATCH'],
+      ['events.ruleApprove', 'ok', null],
+      ['events.ruleApprove', 'refused', 'APPROVAL_NOT_WAITING'],
+      ['events.enableAllApprove', 'refused', 'DIGEST_MISMATCH'],
+      ['events.enableAllApprove', 'ok', null],
+      ['events.enableAllApprove', 'refused', 'APPROVAL_NOT_WAITING'],
+    ]);
+  });
+});
