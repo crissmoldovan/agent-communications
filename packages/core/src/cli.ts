@@ -142,6 +142,8 @@ import {
   renderUpdateStatus,
   truncateDisplay,
 } from './render.ts';
+import { runSearchCommand, SEARCH_OPTIONS } from './search/command.ts';
+import { dailySearchPrune, type SearchDeps } from './search/indexer.ts';
 import { type ExactPlace, parseExpiry } from './standing.ts';
 import { approveStandingAtTerminal } from './standing-flow.ts';
 import { neutralise, wrapUntrusted } from './untrusted.ts';
@@ -198,6 +200,42 @@ Usage — run these with this CLI, each as the words after its program:
   activity retention <days> [--approval <id>]
                                 keep 1 to 365 days: fewer applies at once and deletes the older days;
                                 more is approved first
+  search status                 Search on this machine: on or off, the accounts, what is kept by count and
+                                size and for how long, the local model, backups and disk encryption;
+                                never what a message says
+  search query <words…> [--person <id>] [--account <name>]… [--channel gmail|slack] [--since <when>]
+                                [--until <when>] [--direction in|out|any] [--limit <n>]
+                                what people asked, found by words and by meaning on this machine: the
+                                best 20, 50 at most; a person's search, refused to an agent
+  search people [--since <when>]
+                                every person a message is kept from: their addresses and Slack users,
+                                the latest name they gave, how many messages, when they last wrote
+  search person <id> [--since <when>] [--limit <n>]
+                                what one person sent, newest first, a line each
+  search show <sourceId>        one kept message in full, and the replies sent to it
+  search index [--budget <seconds>]
+                                keep what agents read since the last run, make missing vectors for up to
+                                30 seconds, and delete what is past Activity's days
+  search rebuild [--budget <seconds>]
+                                make every vector again from the kept text; the old ones serve meanwhile
+  search link <person> <person>
+                                the second person is the first: their handles join; only you join people
+  search unlink <handle>        an address or a Slack user becomes a person of its own again
+  search label <person> <name>  the name you know someone by
+  search on [--approval <id>]   keep the words of new messages agents read, encrypted, for Activity's
+                                days: approved first
+  search off                    keep nothing new: applies at once; what is kept goes when its days pass
+  search accounts add <account> [--approval <id>]
+                                keep a Gmail mailbox's or a Slack workspace's messages: approved first
+  search accounts remove <account>
+                                keep nothing more of it, and delete what is kept of it: applies at once
+  search model set <address> [<model>] [--approval <id>]
+                                search by meaning too, with a model your Ollama runs on this machine at
+                                http://127.0.0.1:<port> — qwen3-embedding:0.6b (the default),
+                                embeddinggemma or bge-m3: approved first
+  search model none             words only: applies at once, and drops every vector
+  search delete --all --confirm
+                                delete everything Search keeps, and its key: applies at once
   approvals list [--inbox <alias>] [--state <state>]
   approvals revoke <approvalId>
   approval wait <approvalId> [--wait-seconds <n>]
@@ -312,19 +350,25 @@ Usage — run these with this CLI, each as the words after its program:
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
 install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
-rule add --as me, label rule remove --as agent, label style labelled, activity record on and a longer activity
-retention — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
+rule add --as me, label rule remove --as agent, label style labelled, activity record on, a longer activity
+retention, search on, search accounts add and search model set — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
 approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
 the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach
-deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off and a shorter
-activity retention — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
+deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off, a shorter
+activity retention, search off, search accounts remove, search model none and search delete — applies at once and
+asks nobody, and a --dry-run changes nothing. What an agent
 may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
 once when it only narrows.
 
-The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, update and mcp
-install itself: it shows the same preview and, once you press its confirm, runs the same command with --app-approval
+The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, update, mcp install,
+search on, search accounts add and search model set itself: it shows the same preview and, once you press its confirm, runs the same command with --app-approval
 <id>. That counts only on macOS, from the app itself; anywhere else the command says to approve it at your terminal
 instead. It never goes with --approval, and a tightening takes neither: it applies at once.
+
+Search on this machine keeps the words of messages agents read, so you can find what each person asked. It is
+yours alone: every search command but status, off, accounts remove, model none and delete is refused inside an MCP
+server's process and from an agent's shell, and no MCP tool reads what it keeps. That refusal is a speed bump against
+agents, not a boundary against code running as you.
 
 A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
 places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the
@@ -448,6 +492,13 @@ function parse(argv: string[]) {
       outcome: { type: 'string' },
       // `activity items`; refused on every other command (`refuseActivityOptionsElsewhere`).
       ids: { type: 'string' },
+      // `search`'s own (`SEARCH_OPTIONS`); refused on every other command (`refuseSearchOptionsElsewhere`).
+      person: { type: 'string' },
+      until: { type: 'string' },
+      budget: { type: 'string' },
+      direction: { type: 'string' },
+      all: { type: 'boolean', default: false },
+      confirm: { type: 'boolean', default: false },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -503,6 +554,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return sub !== undefined;
     case 'activity':
       return sub === 'record' || sub === 'retention';
+    case 'search':
+      return sub === 'on' || sub === 'off' || sub === 'accounts' || sub === 'model';
     default:
       return false;
   }
@@ -523,7 +576,7 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, search on|off|accounts|model, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
@@ -541,6 +594,9 @@ function takesAppApproval(command: string | undefined, sub: string | undefined):
       return sub !== undefined;
     case 'update':
       return true;
+    // Search on this machine's loosenings (design 2026-10-26-local-search §8): on, an account added, a model set.
+    case 'search':
+      return sub === 'on' || sub === 'accounts' || sub === 'model';
     default:
       return false;
   }
@@ -649,11 +705,34 @@ function refuseActivityOptionsElsewhere(
       hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`),
     });
   }
-  const given = ACTIVITY_OPTIONS.filter((flag) => values[flag] !== undefined);
+  // `search query` narrows by channel too, and reads `--channel` itself.
+  const given = ACTIVITY_OPTIONS.filter(
+    (flag) => values[flag] !== undefined && !(command === 'search' && flag === 'channel'),
+  );
   if (given.length === 0) return;
   throw new CommsError(
     'USAGE',
     `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the activity show and activity mine commands only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+/**
+ * Refuses `search`'s own options on any other command, as USAGE, before anything runs — as `activity`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing, and `--confirm` read by nothing would look like
+ * a confirmation that counted.
+ */
+function refuseSearchOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof SEARCH_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'search') return;
+  const given = SEARCH_OPTIONS.filter((flag) => values[flag] !== undefined && values[flag] !== false);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the search commands only`,
     { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
   );
 }
@@ -714,6 +793,8 @@ export async function main(
      * The program itself never passes it, so a real run always asks codesign.
      */
     appOrigin?: AppOriginCheck | undefined;
+    /** Search's stand-ins — its secret store, the loopback model server, `tmutil` and `fdesetup`, the clock — for a test. */
+    search?: SearchDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -756,10 +837,11 @@ export async function main(
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
+    refuseSearchOptionsElsewhere(command, values, help);
     if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
       throw new CommsError(
         'USAGE',
-        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update and mcp install only',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update, mcp install, search on, search accounts add and search model set only',
         { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
       );
     }
@@ -814,6 +896,10 @@ export async function main(
     });
   }
 
+  // The day's prune of Search on this machine (design 2026-10-26-local-search, S10): what Activity's days no longer
+  // keep goes at the day's first command, as the activity log's days do. Never in the MCP server, run above.
+  await dailySearchPrune(core).catch(() => undefined);
+
   const code = await runCommand(output, async () => {
     switch (command) {
       case 'paths':
@@ -827,6 +913,7 @@ export async function main(
         const report = await doctor(core, env, {
           platform,
           ...(deps.updateJob === undefined ? {} : { updateJob: deps.updateJob }),
+          ...(deps.search === undefined ? {} : { search: deps.search }),
         });
         writeResult(report, output, renderDoctor);
         if (!report.ok) {
@@ -953,6 +1040,24 @@ export async function main(
           return;
         }
         throw usage('usage: activity sessions|show|mine|items|settings|record|retention');
+      }
+      case 'search': {
+        await runSearchCommand({
+          core,
+          positionals,
+          values,
+          // Every `--account`, in order: `search query` takes several, which `parseArgs` keeps only the last of.
+          accounts: (parsed.tokens ?? []).flatMap((token) =>
+            token.kind === 'option' && token.name === 'account' && token.value !== undefined ? [token.value] : [],
+          ),
+          output,
+          env,
+          approval,
+          appApproval,
+          usage,
+          ...(deps.search === undefined ? {} : { deps: deps.search }),
+        });
+        return;
       }
       case 'approvals': {
         if (sub === 'list') {

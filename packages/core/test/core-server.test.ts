@@ -544,6 +544,7 @@ test('the doctor over MCP is the same report, and the keychain it probes is the 
       'system keychain',
       'secret backend',
       'activity',
+      'search',
       'update check',
     ]);
     const keychain = (report.checks as { name: string; ok: boolean; detail: string }[]).find(

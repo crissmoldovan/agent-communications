@@ -418,6 +418,35 @@ WhatsApp is recorded only as counts.
   long it is kept; `comms_activity_settings` does the same for an agent. Turning recording back on, or keeping it
   longer, is a loosening, approved as every other is.
 
+### Search on this machine: what each person asked
+
+From 0.35.0 Agent Comms can keep the words of the messages your agents read, so you can find what one person asked
+— "what did David ask about invoices?" — by words and, with a local model, by meaning. It is off until you switch it
+on, and only you search it: at your terminal, or in the app.
+
+- **What is kept:** only what Agent Comms already had in hand — a Gmail or Slack message an agent read, a search's
+  subjects and snippets, and the replies Agent Comms sent — for the accounts you choose. Nothing is fetched for it,
+  and never WhatsApp or Resend, or a message from your own address or Slack user. It is kept for as long as Activity
+  keeps its days, 30 by default.
+- **Where:** `<state>/search/` on this machine, owner-only, left out of Time Machine on macOS. Each message's text,
+  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store). The words
+  index and the vectors are not encrypted, and vectors can be turned back into text close to the original: treat
+  this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
+  whether FileVault is on.
+- **Meaning, on this machine only:** `agentcomms search model set http://127.0.0.1:11434` uses your own Ollama, at a
+  literal `127.0.0.1` or `[::1]` address, with `qwen3-embedding:0.6b` (the default), `embeddinggemma` or `bge-m3`.
+  Agent Comms downloads nothing: `ollama pull qwen3-embedding:0.6b` first. A model Ollama runs elsewhere — listed with
+  `remote_host` or `remote_model`, or named `…cloud` — is refused, and setting `OLLAMA_NO_CLOUD=1` is recommended.
+  Without a model, search is by words only, and says so.
+- **The commands:** `agentcomms search on` (approved first), `search accounts add <account>`,
+  `search query <words…>`, `search people`, `search person <id>`, `search show <id>`, `search link` and `unlink`
+  (only you join a Gmail address and a Slack user as one person; names never join anyone), `search index` and
+  `rebuild`. `search off`, `accounts remove`, `model none` and `search delete --all --confirm` apply at once —
+  Delete everything removes the folder and its key.
+- **No agent searches it.** No MCP tool reads it, and every search command but `status` and the tightenings is
+  refused inside an MCP server's process and from an agent's shell — a speed bump against agents, not a boundary
+  against code running as you. Agents keep their own live searches, `gmail_search` and `slack_search`.
+
 ### Agent sessions, through claude-stream
 
 From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working

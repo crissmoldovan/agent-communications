@@ -34,6 +34,7 @@ import { CommsError } from '../errors.ts';
 import { type Remedy, remedy } from '../handoffs.ts';
 import { MCP_SERVER_MARKER, mcpServerOf } from '../mcp-marker.ts';
 import { homeDirectory, shortenHome } from '../paths.ts';
+import { pruneSearchIndex } from '../search/indexer.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import type { DoctorCheck } from './maintenance.ts';
 
@@ -615,6 +616,11 @@ export function activitySettingsChange(
         field === 'retentionDays' && settings.retentionDays < keptBefore
           ? (await core.activity.prune(settings.retentionDays)).deleted
           : [];
+      // Search keeps a message as long as Activity keeps its day (design 2026-10-26-local-search, S12): fewer days
+      // prune its rows, words and vectors now too. Best effort, as the activity prune is: a search prunes again first.
+      if (field === 'retentionDays' && settings.retentionDays < keptBefore) {
+        await pruneSearchIndex(core).catch(() => 0);
+      }
       return { ...(await reportOf(core, settings)), changed: true, pruned };
     },
   };

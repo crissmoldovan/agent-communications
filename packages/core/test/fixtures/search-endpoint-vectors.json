@@ -1,0 +1,29 @@
+{
+  "about": "The local model server addresses Search refuses and takes (design 2026-10-26-local-search, S9). The refused list is the event service's judge-setup list for a local-endpoint judge (packages/events-daemon/test/judge-setup.test.ts, 'judge setup refuses a local model server that is not on this machine'), word for word, plus the forms a URL parser would tidy into a loopback address; search-guards.test.ts checks the event service's list is still in here.",
+  "refused": [
+    "http://192.168.1.20:11434",
+    "http://localhost:11434",
+    "https://127.0.0.1:11434",
+    "http://127.0.0.1",
+    "http://127.0.0.1:11434/api/generate",
+    "http://user@127.0.0.1:11434",
+    "http://127.0.0.1:11434/?q=1",
+    "http://[::2]:11434",
+    "http://8.8.8.8:11434",
+    "http://127.1:11434",
+    "http://[0:0:0:0:0:0:0:1]:11434",
+    "http://127.0.0.1:0",
+    "http://127.0.0.1:65536",
+    "http://127.0.0.1:011434",
+    "http://127.0.0.1:11434#x",
+    "http://0.0.0.0:11434",
+    "http://[::ffff:127.0.0.1]:11434",
+    "ftp://127.0.0.1:11434",
+    ""
+  ],
+  "taken": [
+    { "given": "http://127.0.0.1:11434", "address": "http://127.0.0.1:11434", "host": "127.0.0.1", "port": 11434 },
+    { "given": "http://127.0.0.1:11434/", "address": "http://127.0.0.1:11434", "host": "127.0.0.1", "port": 11434 },
+    { "given": "http://[::1]:8080", "address": "http://[::1]:8080", "host": "::1", "port": 8080 }
+  ]
+}

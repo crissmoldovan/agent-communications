@@ -149,13 +149,15 @@ test('--version and --help print and exit 0', () => {
   // label design, L5), and so is a Slack workspace's style back to `app`; `labelled` is approved first (2026-10-17).
   // Activity recording off, and keeping fewer days, tighten; on again and more days are approved first (design
   // 2026-10-25-activity §4.1).
+  // Search on this machine (design 2026-10-26-local-search §8): on, an account added and a model set are approved
+  // first; off, an account removed, no model and delete everything apply at once.
   assert.match(
     prose,
-    /A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off and a shorter activity retention — applies at once and asks nobody/,
+    /A tightening — policy confirm, attach roots remove, attach deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off, a shorter activity retention, search off, search accounts remove, search model none and search delete — applies at once and asks nobody/,
   );
   assert.match(
     prose,
-    /label rule remove --as agent, label style labelled, activity record on and a longer activity retention — is shown before it happens/,
+    /label rule remove --as agent, label style labelled, activity record on, a longer activity retention, search on, search accounts add and search model set — is shown before it happens/,
   );
   // And the other way: allowing another folder for attachments is a change a person approves.
   assert.match(prose, /policy chat, attach roots add, attach deny remove, mcp install/);

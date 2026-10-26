@@ -38,6 +38,7 @@ import {
 } from './name-grammar.ts';
 import { expandHome } from './paths.ts';
 import { namesMigrationEnabled } from './release-gate.ts';
+import { readSearchSettings, searchModelText, storedSearch } from './search/settings.ts';
 
 /**
  * The one config file. Provider-neutral: provider-specific fields (scopes, tiers) are plain strings here and validated
@@ -308,6 +309,16 @@ interface ConfigBody {
    * `classifyChange`: recording again and keeping more days are loosenings, off and fewer days tightenings.
    */
   activity?: unknown;
+  /**
+   * Search on this machine's settings (design 2026-10-26-local-search, S1, S9): `{ enabled: 'on' | 'off', accounts:
+   * [<id>…], model: { address, name } | null }`, off with no account and no model when absent.
+   *
+   * `unknown` here, as `activity` is: it is read only through `readSearchSettings`, which reads a value it does not
+   * understand as keeping less — off, no account, no model — so a hand edit or a later release's word can only
+   * tighten. Kept through every write as the schemas keep every key they do not name, and judged by `classifyChange`:
+   * on, an account added and a model set are loosenings; off, an account removed and no model tightenings.
+   */
+  search?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2156,6 +2167,22 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (activityAfter.retentionDays > activityBefore.retentionDays) {
     loosen('activity.retentionDays', activityBefore.retentionDays, activityAfter.retentionDays);
   }
+  // Search on this machine (design 2026-10-26-local-search, S1, S9): keeping message words at all, for one more account,
+  // or sending them to a model to make vectors, each lets more be kept of what people wrote, so a person agrees to it;
+  // off, an account removed and no model apply at once. Accounts are shown by the names the person knows them by.
+  const searchBefore = readSearchSettings(before);
+  const searchAfter = readSearchSettings(after);
+  if (searchBefore.enabled === 'off' && searchAfter.enabled === 'on') {
+    loosen('search.enabled', searchBefore.enabled, searchAfter.enabled);
+  }
+  if (searchAfter.accounts.some((id) => !searchBefore.accounts.includes(id))) {
+    const names = (config: Config, ids: readonly string[]) =>
+      ids.map((id) => connectedAccounts(config).find((account) => account.id === id)?.alias ?? id);
+    loosen('search.accounts', names(before, searchBefore.accounts), names(after, searchAfter.accounts));
+  }
+  const modelBefore = searchModelText(searchBefore.model);
+  const modelAfter = searchModelText(searchAfter.model);
+  if (modelAfter !== null && modelAfter !== modelBefore) loosen('search.model', modelBefore, modelAfter);
   return { loosened: changes.map((change) => change.path), changes };
 }
 
@@ -2299,6 +2326,9 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
   record('activity.record', storedActivity(before)?.record, storedActivity(after)?.record);
   record('activity.retentionDays', storedActivity(before)?.retentionDays, storedActivity(after)?.retentionDays);
+  record('search.enabled', storedSearch(before)?.enabled, storedSearch(after)?.enabled);
+  record('search.accounts', storedSearch(before)?.accounts, storedSearch(after)?.accounts);
+  record('search.model', storedSearch(before)?.model, storedSearch(after)?.model);
   return changes;
 }
 

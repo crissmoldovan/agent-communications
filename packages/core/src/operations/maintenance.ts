@@ -40,6 +40,7 @@ import {
   shownText,
 } from '../organisations.ts';
 import type { ResolvedPaths } from '../paths.ts';
+import type { SearchDeps } from '../search/indexer.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { endStanding } from '../standing-flow.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
@@ -56,6 +57,7 @@ import {
 import { VERSION } from '../version.ts';
 import { activityDoctorCheck } from './activity.ts';
 import { orphanedBehaviourRules } from './behaviour.ts';
+import { searchDoctorCheck } from './search.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
 import { type StandingReport, standingReport } from './standing.ts';
 
@@ -109,6 +111,8 @@ export interface DoctorOptions {
   background?: boolean | undefined;
   /** For a test: the clock whether the background job has run lately is read on. */
   now?: (() => Date) | undefined;
+  /** For a test: Search's stand-ins — its secret store, the loopback model server, `tmutil` and `fdesetup`. */
+  search?: SearchDeps | undefined;
 }
 
 /**
@@ -309,6 +313,10 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   });
   // The activity log (design 2026-10-25-activity §4.6): recording, private, writable, retention in force, last failure.
   checks.push(await activityDoctorCheck(core, platform));
+  // Content-free: on or off, counts, size, the model's state, backups, FileVault (design 2026-10-26-local-search §7).
+  checks.push(
+    await searchDoctorCheck(core, { env, ...(options.search === undefined ? {} : { deps: options.search }) }),
+  );
   checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));

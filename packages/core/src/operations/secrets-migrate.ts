@@ -7,6 +7,7 @@ import { CommsError } from '../errors.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { APPROVAL_KEY_REF } from '../keys.ts';
 import { withCredentialsLock } from '../lock.ts';
+import { SEARCH_KEY_REF } from '../search/crypto.ts';
 import { keychainNamespace, openSecretStore, type SecretStore, type SecretStoreKind } from '../secrets.ts';
 
 /**
@@ -35,6 +36,9 @@ export function secretRefsOf(config: Config): string[] {
       ...Object.values(config.accounts).map((account) => account.secretRef),
       ...(config.pendingRevocations ?? []).map((entry) => entry.ref),
       APPROVAL_KEY_REF,
+      // Search on this machine's key (design 2026-10-26-local-search, S11): it moves with the rest, or every kept
+      // message would be sealed under a key the new backend does not have. Absent until Search is first switched on.
+      SEARCH_KEY_REF,
     ]),
   ];
 }
@@ -58,6 +62,7 @@ export function secretLocationsOf(config: Config): SecretLocation[] {
     ...Object.values(config.inboxes).map((inbox) => ({ ref: inbox.secretRef, store: root })),
     ...Object.values(config.accounts).map((account) => ({ ref: account.secretRef, store: root })),
     { ref: APPROVAL_KEY_REF, store: root },
+    { ref: SEARCH_KEY_REF, store: root },
     ...(config.pendingRevocations ?? []).map((entry) => ({ ref: entry.ref, store: entry.store })),
   ];
   return [...new Map(locations.map((location) => [`${location.store}\0${location.ref}`, location] as const)).values()];
@@ -489,11 +494,12 @@ export function secretsMigration(
       let effects: string[] = [];
       if (from !== to) {
         const physical = physicalMigrationPlan(config, to);
-        // The approval key is this machine's own, and is re-created if it is lost; what a person is asked about is
+        // The approval key and Search's are this machine's own; what a person is asked about is
         // their accounts' credentials. Target-side pending bundles are separate because neither a copy nor a delete
         // will touch them.
-        const copied = physical.copy.filter((ref) => ref !== APPROVAL_KEY_REF).length;
-        const kept = physical.verifyInPlace.filter((ref) => ref !== APPROVAL_KEY_REF).length;
+        const own = (ref: string) => ref === APPROVAL_KEY_REF || ref === SEARCH_KEY_REF;
+        const copied = physical.copy.filter((ref) => !own(ref)).length;
+        const kept = physical.verifyInPlace.filter((ref) => !own(ref)).length;
         const clauses: string[] = [];
         if (copied > 0) {
           clauses.push(
