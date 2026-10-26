@@ -1,4 +1,4 @@
-import { cleanup } from '@testing-library/react';
+import { cleanup, configure } from '@testing-library/react';
 import { afterEach } from 'vitest';
 
 /*
@@ -8,6 +8,12 @@ import { afterEach } from 'vitest';
 globalThis.fetch = () => {
   throw new Error('a test tried to reach the network');
 };
+
+/*
+ * A `findBy…` waits 5 s, not the library's 1 s: a file's first test renders the whole app cold, and on the slower
+ * macOS Intel runner that once took longer than a second (Events → Rules, desktop run of 2026-10-26).
+ */
+configure({ asyncUtilTimeout: 5000 });
 
 if (typeof window !== 'undefined') {
   // jsdom has neither; the theme provider asks the first (mode `system`), and the library's layout the second.
