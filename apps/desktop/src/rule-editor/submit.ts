@@ -464,8 +464,11 @@ function linearLines(target: JsonObject, mapping: unknown): RulePart[][] {
   if (linear === null) return [];
   const lines: RulePart[][] = [
     [
-      plain('An issue is added in Linear (api.linear.app), with your Linear key, team '),
-      value(linear.teamKey || linear.teamId || 'its team'),
+      // The issue is made in the team the id names; the key is the author's too, and nothing checks the two agree.
+      plain('An issue is added in Linear (api.linear.app), with your Linear key, in team '),
+      authored(linear.teamKey || '(no key)'),
+      plain(', id '),
+      authored(linear.teamId || '(no id)'),
       plain('.'),
     ],
     templateLine('Its title', target.title, mapping, false),
@@ -477,7 +480,12 @@ function linearLines(target: JsonObject, mapping: unknown): RulePart[][] {
   else
     lines.push([
       plain(labels.length === 1 ? 'Its label: ' : 'Its labels: '),
-      ...labels.flatMap((label, index) => [...(index === 0 ? [] : [plain(', ')]), authored(label.name)]),
+      ...labels.flatMap((label, index) => [
+        ...(index === 0 ? [] : [plain('; ')]),
+        authored(label.name),
+        plain(', id '),
+        authored(label.id),
+      ]),
     ]);
   const assignee = target.assignee;
   if (assignee === null) lines.push([plain('It is assigned to nobody.')]);

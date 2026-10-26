@@ -69,8 +69,12 @@ describe('Review and approve… says all a target is given', () => {
     expect(all).toContain('If there is no such session, one is started in that folder.');
     expect(all).toContain('While the session is busy, the match waits for it, and goes when its run ends.');
     expect(all).toContain('it may edit files without asking, and asks before anything else');
-    expect(all).toContain('team CUE');
-    expect(all).toContain('Its label: Finance');
+    // The team by its key and the id the issue is made in; each label by its name and its id.
+    expect(all).toContain('in team CUE, id 0b1c2d3e-0000-4000-8000-00000000c0e1.');
+    expect(all).toContain('Its label: Finance, id 00000000-0000-4000-8000-000000000001');
+    expect(authored(lines)).toEqual(
+      expect.arrayContaining(['CUE', '0b1c2d3e-0000-4000-8000-00000000c0e1', '00000000-0000-4000-8000-000000000001']),
+    );
     // Every value an author wrote is author text, never the app's own words.
     expect(authored(lines)).toEqual(
       expect.arrayContaining([INSTRUCTION, FIXED_TEXT, TITLE, DESCRIPTION, 'Finance', ASSIGNEE]),
