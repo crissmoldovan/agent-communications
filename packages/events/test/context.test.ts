@@ -14,7 +14,7 @@ import {
   unmappedContextFields,
 } from '../src/index.ts';
 
-const envelope = (text: string, source: 'message' | 'model') =>
+const envelope = (text: string, source: 'message' | 'model' | 'file') =>
   `<untrusted-content source="${source}">\n${text}\n</untrusted-content>`;
 
 const PARTS: readonly ContextPart[] = [
@@ -155,7 +155,12 @@ test('context: the prompt is the fixed frame, with sender material only inside t
   assert.match(prompt, /^missing: \(not in this message\)$/mu);
   assert.match(prompt, /From the rule:\nCheck the invoice/u);
   assert.match(prompt, /left out, because the model took too long\./u);
-  assert.match(prompt, /----- begin file -----\n# How we invoice\n----- end file -----/u);
+  assert.match(
+    prompt,
+    /From the file \/example\/home\/acme\/HOW\.md, as it reads now:\n<untrusted-content source="file">\n# How we invoice\n<\/untrusted-content>/u,
+    'a file’s text is inside the envelope too, not a fence it could forge',
+  );
+  assert.doesNotMatch(prompt, /begin file/u);
   assert.match(prompt, /From the file \/example\/home\/acme\/GONE\.md: left out, because it is not there\./u);
   // The labels say where each part came from, in the order given.
   const order = ['From the rule:', 'From the message', 'Written by anthropic', 'From the file /example/home/acme/HOW'];

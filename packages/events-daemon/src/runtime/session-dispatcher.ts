@@ -368,7 +368,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       parts,
       ...(delivery.target.instruction === undefined ? {} : { instruction: delivery.target.instruction }),
       envelope: (text, source) =>
-        wrapUntrusted(text, { field: source === 'model' ? 'model' : 'event', id: delivery.claim.id }, boundary),
+        wrapUntrusted(text, { field: source === 'message' ? 'event' : source, id: delivery.claim.id }, boundary),
     });
     return built.ok ? built.value : null;
   }
