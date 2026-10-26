@@ -253,5 +253,5 @@ export async function postTakeTarget(
 async function takesCanMatter(deps: TakeGateDeps): Promise<boolean> {
   if (deps.take === undefined) return false;
   if (takeRequiredIn(await deps.currentConfig(), deps.accountId)) return true;
-  return (await deps.take.store.list({ accountId: deps.accountId })).length > 0;
+  return deps.take.store.recordsIn(deps.accountId);
 }

@@ -784,8 +784,10 @@ export async function preparePost(
     expect: expectationFor(payload, preview.notifies),
   });
 
-  // The take pinned while this approval waits, so it does not lapse under it (T3).
-  if (held?.held === true) await requireSlackTake(deps, target, 'slack.post.prepare', record.approvalId);
+  // The take pinned while this approval waits, so it does not lapse under it (T3). Best-effort: the claim asks again.
+  if (held?.held === true) {
+    await requireSlackTake(deps, target, 'slack.post.prepare', record.approvalId).catch(() => undefined);
+  }
 
   await deps.audit?.append({
     inboxId: deps.accountId,
@@ -2344,8 +2346,9 @@ export async function prepareReaction(
     ],
     expect: reactionExpectation(options),
   });
-  // The take pinned while this approval waits (T3).
-  if (held?.held === true) await requireSlackTake(deps, target, 'slack.react', record.approvalId);
+  // The take pinned while this approval waits (T3). Best-effort: the claim asks again.
+  if (held?.held === true)
+    await requireSlackTake(deps, target, 'slack.react', record.approvalId).catch(() => undefined);
   return {
     approvalId: record.approvalId,
     channel: options.channel,
