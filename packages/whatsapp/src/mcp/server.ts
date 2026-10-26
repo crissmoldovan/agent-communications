@@ -2,6 +2,7 @@ import {
   activityClient,
   type ClientInfo,
   type CommsError,
+  isGatewayPart,
   stdinClosed,
   strictToolArguments,
   toCommsError,
@@ -89,6 +90,29 @@ async function buildInstructions(context: WhatsAppContext): Promise<string> {
   ].join('\n');
 }
 
+/**
+ * WhatsApp's brief, as a part of an MCP connection (single-server design D14, §5.6): that nothing here sends, `account`
+ * on every call, and last its accounts — the first line to go when the gateway's budget is short.
+ */
+async function gatewayBrief(context: WhatsAppContext): Promise<string> {
+  let names: string[] = [];
+  try {
+    names = await context.accountNames();
+  } catch {
+    // For the tools to report.
+  }
+  const pinned = context.pinned !== undefined ? names[0] : undefined;
+  return [
+    'Nothing here sends: whatsapp_draft returns a link the person checks and sends themselves. Never say a message was sent.',
+    pinned !== undefined
+      ? `This part serves only the account ${pinned}; \`account\` may be left out.`
+      : 'Pass `account` on every call but whatsapp_status: there is no default.',
+    names.length > 0
+      ? `Known accounts: ${names.slice(0, 8).join(', ')}${names.length > 8 ? `, and ${names.length - 8} more` : ''}.`
+      : 'No account is set up yet.',
+  ].join('\n');
+}
+
 export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}): Promise<WhatsAppMcpServer> {
   // What the client said it is, once one has connected: the activity log's session names it (design 2026-10-25-activity).
   const client: { info?: () => ClientInfo | undefined } = {};
@@ -97,7 +121,7 @@ export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}):
   await context.checkPin();
   const server = new McpServer(
     { name: 'agent-whatsapp', version: VERSION },
-    { instructions: await buildInstructions(context) },
+    { instructions: isGatewayPart(context.env) ? await gatewayBrief(context) : await buildInstructions(context) },
   );
   // The client each call came from: its 2026-07-28 envelope's, or the one it named on connecting (single-server D7).
   client.info = activityClient(() => server.server.getClientVersion());

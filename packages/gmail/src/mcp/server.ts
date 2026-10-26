@@ -17,6 +17,7 @@ import {
   type GatedChange,
   gatedChange,
   handoffSentence,
+  isGatewayPart,
   lookupName,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
   NEVER_NOTICE,
@@ -166,6 +167,29 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
 }
 
 /**
+ * Gmail's brief, as a part of an MCP connection (single-server design D14, §5.6): `inbox` on every call first, and its
+ * mailboxes last, the first line to go when the gateway's budget is short — gmail_inboxes_list gives them.
+ */
+export async function gatewayBrief(context: GmailContext, pinned: string | undefined): Promise<string> {
+  let aliases: string[] = [];
+  try {
+    aliases = Object.keys((await context.config()).inboxes);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) aliases = aliases.filter((alias) => alias === pinned);
+  const shown = aliases.slice(0, 8).join(', ');
+  const more = aliases.length > 8 ? `, and ${aliases.length - 8} more` : '';
+  return [
+    pinned
+      ? `This part serves only the mailbox ${pinned}; \`inbox\` may be left out.`
+      : 'Pass `inbox` on every call: there is no default mailbox.',
+    'A send goes only after the person approves that exact message; if a call says so, show the preview and ask.',
+    aliases.length > 0 ? `Known mailboxes: ${shown}${more}.` : 'No mailbox is connected yet.',
+  ].join('\n');
+}
+
+/**
  * The registration a finished sign-in hands back for comms_server_install: the request `inbox add --finish` makes,
  * and what to do with it, in words an agent can follow.
  *
@@ -253,7 +277,11 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
 
   const server = new McpServer(
     { name: 'agent-gmail', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');

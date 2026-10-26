@@ -274,6 +274,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 start the missing profile file for that place from a starter, and print
                                 its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
+  mcp --connection <id>         run Agent Comms for one MCP connection on stdio: what an app's entry starts,
+                                with the connection's key in its environment
   mcp install --client <client> [--server <server>[,<server>…]] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
@@ -406,6 +408,8 @@ function parse(argv: string[]) {
       'app-approval': { type: 'string' },
       client: { type: 'string' },
       server: { type: 'string' },
+      // `mcp --connection <id>`: the gateway an app starts for one MCP connection (single-server design D2).
+      connection: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -690,6 +694,17 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   deps: {
+    /** Starts the gateway for one connection. Injected so a test can inspect its inputs without opening stdio. */
+    startGateway?:
+      | ((options: {
+          core: ReturnType<typeof openCore>;
+          env: NodeJS.ProcessEnv;
+          connection: string;
+          platform: NodeJS.Platform;
+        }) => Promise<{ close(): Promise<void> }>)
+      | undefined;
+    /** When the gateway's client has gone: its stdin ending, unless a test says otherwise. */
+    gatewayClosed?: Promise<void> | undefined;
     /** Starts the stdio server. Injected so a test can inspect its inputs without opening stdio. */
     startMcp?:
       | ((options: {
@@ -781,6 +796,34 @@ export async function main(
   const appApproval = values['app-approval'];
   /** An exit status for a command that printed its result and still did not do what was asked. */
   let softExit: number = EXIT_CODES.OK;
+
+  if (values.connection !== undefined && !(command === 'mcp' && sub === undefined)) {
+    return writeError(
+      usage('--connection is an option of `mcp` only, which runs the gateway an app starts for that connection'),
+      output,
+    );
+  }
+  // The gateway an app starts for one connection (single-server design D2, §4): on stdio, outside `runCommand` too.
+  if (command === 'mcp' && sub === undefined && values.connection !== undefined) {
+    if (values.json) return writeError(usage('`mcp` runs the server; it prints no result'), output);
+    // Every part it starts inherits the mark, so none of them can make a person's read, or approve in the app (§8.3).
+    markMcpServerProcess(env, 'gateway');
+    if (env !== process.env) markMcpServerProcess(process.env, 'gateway');
+    const toStderr = (...args: unknown[]): void => {
+      process.stderr.write(`${args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' ')}\n`);
+    };
+    console.log = toStderr;
+    console.info = toStderr;
+    console.debug = toStderr;
+    console.warn = toStderr;
+    const runGateway = deps.startGateway ?? (await import('./gateway/serve.ts')).runGateway;
+    const { stdinClosed } = await import('./mcp-request.ts');
+    const closed = deps.gatewayClosed ?? stdinClosed();
+    const gateway = await runGateway({ core, env, connection: values.connection, platform });
+    await closed;
+    await gateway.close();
+    return EXIT_CODES.OK;
+  }
 
   // The server speaks on stdout, so nothing else may: it is run outside `runCommand`, which prints a result there.
   if (command === 'mcp' && sub === undefined) {

@@ -11,6 +11,7 @@ import {
   MAX_ACTIVITY_RETENTION_DAYS,
   MIN_ACTIVITY_RETENTION_DAYS,
 } from './activity-settings.ts';
+import { CONNECTION_ID_ENV, CONNECTION_ID_PATTERN, connectionById, GATEWAY_PID_ENV } from './connections.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { appendPrivateLine, ensurePrivateDir, FILE_MODE, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
@@ -127,6 +128,17 @@ export interface ActivitySession {
   readonly ancestors?: readonly string[] | undefined;
   readonly grouped: boolean;
   readonly surface: ActivitySurface;
+  /**
+   * The MCP connection the call came through (single-server design D11): its id, which the gateway handed the part,
+   * and its name at the time, as account aliases are kept. Absent for a call through no gateway.
+   */
+  readonly connection?: ActivityConnection | undefined;
+}
+
+/** A connection, as a line names it: by id, and by the name it had when the line was written. */
+export interface ActivityConnection {
+  readonly id: string;
+  readonly name: string;
 }
 
 /** What a `told` line says of a delivery (S1): the rule that matched and the target it reached. No sender, no payload. */
@@ -291,6 +303,7 @@ function sessionOf(raw: unknown): ActivitySession {
   const ancestors = Array.isArray(session.ancestors)
     ? session.ancestors.slice(0, 3).flatMap((name) => (typeof name === 'string' ? [cut(name, BOUNDS.word) ?? ''] : []))
     : undefined;
+  const connection = connectionOf(session.connection);
   return {
     // A key that is not one is no session's: this line stands alone rather than in someone else's.
     key: key ?? randomKey(),
@@ -302,7 +315,17 @@ function sessionOf(raw: unknown): ActivitySession {
     ...(ancestors === undefined ? {} : { ancestors }),
     grouped: key !== null && session.grouped === true,
     surface,
+    ...(connection === undefined ? {} : { connection }),
   };
+}
+
+/** A connection a line names, kept only with an id that is a connection's and a name. */
+function connectionOf(raw: unknown): ActivityConnection | undefined {
+  const connection = own<Record<string, unknown>>(raw);
+  const id = connection?.id;
+  const name = cut(connection?.name, BOUNDS.name);
+  if (typeof id !== 'string' || !CONNECTION_ID_PATTERN.test(id) || name === undefined || name === '') return undefined;
+  return { id, name };
 }
 
 /**
@@ -1275,10 +1298,17 @@ export interface SessionIdentityOptions {
    */
   log?: Pick<ActivityLog, 'sessionOfAncestor'> | undefined;
   /**
-   * The MCP connection's own session id, where its transport has one (`ctx.sessionId`; stdio has none): mixed into
-   * the key, so two connections through one parent are two sessions.
+   * The MCP transport's own session id, where it has one (`ctx.sessionId`; stdio has none): mixed into the key, so two
+   * transport sessions through one parent are two sessions. Not an MCP connection of `connections`: that is
+   * `ActivitySession.connection` (single-server design D11).
    */
-  connection?: string | undefined;
+  transportSession?: string | undefined;
+  /**
+   * The gateway this process was started by, when it is a part of an MCP connection (`GATEWAY_PID_ENV`): its parent is
+   * then looked through, so the part takes the gateway's parent — the agent window — as its own (D8). The process's
+   * own environment says it when this is left out.
+   */
+  gatewayPid?: number | undefined;
   /**
    * Where what was worked out is kept: this process's own when left out — or, when any test seam below is given, nowhere,
    * unless a test hands one in.
@@ -1390,6 +1420,16 @@ async function readAncestry(
   const probe = options.probe ?? psProbe;
   const deadline = Date.now() + budgetMs;
   let next = options.ppid ?? process.ppid;
+  // A part of an MCP connection was started by the gateway, which the agent window started (D8): the window is the
+  // gateway's parent, so the part's session key is the one a server the window started itself would have.
+  const gateway = options.gatewayPid ?? gatewayPidOf(process.env);
+  if (gateway !== undefined && next === gateway && !initIsParent) {
+    const left = deadline - Date.now();
+    if (left <= 0) return { pid, folder, chain, complete: false };
+    const facts = await within(probe(next, left), left);
+    if (facts === null) return { pid, folder, chain, complete: false };
+    next = facts.ppid;
+  }
   // Process 1 adopts a process whose parent has gone: it is no window, except to the event service, which it starts.
   while (chain.length < depth && (next > 1 || (initIsParent && next === 1 && chain.length === 0))) {
     const left = deadline - Date.now();
@@ -1401,6 +1441,31 @@ async function readAncestry(
     next = facts.ppid;
   }
   return { pid, folder, chain, complete: true };
+}
+
+/** The gateway's pid a part was started with, or undefined for a process no gateway started. */
+function gatewayPidOf(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[GATEWAY_PID_ENV];
+  if (raw === undefined || !/^[1-9][0-9]{0,9}$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
+/**
+ * The MCP connection this process serves as a part of (D11): its id, which the gateway set in the environment, and its
+ * name in `config.json` now, kept on the line as it is now. Undefined for a process no gateway started, or one whose
+ * connection the configuration no longer has.
+ */
+async function connectionOfProcess(core: Pick<Core, 'activity'>): Promise<ActivityConnection | undefined> {
+  const id = process.env[CONNECTION_ID_ENV];
+  if (id === undefined || !CONNECTION_ID_PATTERN.test(id)) return undefined;
+  const config = (core as Partial<Pick<Core, 'config'>>).config;
+  if (config === undefined) return undefined;
+  try {
+    const read = connectionById(await config.load(), id);
+    return read?.readable ? { id, name: read.record.name } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1622,7 +1687,7 @@ async function identityOf(
   if (parent === undefined || folder === null || shared) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
   }
-  return { key: windowKey(parent, folder, options.connection), ...base, parent, grouped: true };
+  return { key: windowKey(parent, folder, options.transportSession), ...base, parent, grouped: true };
 }
 
 // ── For the channels ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1655,10 +1720,10 @@ export interface ActivityContext {
   /** The session, when the caller has worked it out already; otherwise `sessionIdentity(surface, clientInfo)`. */
   readonly session?: ActivitySession | undefined;
   /**
-   * The MCP connection's own session id, where its transport has one — a tool handler's `ctx.sessionId`; stdio has
-   * none — mixed into the session key (`SessionIdentityOptions.connection`).
+   * The MCP transport's own session id, where it has one — a tool handler's `ctx.sessionId`; stdio has none — mixed
+   * into the session key (`SessionIdentityOptions.transportSession`).
    */
-  readonly connection?: string | (() => string | undefined) | undefined;
+  readonly transportSession?: string | (() => string | undefined) | undefined;
   /** A search's words, known before it runs. */
   readonly query?: string | undefined;
 }
@@ -1722,8 +1787,10 @@ async function recordCall(
       context.session ??
       (await sessionIdentity(context.surface, clientInfo, {
         log: context.core.activity as Pick<ActivityLog, 'sessionOfAncestor'>,
-        connection: typeof context.connection === 'function' ? context.connection() : context.connection,
+        transportSession:
+          typeof context.transportSession === 'function' ? context.transportSession() : context.transportSession,
       }));
+    const connection = context.session?.connection ?? (await connectionOfProcess(context.core));
     const query = detail.query ?? context.query;
     await recordActivity(context.core, {
       channel: context.channel,
@@ -1732,7 +1799,7 @@ async function recordCall(
       kind,
       outcome: detail.outcome ?? 'ok',
       ...(detail.reason === undefined ? {} : { reason: detail.reason }),
-      session,
+      session: connection === undefined ? session : { ...session, connection },
       ms,
       ...(detail.items === undefined ? {} : { items: detail.items }),
       ...(detail.count === undefined ? {} : { count: detail.count }),

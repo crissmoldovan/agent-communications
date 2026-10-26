@@ -6,6 +6,7 @@ import {
   checkForUpdates,
   type GatedChange,
   gatedChange,
+  isGatewayPart,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
   stdinClosed,
@@ -94,6 +95,27 @@ function listOf(names: readonly string[]): string {
  * Under 2 KB, most important first: Claude Code cuts a server's instructions at 2,048 bytes, so what a model must not
  * get wrong comes before what it can look up. `mcp.test.ts` holds it under the limit with many accounts.
  */
+/**
+ * Resend's brief, as a part of an MCP connection (single-server design D14, §5.6): `account` on every call, that mail
+ * goes only after the person's yes, and last its accounts — the first line to go when the gateway's budget is short.
+ */
+export async function gatewayBrief(context: ResendContext, pinned: string | undefined): Promise<string> {
+  let names: string[] = [];
+  try {
+    names = (await listAccounts(context)).accounts.map((view) => view.name);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) names = names.filter((name) => name === pinned);
+  return [
+    pinned
+      ? `This part serves only the account ${pinned}; \`account\` may be left out.`
+      : 'Pass `account` on every call: there is no default.',
+    'An email goes only after the person approves that exact email; never repeat a send whose outcome is unknown.',
+    names.length > 0 ? `Known accounts: ${listOf(names)}.` : 'No account is connected yet.',
+  ].join('\n');
+}
+
 export async function buildInstructions(context: ResendContext, pinned: string | undefined): Promise<string> {
   let accounts: { name: string; canSend: boolean }[] = [];
   try {
@@ -139,7 +161,11 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
 
   const server = new McpServer(
     { name: 'agent-resend', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');

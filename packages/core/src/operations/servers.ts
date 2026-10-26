@@ -165,6 +165,14 @@ async function localModuleUrl(server: ServerId): Promise<string> {
 }
 
 /**
+ * The CLI a part of an MCP connection runs from a checkout (`launcher: local`): this core's sibling package's own
+ * `src/cli.ts` when this core runs from source, its `dist/cli.mjs` otherwise — the file `--launcher local` registers.
+ */
+export async function localPartCli(server: ServerId): Promise<string> {
+  return localCliEntry(await localModuleUrl(server));
+}
+
+/**
  * The product the shared installer registers, for one channel: at this core's version unless another is named.
  *
  * The version is what reaches the launcher. The managed launcher installs exactly `<package>@<version>` into

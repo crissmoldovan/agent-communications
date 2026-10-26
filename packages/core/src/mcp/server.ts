@@ -8,6 +8,7 @@ import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApprova
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
 import { UPDATE_LEVELS } from '../config.ts';
+import { isGatewayPart } from '../connections.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
@@ -175,6 +176,17 @@ async function buildInstructions(core: Core): Promise<string> {
   ].join('\n');
 }
 
+/**
+ * Core's brief, as a part of an MCP connection (single-server design D14, §5.6): its must-not-miss line first. The
+ * gateway composes it with the other parts' within one 2,048-byte budget.
+ */
+export function coreBrief(): string {
+  return [
+    'Every change here comes with a preview: show it in full and ask, and call again with its approvalId only after the person’s yes.',
+    'comms_connection_show, with no id, says which connection this is.',
+  ].join('\n');
+}
+
 export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise<CoreMcpServer> {
   const env = options.env ?? process.env;
   // Opened as core itself, so every command this server hands a person is located from this installation.
@@ -189,7 +201,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
   };
   const server = new McpServer(
     { name: 'agentcomms', version: VERSION },
-    { instructions: await buildInstructions(core) },
+    { instructions: isGatewayPart(env) ? coreBrief() : await buildInstructions(core) },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
@@ -383,7 +395,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           ...args,
           ...(client?.name ? { clientInfo: { name: client.name, version: client.version } } : {}),
           // A transport's own session id, where it has one (stdio has none): one connection, one session.
-          ...(ctx.sessionId ? { connection: ctx.sessionId } : {}),
+          ...(ctx.sessionId ? { transportSession: ctx.sessionId } : {}),
         });
       }),
   );

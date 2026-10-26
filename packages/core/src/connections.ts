@@ -53,6 +53,15 @@ export const CONNECTION_ID_ENV = 'AGENTCOMMS_CONNECTION';
 /** What the gateway tells each part its own process is, so a part takes the gateway's parent as its window (D8). */
 export const GATEWAY_PID_ENV = 'AGENTCOMMS_GATEWAY_PID';
 
+/**
+ * Whether this process is a part of an MCP connection, started by its gateway: its instructions are then a brief of a
+ * few lines that the gateway composes with the others' (D14), not its own full greeting.
+ */
+export function isGatewayPart(env: NodeJS.ProcessEnv): boolean {
+  const raw = env[GATEWAY_PID_ENV];
+  return raw !== undefined && /^[1-9][0-9]{0,9}$/.test(raw);
+}
+
 /** The most characters a connection's name has (§6.1). */
 export const CONNECTION_NAME_MAX = 64;
 
