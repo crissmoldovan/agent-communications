@@ -15,6 +15,7 @@ import {
   REQUIRED_SECTIONS,
   RETENTION_LINES,
   RULE_FIELDS,
+  series,
   suggestion,
 } from './vocabulary.ts';
 
@@ -28,7 +29,19 @@ const STATEMENTS: ReadonlyMap<string, readonly string[]> = new Map([
   ['ask', ['agentic']],
   ['then', ['targets']],
 ]);
-const TOP_LEVEL = ['rule', 'when', 'match', 'ask', 'then', 'keep', 'at', 'cloud', 'subscriber', 'raw'];
+const TOP_LEVEL = [
+  'rule',
+  'when',
+  'match',
+  'ask',
+  'then',
+  'keep',
+  'keep for',
+  'at most',
+  'cloud event type',
+  'subscriber',
+  'raw',
+];
 const TOP_LEVEL_WORDS = 'rule, when, match, ask, then, keep, keep for, at most, cloud event type, subscriber or raw';
 
 interface State {
@@ -168,7 +181,7 @@ function statement(line: TextLine, state: State): void {
         cursor.fail(`a line here starts with a keyword: ${TOP_LEVEL_WORDS}; found ${cursor.describeNext()}`, at);
       const close = suggestion(keyword as string, TOP_LEVEL);
       cursor.fail(
-        `unknown keyword ${JSON.stringify(keyword)}${close === undefined ? '' : `; did you mean ${JSON.stringify(close)}?`} A line here starts with ${TOP_LEVEL_WORDS}`,
+        `unknown keyword ${JSON.stringify(keyword)}${close === undefined ? '.' : `; did you mean ${JSON.stringify(close)}?`} A line here starts with ${TOP_LEVEL_WORDS}`,
         at,
       );
     }
@@ -419,17 +432,23 @@ export function duration(cursor: Cursor, what: string): number {
 }
 
 /** Reads `, clause`s, each at most once, by its first word; then the end of the line. */
-function clauses(cursor: Cursor, what: string, readers: Readonly<Record<string, () => void>>): void {
+function clauses(
+  cursor: Cursor,
+  what: string,
+  readers: Readonly<Record<string, readonly [phrase: string, read: () => void]>>,
+): void {
   const said = new Set<string>();
   while (cursor.comma()) {
     const at = cursor.mark();
     const word = cursor.peekWord();
-    const reader = word === undefined ? undefined : readers[word];
-    if (word === undefined || reader === undefined || !Object.hasOwn(readers, word))
-      cursor.fail(`${what}'s options are ${Object.keys(readers).join(', ')}; found ${cursor.describeNext()}`, at);
-    if (said.has(word as string)) cursor.fail(`${what} says ${word} twice`, at);
-    said.add(word as string);
-    (reader as () => void)();
+    if (word === undefined || !Object.hasOwn(readers, word)) {
+      const phrases = Object.values(readers).map(([phrase]) => phrase);
+      cursor.fail(`${what}'s options are ${series(phrases, 'and')}; found ${cursor.describeNext()}`, at);
+    }
+    const [phrase, read] = readers[word] as readonly [string, () => void];
+    if (said.has(word)) cursor.fail(`${what} says ${phrase.split(' <')[0]} twice`, at);
+    said.add(word);
+    read();
   }
   cursor.expectEnd(what);
 }
@@ -472,10 +491,13 @@ function target(line: TextLine): JsonValue {
   if (cursor.take('dry', 'run')) {
     const target = { ...targetHead(cursor), kind: 'dry-run' } as Record_;
     clauses(cursor, 'a dry run', {
-      keep: () => {
-        cursor.take('keep');
-        target.retentionMs = duration(cursor, 'how long a dry run keeps a record');
-      },
+      keep: [
+        'keep <duration>',
+        () => {
+          cursor.take('keep');
+          target.retentionMs = duration(cursor, 'how long a dry run keeps a record');
+        },
+      ],
     });
     noChildren(line, 'a dry run');
     return target;
@@ -483,18 +505,27 @@ function target(line: TextLine): JsonValue {
   if (cursor.take('queue')) {
     const target = { ...targetHead(cursor), kind: 'queue' } as Record_;
     clauses(cursor, 'a queue', {
-      in: () => {
-        cursor.expect(['in', 'lane'], '"in lane <name>"');
-        target.lane = { name: cursor.name('the lane') };
-      },
-      keep: () => {
-        cursor.take('keep');
-        target.retentionMs = duration(cursor, 'how long a queue keeps an item');
-      },
-      show: () => {
-        cursor.take('show');
-        target.show = cursor.name('what an item shows');
-      },
+      in: [
+        'in lane <name>',
+        () => {
+          cursor.expect(['in', 'lane'], '"in lane <name>"');
+          target.lane = { name: cursor.name('the lane') };
+        },
+      ],
+      keep: [
+        'keep <duration>',
+        () => {
+          cursor.take('keep');
+          target.retentionMs = duration(cursor, 'how long a queue keeps an item');
+        },
+      ],
+      show: [
+        'show <what>',
+        () => {
+          cursor.take('show');
+          target.show = cursor.name('what an item shows');
+        },
+      ],
     });
     if (!Object.hasOwn(target, 'show')) target.show = 'summary';
     noChildren(line, 'a queue');
@@ -503,14 +534,17 @@ function target(line: TextLine): JsonValue {
   if (cursor.take('webhook')) {
     const target = { ...targetHead(cursor), kind: 'webhook' } as Record_;
     clauses(cursor, 'a webhook', {
-      plain: representationReader(cursor, target, 'plain'),
-      enveloped: representationReader(cursor, target, 'enveloped'),
-      retrying: () => {
-        cursor.expect(['retrying', 'up', 'to'], '"retrying up to <n> times"');
-        target.retryLimit = cursor.integer('the retry limit');
-        if (!(cursor.take('times') || cursor.take('time')))
-          cursor.fail('expected "times" after the retry limit', cursor.mark());
-      },
+      plain: ['plain', representationReader(cursor, target, 'plain')],
+      enveloped: ['enveloped', representationReader(cursor, target, 'enveloped')],
+      retrying: [
+        'retrying up to <n> times',
+        () => {
+          cursor.expect(['retrying', 'up', 'to'], '"retrying up to <n> times"');
+          target.retryLimit = cursor.integer('the retry limit');
+          if (!(cursor.take('times') || cursor.take('time')))
+            cursor.fail('expected "times" after the retry limit', cursor.mark());
+        },
+      ],
     });
     webhookLines(line, target);
     return target;
@@ -518,14 +552,17 @@ function target(line: TextLine): JsonValue {
   if (cursor.take('stream')) {
     const target = { ...targetHead(cursor), kind: 'sse' } as Record_;
     clauses(cursor, 'a stream', {
-      plain: representationReader(cursor, target, 'plain'),
-      enveloped: representationReader(cursor, target, 'enveloped'),
-      to: () => {
-        cursor.expect(['to', 'subscriber'], '"to subscriber <id> version <n>"');
-        target.subscriberId = cursor.name('the subscriber id');
-        cursor.expect(['version'], '"version <n>" after the subscriber id');
-        target.subscriberVersion = cursor.integer('the subscriber version');
-      },
+      plain: ['plain', representationReader(cursor, target, 'plain')],
+      enveloped: ['enveloped', representationReader(cursor, target, 'enveloped')],
+      to: [
+        'to subscriber <id> version <n>',
+        () => {
+          cursor.expect(['to', 'subscriber'], '"to subscriber <id> version <n>"');
+          target.subscriberId = cursor.name('the subscriber id');
+          cursor.expect(['version'], '"version <n>" after the subscriber id');
+          target.subscriberVersion = cursor.integer('the subscriber version');
+        },
+      ],
     });
     noChildren(line, 'a stream');
     return target;
@@ -536,10 +573,10 @@ function target(line: TextLine): JsonValue {
       `a ${word} target is not in this version of the rule text yet; write it as raw followed by its JSON document`,
       at,
     );
-  const close = word === undefined ? undefined : suggestion(word, ['dry', 'queue', 'webhook', 'stream', 'raw']);
+  const close = word === undefined ? undefined : suggestion(word, TARGET_KINDS);
   return cursor.fail(
-    `a target starts with ${TARGET_KINDS.join(', ')}; found ${cursor.describeNext()}${
-      close === undefined ? '' : `. Did you mean ${JSON.stringify(close === 'dry' ? 'dry run' : close)}?`
+    `a target starts with ${series(TARGET_KINDS, 'or')}; found ${cursor.describeNext()}${
+      close === undefined ? '' : `. Did you mean ${JSON.stringify(close)}?`
     }`,
     at,
   );
@@ -585,16 +622,22 @@ function subscriber(cursor: Cursor, line: TextLine): JsonValue {
   cursor.expect([',', 'version'], '", version <n>" after the subscriber id');
   const found: Record_ = { subscriberId, version: cursor.integer('the subscriber version'), kind: 'sse' };
   clauses(cursor, 'a subscriber', {
-    on: () => {
-      cursor.take('on');
-      const host = cursor.name('the host');
-      cursor.expect(['port'], '"port <n>" after the host');
-      found.authority = { host, port: cursor.integer('the port') };
-    },
-    keep: () => {
-      cursor.take('keep');
-      found.retentionMs = duration(cursor, 'how long a subscriber can replay');
-    },
+    on: [
+      'on <host> port <n>',
+      () => {
+        cursor.take('on');
+        const host = cursor.name('the host');
+        cursor.expect(['port'], '"port <n>" after the host');
+        found.authority = { host, port: cursor.integer('the port') };
+      },
+    ],
+    keep: [
+      'keep <duration>',
+      () => {
+        cursor.take('keep');
+        found.retentionMs = duration(cursor, 'how long a subscriber can replay');
+      },
+    ],
   });
   for (const child of line.children) {
     const inner = new Cursor(child);
@@ -690,18 +733,10 @@ function block(
     if (found === undefined) {
       const choices = readers.map(([words]) => words.join(' '));
       const word = cursor.peekWord();
-      const close =
-        word === undefined
-          ? undefined
-          : suggestion(
-              word,
-              choices.map((choice) => choice.split(' ')[0] as string),
-            );
+      const close = word === undefined ? undefined : suggestion(word, choices);
       cursor.fail(
-        `${what}'s lines are ${choices.join(', ')}; found ${cursor.describeNext()}${
-          close === undefined
-            ? ''
-            : `. Did you mean ${JSON.stringify(choices.find((choice) => choice.startsWith(close)))}?`
+        `${what}'s lines are ${series(choices, 'and')}; found ${cursor.describeNext()}${
+          close === undefined ? '' : `. Did you mean ${JSON.stringify(close)}?`
         }`,
         at,
       );

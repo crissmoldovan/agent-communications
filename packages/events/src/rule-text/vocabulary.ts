@@ -194,33 +194,40 @@ export function formatNumber(value: number): string {
   return JSON.stringify(value);
 }
 
-/** The edit distance between two words, for "did you mean" suggestions. */
+/** The edit distance between two words, with a swap of two neighbours counting as one edit, for suggestions. */
 export function distance(left: string, right: string): number {
-  const previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  const rows: number[][] = Array.from({ length: left.length + 1 }, (_, row) =>
+    Array.from({ length: right.length + 1 }, (_, column) => (row === 0 ? column : column === 0 ? row : 0)),
+  );
+  const at = (row: number, column: number) => (rows[row] as number[])[column] as number;
   for (let row = 1; row <= left.length; row += 1) {
-    let diagonal = previous[0] as number;
-    previous[0] = row;
     for (let column = 1; column <= right.length; column += 1) {
-      const above = previous[column] as number;
-      previous[column] = Math.min(
-        above + 1,
-        (previous[column - 1] as number) + 1,
-        diagonal + (left[row - 1] === right[column - 1] ? 0 : 1),
-      );
-      diagonal = above;
+      const cost = left[row - 1] === right[column - 1] ? 0 : 1;
+      let best = Math.min(at(row - 1, column) + 1, at(row, column - 1) + 1, at(row - 1, column - 1) + cost);
+      if (row > 1 && column > 1 && left[row - 1] === right[column - 2] && left[row - 2] === right[column - 1])
+        best = Math.min(best, at(row - 2, column - 2) + 1);
+      (rows[row] as number[])[column] = best;
     }
   }
-  return previous[right.length] as number;
+  return at(left.length, right.length);
 }
 
-/** The closest of `choices` to `word`, when it is close enough to be a typo. */
-export function suggestion(word: string, choices: readonly string[]): string | undefined {
+/** Words in a sentence: `a`, `a and b`, `a, b and c`. */
+export function series(words: readonly string[], last: 'and' | 'or'): string {
+  return words.length <= 1 ? (words[0] ?? '') : `${words.slice(0, -1).join(', ')} ${last} ${words.at(-1)}`;
+}
+
+/**
+ * The phrase among `phrases` that `word` is a typo of, by the phrase's first word or by the whole phrase without its
+ * spaces (`atmost` for `at most`), when it is close enough to be one.
+ */
+export function suggestion(word: string, phrases: readonly string[]): string | undefined {
   let best: string | undefined;
   let bestDistance = Number.POSITIVE_INFINITY;
-  for (const choice of choices) {
-    const found = distance(word, choice);
+  for (const phrase of phrases) {
+    const found = Math.min(distance(word, phrase.split(' ')[0] as string), distance(word, phrase.replaceAll(' ', '')));
     if (found < bestDistance) {
-      best = choice;
+      best = phrase;
       bestDistance = found;
     }
   }

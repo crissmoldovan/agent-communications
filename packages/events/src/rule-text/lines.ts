@@ -34,7 +34,10 @@ export class RuleTextFailure extends Error {
   }
 }
 
-/** Splits `text` into a tree of lines. A line it cannot place is reported in `errors` and left out. */
+/**
+ * Splits `text` into a tree of lines. A line indented wrongly is reported in `errors` and still placed, at the nearest
+ * level it could have meant, so one bad indent does not also cost the lines under it.
+ */
 export function lineTree(text: string, errors: RuleTextError[]): TextLine[] {
   const roots: TextLine[] = [];
   // stack[level] is the last line placed at that level.
@@ -45,23 +48,23 @@ export function lineTree(text: string, errors: RuleTextError[]): TextLine[] {
     const row = (rows[index] as string).replace(/[ \t]+$/, '');
     if (row.length === 0) continue;
     const indentation = /^[ \t]*/.exec(row)?.[0] ?? '';
-    if (indentation.includes('\t')) {
-      errors.push({
-        line: number,
-        column: 1,
-        message: 'indent with spaces, two per level; this line has a tab in its indentation',
-      });
-      continue;
+    const width = indentation.length + (indentation.split('\t').length - 1);
+    let level = Math.floor(width / 2);
+    const report = (column: number, message: string) => errors.push({ line: number, column, message });
+    if (indentation.includes('\t'))
+      report(1, 'indent with spaces, two per level; this line has a tab in its indentation');
+    else if (indentation.length % 2 !== 0)
+      report(1, `indent by two spaces per level; this line is indented by ${indentation.length}`);
+    else if (level > 0 && stack.length === 0)
+      report(indentation.length + 1, 'this line is indented, but no line above it opens a block');
+    else if (level > stack.length) {
+      const deeper = level - stack.length + 1;
+      report(
+        indentation.length + 1,
+        `this line is indented ${deeper === 2 ? 'two' : String(deeper)} levels deeper than the line above it; indent one level (two spaces) at a time`,
+      );
     }
-    if (indentation.length % 2 !== 0) {
-      errors.push({
-        line: number,
-        column: 1,
-        message: `indent by two spaces per level; this line is indented by ${indentation.length}`,
-      });
-      continue;
-    }
-    const level = indentation.length / 2;
+    level = Math.min(level, stack.length);
     const line: TextLine = {
       number,
       level,
@@ -69,30 +72,8 @@ export function lineTree(text: string, errors: RuleTextError[]): TextLine[] {
       text: row.slice(indentation.length),
       children: [],
     };
-    if (level === 0) {
-      roots.push(line);
-      stack.length = 0;
-      stack.push(line);
-      continue;
-    }
-    if (stack.length === 0) {
-      errors.push({
-        line: number,
-        column: line.column,
-        message: 'this line is indented, but no line above it opens a block',
-      });
-      continue;
-    }
-    if (level > stack.length) {
-      const deeper = level - stack.length + 1;
-      errors.push({
-        line: number,
-        column: line.column,
-        message: `this line is indented ${deeper === 2 ? 'two' : String(deeper)} levels deeper than the line above it; indent one level (two spaces) at a time`,
-      });
-      continue;
-    }
-    (stack[level - 1] as TextLine).children.push(line);
+    if (level === 0) roots.push(line);
+    else (stack[level - 1] as TextLine).children.push(line);
     stack.length = level;
     stack.push(line);
   }

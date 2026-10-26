@@ -641,3 +641,145 @@ at most 60 an hour
 `,
   );
 });
+
+const VALID = [
+  'rule invoices, version 1',
+  'when a new message arrives in cue/gmail, in the inbox',
+  'match subject exists',
+  'then',
+  '  dry run log, version 1, keep 1 day',
+];
+
+function errorsOf(text: string) {
+  const parsed = parseRuleText(text);
+  assert.equal(parsed.ok, false, `the text is refused:\n${text}`);
+  return parsed.ok ? [] : parsed.errors;
+}
+
+test('errors: the valid text these cases change parses', () => {
+  assert.ok(parseRuleText(VALID.join('\n')).ok);
+});
+
+test('errors: an unknown keyword is named where it stands, with the keyword it is closest to', () => {
+  const text = [...VALID.slice(0, 3), 'thne', '  dry run log, version 1'].join('\n');
+  assert.deepEqual(errorsOf(text), [
+    {
+      line: 4,
+      column: 1,
+      message:
+        'unknown keyword "thne"; did you mean "then"? A line here starts with rule, when, match, ask, then, keep, keep for, at most, cloud event type, subscriber or raw',
+    },
+    {
+      line: 6,
+      column: 1,
+      message: 'a rule says what happens to a match: then, with each target on its own indented line below it',
+    },
+  ]);
+  const [phrase] = errorsOf([...VALID, 'atmost 60 an hour'].join('\n'));
+  assert.match(phrase?.message ?? '', /^unknown keyword "atmost"; did you mean "at most"\?/);
+  const [unrelated] = errorsOf([...VALID, 'zebra'].join('\n'));
+  assert.match(unrelated?.message ?? '', /^unknown keyword "zebra"\. A line here starts with/);
+  const [target] = errorsOf([...VALID.slice(0, 4), '  queu log, version 1'].join('\n'));
+  assert.deepEqual(target, {
+    line: 5,
+    column: 3,
+    message: 'a target starts with dry run, queue, webhook, stream or raw; found "queu". Did you mean "queue"?',
+  });
+  const [inAsk] = errorsOf([...VALID, 'ask jev, version 1', '  questoin "x"'].join('\n'));
+  assert.deepEqual(inAsk, {
+    line: 7,
+    column: 3,
+    message:
+      'an ask\'s lines are question, looking at, yes at, if unsure, at most, each call up to and judge; found "questoin". Did you mean "question"?',
+  });
+});
+
+test('errors: a bad indent is named on its own line, and does not cost the lines under it', () => {
+  assert.deepEqual(errorsOf([...VALID.slice(0, 4), '   dry run log, version 1'].join('\n')), [
+    { line: 5, column: 1, message: 'indent by two spaces per level; this line is indented by 3' },
+  ]);
+  assert.deepEqual(errorsOf([...VALID.slice(0, 4), '    dry run log, version 1'].join('\n')), [
+    {
+      line: 5,
+      column: 5,
+      message:
+        'this line is indented two levels deeper than the line above it; indent one level (two spaces) at a time',
+    },
+  ]);
+  assert.deepEqual(errorsOf([VALID[0], '  match subject exists', ...VALID.slice(1)].join('\n')), [
+    { line: 2, column: 3, message: 'unexpected indent: the rule line has no lines indented under it' },
+  ]);
+  assert.deepEqual(errorsOf(VALID.join('\n').replace('  dry run', '\tdry run')), [
+    { line: 5, column: 1, message: 'indent with spaces, two per level; this line has a tab in its indentation' },
+  ]);
+});
+
+test('errors: a missing then, when or rule line is named, at the end of the text or at its start', () => {
+  assert.deepEqual(errorsOf(VALID.slice(0, 3).join('\n')), [
+    {
+      line: 4,
+      column: 1,
+      message: 'a rule says what happens to a match: then, with each target on its own indented line below it',
+    },
+  ]);
+  assert.deepEqual(errorsOf([VALID[0], ...VALID.slice(2)].join('\n')), [
+    {
+      line: 5,
+      column: 1,
+      message: 'a rule says when it applies: when a new message arrives in <account>, in the inbox',
+    },
+  ]);
+  assert.deepEqual(errorsOf(VALID.slice(1).join('\n')), [
+    { line: 1, column: 1, message: "a rule's text starts with its id and version: rule <id>, version <n>" },
+  ]);
+  assert.deepEqual(errorsOf([...VALID.slice(0, 3), 'then'].join('\n')), [
+    { line: 4, column: 1, message: 'then needs at least one target, each on its own line indented under it' },
+  ]);
+});
+
+test('errors: each mistake is reported, in order, with the column of what is wrong', () => {
+  const text = [
+    'rule invoices',
+    'when a new message arrives in cue/gmail',
+    'match subject contains "unclosed',
+    'then',
+    '  dry run log, version 1, keep 7 weeks',
+    '  session working in /example/home/acme',
+    'raw /a/b = 1',
+  ].join('\n');
+  assert.deepEqual(errorsOf(text), [
+    { line: 1, column: 14, message: 'expected ", version <n>" after the rule id, found the end of the line' },
+    {
+      line: 2,
+      column: 40,
+      message: 'after the accounts, say which mail: in the inbox, in any label, or in labels <label> and <label>',
+    },
+    { line: 3, column: 24, message: 'the value has no closing quote' },
+    {
+      line: 5,
+      column: 34,
+      message:
+        'how long a dry run keeps a record is a duration such as 7 days: days, hours, minutes, seconds or milliseconds',
+    },
+    {
+      line: 6,
+      column: 3,
+      message:
+        'a session target is not in this version of the rule text yet; write it as raw followed by its JSON document',
+    },
+    { line: 7, column: 5, message: 'raw names one top-level field as a JSON Pointer, such as /retention' },
+  ]);
+});
+
+test('errors: a section given twice, and a field given by a section and by raw, are refused', () => {
+  assert.deepEqual(errorsOf([...VALID, 'match subject exists'].join('\n')), [
+    { line: 6, column: 1, message: 'a rule has one match section; this repeats the one on line 3' },
+  ]);
+  assert.deepEqual(errorsOf([...VALID, 'raw /condition = {}'].join('\n')), [
+    {
+      line: 6,
+      column: 5,
+      message: 'condition is given twice: by this raw line and by the match section on line 3',
+    },
+  ]);
+});
