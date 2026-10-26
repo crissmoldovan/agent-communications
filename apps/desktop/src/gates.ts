@@ -16,7 +16,9 @@
  * exceptions, each loosening approved in the app; an older core shows the label read-only.
  * `severalServers` and `bringUpToDate` are core's (0.34.0, `connections.rs`): several servers added to an app in one
  * approval (`MCP_SEVERAL_VERSION`), and `update --check` read and `update` approved in the app
- * (`UPDATE_APP_APPROVAL_VERSION`).
+ * (`UPDATE_APP_APPROVAL_VERSION`). `collectionSwitch` is the events service's (`COLLECTION_SWITCH_VERSION`, 0.34.0):
+ * Switch on… approved in the app, and Switch off. An events service with the rule editor but older than that still
+ * prepares Switch on…, which is then approved in Terminal.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -34,6 +36,7 @@ export const GATES = {
   labelChanges: '0.34.0',
   severalServers: '0.34.0',
   bringUpToDate: '0.34.0',
+  collectionSwitch: '0.34.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

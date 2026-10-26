@@ -67,6 +67,9 @@ const versions =
 
 const region = (name: string): HTMLElement => screen.getByRole('region', { name });
 
+/** Events → Service's first section (0.34.0 design B4): whether the service watches the person's accounts. */
+const WATCH = 'Watching your accounts';
+
 /** The Events screen's tabs, by the name each starts with: its badge, when it has one, follows. */
 const TAB_NAMES = ['Service', 'Judges', 'Rules', 'Deliveries'] as const;
 type TabName = (typeof TAB_NAMES)[number];
@@ -157,9 +160,8 @@ describe('Events', () => {
       },
     );
     renderApp(bridge, { screen: 'events' });
-    const status = await screen.findByRole('region', { name: 'Status' });
-    expect(await within(status).findByText('running')).toBeTruthy();
-    expect(within(status).getByText('on')).toBeTruthy();
+    const status = await screen.findByRole('region', { name: WATCH });
+    expect(await within(status).findByText('On')).toBeTruthy();
 
     // The rules as cards, one per rule (0.32.0): its two versions are one card, on (`events-rules.test.tsx`).
     await openTab('Rules');
@@ -178,30 +180,26 @@ describe('Events', () => {
       deliveryView.querySelector(`[data-slot="next-try"] time[datetime="${new Date(1760864400000).toISOString()}"]`),
     ).not.toBeNull();
 
-    // Pause runs `eventsPause`, the status is read again, and Resume runs `eventsResume`.
+    // Pause runs `eventsPause`, the status is read again, and Resume runs `eventsResume`. Each shows only where it acts.
     await openTab('Service');
-    const resume = within(status).getByRole('button', { name: 'Resume' }) as HTMLButtonElement;
-    expect(resume.disabled).toBe(true);
+    expect(within(status).queryByRole('button', { name: 'Resume' })).toBeNull();
     fireEvent.click(within(status).getByRole('button', { name: 'Pause' }));
-    expect(await within(region('Status')).findByText('paused')).toBeTruthy();
+    expect(await within(region(WATCH)).findByText('Paused')).toBeTruthy();
+    expect(within(region(WATCH)).getByText('Paused at once.')).toBeTruthy();
     expect(cliKinds(bridge)).toContain('eventsPause');
-    await waitFor(() =>
-      expect((within(region('Status')).getByRole('button', { name: 'Resume' }) as HTMLButtonElement).disabled).toBe(
-        false,
-      ),
-    );
-    fireEvent.click(within(region('Status')).getByRole('button', { name: 'Resume' }));
+    expect(within(region(WATCH)).queryByRole('button', { name: 'Pause' })).toBeNull();
+    fireEvent.click(within(region(WATCH)).getByRole('button', { name: 'Resume' }));
     await waitFor(() => expect(cliKinds(bridge)).toContain('eventsResume'));
-    await waitFor(() => expect(within(region('Status')).queryByText('paused')).toBeNull());
+    expect(await within(region(WATCH)).findByText('On')).toBeTruthy();
+    expect(within(region(WATCH)).queryByText('Paused')).toBeNull();
   });
 
   it('a service that is not running offers neither Pause nor Resume, and an empty list says so', async () => {
     const bridge = bridgeWith({}, { eventsStatus: { owner: 'not-running' }, eventsRules: [], eventsDeliveries: [] });
     renderApp(bridge, { screen: 'events' });
-    const status = await screen.findByRole('region', { name: 'Status' });
-    expect(await within(status).findByText('not running')).toBeTruthy();
-    expect((within(status).getByRole('button', { name: 'Pause' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((within(status).getByRole('button', { name: 'Resume' }) as HTMLButtonElement).disabled).toBe(true);
+    const status = await screen.findByRole('region', { name: WATCH });
+    expect(await within(status).findByText('Not running')).toBeTruthy();
+    expect(within(status).queryAllByRole('button')).toEqual([]);
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
     await openTab('Deliveries');
@@ -242,7 +240,7 @@ describe('Events', () => {
     // The view that matters now is the first: the event service and its status.
     expect((await findTab('Service')).getAttribute('aria-selected')).toBe('true');
     expect(await screen.findByRole('region', { name: 'Event service' })).toBeTruthy();
-    expect(screen.getByRole('region', { name: 'Status' })).toBeTruthy();
+    expect(screen.getByRole('region', { name: WATCH })).toBeTruthy();
     // The others wait behind their tabs, and are read all the same, as the screen always read them.
     for (const name of ['Judges', 'Rules', 'Deliveries']) {
       expect(screen.queryByRole('region', { name }), name).toBeNull();
@@ -257,7 +255,7 @@ describe('Events', () => {
     const before = reads();
     // Each tab shows its own view, and only it.
     const views: Record<TabName, string[]> = {
-      Service: ['Event service', 'Status'],
+      Service: [WATCH, 'Event service', 'What the words here mean'],
       Judges: ['Judges'],
       Rules: ['Rules'],
       Deliveries: ['Deliveries'],
@@ -592,7 +590,7 @@ describe('The event service', () => {
         !up && (call.kind === 'eventsRules' || call.kind === 'eventsDeliveries') ? down : inner.cli(call),
     });
     renderApp(bridge, { screen: 'events' });
-    expect(await within(await screen.findByRole('region', { name: 'Status' })).findByText('not running')).toBeTruthy();
+    expect(await within(await screen.findByRole('region', { name: WATCH })).findByText('Not running')).toBeTruthy();
     await openTab('Rules');
     await waitFor(() =>
       expect(within(region('Rules')).getByText('the local event service is not running')).toBeTruthy(),
@@ -608,7 +606,7 @@ describe('The event service', () => {
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
     await openTab('Service');
-    expect(await within(region('Status')).findByText('running')).toBeTruthy();
+    expect(await within(region(WATCH)).findByText('On')).toBeTruthy();
 
     // A word that changes nothing of whether it runs reads nothing again.
     const reads = cliKinds(bridge).length;
@@ -674,7 +672,7 @@ describe('The event service', () => {
     const section = await screen.findByRole('region', { name: SERVICE });
     expect(await within(section).findByText('event_service_state is not built yet')).toBeTruthy();
     expect(within(section).queryByRole('switch')).toBeNull();
-    expect(await screen.findByRole('region', { name: 'Status' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: WATCH })).toBeTruthy();
     first.unmount();
     // A command that fails says why, and the switch stays as the supervisor last said.
     const refusing = serviceBridge(EVENT_SERVICE.running, {

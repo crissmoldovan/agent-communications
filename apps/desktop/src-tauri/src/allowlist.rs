@@ -4,9 +4,11 @@
 //! person's in the app (0.32.0, DA10's notes of 2026-10-26; 0.33.0): a judge's setup; adding a server to an app, whose
 //! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`); and a
 //! rule's activation, whose `eventsRuleApprove` (`rule approve`) answers only the one the rule editor prepared with
-//! `eventsRuleEnable`, for its digest (`rule_editor`). Since 0.34.0 the label's changes are too (`label`): a
-//! `labelWord`, `labelName`, `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app
-//! prepared for the same call without it.
+//! `eventsRuleEnable`, for its digest (`rule_editor`); and since 0.34.0 switching the event service on, whose
+//! `eventsCollectionApprove` (`collection approve`) answers only the one Events → Service prepared with
+//! `eventsEnableAll`, for its digest. Since 0.34.0 the label's changes are too (`label`): a `labelWord`, `labelName`,
+//! `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app prepared for the same call
+//! without it.
 
 use crate::connections::{
     McpClient, McpServer, McpServers, MCP_APP_APPROVAL_VERSION, MCP_SEVERAL_VERSION,
@@ -1045,6 +1047,23 @@ pub enum Call {
         approval_id: ApprovalId,
         digest: Digest,
     },
+    /// The events service's `enable-all` (0.34.0 design B4, Events → Service → Switch on…): prepares the standing
+    /// approval that starts collection, and approves nothing. Rust records the approval it comes back with, and its
+    /// digest, as the app's own (`terminal::Prepared`): only that one `eventsCollectionApprove` answers it, `approve
+    /// <approval-id>` opens for it at a terminal, and the preview's Cancel revokes it. It takes no argument.
+    EventsEnableAll {},
+    /// The events service's `collection approve <approval> --digest <digest>` (0.34.0 design B4): the person pressed
+    /// Approve in the app, after the preview of exactly this digest, and the event service switches collection on. Only
+    /// an approval `eventsEnableAll` recorded for this digest is answered (`connections::run_app_approval`), once; the
+    /// CLI refuses an agent and, on macOS, a process the app did not start.
+    EventsCollectionApprove {
+        approval_id: ApprovalId,
+        digest: Digest,
+    },
+    /// The events service's `disable-all` (0.34.0 design B4, Events → Service → Switch off): switches collection off at
+    /// once. It takes away and gives nothing, a tightening, so the app applies it itself (DA10), once the person
+    /// confirms; its answer's `said` is what it did, in plain words. It takes no argument.
+    EventsDisableAll {},
     /// The events service's `rule analyse <rule> [--draft -] [--provider <openrouter|anthropic>]` (0.33.0, design
     /// §3.3): suggestions for a rule, or for the unsaved draft on stdin, its model on the provider the person picked.
     /// The person's read, refused inside an MCP server and to an agent's shell; it applies nothing.
@@ -1166,6 +1185,12 @@ pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
 /// documents on stdin, `rule approve`, `rule analyse`, `integration show|set`, and the Anthropic and Linear keys. An older
 /// one keeps the rule's page as it was, and says "Needs 0.33.0 or later" (DA12).
 pub const RULE_EDITOR_VERSION: &str = "0.33.0";
+
+/// The first release of the events service whose switch the app turns (0.34.0 design B4): `collection approve`, which
+/// the app answers its own `enable-all` with, and `disable-all` that says what it did. Preparing `enable-all` needs only
+/// `RULE_EDITOR_VERSION`, whose approval view and terminal `approve` an older one still has: there Switch on… is
+/// approved in Terminal, and Switch off is not offered.
+pub const COLLECTION_SWITCH_VERSION: &str = "0.34.0";
 
 /// The first release with the Messages screen's reads (spec 2026-10-26-owner-feedback-0320 §3.6): the events service's
 /// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
@@ -1595,6 +1620,22 @@ impl Call {
                     digest.as_str(),
                 ])
             },
+            Call::EventsEnableAll {} => events(&["enable-all"]),
+            // It approves, and completes switching on: as long as a rule's approval.
+            Call::EventsCollectionApprove {
+                approval_id,
+                digest,
+            } => Words {
+                timeout: SETUP_TIMEOUT,
+                ..events(&[
+                    "collection",
+                    "approve",
+                    approval_id.as_str(),
+                    "--digest",
+                    digest.as_str(),
+                ])
+            },
+            Call::EventsDisableAll {} => events(&["disable-all"]),
             // A model may write some of its suggestions: as long as a doctor's.
             Call::EventsRuleAnalyse {
                 rule_id,
@@ -1795,7 +1836,11 @@ impl Call {
             | Call::IntegrationSetAgentSessions { .. }
             | Call::JudgeShow { .. }
             | Call::SessionQueueList {}
-            | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
+            | Call::SessionQueueDrop { .. }
+            | Call::EventsEnableAll {} => Some(RULE_EDITOR_VERSION),
+            Call::EventsCollectionApprove { .. } | Call::EventsDisableAll {} => {
+                Some(COLLECTION_SWITCH_VERSION)
+            }
             Call::LabelWord { .. }
             | Call::LabelName { .. }
             | Call::LabelRuleAdd { .. }
@@ -1981,6 +2026,9 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "labelRuleAdd", "account": "example/gmail", "conversation": "@example.com", "as": "me", "appApproval": ID }),
         json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
         json!({ "kind": "labelRuleRemove", "account": "example/slack", "conversation": "C0123ABCD", "kinds": "reply,reaction", "as": "agent", "appApproval": ID }),
+        json!({ "kind": "eventsEnableAll" }),
+        json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
+        json!({ "kind": "eventsDisableAll" }),
     ];
     values
         .into_iter()
@@ -2615,9 +2663,14 @@ mod tests {
                 let rule_approve = matches!(call, Call::EventsRuleApprove { .. })
                     && index == 1
                     && words.words[0] == "rule";
+                // `collection approve` (0.34.0) is the same press, for switching on: it answers only the `enable-all`
+                // the app prepared, for its digest.
+                let collection_approve = matches!(call, Call::EventsCollectionApprove { .. })
+                    && index == 1
+                    && words.words[0] == "collection";
                 assert!(
                     !word.starts_with("--approval")
-                        && (word != "approve" || rule_approve)
+                        && (word != "approve" || rule_approve || collection_approve)
                         && word != "--yes",
                     "{value} carries {word}"
                 );
@@ -4476,6 +4529,80 @@ mod tests {
         ] {
             refused(json!({ "kind": kind }));
         }
+    }
+
+    /// Events → Service's switch (0.34.0 design B4): `enable-all` prepares switching on, `collection approve <approval>
+    /// --digest <digest>` is the person's press in the app, and `disable-all` switches off at once. Each is the events
+    /// service's launcher, its words, `--json` and the pins; none prepares a core change; switching on and off need the
+    /// event service that has them, and preparing needs only the one with the approval view. Nothing else rides along.
+    #[test]
+    fn collection_switch_calls_build_exactly_their_words_and_refuse_anything_else() {
+        let words = |value: serde_json::Value| call(value).words().expect("words");
+        let prepare = words(json!({ "kind": "eventsEnableAll" }));
+        assert_eq!(prepare.product, Product::EventsDaemon);
+        assert_eq!(prepare.words, ["enable-all"]);
+        assert_eq!(prepare.shape, Shape::Bare);
+        assert!(prepare.pins && prepare.quiet_updates);
+        assert_eq!(prepare.timeout, Duration::from_secs(30));
+        let approve =
+            words(json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }));
+        assert_eq!(approve.product, Product::EventsDaemon);
+        assert_eq!(
+            approve.words,
+            ["collection", "approve", ID, "--digest", DIGEST]
+        );
+        assert_eq!(approve.shape, Shape::Bare);
+        assert_eq!(approve.timeout, Duration::from_secs(60));
+        let off = words(json!({ "kind": "eventsDisableAll" }));
+        assert_eq!(off.words, ["disable-all"]);
+        assert_eq!(off.shape, Shape::Bare);
+        assert_eq!(
+            call(json!({ "kind": "eventsEnableAll" })).needs(),
+            Some(RULE_EDITOR_VERSION)
+        );
+        for value in [
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
+            json!({ "kind": "eventsDisableAll" }),
+        ] {
+            assert_eq!(
+                call(value.clone()).needs(),
+                Some(COLLECTION_SWITCH_VERSION),
+                "{value}"
+            );
+            assert!(!call(value).prepares_change());
+        }
+        assert!(!call(json!({ "kind": "eventsEnableAll" })).prepares_change());
+        assert_eq!(COLLECTION_SWITCH_VERSION, "0.34.0");
+        assert!(!crate::version::at_least(
+            "0.33.0",
+            COLLECTION_SWITCH_VERSION
+        ));
+        assert!(crate::version::at_least(
+            "0.34.0-feat-0.34-ui-events",
+            COLLECTION_SWITCH_VERSION
+        ));
+        // The approval and its digest are checked words; no challenge, answer, rule or extra field is taken.
+        refused(json!({ "kind": "eventsCollectionApprove", "approvalId": ID }));
+        refused(json!({ "kind": "eventsCollectionApprove", "digest": DIGEST }));
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": "ap_short", "digest": DIGEST }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": "--json", "digest": DIGEST }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST.to_uppercase() }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": &DIGEST[1..] }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST, "challenge": "fake-challenge" }),
+        );
+        refused(json!({ "kind": "eventsEnableAll", "approvalId": ID }));
+        refused(json!({ "kind": "eventsEnableAll", "ruleId": "invoices" }));
+        refused(json!({ "kind": "eventsDisableAll", "force": true }));
+        refused(json!({ "kind": "eventsCollectionEnable" }));
     }
 
     /// The Messages screen's calls (0.32.0, spec §3.6): the events service's `messages list` and `message show`, and

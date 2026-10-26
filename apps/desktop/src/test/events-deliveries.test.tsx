@@ -5,7 +5,7 @@
  * spec's shapes (`deliveries list`, `delivery show`, `dryrun show`), until the event service's own output replaces them.
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordFields } from '../events-deliveries.ts';
 import type { Call } from '../ipc.ts';
 import type { Destination } from '../navigation.tsx';
@@ -103,15 +103,27 @@ async function openDelivery(id: string): Promise<HTMLElement> {
 const cliCalls = (bridge: FakeBridge) =>
   bridge.calls.filter((each) => each.command === 'cli').map((each) => each.args as Call);
 
+/**
+ * The fixtures' morning, 2026-10-25 at 12:30 UTC, just after their last delivery: the dry run's log entry, written at
+ * 10:02, is still kept. A dry run's entry is gone 24 hours after it is written (0.34.0), so the clock is pinned here.
+ */
+const FIXTURES_NOW = new Date('2026-10-25T12:30:00.000Z');
+
 describe('Events → Deliveries', () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(FIXTURES_NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('each row reads "rule → where it went", with its channel, its account, its state in words and its time', async () => {
     renderApp(deliveriesBridge(), { screen: 'events' });
     const view = await openTab('Deliveries');
-    expect(view.textContent).toContain('A delivery is one message a rule passed on');
     expect(view.textContent).toContain(
-      'The dry-run log is a private record on this Mac of what a rule would have delivered',
+      'A delivery is one match a rule passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log.',
     );
-    expect(view.textContent).toContain('each entry is deleted after 24 hours');
 
     // Newest first, each one's time read from when it was made.
     await waitFor(() => expect(rowIds(view)).toEqual([ID.waiting, ID.retry, ID.invoices, ID.david, ID.dry, ID.failed]));
@@ -194,7 +206,7 @@ describe('Events → Deliveries', () => {
       within(show)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual(['All 6', 'Will try again 2', 'Failed 1', 'Done 3']);
+    ).toEqual(['All 6', 'Will try again 2', 'Failed 1', 'Done 3', 'Dry-run log 1']);
     fireEvent.click(within(show).getByRole('button', { name: 'Will try again 2' }));
     await waitFor(() => expect(rowIds(view).sort()).toEqual([ID.retry, ID.waiting].sort()));
     fireEvent.click(within(show).getByRole('button', { name: 'Failed 1' }));
@@ -438,7 +450,7 @@ describe('Events → Deliveries', () => {
       within(show)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual(['All 7', 'Will try again 2', 'Waiting for a session 1', 'Failed 1', 'Done 3']);
+    ).toEqual(['All 7', 'Will try again 2', 'Waiting for a session 1', 'Failed 1', 'Done 3', 'Dry-run log 1']);
     fireEvent.click(within(show).getByRole('button', { name: 'Waiting for a session 1' }));
     await waitFor(() => expect(rowIds(view)).toEqual([busy]));
     fireEvent.click(within(show).getByRole('button', { name: 'Will try again 2' }));

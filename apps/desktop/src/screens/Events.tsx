@@ -7,7 +7,6 @@ import {
   Row as Line,
   Link,
   Panel,
-  SectionHeader,
   Spinner,
   StatusDot,
   Switch,
@@ -32,7 +31,7 @@ import { COPY, needsLine, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
-import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
+import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn, useReloadOnServiceTurn } from '../hooks/use-reload-on-return.ts';
 import {
   type Call,
@@ -46,6 +45,7 @@ import { NavigationProvider, takeDestination } from '../navigation.tsx';
 import { DeliveriesTab } from './events/DeliveriesTab.tsx';
 import { useEventsLists, useEventsNav } from './events/lists.ts';
 import { RulesTab } from './events/RulesTab.tsx';
+import { Watching, WatchWords } from './events/Watching.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /*
@@ -57,13 +57,6 @@ import { ScreenFrame } from './Screen.tsx';
  *   judge kinds list    `operations/contracts/b3-control-v2.schema.json`, `judgeKindEntry`: each kind's state
  *   judges list         `operations/contracts/b3-control-v3.schema.json`, `judgeInventoryEntry`: content-free judges
  */
-
-/** `EventsDaemonStatus`: whether the service has an owner, and its switch. */
-interface EventsStatus {
-  owner: string;
-  enabled?: boolean;
-  paused?: boolean;
-}
 
 type Row = Record<string, unknown>;
 
@@ -89,90 +82,6 @@ export const EVENTS_COPY = {
   failed: 'could not be read',
   needsUpdate: 'needs an update',
 } as const;
-
-/** A fact about the status: what it is, then what it says, at the far end, as Overview's rows say theirs. */
-function Fact({ name, children }: { name: string; children: ReactNode }) {
-  return (
-    <Line>
-      <span className="shrink-0 text-fg-muted">{name}</span>
-      <span className="ml-auto min-w-0 break-words text-right text-fg">{children}</span>
-    </Line>
-  );
-}
-
-/** The status, as words: whether the service runs, and whether it collects. */
-function StatusView({ value }: { value: unknown }) {
-  if (!isRecord(value) || typeof value.owner !== 'string') {
-    return (
-      <p role="alert" className={`${INSET} text-danger`}>
-        The status could not be read.
-      </p>
-    );
-  }
-  const status = value as unknown as EventsStatus;
-  const running = status.owner === 'running';
-  const collecting = status.enabled === true ? (status.paused === true ? 'paused' : 'on') : 'off';
-  return (
-    <>
-      <Fact name="Service">{running ? 'running' : 'not running'}</Fact>
-      {running ? <Fact name="Collecting">{collecting}</Fact> : null}
-    </>
-  );
-}
-
-/** The status, polled with the shared data, and Pause and Resume, which apply at once. */
-function Status() {
-  const { events, refresh } = useAppData();
-  const { run } = useChange();
-  const [busy, setBusy] = useState(false);
-  const [failure, setFailure] = useState<Extract<ChangeOutcome, { state: 'failed' }> | null>(null);
-  const status = events !== 'absent' && events.state === 'ready' && isRecord(events.value) ? events.value : null;
-  const running = status?.owner === 'running';
-  const paused = status?.paused === true;
-
-  const act = async (call: Call) => {
-    setBusy(true);
-    setFailure(null);
-    const result = await run(call);
-    if (result.state === 'failed') setFailure(result);
-    await refresh('events');
-    setBusy(false);
-  };
-
-  return (
-    <section aria-label="Status">
-      <SectionHeader
-        label="Status"
-        action={
-          <>
-            <Button size="sm" disabled={busy || !running || paused} onClick={() => void act({ kind: 'eventsPause' })}>
-              Pause
-            </Button>
-            <Button size="sm" disabled={busy || !running || !paused} onClick={() => void act({ kind: 'eventsResume' })}>
-              Resume
-            </Button>
-          </>
-        }
-      >
-        <Panel>
-          {events === 'absent' ? null : <InPanel value={events}>{(value) => <StatusView value={value} />}</InPanel>}
-          {failure === null ? null : (
-            <div role="alert" className={`${INSET} flex flex-col gap-(--cue-space-1)`}>
-              <p className="text-danger">
-                <UntrustedText text={failure.message} />
-              </p>
-              {failure.hint === null ? null : (
-                <p className="text-fg-muted">
-                  <UntrustedText text={failure.hint} />
-                </p>
-              )}
-            </div>
-          )}
-        </Panel>
-      </SectionHeader>
-    </section>
-  );
-}
 
 /*
  * The event service the app runs (design D2, D4, D5, D6). Its supervisor, in Rust, starts, adopts, restarts and stops
@@ -1418,8 +1327,8 @@ function Count({ count }: { count: number | null }) {
 type EventsTab = keyof typeof EVENTS_COPY.tabs;
 
 /**
- * The screen's four views (desktop design D7): the event service and its status first, then the judges, the rules and
- * the recent deliveries. Every view stays mounted while another is shown, so each is read when the screen opens, as it
+ * The screen's four views (desktop design D7): the event service and whether it watches first (0.34.0 design B4), then
+ * the judges, the rules and the recent deliveries. Every view stays mounted while another is shown, so each is read when the screen opens, as it
  * always was, and a tab's badge can say what waits in it: nothing is hidden behind a tab.
  */
 function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined }) {
@@ -1483,8 +1392,9 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
       </Tabs.List>
       <Tabs.Panel value={'service' satisfies EventsTab} keepMounted>
         <div className="flex flex-col gap-(--cue-space-6)">
+          <Watching lists={lists} version={judgeReads.version} />
           <Service />
-          <Status />
+          <WatchWords />
         </div>
       </Tabs.Panel>
       <Tabs.Panel value={'judges' satisfies EventsTab} keepMounted>
@@ -1494,16 +1404,17 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
         <RulesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
       <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
-        <DeliveriesTab lists={lists} nav={nav} />
+        <DeliveriesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
     </Tabs.Root>
   );
 }
 
 /**
- * The events service (DA5.6), mostly read-only: the app's switch for running it (D2), its status with Pause and
- * Resume, its judges with Turn on in Terminal and Turn off, its rules and its recent deliveries. Everything else stays in
- * its CLI and MCP, which carry its secret-handling rules. Nothing here runs unless its launcher is installed.
+ * The events service (DA5.6), mostly read-only: whether it watches, with Switch on…, Pause, Resume and Switch off
+ * (0.34.0 design B4), the app's switch for running it (D2), its judges with Turn on in Terminal and Turn off, its rules
+ * and its recent deliveries. Everything else stays in its CLI and MCP, which carry its secret-handling rules. Nothing
+ * here runs unless its launcher is installed.
  */
 export function Events({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined } = {}) {
   const { installation } = useAppData();
