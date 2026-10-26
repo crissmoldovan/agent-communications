@@ -106,6 +106,7 @@ import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeSetupService } from './judge-setup.ts';
+import { JudgeReader } from './judge-show.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
@@ -1147,6 +1148,8 @@ async function startOwnerWithLock(
   const readers: OwnerReaders = {
     deliveries: new DeliveryReader({ store: database, cipher, now }),
     rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+    // One judge version's exact document (0.33.0), for the rule editor: configuration only, never a key.
+    judges: new JudgeReader({ store: database }),
     linear: new LinearIntegration({ secrets: eventSecrets, cipher, client: linearClient }),
     // Analyse (0.33.0 §3.3): the rule, its content-free counts, and a model on the person's own provider key, read at
     // the call and never kept.
@@ -1762,6 +1765,7 @@ async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise
 interface OwnerReaders {
   readonly deliveries: DeliveryReader;
   readonly rules: RuleReader;
+  readonly judges: JudgeReader;
   readonly analyse: RuleAnalyseService;
   /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
   readonly linear?: LinearIntegration | undefined;
@@ -1898,6 +1902,10 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
     // Analyse (0.33.0 §3.3): the person's, from the CLI and the app; a caller is refused. It writes nothing.
+    // One judge version's document (0.33.0): content-free, for the person and an agent alike, as judges list is.
+    case OWNER_CONTROL_WIRES.judgeShow:
+      if (readers === undefined) throw new CommsError('USAGE', 'judge show is not available');
+      return readers.judges.show(request.args);
     case OWNER_CONTROL_WIRES.ruleAnalyse:
       if (readers === undefined) throw new CommsError('USAGE', 'rule analyse is not available');
       return readers.analyse.analyse(personOnly(request.args, 'rule analyse'), request.signal);

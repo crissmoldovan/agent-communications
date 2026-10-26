@@ -16,6 +16,7 @@ import {
   enableJudgeKind,
   judgeKindsList,
   judgeModelStatus,
+  judgeShow,
   judgesList,
   judgeTest,
   removeJudge,
@@ -407,6 +408,17 @@ function buildEventsMcpServer(
   );
   strictControlTool('events_judges_list', 'List judges', 'Lists content-free immutable judge metadata.', {}, () =>
     judgesList(options),
+  );
+  strictControlTool(
+    'events_judge_show',
+    'Show judge',
+    "Shows one judge version's exact canonical document — kind, provider, model, endpoint, prompt template, protocol — with its digest and state, to embed in a rule. Never a key: a judge's key is not part of its document.",
+    { judgeId: z.string().min(1), version: z.number().int().positive().optional() },
+    (args) =>
+      judgeShow(args.judgeId as string, {
+        ...options,
+        ...(args.version === undefined ? {} : { version: args.version as number }),
+      }),
   );
   strictControlTool(
     'events_judge_add',

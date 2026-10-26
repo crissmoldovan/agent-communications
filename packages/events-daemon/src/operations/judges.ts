@@ -12,6 +12,19 @@ function request(operation: string, args: Record<string, unknown>, options: Opti
 export function judgesList(options: Options = {}): Promise<unknown> {
   return request('judgesList', {}, options);
 }
+/**
+ * One judge version's exact canonical document, its digest and its state (0.33.0): the newest live version, or the
+ * one named. Configuration only — kind, provider, model, endpoint, prompt template, protocol — and never a key.
+ */
+export function judgeShow(
+  judgeId: string,
+  options: Options & { readonly version?: number | undefined } = {},
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir }).request('judge-show', {
+    judgeId,
+    ...(options.version === undefined ? {} : { version: options.version }),
+  });
+}
 export function addJudge(document: unknown, options: Options = {}): Promise<unknown> {
   return request('addJudge', { document }, options);
 }

@@ -1059,6 +1059,24 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "judge-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId"],
+              "properties": {
+                "judgeId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+                "version": { "$ref": "#/$defs/positive" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "rule-analyse" },
             "args": {
               "type": "object",
@@ -2468,6 +2486,35 @@
             }
           }
         },
+        "judge-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "document", "digest", "state"],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "document": {
+              "oneOf": [
+                { "$ref": "#/$defs/judgeDocument" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["judgeId", "version", "kind", "provider", "model", "promptTemplate"],
+                  "properties": {
+                    "judgeId": { "$ref": "#/$defs/id" },
+                    "version": { "$ref": "#/$defs/positive" },
+                    "kind": { "const": "laya" },
+                    "provider": { "const": "laya" },
+                    "model": { "$ref": "#/$defs/id" },
+                    "promptTemplate": { "$ref": "#/$defs/id" }
+                  }
+                }
+              ]
+            },
+            "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "state": { "enum": ["live", "revoked"] }
+          }
+        },
         "rule-analyse": {
           "type": "object",
           "additionalProperties": false,
@@ -2732,7 +2779,8 @@
                     "provider-key-set",
                     "provider-key-remove",
                     "rule-analyse",
-                    "integration-show"
+                    "integration-show",
+                    "judge-show"
                   ]
                 }
               }
@@ -2960,6 +3008,10 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-analyse" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-analyse" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "judge-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/judge-show" } } }
             }
           ]
         },

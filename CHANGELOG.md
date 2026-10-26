@@ -35,6 +35,10 @@ together under one version.
     first. `deliveries list` and `delivery show` name the issue (`linear: { identifier, url }`), never what it says.
   - **Migrations:** two event service migrations run on their own: 30, a key slot for Linear, and 31, a delivery that
     can record its Linear issue.
+- **A judge's exact document** (`@agentcomms/events-daemon`): `agent-events judge show <judgeId> [--version <n>] --json`
+  and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
+  prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any
+  judge in a rule, not only one another rule already carries. A judge's key is never part of its document.
 
 ## 0.32.0
 

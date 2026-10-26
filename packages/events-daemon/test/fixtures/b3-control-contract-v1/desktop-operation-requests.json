@@ -217,5 +217,15 @@
   {
     "name": "integration-show-request",
     "request": { "operation": "integration-show", "args": { "integration": "linear", "team": "CUE" } }
+  },
+  {
+    "name": "judge-show-request",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev",
+        "version": 1
+      }
+    }
   }
 ]

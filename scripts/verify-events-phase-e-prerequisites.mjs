@@ -30,7 +30,8 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  *
  * 0.33.0 (design §3.3) is another, also only additive: the AI providers gain `anthropic`, whose key Analyse's model
  * uses, while `judge-setup` keeps exactly Jev's two providers (`jevProvider`); and the schema and vectors gain the
- * person's `rule-analyse` owner wire, its arguments and its result. No existing branch changed.
+ * person's `rule-analyse` owner wire, its arguments and its result; and the `judge-show` owner wire, one judge
+ * version's exact canonical document, digest and state, for the rule editor. No existing branch changed.
  *
  * 0.33.0 (the Linear target, design §3.4) is another, also only additive. The provider key wires' provider, `aiProvider`,
  * gains `linear` beside the AI providers; `judge-setup` keeps `jevProvider`, since Linear serves no judge. The target
@@ -40,7 +41,7 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '6e6151c2bdcb61e2b68073d42f78dbf584a057d97bffa85d627e1b0a9e50638a',
+    'c961efa9d8ad88794dfe40c315fa67624a3cbf018a9f59ec636f7db230164d9a',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -52,7 +53,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    'f3c182f9a4ae70d7b2e0d45fff280f9e6d97c186af0b7fc364afd4a51b7e2c59',
+    '80abd5987e9d179ab70242696db635388b8c5a05dd1c25a1c0e0aa56eac19dce',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -70,7 +71,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '866e7900d0d9d119c7b949d59635f9d5cfe86bee10682d43138d330f244ea94c',
+    '7a9503cb9d7a6f6195b58512504ef31ed1d1d318add5a7e3733959ade3e63481',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':
