@@ -19,6 +19,7 @@ import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { FAKE_LABELS, FAKE_LINEAR_KEY, FAKE_TEAM, type FakeLinear, startFakeLinear } from './support/fake-linear.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -232,7 +233,13 @@ test('E3: integration show linear is the person’s read of what their Linear ke
   };
   try {
     fake = await startFakeLinear();
-    owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000, linearClient: fake.clientOptions() });
+    owner = await startEventOwner({
+      ...noRealHome(stateDir),
+      stateDir,
+      configDir,
+      tickMs: 60_000,
+      linearClient: fake.clientOptions(),
+    });
     // Without a key nothing is asked of Linear.
     assert.deepEqual(await ok(['integration', 'show', 'linear']), {
       integration: 'linear',

@@ -490,8 +490,8 @@ two weaknesses beside it. Each is fixed:
   setup, come only from the app the check found (the key on stdin) or an interactive terminal (hidden input, never a
   pipe), and the audit records the real origin.
 - **What it does not close:** Windows and Linux check nothing (§7). There the app's path keeps the marker checks, and
-  its audit line says `desktop-app (unattested)`. (0.33.0's second look closed that path for the event service's
-  changes: there judge setup and a provider key are done at a terminal; see §7.)
+  its audit line says `desktop-app (unattested)`. (0.33.0's second look closed that path: there judge setup, a
+  provider key and adding a server to an app are done at a terminal; see §7.)
 
 **Settled after the second look (2026-10-26).** An independent second look confirmed the high finding above closed, and
 found the origin check spoofable two ways and two smaller gaps. Each is fixed:
@@ -546,5 +546,6 @@ No migration is asked of anyone. Two schema migrations run automatically: `queue
   look the event service's changes go through a terminal: judge setup, a provider key set or removed (and, in 0.33.0,
   Integrations → Agent sessions and a rule's approval) from an origin nothing attests are refused with
   `APPROVAL_REQUIRED` and `ORIGIN_UNATTESTED`, audited as `desktop-app (unattested)`, and the app offers Do it in
-  Terminal. Adding a server in the app (core's `--app-approval`) still rests there on the agent-marker checks, a speed
-  bump an agent's shell could get past. The event service's origin label is a same-user control client's word.
+  Terminal. Adding a server to an app in Connections (core's `mcp install --app-approval`) is the same: from an origin
+  nothing attests it is refused with `ORIGIN_UNATTESTED` and audited, and Connections offers Approve in Terminal there.
+  The event service's origin label is a same-user control client's word.

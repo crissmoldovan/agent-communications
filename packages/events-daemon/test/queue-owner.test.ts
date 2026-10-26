@@ -13,6 +13,7 @@ import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /**
  * The action queue end to end, through a real owner: a fake Gmail mailbox, a queue target, a rule a person approves,
@@ -139,6 +140,7 @@ test('QUEUE-A: a real owner puts a matched mail in the queue; the CLI reads it, 
   };
   let emit = false;
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     tickMs: 60_000,

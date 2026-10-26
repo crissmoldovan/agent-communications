@@ -15,6 +15,7 @@ import { emptyConfigDir } from './support/config-dir.ts';
 import { DAVID } from './support/lane-harness.ts';
 import { rawClient, resultText } from './support/raw-mcp.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /*
  * `judge show <judgeId> [--version <n>]` and `events_judge_show` (0.33.0): one judge version's exact canonical
@@ -83,7 +84,7 @@ test('JUDGE-SHOW: the CLI and the MCP tool give a judge version’s exact canoni
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   const outputs: string[] = [];
   const ok = async (args: readonly string[], stdin?: string) => {
     const ran = await cli(stateDir, args, stdin);

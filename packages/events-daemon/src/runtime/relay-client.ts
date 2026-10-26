@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { inspect } from 'node:util';
-import { CommsError } from '@agentcomms/core';
+import { CommsError, homeForDiscovery } from '@agentcomms/core';
 import {
   addressSetDigest,
   connectPinnedTcp,
@@ -145,6 +145,8 @@ export function relayHomeCandidates(
   homeDirectory: string,
 ): readonly { readonly home: string; readonly source: RelayLocation['source'] }[] {
   if (settings.relayHome !== null) return [{ home: settings.relayHome, source: 'setting' }];
+  // The defaults are under the home: never the account's real one under test.
+  homeForDiscovery(homeDirectory, 'the claude-stream relay');
   return [
     { home: join(homeDirectory, ...RELAY_DEFAULT_HOME_PARTS), source: 'default' },
     { home: join(homeDirectory, ...RELAY_PILOT_HOME_PARTS), source: 'pilot' },

@@ -36,6 +36,7 @@ import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
 
@@ -543,7 +544,12 @@ test('B3 rule test sends hostile catalogue and mapped values through the product
   const originalSubject = example.subject;
   try {
     try {
-      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
+      owner = await startEventOwner({
+        ...noRealHome(stateDir),
+        stateDir,
+        configDir: await emptyConfigDir(stateDir),
+        tickMs: 60_000,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -600,7 +606,12 @@ test('B3 rule test refuses an invalid rule document with its fixed domain reason
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     try {
-      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
+      owner = await startEventOwner({
+        ...noRealHome(stateDir),
+        stateDir,
+        configDir: await emptyConfigDir(stateDir),
+        tickMs: 60_000,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(
@@ -729,7 +740,7 @@ test('B3 production owner binds retry to its composed delivery fence after live 
       seeded.close();
     }
     try {
-      owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+      owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(

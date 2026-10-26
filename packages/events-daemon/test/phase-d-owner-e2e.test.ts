@@ -11,6 +11,7 @@ import { openEventSecretStore, selectEventSecretStore } from '../src/store/event
 import { EventRecordCipher } from '../src/store/records.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 /** The fake list file's digest has the real shape: lowercase SHA-256 of the list document. */
@@ -93,7 +94,13 @@ test('D-C: an owner behind the wall clock leaves unexpired Resend received and s
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     try {
-      owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000, now: () => ownerNow });
+      owner = await startEventOwner({
+        ...noRealHome(stateDir),
+        stateDir,
+        configDir,
+        tickMs: 60_000,
+        now: () => ownerNow,
+      });
     } catch (error) {
       // The development sandbox denies Unix-domain listeners after start-up expiry. The rows below still verify the
       // production owner composition that ran before listener creation; other errors remain test failures.
@@ -152,7 +159,7 @@ test('CUE-474: before any rule is active, sources list names each connected acco
   };
   await writeFile(join(configDir, 'config.json'), `${JSON.stringify(config)}\n`);
   try {
-    const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+    const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
     try {
       const control = new EventControlClient({ stateDir, clientName: 'events-daemon-sources-connected-test' });
       const gmail = { source: 'gmail', accountId: 'ibx_AAAAAAAAAAAAAAAA', account: 'acme/gmail', cursorScope: null };
@@ -184,7 +191,12 @@ test('D7: a normal Phase-D owner registers all sources and exposes their content
 }, async () => {
   const stateDir = await shortTempDir('aev-d7-owner-');
   try {
-    const owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
+    const owner = await startEventOwner({
+      ...noRealHome(stateDir),
+      stateDir,
+      configDir: await emptyConfigDir(stateDir),
+      tickMs: 60_000,
+    });
     try {
       const control = new EventControlClient({ stateDir, clientName: 'events-daemon-phase-d-owner-test' });
       assert.deepEqual(await control.request('sources-list'), [
@@ -283,6 +295,7 @@ test('B1: a Gmail alias swap is refused before the returned source can read or s
   }
   let providerCalls = 0;
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     tickMs: 60_000,
@@ -387,6 +400,7 @@ test('D7b: a normal owner approves all four injected fakes, interleaves source w
     sawSlack = resolve;
   });
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     tickMs: 60_000,

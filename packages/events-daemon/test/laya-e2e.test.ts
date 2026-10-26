@@ -27,6 +27,7 @@ import {
   treeListing,
 } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -339,6 +340,7 @@ async function laya(options: { readonly laya?: SyntheticLaya; readonly origin?: 
         return result;
       };
       rig.owner = await startEventOwner({
+        ...noRealHome(stateDir),
         stateDir,
         configDir,
         dataDir,

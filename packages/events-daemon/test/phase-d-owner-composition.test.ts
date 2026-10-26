@@ -12,6 +12,7 @@ import {
 import { PassThroughSseFrameVisibilityGate } from '../src/runtime/phase-d-whatsapp-seam.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 test('D11: the D owner composition always creates a concrete visibility fence before B2 exists', {
   skip: WINDOWS_SKIP,
@@ -23,7 +24,8 @@ test('D11: the D owner composition always creates a concrete visibility fence be
   try {
     const composition = createPhaseDWhatsAppOwnerComposition({
       database,
-      eventOperations: openWhatsAppEventOperations({ configDir }),
+      // A temporary home: the channel's other folders are never the person's own.
+      eventOperations: openWhatsAppEventOperations({ configDir, env: { HOME: stateDir, USERPROFILE: stateDir } }),
     });
     let writes = 0;
     const visible = await composition.visibilityFence.withCurrentSseFrameVisibility(
@@ -53,7 +55,8 @@ test('D11: a supplied retained-content constructor registers each participant ex
     let constructors = 0;
     const composition = createPhaseDWhatsAppOwnerComposition({
       database,
-      eventOperations: openWhatsAppEventOperations({ configDir }),
+      // A temporary home: the channel's other folders are never the person's own.
+      eventOperations: openWhatsAppEventOperations({ configDir, env: { HOME: stateDir, USERPROFILE: stateDir } }),
       createRetainedContentParticipants: () => {
         constructors += 1;
         return {
@@ -117,6 +120,7 @@ test('D7: a production owner with the WhatsApp source and no concrete fence refu
   try {
     await assert.rejects(
       startEventOwner({
+        ...noRealHome(stateDir),
         stateDir,
         configDir,
         tickMs: 60_000,
@@ -130,7 +134,7 @@ test('D7: a production owner with the WhatsApp source and no concrete fence refu
     );
     assert.equal(passThroughCalls, 0, "the refused owner never selected B2's pre-D pass-through gate");
     // The refused start left nothing held: a normal owner starts on the same state directory and stops cleanly.
-    owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+    owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   } finally {
     await owner?.stop();
     prototype.withCurrentSseFrameVisibility = original;

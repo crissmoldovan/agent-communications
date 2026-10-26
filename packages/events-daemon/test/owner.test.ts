@@ -3,6 +3,7 @@ import { lstat, readFile, rm } from 'node:fs/promises';
 import { test } from 'node:test';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 type OwnerModule = typeof import('../src/runtime/owner.ts');
 type ClientModule = typeof import('../src/control/client.ts');
@@ -98,7 +99,7 @@ test('CTRL-B1: only one foreground owner opens the event database and a graceful
   const stateDir = await shortTempDir('aev-owner-');
   const configDir = await emptyConfigDir(stateDir);
   try {
-    const owner = await ownerRuntime.startEventOwner({ stateDir, configDir });
+    const owner = await ownerRuntime.startEventOwner({ ...noRealHome(stateDir), stateDir, configDir });
     try {
       assert.equal(owner.status().owner, 'running');
       if (process.platform !== 'win32') {
@@ -107,7 +108,7 @@ test('CTRL-B1: only one foreground owner opens the event database and a graceful
         assert.equal((await lstat(paths.controlToken)).mode & 0o077, 0, 'the control token is owner-only');
       }
       await assert.rejects(
-        () => ownerRuntime.startEventOwner({ stateDir, configDir }),
+        () => ownerRuntime.startEventOwner({ ...noRealHome(stateDir), stateDir, configDir }),
         /already owns|already running/i,
       );
       const client = new clientRuntime.EventControlClient({ stateDir, clientName: 'events-daemon-owner-test' });

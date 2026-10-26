@@ -8,6 +8,7 @@ import { startEventOwner } from '../src/runtime/owner.ts';
 import { copyRepositorySnapshot, expandOverlayInput, runB3Mutation } from './support/b3-mutants.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
 const OWNER_CASE = 'owner-b3-operation-closed-set';
@@ -36,6 +37,7 @@ test('B3 mutation proof: a sealed owner dispatches only B3 contract operations',
   const stateDir = await shortTempDir('aev-b3-owner-');
   const seen: unknown[] = [];
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(stateDir),
     b3OwnerService: {

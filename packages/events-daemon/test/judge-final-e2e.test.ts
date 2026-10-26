@@ -30,6 +30,7 @@ import { openEventSecretStore, selectEventSecretStore } from '../src/store/event
 import { EventRecordCipher } from '../src/store/records.ts';
 import { startLoopbackReceiver } from './support/loopback-receiver.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 assertLoopbackSeal();
@@ -222,6 +223,7 @@ async function ownerFixture(outcome: 'match' | 'hold') {
     }
     const startOwner = () =>
       startEventOwner({
+        ...noRealHome(stateDir),
         stateDir,
         configDir,
         tickMs: 60_000,

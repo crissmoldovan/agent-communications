@@ -35,7 +35,8 @@ export interface AuditRecord {
    * Who approved a change, when it was the person in the desktop app (0.32.0): the approval answered through the app
    * channel, as judge setup's disclosures are (`approvedVia: 'app'` on the record). `desktop-app` when the release app
    * started the command (`desktopAppOrigin`, macOS); `desktop-app (test build)` for the local test build, which speaks
-   * only for a test profile; `desktop-app (unattested)` on Windows and Linux, where nothing is checked.
+   * only for a test profile. `desktop-app (unattested)`, on Windows and Linux, where nothing is checked, names only a
+   * refusal: there the change is approved at the person's terminal (the second look at 0.33.0).
    */
   approvedBy?: 'desktop-app' | 'desktop-app (test build)' | 'desktop-app (unattested)';
   /**

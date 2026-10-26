@@ -25,6 +25,7 @@ import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { MailboxLock } from '../src/sources/mailbox-lock.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const ROOT = join(import.meta.dirname, '../../..');
 
@@ -318,7 +319,7 @@ function assertExactJudgeSurfaceResponse(
 async function startSealedOwner(stateDir: string) {
   const configDir = join(stateDir, 'config');
   await mkdir(configDir, { recursive: true });
-  return startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  return startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
 }
 
 /** A real activation/runtime/owner-service composition with only provider, cipher, and target-transport boundaries
