@@ -27,7 +27,11 @@ type Report = { channels: { channel: string; registered: { client: string }[] }[
  */
 function bridgeAt(
   version = '0.32.0',
-  options: { install?: (call: Call) => CliResult; uninstall?: (call: Call) => CliResult } = {},
+  options: {
+    install?: (call: Call) => CliResult;
+    uninstall?: (call: Call) => CliResult;
+    approved?: (call: Call) => CliResult;
+  } = {},
 ): FakeBridge & { report: Report } {
   const report = structuredClone(channels) as unknown as Report;
   const installation: Installation = { ...EXAMPLE_INSTALLATION, version };
@@ -49,6 +53,13 @@ function bridgeAt(
             expiresAt: null,
           };
         }
+        if (call.kind === 'mcpInstallApproved') {
+          // Core approves the install through the app channel, and registers it.
+          if (options.approved) return options.approved(call);
+          const entry = report.channels.find((channel) => channel.channel === call.server);
+          entry?.registered.push({ client: call.client, scope: 'user', path: '/example/home/.claude.json' } as never);
+          return ok({ applied: true, restart: `Restart ${call.client} to use it.` });
+        }
         if (call.kind === 'mcpUninstall') {
           if (options.uninstall) return options.uninstall(call);
           const entry = report.channels.find((channel) => channel.channel === call.server);
@@ -69,6 +80,9 @@ const cliCalls = (bridge: FakeBridge): Call[] =>
   bridge.calls.filter((call) => call.command === 'cli').map((call) => call.args as Call);
 const changes = (bridge: FakeBridge): Call[] =>
   cliCalls(bridge).filter((call) => call.kind === 'mcpInstall' || call.kind === 'mcpUninstall');
+/** Every approval the app answered in the app, by the install it answered. */
+const approvedInApp = (bridge: FakeBridge): Call[] =>
+  cliCalls(bridge).filter((call) => call.kind === 'mcpInstallApproved');
 const terminals = (bridge: FakeBridge): TerminalCommand[] =>
   bridge.calls.filter((call) => call.command === 'openInTerminal').map((call) => call.args as TerminalCommand);
 
@@ -208,7 +222,7 @@ describe('Connections (spec §3.3)', () => {
   });
 
   it(
-    'Change… takes an unticked server away at once and adds a ticked one only through Approve in Terminal',
+    'Change… takes an unticked server away at once, and adds a ticked one once the person approves it in the app',
     SLOW,
     async () => {
       const bridge = bridgeAt();
@@ -237,27 +251,82 @@ describe('Connections (spec §3.3)', () => {
       expect(
         await view.findByText('Slack was taken away from Claude Code. Restart Claude Code to see the change.'),
       ).toBeTruthy();
-      // Core's preview, as text: what the server lets agents do.
+      // Core's preview, as text: what the server lets agents do; and the app's own confirm, with Cancel.
       expect(preview.textContent).toContain('Agents there could send mail <b>through Resend</b>.');
       expect(preview.querySelector('b')).toBeNull();
-      // Nothing was added: nothing opened, and the table reads core again without Slack.
+      expect(within(preview).getByText(CONNECTIONS_COPY.approveHere)).toBeTruthy();
+      expect(within(preview).queryByRole('button', { name: 'Approve in Terminal' })).toBeNull();
+      // Nothing was added yet: nothing approved, nothing opened, and the table reads core again without Slack.
+      expect(approvedInApp(bridge)).toEqual([]);
       expect(terminals(bridge)).toEqual([]);
       await waitFor(async () =>
         expect((await rowOf('Claude Code')).cells[SERVER_COLUMN.slack]?.textContent).toBe('–No'),
       );
       expect((await rowOf('Claude Code')).cells[SERVER_COLUMN.resend]?.textContent).toBe('–No');
 
-      fireEvent.click(within(preview).getByRole('button', { name: 'Approve in Terminal' }));
+      fireEvent.click(within(preview).getByRole('button', { name: CONNECTIONS_COPY.approveAndAdd }));
+      // The person's confirm answers the approval core prepared, for that install, once — and nothing is opened.
       await waitFor(() =>
-        expect(terminals(bridge)).toEqual([
-          { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-code', server: 'resend' }, revoke: ID },
+        expect(approvedInApp(bridge)).toEqual([
+          { kind: 'mcpInstallApproved', client: 'claude-code', server: 'resend', approvalId: ID },
         ]),
       );
-      expect(await view.findByText('Confirm it in Terminal, then restart Claude Code to use it.')).toBeTruthy();
-      // The app never approves: each change it made names the app and the server, and nothing else.
-      for (const call of changes(bridge)) expect(Object.keys(call)).toEqual(['kind', 'client', 'server']);
+      expect(await view.findByText('Resend was added to Claude Code. Restart Claude Code to use it.')).toBeTruthy();
+      await waitFor(() => expect(view.queryByRole('region', { name: 'Add Resend to Claude Code' })).toBeNull());
+      await waitFor(async () =>
+        expect((await rowOf('Claude Code')).cells[SERVER_COLUMN.resend]?.textContent).toBe('✓Yes'),
+      );
+      expect(terminals(bridge)).toEqual([]);
+      // Answered, so not revoked when it goes.
+      expect(bridge.calls.some((call) => call.command === 'revokePreview')).toBe(false);
     },
   );
+
+  it('the app never approves an install without the person pressing its confirm', SLOW, async () => {
+    const bridge = bridgeAt();
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Gmail' }));
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Slack' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const gmail = await view.findByRole('region', { name: 'Add Gmail to Claude Desktop' });
+    expect(await view.findByRole('region', { name: 'Add Slack to Claude Desktop' })).toBeTruthy();
+    // Prepared, shown, and waiting: a moment passes, the window reads again, and still nothing is approved.
+    await new Promise((settled) => setTimeout(settled, 50));
+    window.dispatchEvent(new Event('focus'));
+    await new Promise((settled) => setTimeout(settled, 50));
+    expect(approvedInApp(bridge)).toEqual([]);
+    // Cancel revokes it, and approves nothing.
+    fireEvent.click(within(gmail).getByRole('button', { name: 'Cancel' }));
+    expect(await view.findByText('Cancelled: Gmail was not added to Claude Desktop.')).toBeTruthy();
+    expect(bridge.calls).toContainEqual({ command: 'revokePreview', args: ID });
+    // Leaving the screen with one still waiting revokes that one too, and approves nothing.
+    const navigation = screen.getByRole('navigation', { name: 'Sections' });
+    fireEvent.click(within(navigation).getByRole('button', { name: 'Overview' }));
+    await waitFor(() => expect(bridge.calls).toContainEqual({ command: 'revokePreview', args: OTHER_ID }));
+    expect(approvedInApp(bridge)).toEqual([]);
+    expect(terminals(bridge)).toEqual([]);
+  });
+
+  it('an install core did not apply says why, and its approval can still be cancelled', SLOW, async () => {
+    const bridge = bridgeAt('0.32.0', {
+      approved: () => failed('APPROVAL_VOID', 'the change is not the one that was approved', 'Add it again.'),
+    });
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Core' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const preview = await view.findByRole('region', { name: 'Add Core to Claude Desktop' });
+    fireEvent.click(within(preview).getByRole('button', { name: CONNECTIONS_COPY.approveAndAdd }));
+    expect((await within(preview).findByRole('alert')).textContent).toBe(
+      'Core was not added to Claude Desktop: the change is not the one that was approved Add it again.',
+    );
+    fireEvent.click(within(preview).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(bridge.calls).toContainEqual({ command: 'revokePreview', args: ID }));
+    expect((await rowOf('Claude Desktop')).cells[SERVER_COLUMN.core]?.textContent).toBe('–No');
+  });
 
   it('Add… on an app with nothing only adds, and Cancel revokes the waiting approval', SLOW, async () => {
     const bridge = bridgeAt();
@@ -327,21 +396,37 @@ describe('Connections (spec §3.3)', () => {
     expect(terminals(bridge)).toEqual([]);
   });
 
-  it('on a core before 0.32.0, a server cannot be taken away here, and adding still asks first', SLOW, async () => {
-    const bridge = bridgeAt('0.31.0');
-    const view = await openConnections(bridge);
-    fireEvent.click(within((await rowOf('Claude Code')).row).getByRole('button', { name: 'Change…' }));
-    const editor = await view.findByRole('group', { name: 'Claude Code: which parts?' });
-    expect(within(editor).getByText('Taking a part away needs 0.32.0 or later; this machine has 0.31.0.')).toBeTruthy();
-    const gmail = within(editor).getByRole('checkbox', { name: 'Gmail' });
-    expect(gmail.getAttribute('aria-disabled') === 'true' || gmail.hasAttribute('data-disabled')).toBe(true);
-    fireEvent.click(gmail);
-    expect(gmail.getAttribute('aria-checked')).toBe('true');
-    fireEvent.click(within(editor).getByRole('checkbox', { name: 'WhatsApp' }));
-    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
-    expect(await view.findByRole('region', { name: 'Add WhatsApp to Claude Code' })).toBeTruthy();
-    expect(changes(bridge)).toEqual([{ kind: 'mcpInstall', client: 'claude-code', server: 'whatsapp' }]);
-  });
+  it(
+    'on a core before 0.32.0, a server cannot be taken away here, and adding is approved in Terminal',
+    SLOW,
+    async () => {
+      const bridge = bridgeAt('0.31.0');
+      const view = await openConnections(bridge);
+      fireEvent.click(within((await rowOf('Claude Code')).row).getByRole('button', { name: 'Change…' }));
+      const editor = await view.findByRole('group', { name: 'Claude Code: which parts?' });
+      expect(
+        within(editor).getByText('Taking a part away needs 0.32.0 or later; this machine has 0.31.0.'),
+      ).toBeTruthy();
+      const gmail = within(editor).getByRole('checkbox', { name: 'Gmail' });
+      expect(gmail.getAttribute('aria-disabled') === 'true' || gmail.hasAttribute('data-disabled')).toBe(true);
+      fireEvent.click(gmail);
+      expect(gmail.getAttribute('aria-checked')).toBe('true');
+      fireEvent.click(within(editor).getByRole('checkbox', { name: 'WhatsApp' }));
+      fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+      const preview = await view.findByRole('region', { name: 'Add WhatsApp to Claude Code' });
+      expect(changes(bridge)).toEqual([{ kind: 'mcpInstall', client: 'claude-code', server: 'whatsapp' }]);
+      // A core without the app's approval: the person approves it at their own terminal, as before.
+      expect(within(preview).queryByRole('button', { name: CONNECTIONS_COPY.approveAndAdd })).toBeNull();
+      fireEvent.click(within(preview).getByRole('button', { name: 'Approve in Terminal' }));
+      await waitFor(() =>
+        expect(terminals(bridge)).toEqual([
+          { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-code', server: 'whatsapp' }, revoke: ID },
+        ]),
+      );
+      expect(await view.findByText('Confirm it in Terminal, then restart Claude Code to use it.')).toBeTruthy();
+      expect(approvedInApp(bridge)).toEqual([]);
+    },
+  );
 
   it(
     'on a core before 0.29.0 there is no activity to read: no "used", and Used recently says to update',

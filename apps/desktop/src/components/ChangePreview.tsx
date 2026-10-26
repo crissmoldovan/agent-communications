@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { COPY } from '../copy.ts';
 import type { ChangeOutcome } from '../hooks/use-change.ts';
-import { errorMessage, type TerminalOutcome } from '../ipc.ts';
+import { type Call, type CliResult, errorMessage, type TerminalOutcome } from '../ipc.ts';
 import { TerminalResult } from './TerminalResult.tsx';
 import { UntrustedText } from './UntrustedText.tsx';
 
@@ -19,13 +19,31 @@ type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
  * (DA16, after review), unless Approve or Cancel already did: an approval nobody will look at again would only fill
  * the tray. The revoke waits a moment after the unmount, so React's StrictMode rehearsal, which mounts the preview
  * again at once, revokes nothing.
+ *
+ * `inApp` is the one change the person approves here, in the app (0.32.0, DA10's note of 2026-10-26: adding a server to
+ * an app in Connections): the same preview under its own header, and its confirm runs `inApp.call`, which answers this
+ * approval through core's app channel and applies the change. Nothing is approved until that button is pressed, and
+ * Cancel and leaving revoke it as they do here otherwise.
  */
 export function ChangePreview({
   change,
   onDone,
+  inApp,
 }: {
   change: Waiting;
   onDone?: (result: TerminalOutcome | 'cancelled') => void;
+  inApp?:
+    | {
+        /** The header, the confirm's words, and the call that answers the approval in the app. */
+        title: string;
+        approve: string;
+        call: Call;
+        /** What a refusal says, from core's message. */
+        failed: (message: string) => string;
+        /** Applied: core's answer. */
+        onApproved: (result: Extract<CliResult, { status: 'ok' }>) => void;
+      }
+    | undefined;
 }) {
   const bridge = useBridge();
   const [busy, setBusy] = useState(false);
@@ -73,6 +91,34 @@ export function ChangePreview({
     }
   };
 
+  // Approved here: the person pressed the confirm, and only now is the approval answered — through core's app channel.
+  const approveHere = async (here: NonNullable<typeof inApp>) => {
+    setBusy(true);
+    setProblem(null);
+    handled.current = true;
+    try {
+      const result = await bridge.cli(here.call);
+      if (result.status === 'ok') {
+        here.onApproved(result);
+        return;
+      }
+      // Not applied: the approval is still this preview's to cancel, or to leave behind.
+      handled.current = false;
+      if (!mounted.current) revokeLeftBehind();
+      setProblem(
+        result.status === 'failed'
+          ? [here.failed(result.message), result.hint].filter(Boolean).join(' ')
+          : here.failed('core did not apply it'),
+      );
+    } catch (error) {
+      handled.current = false;
+      if (!mounted.current) revokeLeftBehind();
+      setProblem(here.failed(errorMessage(error)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cancel = async () => {
     setBusy(true);
     setProblem(null);
@@ -100,16 +146,22 @@ export function ChangePreview({
 
   return (
     <Panel>
-      <PanelHeader title={COPY.approveThisInTerminal} />
+      <PanelHeader title={inApp === undefined ? COPY.approveThisInTerminal : inApp.title} />
       <div className="flex flex-col gap-(--cue-space-3) p-(--cue-space-4)">
         <div className="font-mono text-fg">
           <UntrustedText text={change.preview} />
         </div>
         {opened === null ? (
           <div className="flex gap-(--cue-space-2)">
-            <Button variant="primary" loading={busy} onClick={() => void approve()}>
-              {COPY.approveInTerminal}
-            </Button>
+            {inApp === undefined ? (
+              <Button variant="primary" loading={busy} onClick={() => void approve()}>
+                {COPY.approveInTerminal}
+              </Button>
+            ) : (
+              <Button variant="primary" loading={busy} onClick={() => void approveHere(inApp)}>
+                {inApp.approve}
+              </Button>
+            )}
             <Button variant="ghost" disabled={busy} onClick={() => void cancel()}>
               {COPY.cancel}
             </Button>

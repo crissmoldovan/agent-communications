@@ -31,6 +31,12 @@ import { ScreenFrame } from './Screen.tsx';
 /** The first core with `mcp uninstall` (`connections.rs`, `MCP_UNINSTALL_VERSION`). */
 export const MCP_UNINSTALL_VERSION = '0.32.0';
 
+/**
+ * The first core whose `mcp install` takes the app's own approval (`connections.rs`, `MCP_APP_APPROVAL_VERSION`): an
+ * older one is approved in Terminal, as before.
+ */
+export const MCP_APP_APPROVAL_VERSION = '0.32.0';
+
 /** The screen's words (the prototype's, row 5, screen 1). */
 export const CONNECTIONS_COPY = {
   title: 'Connections',
@@ -46,6 +52,9 @@ export const CONNECTIONS_COPY = {
   change: 'Change…',
   add: 'Add…',
   editHint: 'Removing a part applies at once. Adding one shows you what it lets agents do, first.',
+  /** The header over core's preview of an addition, approved here. */
+  approveHere: 'What this lets agents do',
+  approveAndAdd: 'Approve and add',
   save: 'Save',
   cancel: 'Cancel',
   unreadable: 'Settings that could not be read, so what they hold is not known',
@@ -69,6 +78,8 @@ const addedLine = (server: string, app: string) => `${server} was added to ${app
 const notAddedLine = (server: string, app: string) => `${server} was not added to ${app}`;
 const cancelledLine = (server: string, app: string) => `Cancelled: ${server} was not added to ${app}.`;
 const confirmLine = (app: string) => `Confirm it in Terminal, then restart ${app} to use it.`;
+const unfinishedLine = (server: string, app: string, why: string | null) =>
+  `${server} was not fully added to ${app}${why === null ? '' : `: ${why}`}. Doctor says what to do.`;
 const removeNeedsLine = (installed: string | null) =>
   `Taking a part away ${needsLine(MCP_UNINSTALL_VERSION, installed).replace(/^Needs/, 'needs')}`;
 
@@ -128,6 +139,7 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
               view={value}
               lastUsed={lastUsed}
               canRemove={atLeast(version, MCP_UNINSTALL_VERSION)}
+              approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION)}
               installed={version}
               reload={channels.reload}
             />
@@ -173,12 +185,15 @@ function Apps({
   view,
   lastUsed,
   canRemove,
+  approveHere,
   installed,
   reload,
 }: {
   view: ConnectionsView;
   lastUsed: Partial<Record<McpClient, string>>;
   canRemove: boolean;
+  /** Whether core takes the app's own approval of an install (0.32.0); before it, Approve in Terminal. */
+  approveHere: boolean;
   installed: string | null;
   reload: () => Promise<void>;
 }) {
@@ -244,14 +259,32 @@ function Apps({
     await reload();
   };
 
-  const settle = (item: Adding, result: 'cancelled' | 'opened') => {
+  const settle = (item: Adding, result: 'cancelled' | 'opened' | { approved: { exit: number; data: unknown } }) => {
     const app = APP_LABELS[item.client];
+    const server = SERVER_LABELS[item.server];
+    const key = item.change.approvalId;
     if (result === 'cancelled') {
-      setAdding((current) => current.filter((each) => each !== item));
-      setSaid((current) => [...current, { tone: 'ok', text: cancelledLine(SERVER_LABELS[item.server], app) }]);
+      setAdding((current) => current.filter((each) => each.change.approvalId !== key));
+      setSaid((current) => [...current, { tone: 'ok', text: cancelledLine(server, app) }]);
       return;
     }
-    setAdding((current) => current.map((each) => (each === item ? { ...each, opened: true } : each)));
+    if (result === 'opened') {
+      setAdding((current) =>
+        current.map((each) => (each.change.approvalId === key ? { ...each, opened: true } : each)),
+      );
+      return;
+    }
+    // Approved here and applied: said, and the table read again. An install that ended unfinished says so.
+    setAdding((current) => current.filter((each) => each.change.approvalId !== key));
+    const data = result.approved.data as { notApplied?: unknown } | null;
+    const why = typeof data?.notApplied === 'string' ? data.notApplied : null;
+    setSaid((current) => [
+      ...current,
+      result.approved.exit === 0
+        ? { tone: 'ok', text: addedLine(server, app) }
+        : { tone: 'refused', text: unfinishedLine(server, app, why), hint: null },
+    ]);
+    void reload();
   };
 
   return (
@@ -332,7 +365,12 @@ function Apps({
         </div>
       )}
       {adding.map((item) => (
-        <AddPreview key={item.change.approvalId} item={item} onDone={(result) => settle(item, result)} />
+        <AddPreview
+          key={item.change.approvalId}
+          item={item}
+          here={approveHere}
+          onDone={(result) => settle(item, result)}
+        />
       ))}
       {view.unreadable.length === 0 ? null : <Unreadable view={view} />}
     </div>
@@ -450,15 +488,44 @@ function Editor({
   );
 }
 
-/** One server to add, waiting: core's preview of what it lets agents do, with Approve in Terminal and Cancel. */
-function AddPreview({ item, onDone }: { item: Adding; onDone: (result: 'cancelled' | 'opened') => void }) {
+/**
+ * One server to add, waiting: core's preview of what it lets agents do, with its confirm and Cancel. Approved here, in
+ * the app (0.32.0, DA10's note of 2026-10-26): only the person's press of Approve and add answers the approval, through
+ * core's app channel, for this install alone. On an older core it is Approve in Terminal, as before.
+ */
+function AddPreview({
+  item,
+  here,
+  onDone,
+}: {
+  item: Adding;
+  here: boolean;
+  onDone: (result: 'cancelled' | 'opened' | { approved: { exit: number; data: unknown } }) => void;
+}) {
   const app = APP_LABELS[item.client];
+  const server = SERVER_LABELS[item.server];
   return (
-    <section aria-label={addTitle(SERVER_LABELS[item.server], app)} className="flex flex-col gap-(--cue-space-2)">
-      <p className="font-medium text-fg">{addTitle(SERVER_LABELS[item.server], app)}</p>
+    <section aria-label={addTitle(server, app)} className="flex flex-col gap-(--cue-space-2)">
+      <p className="font-medium text-fg">{addTitle(server, app)}</p>
       <ChangePreview
         change={item.change}
         onDone={(result) => onDone(result === 'cancelled' ? 'cancelled' : 'opened')}
+        inApp={
+          here
+            ? {
+                title: CONNECTIONS_COPY.approveHere,
+                approve: CONNECTIONS_COPY.approveAndAdd,
+                call: {
+                  kind: 'mcpInstallApproved',
+                  client: item.client,
+                  server: item.server,
+                  approvalId: item.change.approvalId,
+                },
+                failed: (message) => `${notAddedLine(server, app)}: ${message}`,
+                onApproved: (result) => onDone({ approved: result }),
+              }
+            : undefined
+        }
       />
       {item.opened ? <p className="text-fg-muted">{confirmLine(app)}</p> : null}
     </section>

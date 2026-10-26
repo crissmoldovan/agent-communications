@@ -12,7 +12,8 @@ use crate::paths::FolderOverrides;
 use crate::provider_keys::{self, ProviderKey};
 use crate::runner::{run, RunContext};
 use crate::{
-    deeplink, event_service, links, login_item, settings, terminal, tray, updater, AppState,
+    connections, deeplink, event_service, links, login_item, settings, terminal, tray, updater,
+    AppState,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -81,7 +82,11 @@ pub async fn cli(
     let ctx = context(&state);
     let counts = matches!(call, Call::ApprovalsPending {});
     let asked = call.clone();
-    let result = blocking(move || run(&call, &ctx)).await?;
+    let prepared = state.prepared.clone();
+    // An approval answered in the app runs only for the change the app prepared it for (0.32.0, `connections`).
+    let result =
+        blocking(move || connections::run_app_approval(&prepared, &call, || run(&call, &ctx)))
+            .await??;
     state.prepared.record(&asked, &result);
     if let (Call::ApprovalRevoke { approval_id }, CliResult::Ok { exit: 0, .. }) = (&asked, &result)
     {

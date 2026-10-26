@@ -182,11 +182,13 @@ export type Call =
   | { kind: 'providerList' }
   | { kind: 'providerKeyRemove'; provider: AiProvider }
   | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
-  // Connections (0.32.0): core's channels, read; adding one server to one app, a change the person approves in
-  // Terminal (DA10); and taking one away, a tightening core applies at once.
+  // Connections (0.32.0): core's channels, read; adding one server to one app, prepared, then approved by the person in
+  // the app with `mcpInstallApproved`, only for the approval the app prepared for that install (DA10's note of
+  // 2026-10-26), and taking one away, a tightening core applies at once.
   | { kind: 'channels' }
   | { kind: 'mcpInstall'; client: McpClient; server: McpServer }
   | { kind: 'mcpUninstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServer; approvalId: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };

@@ -4,10 +4,58 @@
 //! applies at once. The app and the server are each one word of a closed list, so nothing the window sends reaches
 //! core's arguments but those words.
 
+use crate::allowlist::{ApprovalId, Call};
+use crate::ipc::{AppError, CliResult};
+use crate::terminal::Prepared;
 use serde::{Deserialize, Serialize};
 
 /// The first core with `mcp uninstall` (0.32.0, plan Task E): an older one says "Needs 0.32.0 or later" (DA12).
 pub const MCP_UNINSTALL_VERSION: &str = "0.32.0";
+
+/// The first core whose `mcp install` takes the app's own approval, `--app-approval` (0.32.0): an older one keeps
+/// Approve in Terminal.
+pub const MCP_APP_APPROVAL_VERSION: &str = "0.32.0";
+
+impl Call {
+    /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
+    /// `mcpInstall` of the same app and server. None for every other call.
+    pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
+        match self {
+            Call::McpInstallApproved {
+                client,
+                server,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::McpInstall {
+                    client: *client,
+                    server: *server,
+                },
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// Runs `call` through `run`. A call that answers an approval in the app (`answers_app_approval`) runs only when
+/// `prepared` recorded that approval for the very change it answers, and takes it, once: the webview cannot have the
+/// app approve an approval an agent prepared, or one prepared for another install. When the run did not come back
+/// applied, the record is put back, so the preview's Cancel can still revoke it.
+pub fn run_app_approval(
+    prepared: &Prepared,
+    call: &Call,
+    run: impl FnOnce() -> CliResult,
+) -> Result<CliResult, AppError> {
+    let Some((id, answered)) = call.answers_app_approval() else {
+        return Ok(run());
+    };
+    prepared.take_for(id, &answered)?;
+    let result = run();
+    if !matches!(result, CliResult::Ok { .. }) {
+        prepared.restore(id, answered);
+    }
+    Ok(result)
+}
 
 /// An app a server is registered with, as `mcp install --client` names it: core's `CLIENTS` less `json`, which prints
 /// an entry instead of registering one. Closed.
@@ -309,5 +357,167 @@ mod tests {
                 json!(server.word())
             );
         }
+    }
+
+    /// A recorded `mcp install` change, as `cli` records it when core answers it waiting for approval `ID`.
+    fn prepared_install(client: &str, server: &str) -> crate::terminal::Prepared {
+        let prepared = crate::terminal::Prepared::default();
+        prepared.record(
+            &call(json!({ "kind": "mcpInstall", "client": client, "server": server })),
+            &crate::ipc::CliResult::ApprovalPending {
+                approval_id: crate::allowlist::ID.into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        prepared
+    }
+
+    fn approved(client: &str, server: &str) -> Call {
+        call(json!({
+            "kind": "mcpInstallApproved",
+            "client": client,
+            "server": server,
+            "approvalId": crate::allowlist::ID
+        }))
+    }
+
+    #[test]
+    fn approving_an_install_in_the_app_builds_cores_words_with_the_app_approval() {
+        let words = approved("claude-code", "gmail").words().expect("words");
+        assert_eq!(words.product, Product::Core);
+        assert_eq!(
+            words.words,
+            [
+                "mcp",
+                "install",
+                "--client",
+                "claude-code",
+                "--server",
+                "gmail",
+                "--app-approval",
+                crate::allowlist::ID
+            ]
+        );
+        assert_eq!(words.shape, Shape::Envelope);
+        assert!(words.pins);
+        // It registers, fetches a runtime when one is needed, and proves the server starts: given room.
+        assert_eq!(words.timeout, Duration::from_secs(300));
+        // It answers an approval the app prepared, and prepares none; it opens no terminal; it needs core 0.32.0.
+        let call = approved("claude-code", "gmail");
+        assert!(!call.prepares_change());
+        assert_eq!(call.needs(), Some("0.32.0"));
+        assert!(command_words(&TerminalCommand::Change {
+            call: call.clone(),
+            revoke: crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+                .expect("an id"),
+        })
+        .is_err());
+        // Never `--approval`, and never `approve`.
+        for word in &words.words {
+            assert!(word != "--approval" && word != "approve", "{word}");
+        }
+        assert_eq!(
+            serde_json::to_value(&call).expect("json"),
+            json!({
+                "kind": "mcpInstallApproved",
+                "client": "claude-code",
+                "server": "gmail",
+                "approvalId": crate::allowlist::ID
+            })
+        );
+    }
+
+    #[test]
+    fn approving_an_install_in_the_app_refuses_any_other_word_or_field() {
+        for bad in [
+            "",
+            "ap_",
+            "ap_0123456789abcdefghjkmnpqrs",
+            "--approval",
+            "ap_0123456789ABCDEFGHJKMNPQRS --json",
+        ] {
+            refused(
+                json!({ "kind": "mcpInstallApproved", "client": "cursor", "server": "gmail", "approvalId": bad }),
+            );
+        }
+        refused(json!({ "kind": "mcpInstallApproved", "client": "cursor", "server": "gmail" }));
+        refused(
+            json!({ "kind": "mcpInstallApproved", "client": "json", "server": "gmail", "approvalId": crate::allowlist::ID }),
+        );
+        refused(
+            json!({ "kind": "mcpInstallApproved", "client": "cursor", "server": "laya", "approvalId": crate::allowlist::ID }),
+        );
+        refused(json!({
+            "kind": "mcpInstallApproved",
+            "client": "cursor",
+            "server": "gmail",
+            "approvalId": crate::allowlist::ID,
+            "force": true
+        }));
+    }
+
+    #[test]
+    fn the_app_approves_only_the_approval_it_prepared_for_that_same_install() {
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "applied": true }),
+            }
+        };
+        // Nothing prepared: refused, and nothing runs.
+        let refusal = run_app_approval(
+            &crate::terminal::Prepared::default(),
+            &approved("claude-code", "gmail"),
+            ok,
+        )
+        .expect_err("not prepared");
+        assert_eq!(refusal.code, "APP_REFUSED");
+        assert_eq!(ran.get(), 0);
+        // Prepared for another install, or another app: refused, and nothing runs.
+        for (client, server) in [("claude-code", "slack"), ("cursor", "gmail")] {
+            let refusal = run_app_approval(
+                &prepared_install("claude-code", "gmail"),
+                &approved(client, server),
+                ok,
+            )
+            .expect_err("another install");
+            assert_eq!(refusal.code, "APP_REFUSED", "{client} {server}");
+        }
+        assert_eq!(ran.get(), 0);
+        // The install the app prepared: it runs once, and its approval is the app's no longer.
+        let prepared = prepared_install("claude-code", "gmail");
+        let result =
+            run_app_approval(&prepared, &approved("claude-code", "gmail"), ok).expect("it runs");
+        assert!(matches!(result, crate::ipc::CliResult::Ok { exit: 0, .. }));
+        assert_eq!(ran.get(), 1);
+        assert!(run_app_approval(&prepared, &approved("claude-code", "gmail"), ok).is_err());
+        assert_eq!(ran.get(), 1, "never twice");
+        // A run that did not apply keeps the approval the app's, so Cancel can still revoke it.
+        let prepared = prepared_install("claude-code", "gmail");
+        let failed = run_app_approval(&prepared, &approved("claude-code", "gmail"), || {
+            crate::ipc::CliResult::Failed {
+                exit: -1,
+                code: "APP_TIMEOUT".into(),
+                message: "m".into(),
+                hint: None,
+            }
+        })
+        .expect("it ran");
+        assert!(matches!(failed, crate::ipc::CliResult::Failed { .. }));
+        let id = crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+            .expect("an id");
+        assert!(prepared.take(&id).is_ok(), "kept for its revoke");
+        // Any other call runs as it is.
+        let other = run_app_approval(
+            &crate::terminal::Prepared::default(),
+            &call(json!({ "kind": "channels" })),
+            ok,
+        )
+        .expect("a read");
+        assert!(matches!(other, crate::ipc::CliResult::Ok { .. }));
     }
 }

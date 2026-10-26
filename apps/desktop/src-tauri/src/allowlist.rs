@@ -1,8 +1,10 @@
 //! The allow-list (DA4, plan "Global Constraints"): every call the app may make, each argument checked against core's
 //! grammars before a word is built. A value that does not match never constructs, so the invoke that carried it fails
-//! before anything runs. No call carries `--approval`, and none is `approve`: the app never approves (DA1, DA10).
+//! before anything runs. No call carries `--approval`, and none is `approve` (DA1, DA10). Two approvals are the
+//! person's in the app (0.32.0, DA10's notes of 2026-10-26): a judge's setup, and adding a server to an app, whose
+//! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`).
 
-use crate::connections::{McpClient, McpServer, MCP_UNINSTALL_VERSION};
+use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
@@ -677,6 +679,15 @@ pub enum Call {
         client: McpClient,
         server: McpServer,
     },
+    /// Core `mcp install --client <client> --server <server> --app-approval <id>` (0.32.0, spec §3.3 and §5 question 3):
+    /// the person approved, in the app, the install the app prepared with `McpInstall` — core approves that change
+    /// through the app channel and applies it. Only an approval `cli` recorded for an equal `McpInstall` is answered
+    /// (`connections::run_app_approval`), once.
+    McpInstallApproved {
+        client: McpClient,
+        server: McpServer,
+        approval_id: ApprovalId,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -729,6 +740,8 @@ pub struct Words {
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// An install the person approved in the app: it may fetch a runtime and start the server to prove it (0.32.0).
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
 /// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1013,6 +1026,24 @@ impl Call {
                 "--server",
                 server.word(),
             ]),
+            // It registers, fetches a runtime when one is needed, and proves the server starts.
+            Call::McpInstallApproved {
+                client,
+                server,
+                approval_id,
+            } => Words {
+                timeout: INSTALL_TIMEOUT,
+                ..core(&[
+                    "mcp",
+                    "install",
+                    "--client",
+                    client.word(),
+                    "--server",
+                    server.word(),
+                    "--app-approval",
+                    approval_id.as_str(),
+                ])
+            },
         })
     }
 
@@ -1060,6 +1091,7 @@ impl Call {
                 Some(JUDGE_SETUP_VERSION)
             }
             Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
+            Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
             _ => None,
         }
     }
@@ -1186,6 +1218,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "channels" }),
         json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
         json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
+        json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
     ];
     values
         .into_iter()

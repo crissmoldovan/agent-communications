@@ -257,6 +257,17 @@ as it sends it, and hands it to the twenty-second command, `provider_key_set`, w
 stdin — never argv, an environment variable, a log, a setting or a file — and overwrites its own copy when the call
 ends. Every other token or secret stays at the terminal. Turning a judge off, and removing a key, apply at once.
 
+**Note, 2026-10-26 (0.32.0; owner-approved prototype and spec 2026-10-26-owner-feedback-0320 §3.3, §5 question 3:
+adding a server to an app).** A second approval is the person's in the app, by the judges' mechanism. Connections →
+Change… → Save runs core's `mcp install --client <c> --server <s>` with `--json`, which comes back `APPROVAL_PENDING`
+with its preview, as every change the app prepares does; the app shows that preview with its own confirm, **Approve
+and add**. Only that press runs `mcp install … --app-approval <id>`, which issues the change's code and answers it at
+once, so core records the approval `approvedVia: app` (its audit line `approvedBy: desktop-app`, surface `app`) and
+the same command claims it and applies. Core refuses `--app-approval` to an agent's shell and inside an MCP server's
+process, and its claim voids it for any change but the one prepared; Rust runs `mcpInstallApproved` only for an
+approval the app itself recorded for an equal `mcpInstall`, once. Cancel and leaving revoke it, as before. A core older
+than 0.32.0 keeps Approve in Terminal. Every other change the app prepares still opens the terminal.
+
 ### DA11. What a preview shows
 
 - **Each waiting approval:** the summary `approvals list` gives (its kind, the enveloped recipients, subject and
