@@ -221,6 +221,20 @@ export * from './sanitize.ts';
 export * from './save-deny.ts';
 export * from './save-destination.ts';
 export * from './saved-files.ts';
+/*
+ * Search on this machine (design 2026-10-26-local-search, S2, S8): a channel's capture of a message it had in hand —
+ * after an ok read, or a send — appended, sealed, to its process's own inbox file. Never throws, never changes a
+ * result, and keeps nothing unless the person switched Search on for that account. Only the indexer, run by the
+ * person's own `agentcomms search` commands, writes the database; no tool reads it.
+ */
+export {
+  type CaptureOptions,
+  captureForSearch,
+  type SearchCapture,
+  type SearchChannel,
+  type SearchDirection,
+} from './search/capture.ts';
+export { readSearchSettings, type SearchSettings, searchKeeps } from './search/settings.ts';
 export * from './secrets.ts';
 export * from './send-epoch.ts';
 export * from './send-pacing.ts';

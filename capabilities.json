@@ -91,6 +91,142 @@
       "reason": "Fewer days kept applies at once and deletes the older days; more days is a loosening the person approves (design 2026-10-25-activity §4.1)."
     },
     {
+      "id": "core.search.status",
+      "package": "core",
+      "cli": "search status",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Where Search on this machine stands — on or off, the accounts, counts, size, the oldest day, the model's state, backups and FileVault — is content-free and is shown by doctor, so comms_doctor gives an agent the same facts; a tool of its own would add nothing an agent needs (design 2026-10-26-local-search §7, §8)."
+    },
+    {
+      "id": "core.search.query",
+      "package": "core",
+      "cli": "search query",
+      "mcp": null,
+      "status": "exception",
+      "reason": "What everyone asked, across every kept account, searchable by meaning, is the widest read there is: the person's alone, in the app and at a terminal, refused inside an MCP server's process and under an agent's marker. No MCP tool returns message content (2026-10-26-owner-feedback-0320 §4); agents search each account live with gmail_search and slack_search (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.people",
+      "package": "core",
+      "cli": "search people",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every person a message is kept from, with their addresses and Slack users, across every account, is the person's view, refused inside an MCP server's process and under an agent's marker; a tool would hand one project's correspondents to another project's agent (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.person",
+      "package": "core",
+      "cli": "search person",
+      "mcp": null,
+      "status": "exception",
+      "reason": "What one person sent, across every kept account, is the person's read, refused inside an MCP server's process and under an agent's marker, as search query is (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.show",
+      "package": "core",
+      "cli": "search show",
+      "mcp": null,
+      "status": "exception",
+      "reason": "A kept message in full is message content from the person's own store, refused inside an MCP server's process and under an agent's marker; agents read a message live, through their own recorded read (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.index",
+      "package": "core",
+      "cli": "search index",
+      "mcp": null,
+      "status": "exception",
+      "reason": "The indexer is the one writer of the person's search database, run by the person's own commands and the app — never as a job of its own and never by an agent; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S8, S10, S13)."
+    },
+    {
+      "id": "core.search.rebuild",
+      "package": "core",
+      "cli": "search rebuild",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Making every vector again from the kept text is upkeep of the person's own store, refused inside an MCP server's process and under an agent's marker, as search index is (design 2026-10-26-local-search §5, S13)."
+    },
+    {
+      "id": "core.search.link",
+      "package": "core",
+      "cli": "search link",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Joining two people is the person's own act: names never join, and no agent may decide that two handles are one person; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.unlink",
+      "package": "core",
+      "cli": "search unlink",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Separating a handle from a person undoes the person's own join, and is theirs alone, as search link is (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.label",
+      "package": "core",
+      "cli": "search label",
+      "mcp": null,
+      "status": "exception",
+      "reason": "The name the person knows someone by is kept sealed in the person's own store and is theirs to give; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S5, S11, S13)."
+    },
+    {
+      "id": "core.search.on",
+      "package": "core",
+      "cli": "search on",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Switching Search on is the first store whose job is to keep message words: a loosening the person approves — at a terminal, or in the attested app with --app-approval — and refused inside an MCP server's process and under an agent's marker, so no tool can ask for it (design 2026-10-26-local-search S1, S13)."
+    },
+    {
+      "id": "core.search.off",
+      "package": "core",
+      "cli": "search off",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Off is a tightening that applies at once from anywhere; a tool for it alone would let an agent stop what the person chose to keep, which only the person, in the app or at a terminal, decides (design 2026-10-26-local-search S1, §8)."
+    },
+    {
+      "id": "core.search.accounts.add",
+      "package": "core",
+      "cli": "search accounts add",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Keeping one more account's messages is a loosening the person approves, at a terminal or in the attested app, and refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S1, S2, S13)."
+    },
+    {
+      "id": "core.search.accounts.remove",
+      "package": "core",
+      "cli": "search accounts remove",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Taking an account out applies at once from anywhere and deletes what is kept of it; it is the person's setting, changed in the app or at a terminal, with no tool (design 2026-10-26-local-search §7, §8)."
+    },
+    {
+      "id": "core.search.model.set",
+      "package": "core",
+      "cli": "search model set",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Sending kept words to a local model server, even on loopback, is a loosening the person approves, at a terminal or in the attested app; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S9, S13)."
+    },
+    {
+      "id": "core.search.model.none",
+      "package": "core",
+      "cli": "search model none",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Words only applies at once from anywhere and drops every vector; the person's setting, with no tool (design 2026-10-26-local-search S9, §8)."
+    },
+    {
+      "id": "core.search.delete",
+      "package": "core",
+      "cli": "search delete",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Delete everything is a tightening that applies at once from anywhere once --all --confirm says so — or the app's confirm — and deletes the key with the folder; a tool would put an irreversible delete of the person's store one agent call away (design 2026-10-26-local-search §7)."
+    },
+    {
       "id": "core.approvals.list",
       "package": "core",
       "cli": "approvals list",
