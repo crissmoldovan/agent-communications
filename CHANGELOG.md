@@ -3,6 +3,29 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the
+queue: "when David is messaging me on Slack", route it to the right agent session.
+
+- **A lane is a queue with a name.** A rule can send its matches to lane `david`, as it sends them to a queue. You
+  approve that the lane's items may be read by the window you bind, with the rule, as every target is approved.
+- **You bind a window to a lane, at a terminal:** `agent-events lane bind david --window <id>`. The app's Queue screen
+  has a Lanes tab, with **Bind a window…**, which lists your recent agent windows and opens Terminal with the command,
+  and **Unbind**, which applies at once. An agent can ask for its own window's id (`events_lane_whoami`) to tell you
+  what to bind, but it can't bind itself through MCP.
+- **The bound window wakes on its own.** In Claude Code, `events_watch` waits as an MCP task. When a new item arrives,
+  the idle window starts working without you typing, told only "1 new item in lane david (Slack, rule …): read it with
+  events_lane_item". It never gets the sender's words in that notice. It reads the item through `events_lane_item`,
+  marked as from outside, and then watches again. `events_wait` waits up to 50 seconds for clients without tasks.
+- **Who sees what:** only the bound window may read a lane's items, and only those that arrive after it was bound.
+  Every other agent window sees no lane items at all, not even in the queue tools. You see everything in the app and
+  at the terminal.
+- **The event service's MCP server now speaks the newer MCP protocol (2026-07-28)** that tasks need, and still serves
+  clients on the older one.
+- **What doesn't change:** a queue without a lane works as in 0.30.0. Windows that can't be identified (on Windows, or
+  a server started in your home folder without a Claude Code session id) can't bind yet, and are told why.
+
 ## 0.30.0
 
 **The action queue: matches you work through, in the app.** The second step the owner asked for, after activity: a
