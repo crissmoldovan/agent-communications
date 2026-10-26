@@ -245,7 +245,7 @@ describe('the shell', () => {
     expect(within(navigation).getByRole('button', { name: 'Doctor' }).getAttribute('aria-current')).toBe('page');
   });
 
-  it('the appearance menu offers soft, cue and terminal, every density and three modes', async () => {
+  it("the appearance menu offers soft, cue and terminal, soft's two typefaces, every density and three modes", async () => {
     renderApp(createFakeBridge());
     const trigger = await screen.findByRole('button', { name: 'Appearance' });
     fireEvent.click(trigger);
@@ -257,6 +257,9 @@ describe('the shell', () => {
       'soft',
       'cue',
       'terminal',
+      // Under soft, its typeface (0.34.0): Inter or SF Pro.
+      'Inter',
+      'SF Pro',
       'ultra-compact',
       'compact',
       'normal',
@@ -266,12 +269,12 @@ describe('the shell', () => {
       'light',
       'system',
     ]);
-    // The defaults are checked: soft, normal, system.
+    // The defaults are checked: soft in Inter, normal, system.
     const checked = within(menu)
       .getAllByRole('menuitemcheckbox')
       .filter((item) => item.getAttribute('aria-checked') === 'true')
       .map((item) => item.textContent?.trim());
-    expect(checked).toEqual(['soft', 'normal', 'system']);
+    expect(checked).toEqual(['soft', 'Inter', 'normal', 'system']);
   });
 
   it('the app opens on the soft look, and cue and terminal can still be chosen, each with its own', async () => {

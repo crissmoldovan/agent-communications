@@ -63,10 +63,14 @@ describe('the local test release stamps the build it makes (spec §3.7)', () => 
     const sealed = lines.findIndex((line) => line.startsWith('codesign --force --deep --sign - "$app_dest"'));
     expect(copied).toBeGreaterThan(built);
     expect(sealed).toBeGreaterThan(copied);
-    // The test profile is marked, in its config folder and nowhere else: core lets the test app approve only for a
-    // folder that holds the mark (`desktopAppOrigin`).
+    // The test profile is marked in its config and its state folders and nowhere else: core lets the test app approve
+    // only for folders inside the marked profile (`desktopAppOrigin`), and the event service only on a state folder
+    // that holds the mark (0.34.0).
     const marks = lines.filter((line) => line.includes('.agentcomms-test-profile') && !line.trim().startsWith('#'));
-    expect(marks).toEqual([': > "$profile/config/.agentcomms-test-profile"']);
+    expect(marks).toEqual([
+      ': > "$profile/config/.agentcomms-test-profile"',
+      ': > "$profile/state/.agentcomms-test-profile"',
+    ]);
     // The names the app reads (`build_info.rs`).
     const rust = readFileSync(join(APP, 'src-tauri', 'src', 'build_info.rs'), 'utf8');
     expect(rust).toContain('option_env!("AGENTCOMMS_BUILD_COMMIT")');

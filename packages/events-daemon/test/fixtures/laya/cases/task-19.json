@@ -1,0 +1,49 @@
+{
+  "schemaVersion": 1,
+  "task": 19,
+  "owners": [
+    {
+      "id": "task-19"
+    }
+  ],
+  "section5": [],
+  "traceability": [],
+  "awaits": [],
+  "fixtures": [
+    {
+      "path": "task-19.json",
+      "owner": "task-19"
+    }
+  ],
+  "externalSources": [],
+  "mutations": [
+    {
+      "id": "e2-t19-rust-disable-prepares-a-change",
+      "kind": "production",
+      "leg": "cargo",
+      "owner": "task-19",
+      "source": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testFile": "apps/desktop/src-tauri/src/allowlist.rs",
+      "testName": "allowlist::tests::laya_calls_prepare_no_change",
+      "testPattern": "allowlist::tests::laya_calls_prepare_no_change",
+      "before": "                    style: SlackStyle::Labelled,\n                    ..\n                }\n        )",
+      "after": "                    style: SlackStyle::Labelled,\n                    ..\n                }\n                | Call::EventsJudgeKindDisable { .. }\n        )"
+    }
+  ],
+  "supersedes": [
+    {
+      "task": 11,
+      "mutant": "e2-t11-rust-disable-prepares-a-change",
+      "replacement": "e2-t19-rust-disable-prepares-a-change",
+      "reason": "0.34.0 (2026-10-26): the desktop app's `prepares_change` list grew past `Call::BehaviourClear` — the label changes and a Slack workspace's `labelled` style each prepare a change approved in the app — so the anchored end of the list moved; the replacement makes Laya's kind-disable prepare a change at the list's new end, and the same named test, `laya_calls_prepare_no_change`, kills it."
+    }
+  ],
+  "matrix": [
+    {
+      "row": "fixture/task-19.json",
+      "owner": "task-19",
+      "test": "E2 mutation: rejects editing a completed task fragment",
+      "mutation": "e2-immutable-fragment-history"
+    }
+  ]
+}
