@@ -5,9 +5,17 @@ import { readActivitySettings } from '../activity-settings.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
+import { writeFileAtomic } from '../fs.ts';
 import { withFileLock } from '../lock.ts';
 import type { SecretStore } from '../secrets.ts';
-import { INBOX_AAD, pruneInboxDays, SEARCH_HANDLE, type SearchInboxLine, searchSourceId } from './capture.ts';
+import {
+  INBOX_AAD,
+  noteKeyId,
+  pruneInboxDays,
+  SEARCH_HANDLE,
+  type SearchInboxLine,
+  searchSourceId,
+} from './capture.ts';
 import { ensureSearchKey, openSearchRecord, type SearchKey, searchSecretStore } from './crypto.ts';
 import {
   type BackupState,
@@ -267,6 +275,8 @@ async function run(
   const master = on
     ? await ensureSearchKey(await (deps.secrets ?? (() => searchSecretStore(core)))(), paths.keyLock)
     : null;
+  // Every capturing process compares the key it remembers with this one, and reads the key again when it changed.
+  if (master !== null) await noteKeyId(paths, master.keyId);
   const counts = { taken: 0, inserted: 0, replaced: 0, unchanged: 0, refused: 0, pruned: 0, embedded: 0, pending: 0 };
   let model: SearchModelCheck | null = null;
   let stopped = false;
@@ -396,6 +406,7 @@ async function run(
 export async function pruneSearchIndex(
   core: Pick<Core, 'config' | 'paths'>,
   deps: Pick<SearchDeps, 'now'> = {},
+  waitMs = 10_000,
 ): Promise<number> {
   const paths = searchPaths(core.paths.stateDir);
   if (!(await exists(paths.database))) return 0;
@@ -424,8 +435,30 @@ export async function pruneSearchIndex(
         index.close();
       }
     },
-    { timeoutMs: 10_000, staleMs: 30_000, renewMs: 5_000 },
+    { timeoutMs: waitMs, maxWaitMs: waitMs, staleMs: 30_000, renewMs: 5_000 },
   );
+}
+
+/** The marker of the last day a core command pruned Search, beside the folder. */
+const PRUNED_DAY_FILE = '.pruned-day';
+
+/**
+ * The day's prune (S10: the first core call each day prunes, as activity does): the first `agentcomms` command of the
+ * day — never an MCP server, never a channel's read — deletes what Activity's days no longer keep, where there is an
+ * index to prune. Best effort and bounded: a run that holds the index prunes anyway.
+ */
+export async function dailySearchPrune(
+  core: Pick<Core, 'config' | 'paths'>,
+  deps: Pick<SearchDeps, 'now'> = {},
+): Promise<void> {
+  const paths = searchPaths(core.paths.stateDir);
+  if (!(await exists(paths.database))) return;
+  const today = new Date((deps.now ?? Date.now)()).toISOString().slice(0, 10);
+  const marker = join(paths.dir, PRUNED_DAY_FILE);
+  const said = await readFile(marker, 'utf8').catch(() => '');
+  if (said.trim() === today) return;
+  await writeFileAtomic(marker, `${today}\n`).catch(() => undefined);
+  await pruneSearchIndex(core, deps, 1_000).catch(() => 0);
 }
 
 /**

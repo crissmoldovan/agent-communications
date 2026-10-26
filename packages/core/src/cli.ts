@@ -143,7 +143,7 @@ import {
   truncateDisplay,
 } from './render.ts';
 import { runSearchCommand, SEARCH_OPTIONS } from './search/command.ts';
-import type { SearchDeps } from './search/indexer.ts';
+import { dailySearchPrune, type SearchDeps } from './search/indexer.ts';
 import { type ExactPlace, parseExpiry } from './standing.ts';
 import { approveStandingAtTerminal } from './standing-flow.ts';
 import { neutralise, wrapUntrusted } from './untrusted.ts';
@@ -895,6 +895,10 @@ export async function main(
       ...terminalUpdateHooks(core, env, { verifyRelease: stateReleaseVerifier(core.paths.stateDir) }),
     });
   }
+
+  // The day's prune of Search on this machine (design 2026-10-26-local-search, S10): what Activity's days no longer
+  // keep goes at the day's first command, as the activity log's days do. Never in the MCP server, run above.
+  await dailySearchPrune(core).catch(() => undefined);
 
   const code = await runCommand(output, async () => {
     switch (command) {

@@ -1,4 +1,4 @@
-import { readdir, rm } from 'node:fs/promises';
+import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readActivitySettings } from '../activity-settings.ts';
 import type { Config } from '../config.ts';
@@ -6,7 +6,7 @@ import type { Core } from '../core.ts';
 import { appendPrivateLine, writeFileAtomic } from '../fs.ts';
 import type { SecretStore } from '../secrets.ts';
 import { canonicalAddress } from '../taint.ts';
-import { ensureSearchKey, type SearchKey, sealSearchRecord, searchSecretStore } from './crypto.ts';
+import { ensureSearchKey, SEARCH_KEY_REF, type SearchKey, sealSearchRecord, searchSecretStore } from './crypto.ts';
 import { type SearchPaths, searchPaths } from './folder.ts';
 import { readSearchSettings, searchKeeps } from './settings.ts';
 
@@ -249,7 +249,34 @@ const CAPTURE_WAIT_MS = 2_000;
 
 let warned = false;
 let prunedDay: string | null = null;
-let keyFor: { store: SecretStore; key: Promise<SearchKey> } | null = null;
+let keyFor: { store: SecretStore; key: Promise<SearchKey>; keyId?: string } | null = null;
+
+/** The key in use, by its id — random, and no secret — beside the folder, so every process can tell it changed. */
+export const KEY_ID_FILE = 'key-id';
+
+/** The id of the key in use, as noted beside the folder, or null when none is noted. */
+export async function readKeyId(paths: SearchPaths): Promise<string | null> {
+  try {
+    return (await readFile(join(paths.dir, KEY_ID_FILE), 'utf8')).trim();
+  } catch {
+    return null;
+  }
+}
+
+/** Notes the id of the key in use beside the folder. */
+export async function noteKeyId(paths: SearchPaths, keyId: string): Promise<void> {
+  if ((await readKeyId(paths)) === keyId) return;
+  await writeFileAtomic(join(paths.dir, KEY_ID_FILE), `${keyId}\n`);
+}
+
+async function folderExists(paths: SearchPaths): Promise<boolean> {
+  try {
+    await stat(paths.dir);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 /** The capture's own failure, kept beside the folder for doctor: when, and what — never any text. */
 export const CAPTURE_FAILURE_FILE = 'capture-failure.json';
@@ -294,8 +321,14 @@ export async function captureForSearch(
   try {
     const config = await core.config.load();
     const settings = readSearchSettings(config);
-    if (!searchKeeps(settings, account.id)) return 0;
     const now = (options.now ?? Date.now)();
+    const today = new Date(now).toISOString().slice(0, 10);
+    // The day's first capture prunes the inbox by its days, on or off: captures waiting without the app go all the same.
+    if (prunedDay !== today) {
+      prunedDay = today;
+      await pruneInboxDays(paths, readActivitySettings(config).retentionDays, now).catch(() => 0);
+    }
+    if (!searchKeeps(settings, account.id)) return 0;
     const own = new Set([...ownHandles(config, account.id), ...(options.own ?? []).map(ownHandle)]);
     const workspace = workspaceOf(config, account.id);
     const lines = captures.flatMap((capture) => {
@@ -306,19 +339,30 @@ export async function captureForSearch(
         return [];
       }
     });
-    const today = new Date(now).toISOString().slice(0, 10);
-    if (prunedDay !== today) {
-      prunedDay = today;
-      await pruneInboxDays(paths, readActivitySettings(config).retentionDays, now).catch(() => 0);
-    }
     if (lines.length === 0) return 0;
     const store = await (options.secrets ?? (() => searchSecretStore(core)))();
+    // A key this process remembers that is no longer the one in use — Delete everything took the folder, or a key made
+    // since is named beside it — is forgotten, and read again: no line is sealed for a key nobody has.
+    if (keyFor !== null && keyFor.keyId !== undefined) {
+      const named = await readKeyId(paths);
+      if (named === null ? !(await folderExists(paths)) : named !== keyFor.keyId) {
+        store.invalidate(SEARCH_KEY_REF);
+        keyFor = null;
+      }
+    }
     if (keyFor === null || keyFor.store !== store) {
       const key = ensureSearchKey(store, paths.keyLock);
-      keyFor = { store, key };
-      key.catch(() => {
-        if (keyFor?.key === key) keyFor = null;
-      });
+      const held: { store: SecretStore; key: Promise<SearchKey>; keyId?: string } = { store, key };
+      keyFor = held;
+      key.then(
+        async (made) => {
+          held.keyId = made.keyId;
+          await noteKeyId(paths, made.keyId).catch(() => undefined);
+        },
+        () => {
+          if (keyFor === held) keyFor = null;
+        },
+      );
     }
     const master = await Promise.race([
       keyFor.key,

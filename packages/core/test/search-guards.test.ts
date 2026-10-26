@@ -545,6 +545,62 @@ test('GUARD: an account taken out of Search loses its rows at once', async () =>
   );
 });
 
+test('GUARD: the day’s first agentcomms command prunes what Activity’s days no longer keep, once a day', async () => {
+  const machine = searchMachine(on());
+  const now = Date.now();
+  await capture(machine, MAIL, [mail({ sourceId: '18c00000000000b1', text: 'ten days old invoice' })], now - 10 * DAY);
+  await capture(machine, MAIL, [mail({ sourceId: '18c00000000000b2', text: 'fresh invoice' })], now - DAY);
+  await index(machine);
+  // Seven days now, written by hand, as another release or a person might: no prune ran when it changed.
+  machine.write(on(), { retentionDays: 7 });
+  const count = async () => {
+    const sqlite = await loadSearchSqlite();
+    const db = new sqlite.DatabaseSync(searchPaths(machine.stateDir).database, { readOnly: true });
+    try {
+      return Number(db.prepare('SELECT count(*) AS n FROM messages').get()?.n);
+    } finally {
+      db.close();
+    }
+  };
+  assert.equal(await count(), 2);
+  const paths = await runMain(['paths', '--json'], machine.env, process.platform, { search: machine.deps });
+  assert.equal(paths.code, 0);
+  assert.equal(await count(), 1, 'any command, the first of the day');
+  assert.equal(
+    readFileSync(join(searchPaths(machine.stateDir).dir, '.pruned-day'), 'utf8').trim(),
+    new Date().toISOString().slice(0, 10),
+  );
+});
+
+test('GUARD: after Delete everything, a process that kept the old key in memory seals with the new one', async () => {
+  const machine = searchMachine(on());
+  resetCaptureForTests();
+  const keep = (id: string) =>
+    captureForSearch(machine.core, MAIL, [mail({ sourceId: id })], {
+      secrets: machine.deps.secrets,
+      warn: () => undefined,
+    });
+  assert.equal(await keep('18c00000000000c1'), 1);
+  const first = await readSearchKey(machine.secrets);
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  // The same process captures again, without being told: the old key is gone from the store and from its memory.
+  assert.equal(await keep('18c00000000000c2'), 1);
+  const second = await readSearchKey(machine.secrets);
+  assert.ok(first && second);
+  assert.notEqual(second.keyId, first.keyId);
+  const run = await index(machine);
+  assert.equal(run.refused, 0, 'nothing sealed for a key nobody has');
+  assert.equal(run.inserted, 1);
+  // A key made by another process is seen too: its id is noted beside the folder.
+  machine.secrets.values.delete(SEARCH_KEY_REF);
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  await index(machine);
+  const third = await readSearchKey(machine.secrets);
+  assert.ok(third);
+  assert.equal(await keep('18c00000000000c3'), 1);
+  assert.equal((await index(machine)).inserted, 1);
+});
+
 // ── Delete everything (§7) ─────────────────────────────────────────────────────────────────────────────────────
 
 test('GUARD: delete everything leaves no file and no key, and a later run starts empty under a new key', async () => {

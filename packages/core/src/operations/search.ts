@@ -13,9 +13,10 @@ import { remedy } from '../handoffs.ts';
 import { withFileLock } from '../lock.ts';
 import { MCP_SERVER_MARKER, mcpServerOf } from '../mcp-marker.ts';
 import { lookupName } from '../names.ts';
-import { homeDirectory } from '../paths.ts';
+import { homeDirectory, homeForDiscovery } from '../paths.ts';
 import {
   CAPTURE_FAILURE_FILE,
+  noteKeyId,
   ownHandles,
   SEARCH_HANDLE,
   type SearchChannel,
@@ -42,7 +43,7 @@ import {
   type SearchDeps,
   searchSystem,
 } from '../search/indexer.ts';
-import { DEFAULT_SEARCH_MODEL, SEARCH_MODELS, searchModelName, searchModelProfile } from '../search/models.ts';
+import { DEFAULT_SEARCH_MODEL, SEARCH_MODELS, searchModelName } from '../search/models.ts';
 import { OllamaClient, type SearchModelCheck, type SearchModelState } from '../search/ollama.ts';
 import { excerpt, fuse, nearest, queryTerms, wordsExpression } from '../search/rank.ts';
 import { readSearchSettings, type SearchModelSetting, type SearchSettings, storedSearch } from '../search/settings.ts';
@@ -254,7 +255,8 @@ async function heldCounts(
 async function localOnlyMode(env: NodeJS.ProcessEnv): Promise<boolean> {
   if (env.OLLAMA_NO_CLOUD !== undefined && env.OLLAMA_NO_CLOUD !== '' && env.OLLAMA_NO_CLOUD !== '0') return true;
   try {
-    const raw = await readFile(join(homeDirectory(env), '.ollama', 'server.json'), 'utf8');
+    const home = homeForDiscovery(homeDirectory(env), "Ollama's settings", env);
+    const raw = await readFile(join(home, '.ollama', 'server.json'), 'utf8');
     return (JSON.parse(raw) as { disable_ollama_cloud?: unknown }).disable_ollama_cloud === true;
   } catch {
     return false;
@@ -1248,7 +1250,7 @@ export function searchSettingsChange(
       if ('enabled' in request && request.enabled === 'on') {
         // The folder made private and left out of backups, and the key made, before anything is kept.
         await ensureSearchFolder(paths, searchSystem(options.deps ?? {}));
-        await ensureSearchKey(await secretsOf(core, options), paths.keyLock);
+        await noteKeyId(paths, (await ensureSearchKey(await secretsOf(core, options), paths.keyLock)).keyId);
       }
       if (searchRequestTightens(request) && !('enabled' in request)) {
         // An account taken out loses its rows now, and no model drops every vector now: upkeep, which needs no key.
@@ -1395,6 +1397,3 @@ export async function searchDoctorCheck(core: Core, options: SearchOptions = {})
     (status.model !== null && status.model.state !== 'running');
   return { name, ok: true, ...(warn ? { warn: true as const } : {}), detail: parts.join('; ') };
 }
-
-/** For a test: the profile a stored model name has. */
-export const SEARCH_MODEL_PROFILE: typeof searchModelProfile = searchModelProfile;
