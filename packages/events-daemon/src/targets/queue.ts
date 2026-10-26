@@ -19,7 +19,10 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  * The queue's person-only gate: its content reads (Q1), and `queue clear`, which an agent must not be able to use to
  * make the person's queue disappear. A separate gate from dry-run's terminal-only one, which is unchanged.
  */
-export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'clear' | 'bind' = 'read'): void {
+export function assertNotMcpServer(
+  env: NodeJS.ProcessEnv,
+  action: 'read' | 'clear' | 'bind' | 'messages' | 'setup' = 'read',
+): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
   const refusals = {
@@ -38,6 +41,18 @@ export function assertNotMcpServer(env: NodeJS.ProcessEnv, action: 'read' | 'cle
       message:
         "binding a lane is for a person, at a terminal or in the app — the event service's MCP server cannot bind one",
       hint: 'An agent gives the person its window id from events_lane_whoami; the person binds it.',
+    },
+    // 0.32.0 §3.6: what happened to each message — where it went, who read it — is the person's own view.
+    messages: {
+      message:
+        "what happened to each message is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
+      hint: 'queue items gives an agent what is waiting, without what it says.',
+    },
+    // Judge setup and AI provider keys (owner decision 2026-10-26): the person's, from the app or their terminal.
+    setup: {
+      message:
+        "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

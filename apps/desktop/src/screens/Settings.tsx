@@ -16,10 +16,13 @@ import {
 import { Fragment, type ReactNode, useEffect, useId, useState } from 'react';
 import { z } from 'zod';
 import { useBridge } from '../bridge-context.tsx';
+import { AiProviders } from '../components/AiProviders.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
+import type { Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { type AppSettings, errorMessage, type FolderOverrides, type Folders, type UpdaterState } from '../ipc.ts';
+import { NavigationProvider } from '../navigation.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 type FolderKey = keyof Required<FolderOverrides>;
@@ -424,7 +427,7 @@ function AppUpdater() {
  * CLI call, so it works before anything is installed, when the person names the folders they keep it in. The appearance
  * menu stays in the window's bar.
  */
-export function Settings() {
+export function Settings({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined } = {}) {
   const bridge = useBridge();
   const [settings, setSettings] = useState<Loadable<AppSettings>>({ state: 'loading' });
   useEffect(() => {
@@ -467,6 +470,10 @@ export function Settings() {
             <ScreenState value={settings}>{() => null}</ScreenState>
           )}
         </section>
+        {/* AI providers (0.32.0): the keys Jev uses, once the events service is installed. */}
+        <NavigationProvider onScreen={onScreen}>
+          <AiProviders />
+        </NavigationProvider>
       </div>
     </ScreenFrame>
   );

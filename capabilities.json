@@ -42,6 +42,14 @@
       "reason": "Any session's calls, by its key, is the person's view. Over MCP no argument names a session: comms_activity shows the calling session's own, worked out by the server itself, so an agent cannot read another window's subjects and senders by guessing or copying a key (design 2026-10-25-activity S3)."
     },
     {
+      "id": "core.activity.items",
+      "package": "core",
+      "cli": "activity items",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every session's calls that name an item, grouped by the item — which window read a message, replied to it or posted in its thread — is the person's view, the CLI's and the desktop app's through it, and is refused inside an MCP server's process. A tool that answered it would hand one project's mail subjects and senders to another project's agent; over MCP comms_activity answers only for the calling window (design 2026-10-25-activity S3; 2026-10-26-owner-feedback-0320 §3.6, §4)."
+    },
+    {
       "id": "core.activity.mine",
       "package": "core",
       "cli": "activity mine",
@@ -682,6 +690,18 @@
       "args": { "channel": "events" },
       "expect": { "request.channel": "events" },
       "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared prune operation."
+    },
+    {
+      "id": "core.mcp.uninstall",
+      "package": "core",
+      "cli": "mcp uninstall",
+      "mcp": "comms_server_uninstall",
+      "status": "both",
+      "operation": "serverUninstallChange",
+      "argv": ["--client", "cursor", "--server", "gmail"],
+      "args": { "channel": "gmail", "client": "cursor" },
+      "expect": { "request.channel": "gmail", "request.client": "cursor" },
+      "reason": "`agentcomms mcp uninstall --client <c> --server <s>` takes one server out of one client's configuration, and comms_server_uninstall with `channel` and `client` is this command: a tightening, applied at once with no approval (design 2026-10-26-owner-feedback-0320 §3.3, §4). Prune is not this — it removes runtimes, and no registration."
     },
 
     {
@@ -2734,6 +2754,67 @@
       "mcp": "events_lane_item",
       "status": "exception",
       "reason": "It reads a lane's item for the one agent window the person bound to that lane, and only items that arrived after the binding. The person reads every item, a lane's included, with the queue's own content reads at a terminal or in the app (routing design 2026-10-25, B2, B3, §3.7)."
+    },
+    {
+      "id": "events-daemon.messages.list",
+      "package": "events-daemon",
+      "cli": "messages list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "messagesList",
+      "reason": "What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4)."
+    },
+    {
+      "id": "events-daemon.message.show",
+      "package": "events-daemon",
+      "cli": "message show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "messageShow",
+      "argv": ["0123456789abcdef0123456789abcdef"],
+      "expect": { "eventId": "0123456789abcdef0123456789abcdef" },
+      "reason": "What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4)."
+    },
+    {
+      "id": "events-daemon.judge.setup",
+      "package": "events-daemon",
+      "cli": "judge setup",
+      "mcp": null,
+      "status": "exception",
+      "operation": "judgeSetup",
+      "argv": ["typesafe"],
+      "expect": { "kind": "typesafe" },
+      "reason": "Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2)."
+    },
+    {
+      "id": "events-daemon.provider.list",
+      "package": "events-daemon",
+      "cli": "provider list",
+      "mcp": "events_provider_list",
+      "status": "both",
+      "operation": "providerList"
+    },
+    {
+      "id": "events-daemon.provider-key.set",
+      "package": "events-daemon",
+      "cli": "provider key set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "providerKeySet",
+      "argv": ["openrouter"],
+      "expect": { "provider": "openrouter" },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.provider-key.remove",
+      "package": "events-daemon",
+      "cli": "provider key remove",
+      "mcp": null,
+      "status": "exception",
+      "operation": "providerKeyRemove",
+      "argv": ["openrouter"],
+      "expect": { "provider": "openrouter" },
+      "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
     },
     {
       "id": "events-daemon.mcp.serve",

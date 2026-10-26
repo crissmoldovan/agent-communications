@@ -536,7 +536,7 @@ test('B2-T5: v8 backfills one stable rule/account/target order across replacemen
     applyMigrations(database);
     assert.equal(
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-      '25',
+      '27',
     );
     assert.deepEqual(
       database

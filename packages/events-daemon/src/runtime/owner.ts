@@ -103,12 +103,14 @@ import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
+import { JudgeSetupService } from './judge-setup.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
+import { MessagesStore } from './messages.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
 import { createB2RetainedContentParticipants } from './phase-d-b2-retention.ts';
 import {
@@ -118,6 +120,7 @@ import {
 import { EventProjectionStore } from './projections.ts';
 import { type QueueScope, QueueStore } from './queue.ts';
 import { QueueDispatcher } from './queue-dispatcher.ts';
+import { PERSON, type QueueActor } from './queue-history.ts';
 import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
@@ -1121,6 +1124,8 @@ async function startOwnerWithLock(
   // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
   const lanes = new LaneService({ store: database, queue, now });
   notifyLaneAppend = () => lanes.notifyAppended();
+  // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
+  const messages = new MessagesStore({ store: database, cipher, queue, expiry, now });
   const webhook = new WebhookDispatcher({
     store: database,
     cipher,
@@ -1526,6 +1531,17 @@ async function startOwnerWithLock(
       now,
     });
   };
+  // The person's own setup (owner decision 2026-10-26): it prepares and approves through the same B3 service and
+  // activation runtime as the terminal, and keeps provider keys through the one secret control.
+  const judgeSetup = new JudgeSetupService({
+    store: database,
+    b3: ownerB3Service,
+    activations,
+    secrets: b3Ports.secrets,
+    quiescer: writerQuiescer,
+    audit: core.audit,
+    now,
+  });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
@@ -1611,9 +1627,11 @@ async function startOwnerWithLock(
           request,
           queue,
           lanes,
+          messages,
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
+          judgeSetup,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1694,9 +1712,11 @@ async function handleControl(
   request: AuthenticatedControlRequest,
   queue: QueueStore,
   lanes: LaneService,
+  messages: MessagesStore,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
+  judgeSetup?: JudgeSetupService | undefined,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1752,12 +1772,19 @@ async function handleControl(
     }
     case OWNER_CONTROL_WIRES.queueCounts:
       return queue.counts(callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueDone:
-      return queue.done(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueDismiss:
-      return queue.dismiss(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
-    case OWNER_CONTROL_WIRES.queueReopen:
-      return queue.reopen(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
+    // Who marked it goes into the item's history: the window a call names, or the person, who names none (§3.6).
+    case OWNER_CONTROL_WIRES.queueDone: {
+      const { caller } = splitCaller(request.args);
+      return queue.done(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
+    case OWNER_CONTROL_WIRES.queueDismiss: {
+      const { caller } = splitCaller(request.args);
+      return queue.dismiss(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
+    case OWNER_CONTROL_WIRES.queueReopen: {
+      const { caller } = splitCaller(request.args);
+      return queue.reopen(request.args.itemId, callerScope(lanes, caller), actorOf(caller));
+    }
     case OWNER_CONTROL_WIRES.queueClear:
       return queue.clear();
     // Routing's lanes. `lane bind` is the person's (B1) and carries the window to bind, never a caller; `lane list`
@@ -1784,6 +1811,20 @@ async function handleControl(
       return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args), request.signal);
     case OWNER_CONTROL_WIRES.laneItem:
       return lanes.item(request.args.itemId, requiredCaller(request.args));
+    // What happened to each message (0.32.0 §3.6): the person's, from the CLI and the app; a caller is refused.
+    case OWNER_CONTROL_WIRES.messagesList:
+      return messages.list(personOnly(request.args, 'messages list'));
+    case OWNER_CONTROL_WIRES.messageShow:
+      return messages.show(personOnly(request.args, 'message show').eventId);
+    // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
+    case OWNER_CONTROL_WIRES.judgeSetup:
+      return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.providerList:
+      return requireJudgeSetup(judgeSetup).providerList();
+    case OWNER_CONTROL_WIRES.providerKeySet:
+      return requireJudgeSetup(judgeSetup).providerKeySet(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.providerKeyRemove:
+      return requireJudgeSetup(judgeSetup).providerKeyRemove(request.args, request.origin);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1847,6 +1888,11 @@ async function handleControl(
   }
 }
 
+function requireJudgeSetup(service: JudgeSetupService | undefined): JudgeSetupService {
+  if (service === undefined) throw new CommsError('CONFIG', 'judge setup is not composed for this owner');
+  return service;
+}
+
 /** A control request's calling window, when it is an agent window's, and its other arguments. */
 function splitCaller(args: Readonly<Record<string, unknown>>): {
   readonly caller: LaneWindowIdentity | undefined;
@@ -1875,6 +1921,24 @@ function callerScope(lanes: LaneService, caller: LaneWindowIdentity | undefined)
     if (!isCommsError(error)) throw error;
   }
   return lanes.scopeFor(caller);
+}
+
+/**
+ * The person's reads take no calling window: the CLI and the app send none, and the event service's MCP server, which
+ * sends one with every call it makes, has no tool that asks for these. A request that names one is refused.
+ */
+function personOnly(args: Readonly<Record<string, unknown>>, name: string): Readonly<Record<string, unknown>> {
+  if (Object.hasOwn(args, 'caller'))
+    throw new CommsError(
+      'APPROVAL_REQUIRED',
+      `${name} is for a person, at a terminal or in the app, not an agent window`,
+    );
+  return args;
+}
+
+/** A queue change's actor: the agent window a call names, by its activity session key, or else the person. */
+function actorOf(caller: LaneWindowIdentity | undefined): QueueActor {
+  return caller === undefined ? PERSON : { actor: 'window', windowKey: caller.activityKey };
 }
 
 /** The client name chooses only the receipt channel; same-user token holders remain inside B3's trust boundary. */

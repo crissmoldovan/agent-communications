@@ -123,6 +123,26 @@ const EXPECTED_LANE_ROWS = [
   ['events-daemon.lane.item', null, 'events_lane_item', 'exception'],
 ] as const;
 
+/**
+ * A story per message (0.32.0 spec §3.6): what happened to each message is the person's own view, at a terminal or in
+ * the app, and a CLI-only exception (§4) — no tool returns it.
+ */
+const EXPECTED_MESSAGE_ROWS = [
+  ['events-daemon.messages.list', 'messages list', null, 'exception', 'messagesList'],
+  ['events-daemon.message.show', 'message show', null, 'exception', 'messageShow'],
+] as const;
+
+/**
+ * The person's own setup (owner decision 2026-10-26): judge setup and the two provider key commands are CLI-only, the
+ * person's; whether each provider has a key is both.
+ */
+const EXPECTED_SETUP_ROWS = [
+  ['events-daemon.judge.setup', 'judge setup', null, 'exception', 'judgeSetup'],
+  ['events-daemon.provider.list', 'provider list', 'events_provider_list', 'both', 'providerList'],
+  ['events-daemon.provider-key.set', 'provider key set', null, 'exception', 'providerKeySet'],
+  ['events-daemon.provider-key.remove', 'provider key remove', null, 'exception', 'providerKeyRemove'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -146,6 +166,8 @@ const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
   ...shapedRows(EXPECTED_QUEUE_ROWS),
   ...shapedRows(EXPECTED_LANE_ROWS),
+  ...shapedRows(EXPECTED_MESSAGE_ROWS),
+  ...shapedRows(EXPECTED_SETUP_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
@@ -269,6 +291,11 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.queue.show',
     'events-daemon.queue.clear',
     'events-daemon.lane.bind',
+    'events-daemon.messages.list',
+    'events-daemon.message.show',
+    'events-daemon.judge.setup',
+    'events-daemon.provider-key.set',
+    'events-daemon.provider-key.remove',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

@@ -97,6 +97,19 @@ checked_word!(
     grammar::window_id,
     "a window id"
 );
+checked_word!(
+    /// A local model server's URL, for judge setup (0.32.0): plain HTTP to the literal `127.0.0.1` or `[::1]`, with
+    /// its port. The event service checks it again.
+    LoopbackUrl,
+    grammar::loopback_url,
+    "a local model server's URL on this machine: http://127.0.0.1:<port> or http://[::1]:<port>"
+);
+checked_word!(
+    /// A local model's name, for judge setup (0.32.0): letters, digits and `._:/-`.
+    LocalModel,
+    grammar::local_model,
+    "a local model's name"
+);
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -181,6 +194,27 @@ impl EndpointJudgeKind {
         match self {
             EndpointJudgeKind::Typesafe => "typesafe",
             EndpointJudgeKind::LocalEndpoint => "local-endpoint",
+        }
+    }
+}
+
+/// The AI providers whose keys Jev uses (0.32.0, owner decision 2026-10-26): TypeSafe itself, and OpenRouter, which
+/// serves TypeSafe's Jev. Closed: Settings → AI providers lists exactly these, and Jev's setup chooses one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+    Typesafe,
+    Openrouter,
+}
+
+impl AiProvider {
+    pub const ALL: [AiProvider; 2] = [AiProvider::Typesafe, AiProvider::Openrouter];
+
+    /// The provider as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            AiProvider::Typesafe => "typesafe",
+            AiProvider::Openrouter => "openrouter",
         }
     }
 }
@@ -606,6 +640,26 @@ pub enum Call {
     /// and gives nothing, a tightening, so the app applies it itself (DA10); the screen asks first. Binding is never a
     /// call: the person binds at a terminal (`TerminalCommand::LaneBind`), so no agent can bind itself.
     LaneUnbind { lane: LaneName },
+    /// The events service's `provider list` (0.32.0): whether TypeSafe and OpenRouter each have a key, and never a key.
+    /// Read-only; it takes no argument.
+    ProviderList {},
+    /// The events service's `provider key remove <provider>` (0.32.0): takes the person's key away, and the copy its
+    /// Jev judges hold. Setting a key is never a call: the key goes to `provider_key_set`, which hands it to the CLI on
+    /// stdin, so no word of it is ever a `Call`'s.
+    ProviderKeyRemove { provider: AiProvider },
+    /// The events service's `judge setup typesafe --provider <provider>`, or `judge setup local-endpoint --url <url>
+    /// [--model <name>]` (0.32.0, owner decision 2026-10-26): the person's own setup, which turns the kind on and
+    /// approves its enablements as their act. Jev names its provider, whose stored key it uses; a local model server
+    /// names its loopback URL. No other combination builds.
+    JudgeSetup {
+        judge_kind: EndpointJudgeKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<AiProvider>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<LoopbackUrl>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<LocalModel>,
+    },
     /// Core `channels` (0.32.0's Connections, spec 2026-10-26-owner-feedback-0320 §3.3): every declared server, where it
     /// is installed, each client entry that starts it, and the client configs core could not read. Read-only, and it
     /// never returns an entry's `env`. It takes no argument.
@@ -646,6 +700,10 @@ pub const QUEUE_VERSION: &str = "0.30.0";
 /// `lane bind`. An older one says "Needs 0.31.0 or later" (DA12).
 pub const LANES_VERSION: &str = "0.31.0";
 
+/// The first release of the events service with judge setup and AI provider keys (owner decision 2026-10-26): its
+/// `judge setup`, `provider list` and `provider key set|remove`. An older one keeps Turn on in Terminal (DA12).
+pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
+
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -672,6 +730,8 @@ pub struct Words {
 
 const TIMEOUT: Duration = Duration::from_secs(30);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
+/// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn core(words: &[&str]) -> Words {
     Words {
@@ -886,6 +946,52 @@ impl Call {
             Call::QueueClear {} => events(&["queue", "clear"]),
             Call::LaneList {} => events(&["lane", "list"]),
             Call::LaneUnbind { lane } => events(&["lane", "unbind", lane.as_str()]),
+            Call::ProviderList {} => events(&["provider", "list"]),
+            Call::ProviderKeyRemove { provider } => {
+                events(&["provider", "key", "remove", provider.word()])
+            }
+            Call::JudgeSetup {
+                judge_kind,
+                provider,
+                url,
+                model,
+            } => {
+                let words = match judge_kind {
+                    EndpointJudgeKind::Typesafe => {
+                        if url.is_some() || model.is_some() {
+                            return Err(AppError::refused(
+                                "Jev's setup takes its provider, not a URL or a model",
+                            ));
+                        }
+                        let Some(provider) = provider else {
+                            return Err(AppError::refused("Jev's setup names its provider"));
+                        };
+                        events(&["judge", "setup", "typesafe", "--provider", provider.word()])
+                    }
+                    EndpointJudgeKind::LocalEndpoint => {
+                        if provider.is_some() {
+                            return Err(AppError::refused(
+                                "a local model server's setup takes its URL, not a provider",
+                            ));
+                        }
+                        let Some(url) = url else {
+                            return Err(AppError::refused(
+                                "a local model server's setup names its URL",
+                            ));
+                        };
+                        with(
+                            events(&["judge", "setup", "local-endpoint", "--url", url.as_str()]),
+                            model.iter().flat_map(|name| {
+                                ["--model".to_string(), name.as_str().to_string()]
+                            }),
+                        )
+                    }
+                };
+                Words {
+                    timeout: SETUP_TIMEOUT,
+                    ..words
+                }
+            }
             Call::Channels {} => core(&["channels"]),
             // A first install may read the release's document and verify it before it shows its preview.
             Call::McpInstall { client, server } => Words {
@@ -950,6 +1056,9 @@ impl Call {
             | Call::QueueReopen { .. }
             | Call::QueueClear {} => Some(QUEUE_VERSION),
             Call::LaneList {} | Call::LaneUnbind { .. } => Some(LANES_VERSION),
+            Call::ProviderList {} | Call::ProviderKeyRemove { .. } | Call::JudgeSetup { .. } => {
+                Some(JUDGE_SETUP_VERSION)
+            }
             Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
             _ => None,
         }
@@ -961,6 +1070,13 @@ impl Call {
 /// would stop it at its timeout. Only `event_service` starts it, detached.
 pub fn service_run() -> Words {
     events(&["run"])
+}
+
+/// The events service's `provider key set <provider>` (0.32.0, owner decision 2026-10-26): the one command whose input
+/// is a secret. It is no `Call`, so no word the window sends can carry a key: `provider_key_set` builds these words and
+/// hands the key to the CLI on stdin (`runner::run_with_input`), never in argv.
+pub fn provider_key_set(provider: AiProvider) -> Words {
+    events(&["provider", "key", "set", provider.word()])
 }
 
 /// One of every call the allow-list knows, with the JSON the UI sends for it: the rows of the plan's table.
@@ -1055,6 +1171,18 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "queueClear" }),
         json!({ "kind": "laneList" }),
         json!({ "kind": "laneUnbind", "lane": "david" }),
+        json!({ "kind": "providerList" }),
+        json!({ "kind": "providerKeyRemove", "provider": "typesafe" }),
+        json!({ "kind": "providerKeyRemove", "provider": "openrouter" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "typesafe" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434" }),
+        json!({
+            "kind": "judgeSetup",
+            "judgeKind": "local-endpoint",
+            "url": "http://[::1]:8080",
+            "model": "nimble"
+        }),
         json!({ "kind": "channels" }),
         json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
         json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
@@ -2805,6 +2933,157 @@ mod tests {
             refused(json!({ "kind": kind }));
             refused(json!({ "kind": kind, "lane": "david" }));
             refused(json!({ "kind": kind, "lane": "david", "window": SESSION }));
+        }
+    }
+
+    /// Judge setup and AI provider keys (0.32.0, owner decision 2026-10-26): the provider list and a key's removal, each
+    /// the events launcher, its words, `--json` and the pins; and Jev's or a local model server's setup, with its
+    /// longer timeout. Each needs 0.32.0, and none prepares a change: the person's setup is applied by the CLI itself.
+    #[test]
+    fn setup_calls_build_exactly_their_words() {
+        assert_eq!(
+            events_line(json!({ "kind": "providerList" })),
+            ["provider", "list"]
+        );
+        for provider in AiProvider::ALL {
+            assert_eq!(
+                events_line(json!({ "kind": "providerKeyRemove", "provider": provider.word() })),
+                ["provider", "key", "remove", provider.word()]
+            );
+        }
+        let setup = |value: serde_json::Value| {
+            let built = call(value.clone()).words().expect("words");
+            assert_eq!(built.product, Product::EventsDaemon, "{value}");
+            assert_eq!(built.shape, Shape::Bare, "{value}");
+            assert!(built.pins && built.quiet_updates, "{value}");
+            assert_eq!(built.timeout, Duration::from_secs(60), "{value}");
+            built.words
+        };
+        assert_eq!(
+            setup(
+                json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" })
+            ),
+            ["judge", "setup", "typesafe", "--provider", "openrouter"]
+        );
+        assert_eq!(
+            setup(json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "typesafe" })),
+            ["judge", "setup", "typesafe", "--provider", "typesafe"]
+        );
+        assert_eq!(
+            setup(
+                json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434" })
+            ),
+            [
+                "judge",
+                "setup",
+                "local-endpoint",
+                "--url",
+                "http://127.0.0.1:11434"
+            ]
+        );
+        assert_eq!(
+            setup(json!({
+                "kind": "judgeSetup",
+                "judgeKind": "local-endpoint",
+                "url": "http://[::1]:8080",
+                "model": "nimble"
+            })),
+            [
+                "judge",
+                "setup",
+                "local-endpoint",
+                "--url",
+                "http://[::1]:8080",
+                "--model",
+                "nimble"
+            ]
+        );
+        for value in [
+            json!({ "kind": "providerList" }),
+            json!({ "kind": "providerKeyRemove", "provider": "openrouter" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.32.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(JUDGE_SETUP_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", JUDGE_SETUP_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32-judges",
+            JUDGE_SETUP_VERSION
+        ));
+    }
+
+    /// No key is ever a call's: there is no `providerKeySet` call, and no setup call takes a key, a free word, Laya, a
+    /// URL that is not on this machine, or a provider and a URL together.
+    #[test]
+    fn setup_calls_refuse_a_key_laya_a_remote_url_and_mixed_shapes() {
+        for kind in ["providerKeySet", "providerKey", "providerKeyAdd"] {
+            refused(json!({ "kind": kind, "provider": "openrouter" }));
+            refused(json!({ "kind": kind, "provider": "openrouter", "key": "fake-key" }));
+        }
+        for (field, value) in [
+            ("key", json!("fake-key")),
+            ("apiKey", json!("fake-key")),
+            ("hidden", json!("fake-key")),
+            ("stdin", json!("fake-key")),
+        ] {
+            let mut setup =
+                json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" });
+            setup[field] = value.clone();
+            refused(setup);
+            let mut remove = json!({ "kind": "providerKeyRemove", "provider": "openrouter" });
+            remove[field] = value.clone();
+            refused(remove);
+            let mut list = json!({ "kind": "providerList" });
+            list[field] = value;
+            refused(list);
+        }
+        for provider in [
+            json!("someone-else"),
+            json!("TypeSafe"),
+            json!(""),
+            json!(1),
+            json!(["typesafe"]),
+        ] {
+            refused(json!({ "kind": "providerKeyRemove", "provider": provider.clone() }));
+            refused(json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": provider }));
+        }
+        refused(json!({ "kind": "providerKeyRemove", "provider": null }));
+        refused(json!({ "kind": "providerKeyRemove" }));
+        refused(json!({ "kind": "judgeSetup", "judgeKind": "laya" }));
+        refused(json!({ "kind": "judgeSetup", "judgeKind": "laya", "provider": "typesafe" }));
+        for url in [
+            "http://192.168.1.20:11434",
+            "http://localhost:11434",
+            "https://127.0.0.1:11434",
+            "http://127.0.0.1",
+            "http://127.0.0.1:11434/api/generate",
+            "http://127.0.0.1:11434 --model x",
+            "-http://127.0.0.1:11434",
+        ] {
+            refused(json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": url }));
+        }
+        refused(json!({
+            "kind": "judgeSetup",
+            "judgeKind": "local-endpoint",
+            "url": "http://127.0.0.1:11434",
+            "model": "--json"
+        }));
+        // Shapes that deserialise, but name the wrong words for their kind, build nothing.
+        for value in [
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter", "url": "http://127.0.0.1:11434" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter", "model": "nimble" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434", "provider": "typesafe" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "model": "nimble" }),
+        ] {
+            assert_eq!(
+                call(value.clone()).words().expect_err("refused").code,
+                "APP_REFUSED",
+                "{value}"
+            );
         }
     }
 

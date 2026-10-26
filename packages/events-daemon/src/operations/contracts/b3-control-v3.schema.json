@@ -340,6 +340,39 @@
               "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
             },
             "kind": {
+              "const": "typesafe"
+            },
+            "provider": {
+              "const": "openrouter"
+            },
+            "model": {
+              "const": "typesafe/jev-1.14"
+            },
+            "revokedAt": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "revokedAt"],
+          "properties": {
+            "judgeId": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/id"
+            },
+            "version": {
+              "$ref": "https://agentcomms.local/b3-control-v1.schema.json#/$defs/positive"
+            },
+            "kind": {
               "const": "local-endpoint"
             },
             "provider": {

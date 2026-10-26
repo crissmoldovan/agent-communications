@@ -418,6 +418,9 @@ export function createFakeBridge(
     },
     async openFullDiskAccess() {},
     async answerQuit() {},
+    async providerKeySet(provider) {
+      return ok({ provider, hasKey: true, judges: 0 });
+    },
     async appBuild() {
       return RELEASE_BUILD;
     },
