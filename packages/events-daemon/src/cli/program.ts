@@ -24,7 +24,7 @@ import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
-import { integrationSet, integrationShow, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
+import { integrationSet, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
 import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
@@ -56,6 +56,7 @@ import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
 import { enableAll } from '../operations/enable-all.ts';
+import { integrationShow } from '../operations/integrations.ts';
 import {
   addJudge,
   budgetShow,
@@ -747,10 +748,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
-  const personSetupOrigin = async (
-    what: string,
-    action: 'setup' | 'integration' = 'setup',
-  ): Promise<PersonSetupOrigin> => {
+  const personSetupOrigin = async (what: string, action: 'setup' | 'relay' = 'setup'): Promise<PersonSetupOrigin> => {
     assertNotMcpServer(env, action);
     const marker = agentMarker(env);
     if (marker !== null)
@@ -811,50 +809,64 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const providers = program
     .command('provider')
     .description(
-      'the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key',
+      'the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key',
     );
   providers
     .command('list')
-    .description('list each AI provider and whether it has a key; never a key')
+    .description('list each provider and whether it has a key; never a key')
     .action(async () => {
       ran = true;
       print(await providerList(controlOptions(program)));
     });
-  const providerKey = providers.command('key').description("set or remove an AI provider's key, as the person");
+  const providerKey = providers.command('key').description("set or remove a provider's key, as the person");
   providerKey
     .command('set <provider>')
     .description('store a provider key, read from your hidden input or the app’s stdin, never from argv')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("set an AI provider's key");
+      const origin = await personSetupOrigin("set a provider's key");
       if (!isEventSecretProvider(provider))
-        throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
       print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
     });
   providerKey
     .command('remove <provider>')
-    .description('remove a provider key, and the copy its Jev judges hold')
+    .description('remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("remove an AI provider's key");
+      const origin = await personSetupOrigin("remove a provider's key");
       if (!isEventSecretProvider(provider))
-        throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });
 
-  // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
-  // their terminal, like an AI provider's key — and the items waiting for a busy session, theirs to read and drop.
+  // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream
+  // relay is (§3.5) — theirs to set, from the app or their terminal, like an AI provider's key — and the items waiting
+  // for a busy session, theirs to read and drop.
   const integration = program
     .command('integration')
-    .description('the tools a rule can act in: agent-sessions, the person’s claude-stream relay');
+    .description(
+      'the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
+    );
   integration
     .command('show <integration>')
-    .description('where the relay is, whether it is ready, and what waits for a busy session (a person)')
-    .action(async (name: string) => {
+    .description(
+      'linear: whether a key is kept, its workspace and teams (with --team, that team’s labels); agent-sessions: where the relay is and whether it is ready',
+    )
+    .option('--team <key>', 'linear: a team, by its key (such as CUE) or its id, whose labels to list')
+    .action(async (name: string, options: { readonly team?: string }) => {
       ran = true;
-      assertNotMcpServer(env, 'integration');
-      print(await integrationShow(requireIntegration(name), controlOptions(program)));
+      // The person's view, at a terminal or in the app: never inside an MCP server's process.
+      assertNotMcpServer(env, name === 'agent-sessions' ? 'relay' : 'integration');
+      if (name === 'agent-sessions') {
+        if (options.team !== undefined)
+          throw new CommsError('USAGE', 'integration show agent-sessions takes no --team');
+        print(await integrationShow(name, controlOptions(program)));
+        return;
+      }
+      if (name !== 'linear') throw new CommsError('USAGE', 'the integration is linear or agent-sessions');
+      print(await integrationShow(name, { ...controlOptions(program), team: options.team }));
     });
   integration
     .command('set <integration>')
@@ -867,11 +879,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--remove-folder <path>', 'a folder to take off that list (repeat for more)', collect, [])
     .action(async (name: string, options: Record<string, unknown>) => {
       ran = true;
-      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', 'integration');
+      if (name !== 'agent-sessions') throw new CommsError('USAGE', 'integration set takes agent-sessions');
+      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', 'relay');
       const port = options.relayPort as string | undefined;
       print(
         await integrationSet(
-          requireIntegration(name),
+          name,
           {
             ...(options.relayHome === undefined ? {} : { relayHome: options.relayHome as string }),
             ...(port === undefined ? {} : { relayPort: port === 'default' ? 'default' : parseRelayPort(port) }),
@@ -1306,12 +1319,6 @@ function isTerminalSecretReveal(
 /** Commander's repeatable option: each value given, in order. */
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
-}
-
-/** The one integration this release has (0.33.0 §3.5). */
-function requireIntegration(name: string): string {
-  if (name !== 'agent-sessions') throw new CommsError('USAGE', 'the integration is agent-sessions');
-  return name;
 }
 
 function parseRelayPort(value: string): number {

@@ -35,6 +35,7 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -66,6 +67,7 @@ import {
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
 import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
+import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -577,7 +579,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
-  readonly 'integration-show': AgentSessionsIntegrationV1;
+  readonly 'integration-show': IntegrationShowResultV1 | AgentSessionsIntegrationV1;
   readonly 'integration-set': AgentSessionsIntegrationV1;
   readonly 'session-queue-list': SessionQueueListResultV1;
   readonly 'session-queue-drop': SessionQueueDropResultV1;
@@ -748,11 +750,14 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+  /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, and one team's labels. */
+  readonly 'integration-show':
+    | { readonly integration: 'linear'; readonly team?: string | undefined }
+    | { readonly integration: 'agent-sessions' };
   /**
    * Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is, theirs to see and to set from the
    * app or their terminal; and the busy queue, theirs to read and to drop from. No token is in any of them.
    */
-  readonly 'integration-show': { readonly integration: 'agent-sessions' };
   readonly 'integration-set': {
     readonly integration: 'agent-sessions';
     readonly relayHome?: string | undefined;
@@ -1003,7 +1008,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'session'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -1018,10 +1023,26 @@ function assertEventSource(value: unknown, name: string): void {
   for (const key of keys) assertText(value[key], `${name} ${key}`);
 }
 
+/** A Linear delivery's issue (0.33.0 design §3.4): its identifier and its linear.app address, and only on one. */
+function assertDeliveryRowLinear(row: unknown): void {
+  if (!isRecord(row) || !Object.hasOwn(row, 'linear')) return;
+  if (row.targetKind !== 'linear') throw new TypeError('only a Linear delivery shows a Linear issue');
+  assertClosedRecord(row.linear, ['identifier', 'url'], 'a delivery’s Linear issue');
+  if (typeof row.linear.identifier !== 'string' || !/^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u.test(row.linear.identifier))
+    throw new TypeError('a Linear issue identifier is a team key and a number');
+  if (typeof row.linear.url !== 'string' || !row.linear.url.startsWith('https://linear.app/'))
+    throw new TypeError('a Linear issue address is on linear.app');
+}
+
 /** `delivery show` (0.32.0, owner feedback §3.5): content-free ids, times and the judge's yes or no. */
 function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   const row = value.delivery;
-  assertClosedRecord(row, DELIVERY_ROW_FIELDS, 'a shown delivery row');
+  assertDeliveryRowLinear(row);
+  assertClosedRecord(
+    row,
+    [...DELIVERY_ROW_FIELDS, ...(isRecord(row) && Object.hasOwn(row, 'linear') ? ['linear'] : [])],
+    'a shown delivery row',
+  );
   for (const field of ['deliveryId', 'accountId', 'ruleId', 'targetId', 'state', 'decisionId'])
     assertText(row[field], `a shown delivery ${field}`);
   for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);
@@ -1088,6 +1109,38 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   }
 }
 
+/**
+ * `integration show linear` (0.33.0 design §3.4): whether a Linear key is kept, the workspace and teams it sees, and one
+ * team's labels when asked. Ids are Linear's; names are the workspace's own, one line each.
+ */
+function assertIntegrationShow(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(
+    value,
+    ['integration', 'connected', 'workspace', 'teams', ...(Object.hasOwn(value, 'labels') ? ['labels'] : [])],
+    'an integration show result',
+  );
+  if (value.integration !== 'linear') throw new TypeError('an integration show result names Linear');
+  if (typeof value.connected !== 'boolean')
+    throw new TypeError('an integration show result says whether it is connected');
+  if (value.connected) assertText(value.workspace, 'a Linear workspace');
+  else if (value.workspace !== null) throw new TypeError('an unconnected integration has no workspace');
+  if (!Array.isArray(value.teams)) throw new TypeError('an integration show result lists its teams');
+  if (!value.connected && (value.teams.length > 0 || Object.hasOwn(value, 'labels')))
+    throw new TypeError('an unconnected integration lists nothing');
+  for (const team of value.teams) {
+    assertClosedRecord(team, ['id', 'key', 'name'], 'a Linear team');
+    if (!isLinearId(team.id)) throw new TypeError('a Linear team id is a Linear id');
+    for (const field of ['key', 'name']) assertText(team[field], `a Linear team ${field}`);
+  }
+  if (!Object.hasOwn(value, 'labels')) return;
+  if (!Array.isArray(value.labels)) throw new TypeError('an integration show result lists its labels');
+  for (const label of value.labels) {
+    assertClosedRecord(label, ['id', 'name'], 'a Linear label');
+    if (!isLinearId(label.id)) throw new TypeError('a Linear label id is a Linear id');
+    assertText(label.name, 'a Linear label name');
+  }
+}
+
 /** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
 function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
   if (value.kind !== JUDGE_KIND_TYPESAFE && value.kind !== JUDGE_KIND_LOCAL_ENDPOINT)
@@ -1125,6 +1178,7 @@ function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void 
 
 /** `integration show|set agent-sessions` (0.33.0 §3.5): the settings and what the relay said; never its token. */
 function assertAgentSessionsIntegration(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(value, ['integration', 'settings', 'relay', 'waiting'], 'the agent sessions integration');
   if (value.integration !== 'agent-sessions') throw new TypeError('an integration result names agent-sessions');
   assertClosedRecord(value.settings, ['relayHome', 'relayPort', 'allowedFolders'], 'agent session settings');
   assertNullable(value.settings.relayHome, assertText, 'the relay home setting');
@@ -1364,7 +1418,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
-  'integration-show': ['integration', 'settings', 'relay', 'waiting'],
+  'integration-show': ['integration', 'connected', 'workspace', 'teams'],
   'integration-set': ['integration', 'settings', 'relay', 'waiting'],
   'session-queue-list': ['items'],
   'session-queue-drop': ['deliveryId', 'dropped'],
@@ -1573,6 +1627,11 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     assertB3OrdinaryControlResultV1(operation, version);
     return;
   }
+  if (operation === 'integration-show' && isRecord(value)) {
+    if (value.integration === 'agent-sessions') assertAgentSessionsIntegration(value);
+    else assertIntegrationShow(value);
+    return;
+  }
   assertClosedRecord(value, fields, `a ${operation} result`);
   switch (operation) {
     case 'status': {
@@ -1733,7 +1792,6 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');
       return;
-    case 'integration-show':
     case 'integration-set':
       assertAgentSessionsIntegration(value);
       return;
@@ -2097,6 +2155,17 @@ function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
   });
 }
 
+/**
+ * What each Linear target of a rule does (0.33.0 design §3.4): the team, its labels and who it is assigned to, and which
+ * mapped fields fill the title and the description. Every value is the approved document's, through `neutralise`.
+ */
+function linearTargetLines(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  return document.rule.targets.flatMap((target) =>
+    target.kind === 'linear' ? [neutralise(linearTargetDisclosure(target)).text] : [],
+  );
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -2171,6 +2240,7 @@ export function renderB3ApprovalPreviewV1(
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
       ...sessionDisclosure(document),
+      ...linearTargetLines(document),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,

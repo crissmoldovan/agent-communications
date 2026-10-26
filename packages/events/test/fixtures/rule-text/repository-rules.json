@@ -44,6 +44,8 @@
     "packages/events-daemon/test/laya-evaluation.test.ts": 1,
     "packages/events-daemon/test/laya-judge-creation.test.ts": 1,
     "packages/events-daemon/test/laya-purge-closure.test.ts": 1,
+    "packages/events-daemon/test/linear-dispatch.test.ts": 1,
+    "packages/events-daemon/test/linear-target.test.ts": 1,
     "packages/events-daemon/test/messages-list.test.ts": 1,
     "packages/events-daemon/test/network-documents.test.ts": 1,
     "packages/events-daemon/test/pending-rule-judge-test.test.ts": 1,
@@ -5863,6 +5865,491 @@
           "sseReplayMs": 1000,
           "deadLetterMs": 1000,
           "decisionMetadataMs": 1000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-dispatch.test.ts:47"],
+      "document": {
+        "ruleId": "rule-linear-dispatch",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARDISPATCH0"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "Invoice: {{subject}}"
+            },
+            "description": {
+              "text": "{{subject}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "sender": {
+            "$path": "/from/address"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "kind": "invoice"
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "Invoice from {{sender}}: {{subject}}"
+            },
+            "description": {
+              "text": "Check it against Stripe.\n\nSubject: {{subject}}\nKind: {{kind}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "sender": {
+            "$path": "/from/address"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "kind": "invoice"
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "From {{from.name}}"
+            },
+            "description": {
+              "text": "Check it against Stripe.\n\nSubject: {{subject}}\nKind: {{kind}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "sender": {
+            "$path": "/from/address"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "kind": "invoice"
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "Invoice from {{sender}}: {{subject}}"
+            },
+            "description": {
+              "text": "{{body}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "{{from.address}}"
+            },
+            "description": {
+              "text": "From {{from.name}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "sender": {
+            "$path": "/from/address"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "kind": "invoice"
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "{{kind.name}}"
+            },
+            "description": {
+              "text": "Check it against Stripe.\n\nSubject: {{subject}}\nKind: {{kind}}"
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 4,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARTARGET0001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "from": {
+            "address": {
+              "$path": "/from/address"
+            }
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "{{from.address}}"
+            },
+            "description": {
+              "text": ""
+            },
+            "labels": [
+              {
+                "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+                "name": "Billing"
+              }
+            ],
+            "assignee": "me"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
         }
       }
     },

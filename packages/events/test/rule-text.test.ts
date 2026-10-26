@@ -294,6 +294,114 @@ test('then: every target kind today, with its options, one block per target', ()
   ]);
 });
 
+const TEAM_ID = '0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11';
+const BILLING_ID = '3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60';
+const URGENT_ID = '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d';
+
+test('then: a Linear issue says its team, labels and assignee on its line, and its ids, title and description below', () => {
+  const issue = {
+    targetId: 'billing-issues',
+    version: 2,
+    kind: 'linear',
+    team: { id: TEAM_ID, key: 'CUE' },
+    title: { text: 'Invoice from {{from.address}}' },
+    description: { text: 'Check it against Stripe.\n\n{{subject}}' },
+    labels: [
+      { id: URGENT_ID, name: 'Urgent' },
+      { id: BILLING_ID, name: 'Needs triage' },
+    ],
+    assignee: 'me',
+  };
+  const text = roundTrip(rule({ targets: [issue] }));
+  assert.deepEqual(section(text, 'then'), [
+    'then',
+    '  linear issue billing-issues, version 2, in team CUE, labels Urgent and "Needs triage", assigned to me',
+    `    team id ${TEAM_ID}`,
+    `    label ids ${URGENT_ID} and ${BILLING_ID}`,
+    '    title "Invoice from {{from.address}}"',
+    '    description "Check it against Stripe.\\n\\n{{subject}}"',
+  ]);
+  // No labels and nobody are what the parser fills, so neither is written; one label, and one user by id.
+  assert.deepEqual(
+    section(roundTrip(rule({ targets: [{ ...issue, labels: [], assignee: null }] })), 'then').slice(1, 2),
+    ['  linear issue billing-issues, version 2, in team CUE'],
+  );
+  const one = roundTrip(
+    rule({ targets: [{ ...issue, labels: [{ id: BILLING_ID, name: 'Billing' }], assignee: { id: URGENT_ID } }] }),
+  );
+  assert.deepEqual(section(one, 'then').slice(1, 3), [
+    `  linear issue billing-issues, version 2, in team CUE, label Billing, assigned to user ${URGENT_ID}`,
+    `    team id ${TEAM_ID}`,
+  ]);
+  assert.match(one, new RegExp(`^    label id ${BILLING_ID}$`, 'mu'));
+  // A model-written part, a label without its name, and an assignee by name have no words yet: the target is raw.
+  for (const odd of [
+    { ...issue, title: { generate: { provider: 'openrouter', instruction: 'Summarise', from: ['/subject'] } } },
+    { ...issue, labels: [{ id: BILLING_ID }] },
+    { ...issue, labels: [{ id: BILLING_ID, name: 'Billing' }, { name: 'Urgent' }] },
+    { ...issue, assignee: 'criss' },
+  ])
+    assert.match(section(roundTrip(rule({ targets: [odd] })), 'then')[1] as string, /^ {2}raw \{/u);
+});
+
+test("then: the prototype's short Linear line parses, leaving out the ids the app fills from Linear", () => {
+  const parsed = parseRuleText(
+    [
+      'rule invoices, version 1',
+      'when a new message arrives in cue/gmail, in the inbox',
+      'match subject exists',
+      'then',
+      '  linear issue in team CUE, label Billing, assigned to me',
+      '    title "Invoice from {{sender}}"',
+    ].join('\n'),
+  );
+  assert.ok(parsed.ok, JSON.stringify(parsed));
+  assert.deepStrictEqual(parsed.doc.targets, [
+    {
+      kind: 'linear',
+      team: { key: 'CUE' },
+      labels: [{ name: 'Billing' }],
+      assignee: 'me',
+      title: { text: 'Invoice from {{sender}}' },
+    },
+  ]);
+  // It prints back whole, as raw: a target without its id and version has no line of its own.
+  const again = parseRuleText(printRuleText(parsed.doc));
+  assert.ok(again.ok);
+  assert.deepStrictEqual(again.doc, parsed.doc);
+});
+
+test('errors: a Linear issue’s ids pair with its names, a model-written title is not yet, and each part is said once', () => {
+  const lines = (...target: string[]) => [...VALID.slice(0, 4), ...target].join('\n');
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1, labels A and B', '    label id x')), [
+    { line: 6, column: 5, message: "the issue's line names 2 labels, and this line 1 ids" },
+  ]);
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1', '    label ids x and y')), [
+    { line: 6, column: 5, message: "label ids pair with the label names on the issue's line, which names none" },
+  ]);
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1', '    title written by claude "Say it"')), [
+    {
+      line: 6,
+      column: 11,
+      message:
+        "a model-written title arrives with the session target's context; for now write the title as quoted text with {{field}} slots",
+    },
+  ]);
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1, label A, labels B')), [
+    { line: 5, column: 39, message: 'a Linear issue names its labels once' },
+  ]);
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1, assigned to someone')), [
+    { line: 5, column: 42, message: 'expected me, nobody or user <id> after "assigned to"; found "someone"' },
+  ]);
+  assert.deepEqual(errorsOf(lines('  linear issue i, version 1', '    priority 1')), [
+    {
+      line: 6,
+      column: 5,
+      message: 'a Linear issue\'s lines are team id, label id, label ids, title and description; found "priority"',
+    },
+  ]);
+});
+
 test('names are bare when they can be, and quoted when they have other characters or are a word a name could end at', () => {
   const text = roundTrip(
     rule({
@@ -689,7 +797,7 @@ test('errors: an unknown keyword is named where it stands, with the keyword it i
     line: 5,
     column: 3,
     message:
-      'a target starts with dry run, queue, webhook, stream, session or raw; found "queu". Did you mean "queue"?',
+      'a target starts with dry run, queue, webhook, stream, session, linear issue or raw; found "queu". Did you mean "queue"?',
   });
   const [inAsk] = errorsOf([...VALID, 'ask jev, version 1', '  questoin "x"'].join('\n'));
   assert.deepEqual(inAsk, {

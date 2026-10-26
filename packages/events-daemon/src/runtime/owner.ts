@@ -114,6 +114,9 @@ import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
+import { LinearClient, type LinearClientOptions } from './linear-client.ts';
+import { LinearDispatcher } from './linear-dispatcher.ts';
+import { LinearIntegration } from './linear-integration.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { MessagesStore } from './messages.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -196,6 +199,11 @@ export interface EventOwnerOptions {
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<ResendEventReader>)
     | undefined;
   readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
+  /**
+   * Linear's GraphQL client (0.33.0 design §3.4): its resolver and pinned connections. Production leaves it unset and
+   * reaches only api.linear.app; a test gives a loopback fake, and never the real Linear.
+   */
+  readonly linearClient?: LinearClientOptions | undefined;
   /** Test seam only: replaces D's composition so the missing-seam refusal can be proven on the real start path. */
   readonly phaseDComposition?: typeof createPhaseDWhatsAppOwnerComposition | undefined;
   readonly tickMs?: number | undefined;
@@ -1152,9 +1160,12 @@ async function startOwnerWithLock(
   const lanes = new LaneService({ store: database, queue, now });
   // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
   // and each rule version with its times, its plain-words summary and its last 7 days.
+  // The Linear target's one client (0.33.0 design §3.4): the integration's read and the Linear dispatcher share it.
+  const linearClient = new LinearClient(options.linearClient);
   const readers: OwnerReaders = {
     deliveries: new DeliveryReader({ store: database, cipher, now }),
     rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+    linear: new LinearIntegration({ secrets: eventSecrets, cipher, client: linearClient }),
     // Analyse (0.33.0 §3.3): the rule, its content-free counts, and a model on the person's own provider key, read at
     // the call and never kept.
     analyse: new RuleAnalyseService({
@@ -1251,6 +1262,18 @@ async function startOwnerWithLock(
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     onAppended: () => notifyLaneAppend(),
   });
+  // The Linear target's delivery (0.33.0 design §3.4): the webhook's fences, through the one Linear client.
+  const linear = new LinearDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    secrets: eventSecrets,
+    client: linearClient,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    now,
+  });
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
@@ -1258,6 +1281,7 @@ async function startOwnerWithLock(
     sse,
     queue: queueDispatcher,
     session: sessionDispatcher,
+    linear,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
@@ -1810,6 +1834,8 @@ interface OwnerReaders {
   readonly deliveries: DeliveryReader;
   readonly rules: RuleReader;
   readonly analyse: RuleAnalyseService;
+  /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
+  readonly linear?: LinearIntegration | undefined;
 }
 
 async function handleControl(
@@ -1880,6 +1906,19 @@ async function handleControl(
       return dispatcher.list();
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
+    // Settings → Integrations: Linear's key and what it sees (0.33.0 §3.4), or where the person's claude-stream relay is
+    // (§3.5). Each is the person's read, at a terminal or in the app.
+    case OWNER_CONTROL_WIRES.integrationShow: {
+      const args = personOnly(request.args, 'integration show');
+      if (args.integration === 'agent-sessions') {
+        const { integration: _integration, ...rest } = args;
+        if (Object.keys(rest).length > 0)
+          throw new CommsError('USAGE', 'integration show agent-sessions takes no options');
+        return requireSessions(sessions).service.show();
+      }
+      if (readers?.linear === undefined) throw new CommsError('USAGE', 'integration show is not available');
+      return readers.linear.show(args);
+    }
     case OWNER_CONTROL_WIRES.deliveryShow:
       if (readers === undefined) throw new CommsError('USAGE', 'delivery show is not available');
       return readers.deliveries.show(requiredText(personOnly(request.args, 'delivery show').deliveryId, 'delivery id'));
@@ -1955,9 +1994,6 @@ async function handleControl(
       return requireJudgeSetup(judgeSetup).providerKeyRemove(request.args, request.origin);
     // Agent sessions (0.33.0 §3.5). Where the relay is is the person's to see and set; the busy queue is theirs to see
     // and drop from, and a bound window's call sees only its own lane's items (routing B4), as the queue's does.
-    case OWNER_CONTROL_WIRES.integrationShow:
-      integrationName(personOnly(request.args, 'integration show'));
-      return requireSessions(sessions).service.show();
     case OWNER_CONTROL_WIRES.integrationSet: {
       const { integration, ...settings } = personOnly(request.args, 'integration set');
       integrationName({ integration });
@@ -2043,7 +2079,7 @@ function requireSessions<T>(sessions: T | undefined): T {
   return sessions;
 }
 
-/** The one integration this release has (0.33.0 §3.5); Linear's key is a provider key, not an integration here. */
+/** The integration `integration set` changes (0.33.0 §3.5): agent-sessions; Linear's is its key, a provider key. */
 function integrationName(args: Readonly<Record<string, unknown>>): 'agent-sessions' {
   if (args.integration !== 'agent-sessions')
     throw new CommsError('USAGE', 'the integration is agent-sessions', { details: { reason: 'UNKNOWN_INTEGRATION' } });

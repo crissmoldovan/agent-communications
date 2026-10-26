@@ -101,6 +101,24 @@
       "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
     }
   },
+  {
+    "name": "target-add-linear-request",
+    "request": {
+      "operation": "target-add",
+      "args": {
+        "document": {
+          "targetId": "billing-issues",
+          "version": 1,
+          "kind": "linear",
+          "team": { "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11", "key": "CUE" },
+          "title": { "text": "Invoice from {{sender}}" },
+          "description": { "text": "{{subject}}" },
+          "labels": [{ "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60", "name": "Billing" }],
+          "assignee": "me"
+        }
+      }
+    }
+  },
   { "name": "target-remove-request", "request": { "operation": "target-remove", "args": { "targetId": "target-1" } } },
   {
     "name": "approve-request",
@@ -193,7 +211,15 @@
     }
   },
   {
+    "name": "provider-key-set-linear-request",
+    "request": { "operation": "provider-key-set", "args": { "provider": "linear" } }
+  },
+  {
     "name": "integration-show-request",
+    "request": { "operation": "integration-show", "args": { "integration": "linear", "team": "CUE" } }
+  },
+  {
+    "name": "integration-show-agent-sessions-request",
     "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } }
   },
   {

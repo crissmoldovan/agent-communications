@@ -55,8 +55,8 @@ Scripts should read these rather than parse output.
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
-| [`provider`](#agent-events-provider) | the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key |
-| [`integration`](#agent-events-integration) | the tools a rule can act in: agent-sessions, the person’s claude-stream relay |
+| [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
+| [`integration`](#agent-events-integration) | the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
 | [`session-queue`](#agent-events-session-queue) | the matches waiting for a busy agent session, each passed on when the session’s run ends |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
@@ -632,7 +632,7 @@ agent-events budget update [options] <document>
 
 ### `agent-events provider`
 
-the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key
+the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key
 
 ```
 agent-events provider [options] [command]
@@ -640,7 +640,7 @@ agent-events provider [options] [command]
 
 ### `agent-events provider list`
 
-list each AI provider and whether it has a key; never a key
+list each provider and whether it has a key; never a key
 
 ```
 agent-events provider list [options]
@@ -648,7 +648,7 @@ agent-events provider list [options]
 
 ### `agent-events provider key`
 
-set or remove an AI provider's key, as the person
+set or remove a provider's key, as the person
 
 ```
 agent-events provider key [options] [command]
@@ -664,7 +664,7 @@ agent-events provider key set [options] <provider>
 
 ### `agent-events provider key remove`
 
-remove a provider key, and the copy its Jev judges hold
+remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue
 
 ```
 agent-events provider key remove [options] <provider>
@@ -672,7 +672,7 @@ agent-events provider key remove [options] <provider>
 
 ### `agent-events integration`
 
-the tools a rule can act in: agent-sessions, the person’s claude-stream relay
+the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)
 
 ```
 agent-events integration [options] [command]
@@ -680,11 +680,15 @@ agent-events integration [options] [command]
 
 ### `agent-events integration show`
 
-where the relay is, whether it is ready, and what waits for a busy session (a person)
+linear: whether a key is kept, its workspace and teams (with --team, that team’s labels); agent-sessions: where the relay is and whether it is ready
 
 ```
 agent-events integration show [options] <integration>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--team <key>` | linear: a team, by its key (such as CUE) or its id, whose labels to list | — |
 
 ### `agent-events integration set`
 

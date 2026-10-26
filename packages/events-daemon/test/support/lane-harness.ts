@@ -146,8 +146,8 @@ export interface LaneHarness {
 
 export async function withLaneOwner(
   work: (harness: LaneHarness) => Promise<void>,
-  /** More owner options, for a test that needs a seam this harness does not set (the agent-session tests). */
-  extra: Partial<EventOwnerOptions> = {},
+  /** More owner options, for a test that needs a seam this harness does not set (Linear's client, agent sessions). */
+  options: Partial<EventOwnerOptions> = {},
 ): Promise<void> {
   const root = await shortTempDir('aev-lane-story-');
   const stateDir = join(root, 'state');
@@ -211,6 +211,7 @@ export async function withLaneOwner(
     configDir,
     tickMs: 60_000,
     pollIntervalMs: 1,
+    ...options,
     gmailSourceFor: async () =>
       ({
         inboxId: ACCOUNT,
@@ -235,7 +236,6 @@ export async function withLaneOwner(
         getMessageMetadata: async (id: string) => metadata(id),
         getMessage: async (id: string) => metadata(id),
       }) as never,
-    ...extra,
   });
   const control = new EventControlClient({ stateDir, clientName: 'events-lane-story-e2e' });
   const opened: Array<() => Promise<void>> = [];

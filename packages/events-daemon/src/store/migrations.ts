@@ -52,6 +52,8 @@ function providerSlotTableStatements(version: number, providers: string): readon
     `UPDATE meta SET value = '${version}' WHERE key = 'schema_version'`,
   ];
 }
+/** 0.33.0 (design §3.4): a Linear target adds issues with the person's Linear key, so Linear gains a key slot too. */
+const PROVIDER_KEY_SQL_VALUES_V30 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic', 'linear']);
 
 export interface EventMigration {
   readonly version: number;
@@ -1047,20 +1049,22 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     statements: providerSlotTableStatements(29, PROVIDER_KEY_SQL_VALUES_V29),
   },
   {
-    // Agent sessions through claude-stream (0.33.0 design §3.5): a delivery may target a session the relay runs. The
-    // deliveries kind check is a closed set, so the table is rebuilt with its exact columns, in order, to admit it, as
-    // migration 24 did for the queue. Three tables follow, all content-free:
-    // - session_queue: a delivery that met a busy session waits here, oldest first per relay session, until the
-    //   relay's event stream says that session's run ended; the delivery keeps its own encrypted record and retention,
-    //   and its row goes with it — the triggers run whenever the delivery stops being one that may still be tried;
-    // - session_deliveries: the relay session a delivery chose, and the run it made, so a retry reuses both;
-    // - agent_session_settings: where the person's relay is, and the folders a file part may be read from.
-    // A session target found by a lane carries that lane (B5), so a lane's binding follows those targets too.
+    // A Linear key (0.33.0 design §3.4): the person's Linear API key is kept beside the AI provider keys, in a slot whose
+    // owner is Linear itself, so a rule's Linear target can add issues with it. The table is rebuilt as v26 built it,
+    // with the wider CHECK; every row is copied as it is.
     version: 30,
-    name: 'agent-session-target-v1',
+    name: 'event-secret-linear-slot-v1',
+    statements: providerSlotTableStatements(30, PROVIDER_KEY_SQL_VALUES_V30),
+  },
+  {
+    // The Linear target (0.33.0 design §3.4): a delivery may add a Linear issue, and records which issue it added — its
+    // id, its identifier (CUE-123) and its address without the title's words — and nothing of what it says. The kind
+    // check is a closed set, so the table is rebuilt with its exact columns, in order, as migration 24 rebuilt it.
+    version: 31,
+    name: 'event-linear-target-v1',
     rebuildsParentTable: true,
     statements: [
-      `CREATE TABLE deliveries_v30 (
+      `CREATE TABLE deliveries_v31 (
         id TEXT PRIMARY KEY,
         decision_id TEXT NOT NULL REFERENCES decisions(id),
         account_id TEXT NOT NULL,
@@ -1079,7 +1083,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
         lease_until INTEGER,
         last_error_code TEXT,
         last_status INTEGER,
-        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'session')),
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear')),
         target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
         subscriber_id TEXT,
         subscriber_version INTEGER,
@@ -1090,11 +1094,22 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
         dead_letter_expires_at INTEGER,
         whatsapp_visibility_version INTEGER,
         whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
         UNIQUE (decision_id, target_key),
         -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
-        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing'))
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
       ) STRICT`,
-      `INSERT INTO deliveries_v30
+      `INSERT INTO deliveries_v31
        (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
         attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
         last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
@@ -1106,7 +1121,85 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
               whatsapp_visibility_version, whatsapp_message_id
          FROM deliveries ORDER BY rowid`,
       'DROP TABLE deliveries',
-      'ALTER TABLE deliveries_v30 RENAME TO deliveries',
+      'ALTER TABLE deliveries_v31 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      "UPDATE meta SET value = '31' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Agent sessions through claude-stream (0.33.0 design §3.5): a delivery may target a session the relay runs. The
+    // deliveries kind check is a closed set, so the table is rebuilt from migration 31's — Linear's columns
+    // included — with its exact columns, in order, to admit it, as migration 24 did for the queue. Three tables follow, all content-free:
+    // - session_queue: a delivery that met a busy session waits here, oldest first per relay session, until the
+    //   relay's event stream says that session's run ended; the delivery keeps its own encrypted record and retention,
+    //   and its row goes with it — the triggers run whenever the delivery stops being one that may still be tried;
+    // - session_deliveries: the relay session a delivery chose, and the run it made, so a retry reuses both;
+    // - agent_session_settings: where the person's relay is, and the folders a file part may be read from.
+    // A session target found by a lane carries that lane (B5), so a lane's binding follows those targets too.
+    version: 32,
+    name: 'agent-session-target-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v32 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear', 'session')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
+      ) STRICT`,
+      `INSERT INTO deliveries_v32
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id,
+        linear_issue_id, linear_identifier, linear_url)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id, linear_issue_id, linear_identifier, linear_url
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v32 RENAME TO deliveries',
       `CREATE INDEX deliveries_stable_order
        ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
       `CREATE TABLE session_queue (
@@ -1161,7 +1254,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
           );
         END`,
       ),
-      "UPDATE meta SET value = '30' WHERE key = 'schema_version'",
+      "UPDATE meta SET value = '32' WHERE key = 'schema_version'",
     ],
   },
 ];

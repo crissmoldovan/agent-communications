@@ -170,11 +170,34 @@ At least one target, in order. Blank lines between them are ignored.
 | `webhook <id>, version <n>[, plain\|enveloped][, retrying up to <n> times]` | `webhook`, `representation`, `retryLimit` |
 | `stream <id>, version <n>[, to subscriber <id> version <n>][, plain\|enveloped]` | `sse`, `subscriberId`, `subscriberVersion` |
 | `session <id>, version <n>, working in <folder>\|in lane <name>[, with <provider>]` | `session`, `find`, `provider` (see [The session target](#the-session-target)) |
+| `linear issue <id>, version <n>[, in team <key>][, label <name>\|labels <name> and <name>…][, assigned to me\|nobody\|user <id>]` | `linear`, `team.key`, `labels[].name`, `assignee` |
 | `raw <JSON>` | the target as given |
 
 A webhook's indented lines: `to <URL>` (a plain URL), `to secret <scheme> URL on <host> port <n>, fingerprint <sha-256>`
 (a secret URL's public part), `approved addresses <address> and <address>`, and `signed <name>` and `ordering <name>`,
 written only when they are not `standard-webhooks` and `strict`, which the parser fills.
+
+A Linear issue (design §3.4) names its team by key, its labels by name and who it is assigned to on its line, and gives
+below it the ids Linear knows them by, and its title and description:
+
+```
+  linear issue billing-issues, version 2, in team CUE, labels Billing and Urgent, assigned to me
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    label ids 3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60 and 1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d
+    title "Invoice from {{from.address}}"
+    description "Check it against Stripe.\n\n{{subject}}"
+```
+
+- `team id <id>` is `team.id`; `label id <id>` (or `label ids <id> and <id>…`) pairs each id, in order, with a name on
+  the target's line, so there are as many of each.
+- `title "<text>"` and `description "<text>"` are the templates `{ "text": … }`: quoted text, whose `{{field}}` slots
+  name the rule's mapped fields (the event service checks them when the rule is activated). A model-written part
+  (`title written by …`) is refused for now: it arrives with the session target's context.
+- `assigned to me` is `"me"`, `assigned to user <id>` is `{ "id": … }`, and `assigned to nobody`, or nothing, is `null`.
+  No labels is `[]`. The parser fills both, and the printer leaves out each only when the document holds exactly that.
+- The prototype's short line, `linear issue in team CUE, label Billing, assigned to me`, with no id or version and no
+  ids below it, parses too: it gives `team: { "key": "CUE" }` and `labels: [{ "name": "Billing" }]`, and the app fills
+  the rest from Linear; the event service refuses what it leaves out. Such a target prints as `raw`.
 
 ### The session target
 
@@ -274,8 +297,9 @@ the event service uses too.
 
 When the text says nothing of them: `judges` is `[]`, `subscribers` is `[]`, `retention` is the defaults above, a
 queue's `show` is `summary`, a session's `ifNone`, `ifBusy`, `mode` and `context` are `queue-only`, `queue`, `manual`
-and `[]`, a webhook's `signing` and `ordering` are `standard-webhooks` and `strict`, Gmail's
-`includeSpamTrash` is `false`, and a condition's `caseSensitive` is `false`. The printer leaves each out only when the
+and `[]`, a webhook's `signing` and `ordering` are `standard-webhooks` and `strict`, a Linear issue's `labels` are `[]`
+and its `assignee` is `null`, Gmail's `includeSpamTrash` is `false`, and a condition's `caseSensitive` is `false`. The
+printer leaves each out only when the
 document holds exactly that value.
 
 ## The escape form
@@ -301,14 +325,3 @@ after a mistake:
 - a section given twice, an option given twice, and quoted text without its closing quote are refused where they
   stand.
 
-## Reserved for the Linear target
-
-`linear issue` is kept for the Linear target (design §3.4), drawn in the prototype as:
-
-```
-  linear issue in team CUE, label Billing, assigned to me
-    title written by claude "Invoice request from {sender's company}"
-```
-
-Until its document is final, the parser refuses those words with a note to use `raw`, and the printer writes any
-target kind it does not know as `raw <JSON>`, so such a rule already round-trips.

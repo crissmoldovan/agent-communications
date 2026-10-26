@@ -153,12 +153,17 @@ const EXPECTED_ANALYSE_ROWS = [
   ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
 ] as const;
 
+/** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
+const EXPECTED_INTEGRATION_ROWS = [
+  ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
+] as const;
+
 /**
  * Agent sessions through claude-stream (0.33.0 §3.5): where the relay is, and dropping a waiting match, are the
  * person's, CLI-only; the waiting matches are both, a bound window's own lane's over MCP.
  */
 const EXPECTED_SESSION_ROWS = [
-  ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
+  ['events-daemon.integration.show-agent-sessions', 'integration show', null, 'exception', 'integrationShow'],
   ['events-daemon.integration.set', 'integration set', null, 'exception', 'integrationSet'],
   ['events-daemon.session-queue.list', 'session-queue list', 'events_session_queue_list', 'both', 'sessionQueueList'],
   ['events-daemon.session-queue.drop', 'session-queue drop', null, 'exception', 'sessionQueueDrop'],
@@ -191,6 +196,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_MESSAGE_ROWS),
   ...shapedRows(EXPECTED_SETUP_ROWS),
   ...shapedRows(EXPECTED_ANALYSE_ROWS),
+  ...shapedRows(EXPECTED_INTEGRATION_ROWS),
   ...shapedRows(EXPECTED_SESSION_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
@@ -323,6 +329,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.provider-key.remove',
     'events-daemon.rule.analyse',
     'events-daemon.integration.show',
+    'events-daemon.integration.show-agent-sessions',
     'events-daemon.integration.set',
     'events-daemon.session-queue.drop',
   ]) {

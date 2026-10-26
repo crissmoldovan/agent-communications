@@ -46,6 +46,8 @@ export interface DescribableTarget {
   readonly ifNone?: string | undefined;
   readonly ifBusy?: string | undefined;
   readonly provider?: string | undefined;
+  /** A Linear target's team (0.33.0): its key names it in the sentence. */
+  readonly team?: { readonly key?: unknown; readonly id?: unknown } | undefined;
 }
 
 /**
@@ -401,6 +403,14 @@ function target(entry: DescribableTarget): readonly RulePart[] {
       return [plain('stream it to '), value(entry.subscriberId ?? entry.targetId)];
     case 'session':
       return session(entry);
+    case 'linear': {
+      const key = entry.team?.key;
+      return [
+        plain('add an issue to '),
+        value('Linear'),
+        ...(typeof key === 'string' && key !== '' ? [plain(', team '), value(key)] : []),
+      ];
+    }
     default:
       return [plain('deliver it to '), value(entry.targetId)];
   }

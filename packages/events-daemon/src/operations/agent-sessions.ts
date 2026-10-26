@@ -6,7 +6,8 @@ import type { SessionQueueDropResultV1, SessionQueueListResultV1 } from '../runt
 
 /*
  * Agent sessions through claude-stream (0.33.0 design §3.5). Where Agent Comms finds the person's relay is the
- * person's: `integration show` and `integration set agent-sessions` run from the app or their terminal, the CLI refuses
+ * person's: `integration show agent-sessions` (with Linear's, in `integrations.ts`) and `integration set agent-sessions`
+ * run from the app or their terminal, the CLI refuses
  * the event service's MCP server and an agent's shell first, and no MCP tool reads or sets it. The busy queue is the
  * person's to read and drop from; over MCP the event service's server passes the window it runs in as `caller`, and a
  * bound window sees only its own lane's items (routing B4).
@@ -24,13 +25,6 @@ export interface AgentSessionsSettingsArgs {
   readonly relayPort?: number | 'default' | undefined;
   readonly allowFolders?: readonly string[] | undefined;
   readonly removeFolders?: readonly string[] | undefined;
-}
-
-/** Where the relay is, whether it is ready, and how many items wait for a busy session; never its token. */
-export async function integrationShow(integration: string, options: Options = {}): Promise<AgentSessionsIntegrationV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('integration-show', {
-    integration,
-  })) as AgentSessionsIntegrationV1;
 }
 
 /** Sets where the relay is, or a folder a file part may be read from: the person's own, from their origin only. */

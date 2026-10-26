@@ -14,7 +14,7 @@ import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference }
  *
  * A row is content-free: ids and times. The delivery keeps its own sealed record and its own retention, and the row
  * goes when the delivery stops being one that may still be tried — delivered, dropped, expired, cancelled — whichever
- * path ends it (migration 30's triggers).
+ * path ends it (migration 32's triggers).
  */
 
 export interface SessionQueueItemV1 {
