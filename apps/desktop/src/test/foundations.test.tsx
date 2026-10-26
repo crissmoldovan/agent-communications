@@ -217,15 +217,17 @@ describe('the data the screens share', () => {
 });
 
 describe('the shell', () => {
-  it('the sidebar has the nine sections in order, Queue after Overview, Activity after Approvals, then Settings', async () => {
+  it('the sidebar has the sections in order, Queue after Overview, Messages after Queue, Activity after Approvals, then Settings', async () => {
     renderApp(createFakeBridge());
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
+    // Each section's name, as its label holds it: a count or a New tag beside it is not its name.
     const items = within(navigation)
       .getAllByRole('button')
-      .map((button) => button.textContent?.trim());
+      .map((button) => button.querySelector('[data-slot="sidebar-item-label"]')?.textContent?.trim());
     expect(items).toEqual([
       'Overview',
       'Queue',
+      'Messages',
       'Accounts',
       'Approvals',
       'Activity',

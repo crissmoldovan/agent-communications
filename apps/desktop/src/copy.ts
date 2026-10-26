@@ -3,10 +3,11 @@
  * Constraints). A screen's own sentences live with the screen.
  */
 
-/** The app's screens: the nine sections, then Settings. */
+/** The app's screens: the sections, then Settings. */
 export type Screen =
   | 'overview'
   | 'queue'
+  | 'messages'
   | 'accounts'
   | 'approvals'
   | 'activity'
@@ -17,12 +18,13 @@ export type Screen =
   | 'settings';
 
 /**
- * The nine sections in the sidebar's order (DA3; Queue, 0.30.0, first after Overview; Activity, 0.29.0, between
- * Approvals and Agent), then Settings.
+ * The sections in the sidebar's order (DA3; Queue, 0.30.0, first after Overview; Messages, 0.32.0, after Queue;
+ * Activity, 0.29.0, between Approvals and Agent), then Settings. `isNew` puts a New tag beside a section's name.
  */
-export const SECTIONS: readonly { screen: Exclude<Screen, 'settings'>; label: string }[] = [
+export const SECTIONS: readonly { screen: Exclude<Screen, 'settings'>; label: string; isNew?: true }[] = [
   { screen: 'overview', label: 'Overview' },
   { screen: 'queue', label: 'Queue' },
+  { screen: 'messages', label: 'Messages', isNew: true },
   { screen: 'accounts', label: 'Accounts' },
   { screen: 'approvals', label: 'Approvals' },
   { screen: 'activity', label: 'Activity' },

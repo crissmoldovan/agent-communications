@@ -1,4 +1,4 @@
-import { AppShell, Sidebar } from '@cueplusplus/ui';
+import { AppShell, Chip, Sidebar } from '@cueplusplus/ui';
 import {
   Activity,
   Bot,
@@ -6,6 +6,7 @@ import {
   History,
   Inbox,
   LayoutDashboard,
+  MessagesSquare,
   RefreshCw,
   Settings,
   Stethoscope,
@@ -20,6 +21,7 @@ import { isMac } from './platform.ts';
 const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
   queue: Inbox,
+  messages: MessagesSquare,
   accounts: Users,
   approvals: CheckCheck,
   activity: History,
@@ -31,9 +33,9 @@ const ICONS: Record<Screen, ComponentType> = {
 };
 
 /**
- * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the nine
- * sections with Settings at its foot, Queue's with its open count. On macOS the header leaves the traffic lights their
- * room.
+ * Supbuddy's shell (DA2, DA3): a header that drags the window, holding the appearance menu, and a sidebar of the
+ * sections with Settings at its foot, Queue's with its open count and a new section's with a New tag. On macOS the
+ * header leaves the traffic lights their room.
  *
  * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns
  * under it, the brand over the sidebar's ground and the menu over the page's, and text the screens leave unsized is the
@@ -50,14 +52,14 @@ export function Shell({
   mac?: boolean;
   children: ReactNode;
 }) {
-  const item = (target: Screen, label: string) => (
+  const item = (target: Screen, label: string, isNew = false) => (
     <Sidebar.Item
       key={target}
       icon={ICONS[target]}
       active={screen === target}
       onClick={() => onScreen(target)}
-      // The queue's open count, once there is one (0.30.0): nothing else in the sidebar carries a badge.
-      {...(target === 'queue' ? { badge: <QueueBadge /> } : {})}
+      // The queue's open count, once there is one (0.30.0); a New tag beside a section new in this release.
+      {...(target === 'queue' ? { badge: <QueueBadge /> } : isNew ? { badge: <NewTag /> } : {})}
     >
       {label}
     </Sidebar.Item>
@@ -83,7 +85,9 @@ export function Shell({
       />
       <AppShell.Body>
         <AppShell.Sidebar aria-label="Sections" drawerTitle="Sections" collapsible={false} className="bg-sunken">
-          <Sidebar.Section>{SECTIONS.map(({ screen: target, label }) => item(target, label))}</Sidebar.Section>
+          <Sidebar.Section>
+            {SECTIONS.map(({ screen: target, label, isNew }) => item(target, label, isNew === true))}
+          </Sidebar.Section>
           <Sidebar.Section className="mt-auto">{item(SETTINGS.screen, SETTINGS.label)}</Sidebar.Section>
         </AppShell.Sidebar>
         <AppShell.Content>
@@ -91,5 +95,15 @@ export function Shell({
         </AppShell.Content>
       </AppShell.Body>
     </AppShell.Root>
+  );
+}
+
+/** A section's New tag: a quiet accent chip, read after the section's name with a space between. */
+function NewTag() {
+  return (
+    <Chip tone="accent" variant="tinted" data-slot="section-new">
+      {/* A space first: the sidebar's row draws none between its name and its badge. */}
+      <span className="sr-only"> </span>New
+    </Chip>
   );
 }

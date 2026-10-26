@@ -11,6 +11,7 @@ import { Agent } from './screens/Agent.tsx';
 import { Approvals } from './screens/Approvals.tsx';
 import { Doctor } from './screens/Doctor.tsx';
 import { Events } from './screens/Events.tsx';
+import { Messages } from './screens/Messages.tsx';
 import { NotInstalled } from './screens/NotInstalled.tsx';
 import { Overview } from './screens/Overview.tsx';
 import { Queue } from './screens/Queue.tsx';
@@ -21,6 +22,7 @@ import { Updates } from './screens/Updates.tsx';
 const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void }>> = {
   overview: Overview,
   queue: Queue,
+  messages: Messages,
   accounts: Accounts,
   approvals: Approvals,
   activity: Activity,
