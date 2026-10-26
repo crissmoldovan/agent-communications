@@ -342,6 +342,13 @@ for (const loosening of LOOSENINGS.filter((one) => one.tightening !== undefined)
     // An approval waiting for something else, which an app call for the tightening must leave as it is.
     const waiting = await prepare(m, ['label', 'word', 'twin']);
 
+    // Anywhere but the attested app the origin is checked first: refused as every app approval there is, exit 10.
+    for (const options of [{ origin: UNATTESTED }, { origin: ATTESTED, extra: { CLAUDECODE: '1' } }]) {
+      const elsewhere = await m.run([...tightening.words, '--app-approval', waiting], options);
+      assert.equal(elsewhere.code, 10, elsewhere.stdout);
+      assert.equal(envelope(elsewhere).error?.code, 'APPROVAL_REQUIRED');
+    }
+    // From the attested app: planned, found to need no approval, and refused as USAGE.
     const flagged = await m.run([...tightening.words, '--app-approval', waiting], { origin: ATTESTED });
     assert.equal(flagged.code, 64, flagged.stdout);
     assert.equal(envelope(flagged).error?.code, 'USAGE');

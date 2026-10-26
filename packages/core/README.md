@@ -74,7 +74,10 @@ confirm it runs the same command with `--app-approval <id>`. That plans the chan
 waiting one for exactly that change, and only then approves it through the app channel (`approvedVia: app`) and
 applies it; an approval for anything else, or a plan that refuses, approves nothing. A tightening — `label rule add
 --as agent`, `label style … app`, a `behaviour allow` that only narrows — applies at once and takes no approval of
-either kind: given one, it is refused (exit 64) and nothing is applied. On macOS core checks that the app started this
+either kind. Given `--app-approval` it is refused and nothing is applied: from the attested app on macOS with `USAGE`
+(exit 64), since the change needs none; from anywhere else — an agent, an MCP server's process, a parent that is not
+the app, Windows or Linux — the origin is checked first, so it is refused as any other app approval there is, with
+`APPROVAL_REQUIRED` (exit 10). On macOS core checks that the app started this
 process: a speed bump against agents, not a boundary against code running as you, which can approve in-process anyway.
 `desktopAppOrigin` has codesign verify the running parent, by its pid: the release, signed by the owner's team,
 audited `approvedBy: desktop-app`; or the local test build, ad-hoc signed, only for a test profile — a config folder
