@@ -42,7 +42,7 @@ const TOP_LEVEL = [
   'subscriber',
   'raw',
 ];
-const TOP_LEVEL_WORDS = 'rule, when, match, ask, then, keep, keep for, at most, cloud event type, subscriber or raw';
+const TOP_LEVEL_WORDS = series(TOP_LEVEL, 'or');
 
 interface State {
   /** Fields a section set, with the line that set them. */
