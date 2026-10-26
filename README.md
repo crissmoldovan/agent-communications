@@ -419,7 +419,10 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
   `agent-events integration set agent-sessions --relay-home <folder>`. Without a setting it looks in claude-stream's
   default home, `~/.local/state/agent-relay`, then the Pilot app's; the port comes from the Pilot app's record, or is
   4318. `agent-events integration show agent-sessions` says what it found and whether the relay is ready. It reads the
-  relay's `control.token` as you, refuses one others can read, and never prints it or puts it in a command line.
+  relay's `control.token` as you, refuses one others can read (or a link, or anything but a plain file), and never
+  prints it or puts it in a command line. It sends the token only to a port that a process of yours listens on — any
+  local user can take a free loopback port — asking `lsof` on macOS and `/proc/net/tcp` on Linux first; on Windows that
+  is not checked.
 - **The rule says everything the session gets**, and you approve it like any rule:
 
   ```

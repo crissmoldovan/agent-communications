@@ -158,6 +158,11 @@ export class FakeRelay {
     this.#publish({ sessionId, runId: `run_${uuid()}`, type: `run.${status}` });
   }
 
+  /** Writes `text` as it is to every open follow stream: a relay that sends what no record is. */
+  writeRaw(text: string): void {
+    for (const stream of this.#streams) stream.write(text);
+  }
+
   /** Drops every open follow stream, as a relay restart or a network blip does; followers resume. */
   disconnectStreams(): void {
     for (const stream of this.#streams) stream.destroy();

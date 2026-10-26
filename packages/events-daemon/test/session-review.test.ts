@@ -387,6 +387,7 @@ test('REVIEW-3: a session never free fails its delivery after SESSION_RETRY_LIMI
         harness,
         `UPDATE deliveries SET attempts = ${SESSION_RETRY_LIMIT - 1} WHERE target_kind = 'session'`,
       );
+      await until(harness, () => relay.streamCount > 0, 'the follower');
       relay.publishRunEnd(session.id);
       // Let go after a backoff that grows with its tries; the backoff passes.
       await until(harness, () => released(harness), 'the release');
