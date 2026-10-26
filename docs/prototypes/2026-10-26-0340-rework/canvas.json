@@ -1,0 +1,127 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-26T18:00:00Z"
+  },
+  "title": "Agent Comms 0.34 rework prototype",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "YourAgents.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 1560,
+      "title": "Your agents: what people see, and the exceptions",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AccountSlack.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 1900,
+      "title": "Accounts → acme/slack: Agents here",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AccountGmail.dc.html": {
+      "x": 2720,
+      "y": 0,
+      "w": 1280,
+      "h": 1180,
+      "title": "Accounts → acme/gmail: Agents here",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "McpServers.dc.html": {
+      "x": 0,
+      "y": 2280,
+      "w": 1280,
+      "h": 2560,
+      "title": "MCP servers, one card each (testBuild=true for the test build)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "EventsService.dc.html": {
+      "x": 0,
+      "y": 5220,
+      "w": 1280,
+      "h": 1180,
+      "title": "Events → Service: switched off, on or paused (state=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Deliveries.dc.html": {
+      "x": 1360,
+      "y": 5220,
+      "w": 1280,
+      "h": 1460,
+      "title": "Events → Deliveries: a rule in dry-run",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Doctor.dc.html": {
+      "x": 0,
+      "y": 7060,
+      "w": 1280,
+      "h": 1600,
+      "title": "Doctor: a long detail wraps beside the name",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Face.dc.html": {
+      "x": 1360,
+      "y": 7060,
+      "w": 1280,
+      "h": 1000,
+      "title": "Which face? Inter beside SF Pro",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "YourAgents.dc.html",
+    "AccountSlack.dc.html",
+    "AccountGmail.dc.html",
+    "McpServers.dc.html",
+    "EventsService.dc.html",
+    "Deliveries.dc.html",
+    "Doctor.dc.html",
+    "Face.dc.html"
+  ],
+  "notes": {
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · Your agents, and what they may do in each account",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "row2": {
+      "x": 0,
+      "y": 2020,
+      "text": "2 · MCP servers, in place of Connections",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row3": {
+      "x": 0,
+      "y": 4960,
+      "text": "3 · Events: the service in plain words, and where a match goes",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row4": {
+      "x": 0,
+      "y": 6800,
+      "text": "4 · Doctor's fixed layout, and which face",
+      "kind": "title1",
+      "maxW": 2640
+    }
+  },
+  "designSystems": []
+}

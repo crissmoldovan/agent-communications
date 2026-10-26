@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Accounts, acme/slack</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.crumb{display:flex;align-items:center;gap:6px;color:var(--text3);font-size:12px}
+.crumb a{text-decoration:none}
+.crumb a:hover{color:var(--text)}
+.head{flex-direction:row;align-items:center;gap:12px}
+.av{width:36px;height:36px;border-radius:50%;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none}
+.acts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.act{display:flex;align-items:center;gap:12px;background:var(--s2);border-radius:10px;padding:10px 12px}
+.subhead{display:flex;align-items:center;gap:8px;margin-top:6px;padding-top:14px;border-top:1px solid var(--s2)}
+.ch{font-weight:500;min-width:120px}
+.boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.boxes label{display:flex;align-items:center;gap:8px;background:var(--s1);border-radius:8px;padding:7px 10px;cursor:pointer}
+.boxes input{accent-color:var(--accent)}
+.looks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.look{display:flex;flex-direction:column;gap:8px;text-align:left;background:var(--s2);border:0;border-radius:12px;padding:12px;cursor:pointer;box-shadow:inset 0 0 0 2px transparent;transition:box-shadow 160ms ease,background-color 160ms ease}
+.look:hover{background:var(--s3)}
+.look.on{box-shadow:inset 0 0 0 2px var(--accent)}
+.look .top{display:flex;align-items:center;gap:8px;font-weight:600}
+.radio{width:14px;height:14px;border-radius:50%;box-shadow:inset 0 0 0 2px var(--text3);flex:none}
+.look.on .radio{box-shadow:inset 0 0 0 4px var(--accent)}
+.msg{display:flex;gap:9px;background:var(--s1);border-radius:8px;padding:10px}
+.mav{width:28px;height:28px;border-radius:7px;background:var(--s3);color:var(--text2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex:none}
+.mav.app{background:var(--accent);color:var(--accentText)}
+.appb{display:inline-flex;align-items:center;height:16px;padding:0 4px;border-radius:4px;background:var(--s3);color:var(--text2);font-size:10px;font-weight:700;letter-spacing:.03em}
+.sa{background:var(--s2);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:10px}
+.sagrid{display:grid;grid-template-columns:1.4fr 1fr 1fr;gap:12px}
+.sagrid > div{display:flex;flex-direction:column;gap:3px}
+.facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.facts > div{display:flex;flex-direction:column;gap:4px;background:var(--s2);border-radius:10px;padding:10px 12px}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1900px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni on" href="AccountSlack.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="McpServers.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="YourAgents.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="EventsService.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Doctor.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Accounts</h1>
+  <nav aria-label="Channels" class="tabs">
+    <a class="tab" href="AccountGmail.dc.html">Gmail <span class="n">2</span></a>
+    <a class="tab on" href="AccountSlack.dc.html" aria-current="page">Slack <span class="n">1</span></a>
+    <a class="tab" href="#">Resend <span class="n">1</span></a>
+    <a class="tab" href="#">WhatsApp <span class="n">1</span></a>
+  </nav>
+  <div class="crumb"><a href="AccountSlack.dc.html">Slack</a><span aria-hidden="true">›</span><span>acme/slack</span></div>
+
+  <section class="card head" aria-label="acme/slack">
+    <span class="av" aria-hidden="true">a</span>
+    <div class="grow">
+      <div class="row wrap" style="gap: 8px"><span class="h2">acme/slack</span><span class="faint">Acme · acme.slack.com</span></div>
+      <span class="muted">Connected to read and post. Every post waits for your yes in the chat.</span>
+    </div>
+  </section>
+
+  <nav aria-label="acme/slack" class="tabs">
+    <button type="button" class="tab {{aboutOn}}" aria-pressed="{{isAbout}}" onClick="{{showAbout}}">About</button>
+    <button type="button" class="tab {{agentsOn}}" aria-pressed="{{isAgents}}" onClick="{{showAgents}}">Agents here <span class="new" title="Not in the app yet: today this lives on the Agent screen">new</span></button>
+  </nav>
+
+  <sc-if value="{{isAbout}}" hint-placeholder-val="{{ false }}">
+    <section class="card" aria-label="About acme/slack">
+      <div class="facts">
+        <div><span class="lbl">Access</span><span>Read and post</span><span class="faint">What Slack lets this connection do.</span></div>
+        <div><span class="lbl">Posts</span><span>Wait for your yes, in the chat</span><span class="faint">Each one is shown to you first.</span></div>
+        <div><span class="lbl">Writing profile</span><span>Written</span><button type="button" class="link" style="align-self: flex-start">Open in your editor</button></div>
+      </div>
+      <span class="faint">As the app has it today. Signing in again happens in Terminal, as now.</span>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{isAgents}}" hint-placeholder-val="{{ true }}">
+    <section class="card" aria-labelledby="may">
+      <div>
+        <h2 id="may" class="h2">What agents may do here</h2>
+        <p class="muted p0">Turning one off applies at once. Turning one on asks you to approve it.</p>
+      </div>
+      <div class="acts">
+        <sc-for list="{{acts}}" as="a" hint-placeholder-count="6">
+          <div class="act">
+            <div class="grow"><div style="font-weight: 500">{{a.label}}</div><div class="faint">{{a.hint}}</div></div>
+            <button type="button" role="switch" class="sw" aria-checked="{{a.on}}" aria-label="{{a.label}}" onClick="{{a.flip}}"></button>
+          </div>
+        </sc-for>
+      </div>
+
+      <div class="subhead"><h3 class="h3 grow">In one conversation</h3><button type="button" class="btn sm" onClick="{{openAdd}}">Add a conversation…</button></div>
+      <p class="faint p0">A conversation can allow less than the rest of acme/slack, or more.</p>
+      <div>
+        <sc-for list="{{convs}}" as="c" hint-placeholder-count="1">
+          <div class="line"><span class="ch">{{c.name}}</span><span class="grow muted">{{c.acts}}</span><button type="button" class="btn sm q" onClick="{{c.remove}}">Remove…</button></div>
+        </sc-for>
+        <sc-if value="{{noConvs}}" hint-placeholder-val="{{ false }}"><div class="empty">None: every conversation allows what acme/slack allows.</div></sc-if>
+      </div>
+
+      <sc-if value="{{adding}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="add-conv">
+          <h3 id="add-conv" class="t">Add a conversation</h3>
+          <label class="fl"><span class="lbl">Conversation</span>
+            <select class="f" onChange="{{pickConv}}" style="max-width: 320px">
+              <option value="support" selected="{{cv_support}}">#support</option>
+              <option value="random" selected="{{cv_random}}">#random</option>
+              <option value="deploys" selected="{{cv_deploys}}">#deploys</option>
+              <option value="dm" selected="{{cv_dm}}">Direct messages with Jo Example</option>
+            </select>
+          </label>
+          <div class="fl"><span class="lbl">Agents may</span>
+            <div class="boxes">
+              <sc-for list="{{draftActs}}" as="d" hint-placeholder-count="6">
+                <label><input type="checkbox" checked="{{d.on}}" onChange="{{d.flip}}">{{d.label}}</label>
+              </sc-for>
+            </div>
+          </div>
+          <span class="faint">Allowing less than the rest of acme/slack applies at once. Allowing more asks you to approve it.</span>
+          <div class="row"><button type="button" class="btn p" onClick="{{saveConv}}">Save</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button></div>
+        </div>
+      </sc-if>
+
+      <sc-if value="{{asking}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-t">
+          <div>
+            <h3 id="ask-t" class="t">{{askTitle}}</h3>
+            <p class="muted p0">{{askBody}}</p>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{approve}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{saidMay}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidMay}}</p></sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="look">
+      <h2 id="look" class="h2">How their messages look here</h2>
+      <div class="looks" role="radiogroup" aria-labelledby="look">
+        <button type="button" role="radio" aria-checked="{{lookApp}}" aria-label="As the Agent Comms app" aria-describedby="look-app" class="look {{lookAppOn}}" onClick="{{pickApp}}">
+          <span class="top"><span class="radio" aria-hidden="true"></span>As the Agent Comms app</span>
+          <span id="look-app" class="faint">Slack shows an APP badge beside it, which nobody can fake.</span>
+          <span class="msg">
+            <span class="mav app" aria-hidden="true">A</span>
+            <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+              <span class="row" style="gap: 6px"><span style="font-weight: 600">Chris Moldovan (agent)</span><span class="appb">APP</span><span class="faint">10:42</span></span>
+              <span>Thanks, I'll look at this today.</span>
+            </span>
+          </span>
+        </button>
+        <button type="button" role="radio" aria-checked="{{lookTagged}}" aria-label="As you, tagged" aria-describedby="look-tagged" class="look {{lookTaggedOn}}" onClick="{{pickTagged}}">
+          <span class="top"><span class="radio" aria-hidden="true"></span>As you, tagged</span>
+          <span id="look-tagged" class="faint">Your own name, with the tag at the start of the message.</span>
+          <span class="msg">
+            <span class="mav" aria-hidden="true">CM</span>
+            <span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+              <span class="row" style="gap: 6px"><span style="font-weight: 600">Chris Moldovan</span><span class="faint">10:42</span></span>
+              <span><span style="font-weight: 600">Chris Moldovan (agent):</span> Thanks, I'll look at this today.</span>
+            </span>
+          </span>
+        </button>
+      </div>
+      <span class="muted">Where the app can't post, such as a direct message, it goes as you, tagged.</span>
+      <span class="faint">Choosing the app applies at once. Choosing “as you, tagged” asks you to approve it. Exceptions, such as reactions sent as you, are in <a href="YourAgents.dc.html">Your agents ›</a></span>
+      <sc-if value="{{askingLook}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-look">
+          <div>
+            <h3 id="ask-look" class="t">Post as you, tagged, in acme/slack? Approve it</h3>
+            <p class="muted p0">People will see your own name, with “Chris Moldovan (agent):” at the start of each message, instead of Slack's APP badge.</p>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{approve}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{saidLook}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidLook}}</p></sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="adv">
+      <div class="row"><h2 id="adv" class="h2 grow">Replies you approved in advance</h2><button type="button" class="btn sm d" disabled="{{noStanding}}" onClick="{{endAll}}">End all</button></div>
+      <p class="muted p0">Your yes given ahead of time, for quick acknowledgements only: a 👀 reaction or a short fixed reply to a new message.</p>
+      <sc-if value="{{hasStanding}}" hint-placeholder-val="{{ true }}">
+        <div class="sa">
+          <div class="row"><span class="chip c-ok">Active</span><span class="grow" style="font-weight: 500">In #support</span><button type="button" class="btn sm q" onClick="{{endOne}}">End</button></div>
+          <div class="sagrid">
+            <div><span class="lbl">An agent may answer a new message with</span><span>a 👀 reaction</span><span>“Thanks, I'll look at this shortly.”</span></div>
+            <div><span class="lbl">How often</span><span>At most 10 an hour</span><span class="faint">2 used today</span></div>
+            <div><span class="lbl">Ends</span><span>In 5 days</span><span class="faint">Oct 31, 14:00</span></div>
+          </div>
+          <span class="faint">The agent picks which new message to acknowledge, and with which of these. It never writes the words, and it can't pick an old message or another channel.</span>
+        </div>
+      </sc-if>
+      <sc-if value="{{noStanding}}" hint-placeholder-val="{{ false }}"><div class="empty">None. An agent can prepare one; you approve it at your terminal.</div></sc-if>
+      <span class="faint">Ending one applies at once.</span>
+      <sc-if value="{{saidStanding}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidStanding}}</p></sc-if>
+    </section>
+  </sc-if>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"view":{"editor":"enum","options":["agents","about"],"default":"agents"},"$preview":{"width":1280,"height":1900}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = {
+view: (props.view ?? 'agents') === 'about' ? 'about' : 'agents',
+acts: { post: true, reply: true, reaction: true, edit: false, delete: false, file: false },
+convs: [{ id: 'general', name: '#general', acts: ['reply', 'reaction'] }],
+look: 'tagged', standing: true, ask: null, adding: false,
+draftConv: 'support', draftActs: { post: false, reply: true, reaction: true, edit: false, delete: false, file: false },
+said: null, saidTone: 'ok'
+};
+}
+renderVals() {
+const s = this.state;
+const ACTS = [
+{ key: 'post', label: 'Post', word: 'post', verb: 'post new messages', hint: 'Start a new message in a channel' },
+{ key: 'reply', label: 'Reply', word: 'reply', verb: 'reply in threads', hint: 'Answer in a thread' },
+{ key: 'reaction', label: 'React', word: 'react', verb: 'react with an emoji', hint: 'Add an emoji reaction' },
+{ key: 'edit', label: 'Edit', word: 'edit', verb: 'edit messages', hint: 'Change a message sent from this account' },
+{ key: 'delete', label: 'Delete', word: 'delete', verb: 'delete messages', hint: 'Remove a message sent from this account' },
+{ key: 'file', label: 'Share files', word: 'share files', verb: 'share files', hint: 'Post a file from this Mac' }
+];
+const CONVS = { support: '#support', random: '#random', deploys: '#deploys', dm: 'Direct messages with Jo Example' };
+const meta = (key) => ACTS.find((a) => a.key === key);
+const words = (keys) => {
+const list = ACTS.filter((a) => keys.includes(a.key)).map((a) => a.word);
+if (list.length === 0) return 'nothing';
+if (list.length === 1) return list[0];
+return list.slice(0, -1).join(', ') + ' and ' + list[list.length - 1];
+};
+const cap = (t) => t.charAt(0).toUpperCase() + t.slice(1);
+const may = (keys) => keys.length === 0 ? 'agents may do nothing' : 'agents may ' + words(keys);
+const accountActs = ACTS.map((a) => a.key).filter((k) => s.acts[k]);
+const done = (patch, text, tone, at) => this.setState(Object.assign({ ask: null, adding: false, said: text, saidTone: tone || 'ok', saidAt: at || 'may' }, patch));
+const chosen = ACTS.map((a) => a.key).filter((k) => s.draftActs[k]);
+let askTitle = '', askBody = '';
+const a = s.ask;
+if (a && a.kind === 'act') {
+askTitle = 'Let agents ' + meta(a.key).verb + ' in acme/slack? Approve it';
+askBody = 'Agents could then ' + meta(a.key).verb + ' here. Each one still waits for your yes before it happens. A conversation with a line of its own below keeps it.';
+} else if (a && a.kind === 'remove') {
+const c = s.convs.find((x) => x.id === a.id);
+askTitle = 'Remove the line for ' + c.name + '? Approve it';
+askBody = c.name + ' would then allow what the rest of acme/slack allows: ' + words(accountActs) + '.';
+} else if (a && a.kind === 'add') {
+const extra = a.acts.filter((k) => !accountActs.includes(k));
+askTitle = 'Let agents do more in ' + CONVS[a.conv] + ' than in the rest of acme/slack? Approve it';
+askBody = CONVS[a.conv] + ' would allow ' + words(a.acts) + '. That includes ' + words(extra) + ', which the rest of acme/slack doesn’t allow.';
+}
+const putConv = (conv, acts) => s.convs.filter((x) => x.id !== conv).concat([{ id: conv, name: CONVS[conv], acts }]);
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+isAbout: s.view === 'about', isAgents: s.view === 'agents',
+aboutOn: s.view === 'about' ? 'on' : '', agentsOn: s.view === 'agents' ? 'on' : '',
+showAbout: () => this.setState({ view: 'about', ask: null, adding: false, said: null }),
+showAgents: () => this.setState({ view: 'agents', said: null }),
+saidMay: s.saidAt === 'may' ? s.said : null, saidLook: s.saidAt === 'look' ? s.said : null, saidStanding: s.saidAt === 'standing' ? s.said : null,
+saidClass: s.saidTone === 'ok' ? 'said' : 'said n',
+acts: ACTS.map((m) => ({
+label: m.label, hint: m.hint, on: s.acts[m.key],
+flip: () => {
+if (s.acts[m.key]) done({ acts: Object.assign({}, s.acts, { [m.key]: false }) }, 'Applied at once: agents may no longer ' + m.verb + ' in acme/slack.');
+else this.setState({ ask: { kind: 'act', key: m.key }, adding: false, said: null });
+}
+})),
+convs: s.convs.map((c) => ({
+name: c.name,
+acts: c.acts.length === 0 ? 'Nothing: agents can’t act here' : cap(words(c.acts)) + ' only',
+remove: () => {
+const widens = accountActs.some((k) => !c.acts.includes(k));
+if (widens) this.setState({ ask: { kind: 'remove', id: c.id }, adding: false, said: null });
+else done({ convs: s.convs.filter((x) => x.id !== c.id) }, 'Removed at once: ' + c.name + ' now allows what the rest of acme/slack allows.');
+}
+})),
+noConvs: s.convs.length === 0,
+adding: s.adding,
+openAdd: () => this.setState({ adding: true, ask: null, said: null, draftConv: 'support', draftActs: { post: false, reply: true, reaction: true, edit: false, delete: false, file: false } }),
+pickConv: (e) => this.setState({ draftConv: e.target.value }),
+cv_support: s.draftConv === 'support', cv_random: s.draftConv === 'random', cv_deploys: s.draftConv === 'deploys', cv_dm: s.draftConv === 'dm',
+draftActs: ACTS.map((m) => ({ label: m.label, on: s.draftActs[m.key], flip: (e) => this.setState({ draftActs: Object.assign({}, s.draftActs, { [m.key]: e.target.checked }) }) })),
+saveConv: () => {
+const wider = chosen.some((k) => !accountActs.includes(k));
+if (wider) this.setState({ adding: false, ask: { kind: 'add', conv: s.draftConv, acts: chosen } });
+else done({ convs: putConv(s.draftConv, chosen) }, 'Added at once, because it allows no more than the rest of acme/slack: in ' + CONVS[s.draftConv] + ', ' + may(chosen) + '.');
+},
+asking: !!a && a.kind !== 'look', askingLook: !!a && a.kind === 'look', askTitle, askBody,
+approve: () => {
+if (a.kind === 'act') done({ acts: Object.assign({}, s.acts, { [a.key]: true }) }, 'Approved. Agents may now ' + meta(a.key).verb + ' in acme/slack. Each one still waits for your yes.');
+else if (a.kind === 'remove') { const c = s.convs.find((x) => x.id === a.id); done({ convs: s.convs.filter((x) => x.id !== a.id) }, 'Approved. ' + c.name + ' now allows what the rest of acme/slack allows.'); }
+else if (a.kind === 'add') done({ convs: putConv(a.conv, a.acts) }, 'Approved. In ' + CONVS[a.conv] + ', ' + may(a.acts) + '.');
+else if (a.kind === 'look') done({ look: 'tagged' }, 'Approved. Agents’ messages in acme/slack now go as you, tagged “Chris Moldovan (agent):”.', 'ok', 'look');
+},
+cancel: () => done({}, 'Cancelled: nothing was changed.', 'n', a && a.kind === 'look' ? 'look' : 'may'),
+lookApp: s.look === 'app', lookTagged: s.look === 'tagged',
+lookAppOn: s.look === 'app' ? 'on' : '', lookTaggedOn: s.look === 'tagged' ? 'on' : '',
+pickApp: () => { if (s.look !== 'app') done({ look: 'app' }, 'Applied at once: agents’ messages in acme/slack now come from the Agent Comms app, with Slack’s APP badge.', 'ok', 'look'); },
+pickTagged: () => { if (s.look !== 'tagged') this.setState({ ask: { kind: 'look' }, adding: false, said: null }); },
+hasStanding: s.standing, noStanding: !s.standing,
+endOne: () => done({ standing: false }, 'Ended at once. In #support, agents ask you before each acknowledgement again.', 'ok', 'standing'),
+endAll: () => done({ standing: false }, 'Ended at once: no replies are approved in advance in acme/slack now.', 'ok', 'standing')
+};
+}
+}
+</script>
+</body>
+</html>

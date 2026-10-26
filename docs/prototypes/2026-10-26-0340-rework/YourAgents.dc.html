@@ -1,0 +1,365 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your agents</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.seen{display:flex;flex-direction:column;gap:8px;min-width:0}
+.slack{background:var(--s2);border-radius:10px;padding:12px;display:flex;gap:10px;align-items:flex-start}
+.av{width:32px;height:32px;border-radius:8px;background:var(--s3);color:var(--text2);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.mail{background:var(--s2);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:3px}
+.mh{display:flex;gap:8px;min-width:0}
+.mh .k{width:56px;flex:none;color:var(--text3)}
+.mh .v{min-width:0;overflow-wrap:anywhere}
+.mbody{margin-top:6px;padding-top:8px;border-top:1px solid var(--s3)}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.fact{background:var(--s2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.ba{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.acct{display:flex;align-items:flex-start;gap:12px;padding:12px;margin:0 -6px;border-radius:10px;text-decoration:none;transition:background-color 160ms ease}
+.acct:hover{background:var(--s2)}
+.acct .av{width:28px;height:28px;border-radius:50%;font-size:11.5px}
+.acct .go{color:var(--accent);font-weight:500;white-space:nowrap;padding-top:2px}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1560px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="AccountSlack.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="McpServers.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni on" href="YourAgents.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="EventsService.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Doctor.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div>
+    <div class="row wrap" style="gap: 10px"><h1 class="h1">Your agents</h1><span class="was">Called “Agent” before</span></div>
+    <p class="sub">How the messages your agents write for you look to the people who get them. What agents may do is now set in each account.</p>
+  </div>
+
+  <section class="card" aria-labelledby="seen">
+    <div class="row"><h2 id="seen" class="h2">When an agent writes for you, people see this</h2><span class="new" title="Not in the app yet">new</span></div>
+    <div class="pair">
+      <div class="seen">
+        <span class="lbl">In Slack · acme/slack</span>
+        <div class="slack">
+          <span class="av" aria-hidden="true">CM</span>
+          <div style="min-width: 0">
+            <div class="row" style="gap: 6px"><span style="font-weight: 600">Chris Moldovan</span><span class="faint">10:42</span></div>
+            <div><span style="font-weight: 600">{{phrase}}:</span> Thanks, I'll look at this today.</div>
+          </div>
+        </div>
+        <span class="faint">Posted as you, with the tag at the start. Where an account posts as the Agent Comms app instead, Slack shows its APP badge.</span>
+      </div>
+      <div class="seen">
+        <span class="lbl">In mail · acme/gmail</span>
+        <div class="mail">
+          <div class="mh"><span class="k">From</span><span class="v">"{{phrase}}" &lt;chris@example.com&gt;</span></div>
+          <div class="mh"><span class="k">To</span><span class="v">Jo Example &lt;jo@example.com&gt;</span></div>
+          <div class="mh"><span class="k">Subject</span><span class="v">Re: Thursday's review</span></div>
+          <div class="mbody">Thanks, I'll look at this today.</div>
+        </div>
+        <span class="faint">The tag is in the From line, the first thing people read.</span>
+      </div>
+    </div>
+
+    <div class="facts">
+      <div class="fact">
+        <span class="lbl">Your name</span>
+        <div class="row"><span class="grow" style="font-weight: 500">{{name}}</span><span class="new" title="Changed here, in the app: new">new</span><button type="button" class="btn sm" onClick="{{editName}}">Change…</button></div>
+      </div>
+      <div class="fact">
+        <span class="lbl">The word after it</span>
+        <div class="row"><span class="grow" style="font-weight: 500">{{word}}</span><span class="new" title="Changed here, in the app: new">new</span><button type="button" class="btn sm" onClick="{{editWord}}">Change…</button></div>
+      </div>
+    </div>
+
+    <sc-if value="{{editingName}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-name">
+        <div>
+          <h3 id="ask-name" class="t">This changes what everyone you write to sees. Approve it</h3>
+          <p class="muted p0">Every message an agent sends from now on carries the new name.</p>
+        </div>
+        <label class="fl"><span class="lbl">Your name</span><input class="f" value="{{draftName}}" onChange="{{typeName}}" aria-describedby="name-hint"></label>
+        <span id="name-hint" class="faint">A name can't hold brackets, quotes, @, commas, colons or semicolons, so nobody can fake a second tag with one.</span>
+        <div class="ba">
+          <div class="fl"><span class="lbl">Now</span><div class="pv">{{phrase}}: Thanks, I'll look at this today.</div></div>
+          <div class="fl"><span class="lbl">After</span><div class="pv">{{draftPhrase}}: Thanks, I'll look at this today.</div></div>
+        </div>
+        <sc-if value="{{problem}}" hint-placeholder-val="{{ false }}"><p role="alert" class="err">{{problem}}</p></sc-if>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveName}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{editingWord}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-word">
+        <div>
+          <h3 id="ask-word" class="t">This changes what everyone you write to sees. Approve it</h3>
+          <p class="muted p0">Every message an agent sends from now on carries the new word.</p>
+        </div>
+        <label class="fl"><span class="lbl">The word after your name</span>
+          <select class="f" onChange="{{pickWord}}" style="max-width: 240px">
+            <option value="agent" selected="{{w_agent}}">agent</option>
+            <option value="assistant" selected="{{w_assistant}}">assistant</option>
+            <option value="twin" selected="{{w_twin}}">twin</option>
+            <option value="minion" selected="{{w_minion}}">minion</option>
+            <option value="bot" selected="{{w_bot}}">bot</option>
+            <option value="fake" selected="{{w_fake}}">fake</option>
+            <option value="AI" selected="{{w_AI}}">AI</option>
+          </select>
+        </label>
+        <div class="ba">
+          <div class="fl"><span class="lbl">Now</span><div class="pv">{{phrase}}: Thanks, I'll look at this today.</div></div>
+          <div class="fl"><span class="lbl">After</span><div class="pv">{{draftPhrase}}: Thanks, I'll look at this today.</div></div>
+        </div>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveWord}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{saidSeen}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidSeen}}</p></sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="exc">
+    <div class="row"><h2 id="exc" class="h2 grow">Exceptions</h2><span class="new" title="Added here, in the app: new">new</span><button type="button" class="btn sm" onClick="{{addExc}}">Add an exception…</button></div>
+    <p class="muted p0">Every message an agent sends carries the tag, except where a line here says to send it as you, with no tag.</p>
+    <div>
+      <sc-for list="{{exceptions}}" as="x" hint-placeholder-count="1">
+        <div class="line"><span class="grow">{{x.text}}</span><span class="new" title="Removed here, in the app: new">new</span><button type="button" class="btn sm q" onClick="{{x.remove}}">Remove</button></div>
+      </sc-for>
+      <sc-if value="{{noExceptions}}" hint-placeholder-val="{{ false }}"><div class="empty">None: every message an agent sends is tagged.</div></sc-if>
+    </div>
+    <span class="faint">Removing one applies at once. Adding one asks you to approve it, because people would read those messages as if you wrote them yourself.</span>
+
+    <sc-if value="{{addingExc}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-exc">
+        <div>
+          <h3 id="ask-exc" class="t">Send some messages as you, with no tag? Approve it</h3>
+          <p class="muted p0">{{excPreview}}</p>
+        </div>
+        <div class="row wrap" style="gap: 12px; align-items: flex-end">
+          <label class="fl"><span class="lbl">Which messages</span>
+            <select class="f" onChange="{{pickKind}}">
+              <option value="reactions" selected="{{k_reactions}}">Reactions</option>
+              <option value="replies" selected="{{k_replies}}">Replies</option>
+              <option value="all" selected="{{k_all}}">Every message</option>
+            </select>
+          </label>
+          <label class="fl"><span class="lbl">In</span>
+            <select class="f" onChange="{{pickAccount}}">
+              <option value="acme/slack" selected="{{a_slack}}">acme/slack</option>
+              <option value="acme/gmail" selected="{{a_acme}}">acme/gmail</option>
+              <option value="personal/gmail" selected="{{a_personal}}">personal/gmail</option>
+            </select>
+          </label>
+        </div>
+        <sc-if value="{{problem}}" hint-placeholder-val="{{ false }}"><p role="alert" class="err">{{problem}}</p></sc-if>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveExc}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{saidExc}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidExc}}</p></sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="per">
+    <div class="row"><h2 id="per" class="h2">Per account</h2><span class="new" title="Not in the app yet">new</span></div>
+    <p class="muted p0">What agents may do in each account, and how their messages look there, is set in that account, under Agents here.</p>
+    <div style="display: flex; flex-direction: column">
+      <a class="acct" href="AccountSlack.dc.html">
+        <span class="av" aria-hidden="true">a</span>
+        <span class="grow" style="display: flex; flex-direction: column; gap: 2px">
+          <span><span style="font-weight: 500">acme/slack</span> <span class="faint">Slack · Acme</span></span>
+          <span class="muted">Agents may post, reply and react; in #general, only reply and react. Their messages go as you, tagged. Quick replies approved in advance in #support.</span>
+        </span>
+        <span class="go">Open in Accounts ›</span>
+      </a>
+      <a class="acct" href="AccountGmail.dc.html">
+        <span class="av" aria-hidden="true">a</span>
+        <span class="grow" style="display: flex; flex-direction: column; gap: 2px">
+          <span><span style="font-weight: 500">acme/gmail</span> <span class="faint">Gmail · chris@example.com</span></span>
+          <span class="muted">Agents may send and reply, but never to anyone at @client.test. The From line reads “{{phrase}}”.</span>
+        </span>
+        <span class="go">Open in Accounts ›</span>
+      </a>
+      <a class="acct" href="AccountGmail.dc.html?account=personal%2Fgmail">
+        <span class="av" aria-hidden="true">p</span>
+        <span class="grow" style="display: flex; flex-direction: column; gap: 2px">
+          <span><span style="font-weight: 500">personal/gmail</span> <span class="faint">Gmail · chris.m@example.com</span></span>
+          <span class="muted">Agents may reply, but not start new mail. The From line reads “{{phrase}}”.</span>
+        </span>
+        <span class="go">Open in Accounts ›</span>
+      </a>
+    </div>
+  </section>
+
+  <p class="faint p0">This screen used to have tabs for behaviour rules and standing approvals. Both are now in each account, under Agents here, as “What agents may do here” and “Replies you approved in advance”.</p>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1560}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = {
+name: 'Chris Moldovan', word: 'agent', editing: null, draftName: 'Chris Moldovan', draftWord: 'agent', problem: null,
+exceptions: [{ id: 'x1', text: 'Reactions on acme/slack go as you, without the tag' }],
+addAccount: 'acme/slack', addKind: 'reactions', said: null, saidTone: 'ok'
+};
+}
+phraseOf(name, word) { return name + ' (' + word + ')'; }
+done(patch, text, tone, at) {
+this.setState(Object.assign({ editing: null, problem: null, said: text, saidTone: tone || 'ok', saidAt: at || 'seen' }, patch));
+}
+renderVals() {
+const s = this.state;
+const words = ['agent', 'assistant', 'twin', 'minion', 'bot', 'fake', 'AI'];
+const kinds = { reactions: 'Reactions', replies: 'Replies', all: 'Every message' };
+const phrase = this.phraseOf(s.name, s.word);
+const draftPhrase = s.editing === 'name'
+? this.phraseOf(s.draftName.trim() === '' ? s.name : s.draftName.trim(), s.word)
+: this.phraseOf(s.name, s.draftWord);
+const excText = s.addKind === 'all'
+? 'Every message on ' + s.addAccount + ' goes as you, without the tag'
+: kinds[s.addKind] + ' on ' + s.addAccount + ' go as you, without the tag';
+const what = s.addKind === 'all' ? 'every message agents send' : s.addKind === 'reactions' ? 'agents’ reactions' : 'agents’ replies';
+const vals = {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+name: s.name, word: s.word, phrase, draftName: s.draftName, draftPhrase,
+editingName: s.editing === 'name', editingWord: s.editing === 'word', addingExc: s.editing === 'exception',
+problem: s.problem,
+saidSeen: s.saidAt === 'seen' ? s.said : null, saidExc: s.saidAt === 'exc' ? s.said : null,
+saidClass: s.saidTone === 'ok' ? 'said' : 'said n',
+editName: () => this.setState({ editing: 'name', draftName: s.name, problem: null, said: null }),
+editWord: () => this.setState({ editing: 'word', draftWord: s.word, problem: null, said: null }),
+addExc: () => this.setState({ editing: 'exception', addAccount: 'acme/slack', addKind: 'reactions', problem: null, said: null }),
+typeName: (e) => this.setState({ draftName: e.target.value, problem: null }),
+pickWord: (e) => this.setState({ draftWord: e.target.value }),
+pickKind: (e) => this.setState({ addKind: e.target.value, problem: null }),
+pickAccount: (e) => this.setState({ addAccount: e.target.value, problem: null }),
+cancel: () => this.done({}, 'Cancelled: nothing was changed.', 'n', s.editing === 'exception' ? 'exc' : 'seen'),
+approveName: () => {
+const next = s.draftName.trim();
+if (next === '') { this.setState({ problem: 'Type a name: the tag needs one. Nothing was changed.' }); return; }
+if (/[()<>"@,;:\\]/.test(next)) { this.setState({ problem: 'A name can’t hold ( ) < > " @ , ; : or \\. Nothing was changed.' }); return; }
+if (next === s.name) { this.done({}, 'Nothing to change: that is your name already.', 'n'); return; }
+this.done({ name: next }, 'Approved. From now on, agents’ messages read “' + this.phraseOf(next, s.word) + '”.');
+},
+approveWord: () => {
+if (s.draftWord === s.word) { this.done({}, 'Nothing to change: that is the word already.', 'n'); return; }
+this.done({ word: s.draftWord }, 'Approved. From now on, agents’ messages read “' + this.phraseOf(s.name, s.draftWord) + '”.');
+},
+excPreview: 'People will read ' + what + ' on ' + s.addAccount + ' as if you wrote them yourself, with no “(' + s.word + ')”.',
+approveExc: () => {
+if (s.addAccount.endsWith('/gmail') && s.addKind === 'reactions') { this.setState({ problem: 'Mail has no reactions. Choose replies, or every message.' }); return; }
+if (s.exceptions.some((x) => x.text === excText)) { this.done({}, 'Nothing to change: that exception is here already.', 'n', 'exc'); return; }
+this.done({ exceptions: s.exceptions.concat([{ id: 'x' + (s.exceptions.length + 2), text: excText }]) }, 'Approved. ' + excText + '.', 'ok', 'exc');
+},
+exceptions: s.exceptions.map((x) => ({
+text: x.text,
+remove: () => this.done({ exceptions: s.exceptions.filter((y) => y.id !== x.id) }, 'Removed at once. Those messages carry the tag again.', 'ok', 'exc')
+})),
+noExceptions: s.exceptions.length === 0,
+k_reactions: s.addKind === 'reactions', k_replies: s.addKind === 'replies', k_all: s.addKind === 'all',
+a_slack: s.addAccount === 'acme/slack', a_acme: s.addAccount === 'acme/gmail', a_personal: s.addAccount === 'personal/gmail'
+};
+for (const w of words) vals['w_' + w] = s.draftWord === w;
+return vals;
+}
+}
+</script>
+</body>
+</html>

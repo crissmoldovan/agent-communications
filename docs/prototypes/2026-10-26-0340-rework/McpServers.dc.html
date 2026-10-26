@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MCP servers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.banner{display:flex;gap:12px;align-items:flex-start;background:var(--test);color:var(--testText);border-radius:12px;padding:12px 14px}
+.banner b{font-weight:600;letter-spacing:.02em}
+.srv{gap:6px}
+.sh{display:flex;align-items:flex-start;gap:12px;margin-bottom:4px}
+.si{width:34px;height:34px;border-radius:10px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;flex:none}
+.app-row{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.app-name{width:128px;flex:none;font-weight:500}
+.older{color:var(--warn)}
+.grants{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
+.reach{display:flex;gap:10px;align-items:flex-start}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 2560px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="AccountSlack.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni on" href="McpServers.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="YourAgents.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="EventsService.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Doctor.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div>
+    <div class="row wrap" style="gap: 10px"><h1 class="h1">MCP servers</h1><span class="was">Called “Connections” before</span><span class="new" title="One card per server, with its apps under it: new">new</span></div>
+    <p class="sub">Your AI apps reach your accounts through these servers. An app sees a change after you restart it.</p>
+  </div>
+
+  <sc-if value="{{testBuild}}" hint-placeholder-val="{{ false }}">
+    <div class="banner" role="note">
+      <span><b>Test build:</b> your apps start your real Agent Comms (0.30.0), not this test, so every server shows as older here. Changes are off, because they would edit your real apps' settings.</span>
+    </div>
+  </sc-if>
+
+  <sc-for list="{{servers}}" as="sv" hint-placeholder-count="6">
+    <section class="card srv" aria-label="{{sv.name}}">
+      <div class="sh">
+        <span class="si" aria-hidden="true">{{sv.mark}}</span>
+        <div class="grow">
+          <div class="row wrap" style="gap: 8px"><h2 class="h2">{{sv.name}}</h2><span class="chip c-n">{{sv.count}}</span></div>
+          <p class="muted p0">{{sv.purpose}}</p>
+        </div>
+      </div>
+      <sc-for list="{{sv.rows}}" as="r" hint-placeholder-count="4">
+        <div class="app-row">
+          <span class="app-name">{{r.app}}</span>
+          <div class="grow" style="display: flex; flex-direction: column; gap: 2px">
+            <div class="row"><span class="chip {{r.chip}}">{{r.state}}</span></div>
+            <sc-if value="{{r.olderLine}}" hint-placeholder-val="{{ false }}"><span class="faint older">{{r.olderLine}}</span></sc-if>
+          </div>
+          <sc-if value="{{r.isOlder}}" hint-placeholder-val="{{ false }}">
+            <span class="new" title="Not in the app yet">new</span><button type="button" class="btn sm" disabled="{{r.locked}}" onClick="{{r.update}}">Bring up to date</button>
+          </sc-if>
+          <sc-if value="{{r.isAdded}}" hint-placeholder-val="{{ false }}">
+            <button type="button" class="btn sm q" disabled="{{r.locked}}" onClick="{{r.remove}}">Remove from {{r.app}}</button>
+          </sc-if>
+          <sc-if value="{{r.isNone}}" hint-placeholder-val="{{ false }}">
+            <button type="button" class="btn sm" disabled="{{r.locked}}" onClick="{{r.add}}">Add to {{r.app}}…</button>
+          </sc-if>
+        </div>
+      </sc-for>
+
+      <sc-if value="{{sv.said}}" hint-placeholder-val="{{ false }}">
+        <p role="status" class="{{sv.saidClass}}">{{sv.said}}</p>
+      </sc-if>
+
+      <sc-if value="{{sv.asking}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-label="{{sv.askTitle}}">
+          <h3 class="t">{{sv.askTitle}}</h3>
+          <div class="fl"><span class="lbl">{{sv.askHead}}</span>
+            <div class="pv">
+              <p class="p0">{{sv.askLead}}</p>
+              <ul class="grants">
+                <sc-for list="{{sv.askLines}}" as="g" hint-placeholder-count="3"><li>{{g}}</li></sc-for>
+              </ul>
+            </div>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{sv.approve}}">{{sv.approveWord}}</button><button type="button" class="btn q" onClick="{{sv.cancel}}">Cancel</button><span class="faint" style="margin-left: auto">Then restart {{sv.askApp}} to use it.</span></div>
+        </div>
+      </sc-if>
+    </section>
+  </sc-for>
+
+  <span class="faint">Removing a server from an app applies at once. Adding one shows you what it lets agents do, and waits for your approval. On Windows and Linux you approve it in Terminal.</span>
+
+  <section class="card" aria-labelledby="where">
+    <h2 id="where" class="h2">Who can reach them</h2>
+    <div class="reach"><span class="chip c-ok">Yes</span><span>Apps on this Mac, above. That includes a Claude Code window on this Mac that you drive from your phone with Remote Control.</span></div>
+    <div class="reach"><span class="chip c-n">No</span><span>Cloud sessions, such as Claude on the web or Claude Code in the cloud. They run on other computers, and these servers run only on this Mac.</span></div>
+  </section>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"testBuild":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":2560}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = {
+apps: {
+core: { cc: 'current', cd: 'older', codex: 'none', cursor: 'none' },
+gmail: { cc: 'current', cd: 'older', codex: 'none', cursor: 'current' },
+slack: { cc: 'current', cd: 'none', codex: 'none', cursor: 'none' },
+resend: { cc: 'none', cd: 'none', codex: 'none', cursor: 'none' },
+whatsapp: { cc: 'none', cd: 'none', codex: 'none', cursor: 'none' },
+events: { cc: 'current', cd: 'none', codex: 'none', cursor: 'none' }
+},
+ask: null, said: {}
+};
+}
+renderVals() {
+const s = this.state;
+const test = this.props.testBuild === true || this.props.testBuild === 'true';
+const APPS = [{ key: 'cc', name: 'Claude Code' }, { key: 'cd', name: 'Claude Desktop' }, { key: 'codex', name: 'Codex' }, { key: 'cursor', name: 'Cursor' }];
+const SERVERS = [
+{ key: 'core', name: 'Agent Comms', mark: 'A', purpose: 'Manages the others, your approvals and updates.',
+grants: ['see which servers each app has, and prepare adding or removing one, which waits for your approval', 'see your approvals, and wait for your answer', 'check for an update, and prepare installing it, which waits for your approval'] },
+{ key: 'gmail', name: 'Gmail', mark: 'G', purpose: 'Reads, searches and drafts mail in your Gmail accounts. Sends only what you approve.',
+grants: ['read and search mail in acme/gmail and personal/gmail', 'write drafts', 'prepare an email, which goes only after your yes'] },
+{ key: 'slack', name: 'Slack', mark: 'S', purpose: 'Reads Slack, and posts, replies or reacts only with your yes.',
+grants: ['read channels and threads in acme/slack', 'prepare a post, a reply or a reaction, which goes only after your yes', 'use the replies you approved in advance, within their limits'] },
+{ key: 'resend', name: 'Resend', mark: 'R', purpose: 'Sends mail from your own domain through Resend, each email after your yes.',
+grants: ['prepare an email from acme/resend, which goes only after your yes'] },
+{ key: 'whatsapp', name: 'WhatsApp', mark: 'W', purpose: 'Reads your WhatsApp chats on this Mac and drafts replies. It never sends.',
+grants: ['read the chats in WhatsApp on this Mac', 'write a draft reply, for you to send yourself'] },
+{ key: 'events', name: 'Events', mark: 'E', purpose: 'Lets agents work through the Queue, and see what your rules passed on.',
+grants: ['read the Queue, and mark items done', 'see your rules and their deliveries', 'propose a rule, which waits for your approval'] }
+];
+const say = (key, text, tone) => Object.assign({}, s.said, { [key]: { text, tone: tone || 'ok' } });
+const servers = SERVERS.map((sv) => {
+const states = s.apps[sv.key];
+const added = APPS.filter((a) => states[a.key] === 'current' || states[a.key] === 'older').length;
+const rows = APPS.map((ap) => {
+const st = states[ap.key];
+const isAdded = st === 'current' || st === 'older';
+const older = isAdded && (test || st === 'older');
+const set = (value) => Object.assign({}, s.apps, { [sv.key]: Object.assign({}, states, { [ap.key]: value }) });
+return {
+app: ap.name,
+state: isAdded ? 'Added' : 'Not added',
+chip: isAdded ? 'c-ok' : 'c-n',
+olderLine: !older ? '' : test ? 'Starts version 0.30.0, your real Agent Comms; this test is 0.34.0' : 'Starts version 0.30.0; this Mac has 0.34.0',
+isOlder: older, isAdded, isNone: st === 'none', locked: test,
+update: () => this.setState({ ask: { server: sv.key, app: ap.key, kind: 'update' }, said: say(sv.key, '') }),
+remove: () => this.setState({ apps: set('none'), ask: null, said: say(sv.key, sv.name + ' was taken away from ' + ap.name + '. Restart ' + ap.name + ' to see the change.') }),
+add: () => this.setState({ ask: { server: sv.key, app: ap.key, kind: 'add' }, said: say(sv.key, '') })
+};
+});
+const a = s.ask && s.ask.server === sv.key ? s.ask : null;
+const appName = a ? APPS.find((x) => x.key === a.app).name : '';
+const said = s.said[sv.key];
+return {
+name: sv.name, mark: sv.mark, purpose: sv.purpose, rows,
+count: added === 0 ? 'In no app' : added === 1 ? 'In 1 app' : 'In ' + added + ' apps',
+said: said ? said.text : '', saidClass: said && said.tone === 'n' ? 'said n' : 'said',
+asking: !!a, askApp: appName,
+askTitle: !a ? '' : a.kind === 'add' ? 'Add ' + sv.name + ' to ' + appName : 'Bring ' + sv.name + ' up to date in ' + appName,
+askHead: !a ? '' : a.kind === 'add' ? 'What this lets agents do' : 'What changes',
+askLead: !a ? '' : a.kind === 'add'
+? appName + ' will start the ' + sv.name + ' server, version 0.34.0, in every folder. Agents in ' + appName + ' could then:'
+: appName + ' starts ' + sv.name + ' 0.30.0, an older copy. This changes its setting to start 0.34.0, the version on this Mac.',
+askLines: !a ? [] : a.kind === 'add' ? sv.grants : ['Agents in ' + appName + ' get the fixes and tools of 0.34.0, as Updates lists them.', 'What they may do in each account stays as it is.'],
+approveWord: a && a.kind === 'update' ? 'Approve and update' : 'Approve and add',
+approve: () => {
+const next = Object.assign({}, s.apps, { [sv.key]: Object.assign({}, states, { [a.app]: 'current' }) });
+const text = a.kind === 'add'
+? sv.name + ' was added to ' + appName + '. Restart ' + appName + ' to use it.'
+: appName + ' now starts ' + sv.name + ' 0.34.0. Restart ' + appName + ' to use it.';
+this.setState({ apps: next, ask: null, said: say(sv.key, text) });
+},
+cancel: () => this.setState({ ask: null, said: say(sv.key, a.kind === 'add' ? 'Cancelled: ' + sv.name + ' was not added to ' + appName + '.' : 'Cancelled: nothing was changed.', 'n') })
+};
+});
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+testBuild: test,
+servers
+};
+}
+}
+</script>
+</body>
+</html>
