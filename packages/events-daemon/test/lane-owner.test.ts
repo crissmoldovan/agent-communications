@@ -201,6 +201,8 @@ async function withOwner(work: (harness: Harness) => Promise<void>): Promise<voi
   const owner = await startEventOwner({
     stateDir,
     configDir,
+    // A home of its own, never the real one: a binding's folder is shown as `~` under it.
+    homeDirectory: join(root, 'home'),
     tickMs: 60_000,
     pollIntervalMs: 1,
     gmailSourceFor: async () =>

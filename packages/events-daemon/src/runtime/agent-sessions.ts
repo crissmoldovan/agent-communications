@@ -101,7 +101,8 @@ export function isInside(path: string, folder: string): boolean {
 
 export interface AgentSessionServiceOptions {
   readonly store: EventDatabase;
-  readonly homeDirectory: string;
+  /** The person's home folder, or how to find it: asked only when the relay or a root is looked at, never before. */
+  readonly homeDirectory: string | (() => string);
   /**
    * Agent Comms' own configuration, state, secrets and data folders (security review of 0.33.0, finding 4): no file
    * part is read from them and no session works in them, whatever the roots say.
@@ -120,17 +121,24 @@ export interface ReadyRelay {
 
 export class AgentSessionService {
   readonly #store: EventDatabase;
-  readonly #homeDirectory: string;
+  readonly #home: () => string;
+  #homeFound: string | undefined;
   readonly #deniedFolders: readonly string[];
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
   readonly #now: () => number;
 
   constructor(options: AgentSessionServiceOptions) {
     this.#store = options.store;
-    this.#homeDirectory = options.homeDirectory;
+    const home = options.homeDirectory;
+    this.#home = typeof home === 'string' ? () => home : home;
     this.#deniedFolders = options.deniedFolders ?? [];
     this.#audit = options.audit;
     this.#now = options.now ?? Date.now;
+  }
+  /** The home folder, found once, the first time something needs it. */
+  #homeFolder(): string {
+    this.#homeFound ??= this.#home();
+    return this.#homeFound;
   }
 
   settings(): AgentSessionSettingsV1 {
@@ -148,7 +156,7 @@ export class AgentSessionService {
       relayHome: row.relay_home,
       relayPort: row.relay_port,
       allowedFolders: Array.isArray(folders)
-        ? folders.filter((folder) => isSettingsFolder(folder) && !isTooWideRoot(folder, this.#homeDirectory))
+        ? folders.filter((folder) => isSettingsFolder(folder) && !isTooWideRoot(folder, this.#homeFolder()))
         : [],
     };
   }
@@ -159,7 +167,7 @@ export class AgentSessionService {
    */
   async relay(): Promise<ReadyRelay> {
     const settings = this.settings();
-    const location = await locateRelay(settings, this.#homeDirectory);
+    const location = await locateRelay(settings, this.#homeFolder());
     const token = await readRelayToken(location.home);
     const client = new RelayClient({ url: location.url, token });
     const info = await client.ready();
@@ -180,7 +188,7 @@ export class AgentSessionService {
       if (error instanceof RelayError) return null;
       throw error;
     }
-    if (roots === null || roots.some((root) => isTooWideRoot(root, this.#homeDirectory))) return null;
+    if (roots === null || roots.some((root) => isTooWideRoot(root, this.#homeFolder()))) return null;
     return roots;
   }
 
@@ -266,7 +274,7 @@ export class AgentSessionService {
     let roots: readonly string[] | null = null;
     let problem: string | null = null;
     try {
-      location = await locateRelay(settings, this.#homeDirectory);
+      location = await locateRelay(settings, this.#homeFolder());
       const ready = await this.relay();
       info = ready.info;
       roots = await this.relayAllowedRoots(ready);
@@ -326,7 +334,7 @@ export class AgentSessionService {
     }
     try {
       const current = this.settings();
-      const next = settingsFrom(args, current, this.#homeDirectory);
+      const next = settingsFrom(args, current, this.#homeFolder());
       this.#store.immediate(() =>
         this.#store.database
           .prepare(

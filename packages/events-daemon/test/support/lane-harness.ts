@@ -209,6 +209,8 @@ export async function withLaneOwner(
   const owner = await startEventOwner({
     stateDir,
     configDir,
+    // A home of its own, never the real one: a binding's `~` and the relay's default homes are looked for under it.
+    homeDirectory: join(root, 'home'),
     tickMs: 60_000,
     pollIntervalMs: 1,
     ...options,
