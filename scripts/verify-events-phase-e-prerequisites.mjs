@@ -28,12 +28,13 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `approvedBy`, which was always `desktop-app`, names where the person was — `desktop-app`, `desktop-app (test build)`,
  * `desktop-app (unattested)` or `terminal` — as the CLI established it. No branch an earlier release shipped changed.
  *
- * 0.33.0 (the Linear target, design §3.4) is another. The provider key wires' provider is `keyedProvider`, which adds
- * `linear` to TypeSafe and OpenRouter; judge setup keeps `aiProvider`, since Linear serves no judge.
+ * 0.33.0 (the Linear target, design §3.4) is another, also only additive. The provider key wires' provider is
+ * `keyedProvider`, which adds `linear` to TypeSafe and OpenRouter; judge setup keeps `aiProvider`, since Linear serves no
+ * judge. The target document gains its `linear` branch, and a delivery's target kind the value `linear`.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '96154ebbaee46cc00ed9b5abea1395d1020321b8b88379a291131f748374b93e',
+    '4fc5efedda0d55b1d8afff469b77021a17d4dc83e6fda37f675dae7d8d273c7e',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -45,7 +46,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '25bc8418ba484f6725e925ceb10602e3452aaf96446130c11b761423cd961f91',
+    'a0e2af8a13e3d80cec648ce891ca974e55360c9780683e3890378c77fc0ddddd',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':

@@ -81,3 +81,60 @@ test('0.33 E3: migration 29 adds a Linear key slot, keeps every generation, and 
     database.close();
   }
 });
+
+test('0.33 E3: migration 30 lets a delivery add a Linear issue and record which, content-free, keeping every row', () => {
+  const database = migratedTo('event-linear-target-v1');
+  try {
+    database.exec(
+      `INSERT INTO ingest
+         (event_id, installation_id, type, version, account_id, dedupe_key, occurred_at, observed_at, staged_at)
+       VALUES ('event-l', 'installation', 'gmail.message.received', 1, 'ibx_LINEARMIGRATION0', 'dedupe-l', 1, 1, 1);
+       INSERT INTO decisions (id, event_id, account_id, rule_id, rule_version, outcome, metadata_expires_at, metadata_state)
+       VALUES ('decision-l', 'event-l', 'ibx_LINEARMIGRATION0', 'rule-l', 1, 'matched', 999, 'retained');
+       INSERT INTO deliveries
+         (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, target_kind,
+          encrypted_record, expires_at, state, switch_generation)
+       VALUES ('delivery-q', 'decision-l', 'ibx_LINEARMIGRATION0', 'rule-l', 1, 'queue:q:1', 'q', 1, 'queue', X'01', 999,
+               'queued', 1);
+       INSERT INTO queue_items
+         (id, delivery_id, decision_id, event_id, rule_id, rule_version, target_id, target_version, account_id, channel,
+          state, state_at, arrived_at, appended_at, retention_ms, expires_at, row_expires_at)
+       VALUES ('qi_00000000000000000000000000', 'delivery-q', 'decision-l', 'event-l', 'rule-l', 1, 'q', 1,
+               'ibx_LINEARMIGRATION0', 'gmail', 'open', 1, 1, 1, 86400000, 2, 3);`,
+    );
+    const insertLinear = (id: string, issue: readonly [string | null, string | null, string | null], kind = 'linear') =>
+      database
+        .prepare(
+          `INSERT INTO deliveries
+             (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, target_kind,
+              encrypted_record, expires_at, state, switch_generation, linear_issue_id, linear_identifier, linear_url)
+           VALUES (?, 'decision-l', 'ibx_LINEARMIGRATION0', 'rule-l', 1, ?, 'l', 1, ?, NULL, 999, 'delivered', 1, ?, ?, ?)`,
+        )
+        .run(id, `${kind}:${id}:1`, kind, ...issue);
+    assert.throws(() => database.exec('SELECT linear_issue_id FROM deliveries'), /no such column/u);
+
+    applyMigrations(database);
+    assert.deepEqual(
+      { ...(database.prepare("SELECT id, target_kind FROM deliveries WHERE id = 'delivery-q'").get() as object) },
+      { id: 'delivery-q', target_kind: 'queue' },
+      'the queue delivery and its item are kept',
+    );
+    const ISSUE = '6b1f0e2a-3c4d-4e5f-8a9b-0c1d2e3f4a5b';
+    insertLinear('linear-1', [ISSUE, 'CUE-123', 'https://linear.app/acme/issue/CUE-123']);
+    insertLinear('linear-2', [null, null, null]);
+    for (const [what, issue, kind] of [
+      ['an issue id without its identifier', [ISSUE, null, null], 'linear'],
+      ['an identifier that is not one', [ISSUE, 'the subject', 'https://linear.app/acme/issue/CUE-1'], 'linear'],
+      ['an address off linear.app', [ISSUE, 'CUE-1', 'https://evil.example/CUE-1'], 'linear'],
+      ['an issue on a webhook delivery', [ISSUE, 'CUE-1', 'https://linear.app/acme/issue/CUE-1'], 'webhook'],
+    ] as const)
+      assert.throws(() => insertLinear(`bad-${what}`, issue, kind), /CHECK constraint failed/u, what);
+    assert.deepEqual(
+      database.prepare('PRAGMA foreign_key_check').all(),
+      [],
+      'every reference to a delivery still holds after the rebuild',
+    );
+  } finally {
+    database.close();
+  }
+});

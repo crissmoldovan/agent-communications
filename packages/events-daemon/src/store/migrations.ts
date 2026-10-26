@@ -1034,6 +1034,77 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '29' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // The Linear target (0.33.0 design §3.4): a delivery may add a Linear issue, and records which issue it added — its
+    // id, its identifier (CUE-123) and its address without the title's words — and nothing of what it says. The kind
+    // check is a closed set, so the table is rebuilt with its exact columns, in order, as migration 24 rebuilt it.
+    version: 30,
+    name: 'event-linear-target-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v30 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
+      ) STRICT`,
+      `INSERT INTO deliveries_v30
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v30 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      "UPDATE meta SET value = '30' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

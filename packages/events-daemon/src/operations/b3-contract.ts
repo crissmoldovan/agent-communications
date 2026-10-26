@@ -32,6 +32,7 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -969,7 +970,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -1849,6 +1850,17 @@ function hostedJudgeDestination(document: ActivationDocumentV1): readonly string
   ];
 }
 
+/**
+ * What each Linear target of a rule does (0.33.0 design §3.4): the team, its labels and who it is assigned to, and which
+ * mapped fields fill the title and the description. Every value is the approved document's, through `neutralise`.
+ */
+function linearTargetLines(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  return document.rule.targets.flatMap((target) =>
+    target.kind === 'linear' ? [neutralise(linearTargetDisclosure(target)).text] : [],
+  );
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -1921,6 +1933,7 @@ export function renderB3ApprovalPreviewV1(
       ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
+      ...linearTargetLines(document),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,

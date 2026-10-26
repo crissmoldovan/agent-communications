@@ -1,7 +1,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-/** The closed set of target kinds a delivery row can carry (migration 24). */
-export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue';
+/** The closed set of target kinds a delivery row can carry (migration 24; Linear from migration 30). */
+export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue' | 'linear';
 
 /**
  * One `deliveries list` row: content-free metadata only. The fields after `deadLetterExpiresAt` are 0.32.0's (owner

@@ -78,8 +78,17 @@ test('QUEUE-A: v24 rebuilds deliveries to admit the queue kind, keeping every ro
       String(EVENT_MIGRATIONS.at(-1)?.version),
     );
     assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'event-action-queue-v1')?.version, 24);
-    assert.deepEqual(columns(database, 'deliveries'), beforeColumns, 'the rebuilt table keeps its column order');
-    assert.deepEqual(rows(database, 'deliveries'), before.deliveries);
+    // Migration 30 (0.33.0, the Linear target) rebuilds the table again and appends a Linear delivery's issue columns.
+    const LINEAR_COLUMNS = { linear_issue_id: null, linear_identifier: null, linear_url: null };
+    assert.deepEqual(
+      columns(database, 'deliveries'),
+      [...beforeColumns, ...Object.keys(LINEAR_COLUMNS)],
+      'the rebuilt table keeps its column order',
+    );
+    assert.deepEqual(
+      rows(database, 'deliveries'),
+      (before.deliveries as readonly object[]).map((row) => Object.assign(Object.create(null), row, LINEAR_COLUMNS)),
+    );
     assert.deepEqual(rows(database, 'dryrun_log'), before.dryrun);
     assert.deepEqual(rows(database, 'delivery_cap_charges'), before.charges);
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);

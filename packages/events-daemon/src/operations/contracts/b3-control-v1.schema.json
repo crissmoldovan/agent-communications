@@ -158,8 +158,68 @@
             "retryLimit": { "type": "integer", "minimum": 1, "maximum": 20 },
             "representation": { "enum": ["plain", "enveloped"] }
           }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["targetId", "version", "kind", "team", "title", "description", "labels", "assignee"],
+          "properties": {
+            "targetId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "linear" },
+            "team": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "key"],
+              "properties": {
+                "id": { "$ref": "#/$defs/linearId" },
+                "key": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,32}$" }
+              }
+            },
+            "title": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": { "text": { "type": "string", "minLength": 1, "maxLength": 255 } }
+            },
+            "description": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text"],
+              "properties": { "text": { "type": "string", "maxLength": 10000 } }
+            },
+            "labels": {
+              "type": "array",
+              "maxItems": 20,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "name"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/linearId" },
+                  "name": { "type": "string", "minLength": 1, "maxLength": 80 }
+                }
+              }
+            },
+            "assignee": {
+              "oneOf": [
+                { "const": "me" },
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["id"],
+                  "properties": { "id": { "$ref": "#/$defs/linearId" } }
+                }
+              ]
+            }
+          }
         }
       ]
+    },
+    "linearId": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     },
     "subscriberDocument": {
       "type": "object",
@@ -1524,7 +1584,7 @@
     },
     "nullableCount": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
     "nullableId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
-    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue"] },
+    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear"] },
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
     "eventId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
     "messagesCursor": { "type": "string", "pattern": "^[0-9]{1,16}:[0-9a-f]{32}$" },
@@ -1651,7 +1711,7 @@
             "required": ["deliveryId", "targetKind", "targetId", "lane", "state"],
             "properties": {
               "deliveryId": { "$ref": "#/$defs/id" },
-              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue"] },
+              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear"] },
               "targetId": { "$ref": "#/$defs/id" },
               "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] },
               "state": {
