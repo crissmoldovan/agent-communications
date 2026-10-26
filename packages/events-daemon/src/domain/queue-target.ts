@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { canonicalJson } from '@agentcomms/core';
 import { getPointer, type JsonValue, relatePointers } from '@agentcomms/events';
+import { isLaneName } from './lanes.ts';
 import { EventDomainError } from './lifecycle.ts';
 
 /**
@@ -25,6 +26,12 @@ export interface QueueTargetDocument {
   readonly kind: 'queue';
   readonly retentionMs: number;
   readonly show: QueueShow;
+  /**
+   * Routing (routing design 2026-10-25, B2): a queue that is a lane. Its items may be read by the one agent window the
+   * person binds to the lane, through `events_lane_item`; the name is part of what the person approves. Absent on a
+   * plain queue, so no stored target or digest changes.
+   */
+  readonly lane?: { readonly name: string };
 }
 
 function fail(message: string, code: EventDomainError['code'] = 'VERSION_DOCUMENT_INVALID'): never {
@@ -43,7 +50,7 @@ export function isQueueRetention(value: unknown): value is number {
 /** The canonical immutable queue target: exact keys, its defaults written out, so the digest binds what applies. */
 export function canonicalQueueTarget(target: Record<string, unknown>): QueueTargetDocument {
   for (const key of Object.keys(target))
-    if (!['targetId', 'version', 'kind', 'retentionMs', 'show'].includes(key))
+    if (!['targetId', 'version', 'kind', 'retentionMs', 'show', 'lane'].includes(key))
       return fail(`a queue target has no ${key} field`);
   if (typeof target.targetId !== 'string' || target.targetId.length === 0)
     return fail('a target id is a non-empty string');
@@ -53,13 +60,25 @@ export function canonicalQueueTarget(target: Record<string, unknown>): QueueTarg
   if (!isQueueRetention(retentionMs)) return fail('a queue retention is 1 to 30 days, in milliseconds');
   const show = target.show ?? 'summary';
   if (!(QUEUE_SHOW_VALUES as readonly unknown[]).includes(show)) return fail('a queue target shows summary or minimal');
+  const lane = Object.hasOwn(target, 'lane') ? canonicalLane(target.lane) : undefined;
   return {
     targetId: target.targetId,
     version: target.version as number,
     kind: 'queue',
     retentionMs,
     show: show as QueueShow,
+    ...(lane === undefined ? {} : { lane }),
   };
+}
+
+/** A lane is `{ name }`, and nothing else: the name is lowercase letters, digits and hyphens, 1 to 40 of them. */
+function canonicalLane(value: unknown): { readonly name: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value))
+    return fail('a queue target’s lane is { name }');
+  const lane = value as Record<string, unknown>;
+  if (Object.keys(lane).some((key) => key !== 'name')) return fail('a queue target’s lane has only a name');
+  if (!isLaneName(lane.name)) return fail('a lane name is 1 to 40 lowercase letters, digits and hyphens');
+  return { name: lane.name };
 }
 
 /** The action queue's closed vocabularies (the §8 CLI contract). */

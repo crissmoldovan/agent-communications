@@ -4,7 +4,7 @@
 agent-communications. When an event matches a rule you approved, it delivers that event to the rule's targets:
 - a signed HTTPS webhook;
 - a local live stream (server-sent events) for your own tools;
-- a queue you work through in the desktop app or at your terminal;
+- a queue you work through in the desktop app or at your terminal, or a lane of it that wakes one agent window;
 - a dry-run log you read at your terminal.
 
 Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal.
@@ -133,6 +133,46 @@ agent-events queue clear             # remove done and dismissed items now (your
   in your Done or Dismissed tab for its retention. Clearing the queue is yours alone, at your terminal or in the app:
   no MCP tool does it, so an agent cannot make your queue disappear. A queue target makes no network connection.
 
+## A lane
+
+From 0.31.0 a queue can be a **lane**: you name it (`david`, `billing`), bind it to one agent window, and that window
+is woken for each new item and may read it. Nothing else changes about the queue: a lane's items are queue items,
+kept, purged and shown as every queue item is, and each item names its lane.
+
+```bash
+# 1. a lane is a queue target with a name; a rule sends to it, and you approve the rule as any other
+agent-events target add '{"targetId":"lane-david","version":1,"kind":"queue","retentionMs":604800000,"show":"summary","lane":{"name":"david"}}'
+
+# 2. the agent in the window you want tells you its id (events_lane_whoami); you bind it, at your terminal
+agent-events lane bind david --window 25f971a3-0c69-44e3-971c-3a4656afa986
+
+agent-events lane list               # every lane, its rules, channels, open items and the window bound to it
+agent-events lane unbind david       # at once; the window's watches end
+```
+
+- **Binding is yours.** No MCP tool binds a lane, and `lane bind` refuses inside the event service's MCP server. A
+  window's id is its Claude Code session id, or its activity session key; `agent-events mcp` works out both for the
+  window it runs in. Only a window that can be told apart from others can be bound: one with a Claude Code session
+  id, or a grouped activity session (not Windows, and not a server started in `/`, the home folder or a system
+  folder). One window per lane, and one lane per window. The app's Lanes panel opens your terminal with the command.
+- **What the window gets.** `events_watch({ lane })` answers with an MCP task (protocol 2026-07-28, the tasks
+  extension) that completes on the lane's next new item: Claude Code wakes an idle window for it. The wake is a
+  pointer the event service writes — "1 new item in lane david (Slack, rule david-on-slack): read it with
+  events_lane_item, item qi_…" — never a sender, subject or text. The window reads the item with
+  `events_lane_item({ item })`, every field its sender wrote inside an untrusted-content envelope, then watches again.
+  A client without the tasks extension waits with `events_wait({ lane, seconds })`, up to 50 seconds at a time.
+- **Only what arrives after you bind.** A window wakes for, reads and sees in `events_queue_items` only items that
+  arrived after its binding. Binding again starts again.
+- **Every other window sees no lane item** over MCP, in any queue tool, and is not told one exists. You, at the
+  terminal and in the app, see everything.
+- **A binding ends** when you unbind it (or the window unbinds its own), when no active rule sends to the lane any
+  more, and with `disable-all`. It follows the lane across a new version of its target that you approve. Making a
+  queue a lane, or renaming one, is a new target version, approved through a new rule activation, and the approval
+  says "Items in lane david can be read by the agent window you bind to it." Two different targets of active rules
+  cannot share a lane's name.
+- **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
+  2025-era client connects as before.
+
 ## What you can do with it
 
 - **Sources:**
@@ -150,7 +190,8 @@ agent-events queue clear             # remove done and dismissed items now (your
     is signed (Standard Webhooks). Each delivery can be retried or dropped (`delivery retry`, `delivery drop`).
   - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
     token, and its origin is checked.
-  - **A queue** you work through ([A queue](#a-queue)).
+  - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window
+    ([A lane](#a-lane)).
   - **The dry-run log.**
 - **Control:**
   - `pause` / `resume`;
@@ -175,10 +216,11 @@ channel servers applies, and the result tells you to restart the client. The
 
 - **An agent can:** read the catalogue and your rules, propose rules, targets, judges and a judge budget, test a rule
   against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's enablement,
-  and turn a judge kind off.
+  and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and unbind it.
 - **An agent can never:**
   - approve anything;
-  - read what the dry-run log kept, or what a queue item says;
+  - bind a lane, or read a lane another window is bound to;
+  - read what the dry-run log kept, or what a queue item says outside its own lane;
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - resume a target;

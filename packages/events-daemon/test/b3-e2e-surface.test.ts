@@ -809,7 +809,18 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
         'the server-start exception is explicitly unchecked rather than silently omitted from CLI/MCP parity',
       );
       assert.equal(mcpServe?.mcp, null, 'the server-start exception cannot have an MCP route');
-      const rows = allRows.filter((row) => row.status === 'exception' && row.unchecked === undefined);
+      // Routing's window tools (0.31.0) are MCP-only exceptions: an agent window's own, with no command to run.
+      const windowRows = allRows.filter((row) => row.status === 'exception' && row.cli === null);
+      assert.deepEqual(
+        windowRows.map((row) => row.mcp).sort(),
+        ['events_lane_item', 'events_lane_whoami', 'events_wait', 'events_watch'],
+        'the only MCP-only daemon exceptions are the lane window tools',
+      );
+      const registered = new Set((await client.listTools()).tools.map((tool) => tool.name));
+      for (const row of windowRows) assert.ok(registered.has(row.mcp as string), `${row.id} is a registered tool`);
+      const rows = allRows.filter(
+        (row) => row.status === 'exception' && row.unchecked === undefined && row.cli !== null,
+      );
       for (const row of rows) {
         const result = await cli([...commandWords(row), ...exceptionArguments(row)], stateDir, {
           human: true,

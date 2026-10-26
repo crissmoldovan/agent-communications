@@ -441,10 +441,15 @@ test('QUEUE-A: queue items is content-free, and queue counts gives the open, don
         'channel',
         'expiresAt',
         'id',
+        'lane',
         'rule',
         'state',
         'stateAt',
       ]);
+    assert.ok(
+      listed.items.every((item) => item.lane === null),
+      'a plain queue’s items are in no lane',
+    );
     assert.deepEqual(listed.items.at(-1)?.account, { id: GMAIL, alias: 'work/gmail' });
     assert.doesNotMatch(JSON.stringify(listed), /Hidden|hidden@/u);
     assert.deepEqual(

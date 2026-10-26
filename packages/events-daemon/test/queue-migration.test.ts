@@ -77,7 +77,7 @@ test('QUEUE-A: v24 rebuilds deliveries to admit the queue kind, keeping every ro
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
       String(EVENT_MIGRATIONS.at(-1)?.version),
     );
-    assert.equal(EVENT_MIGRATIONS.at(-1)?.version, 24);
+    assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'event-action-queue-v1')?.version, 24);
     assert.deepEqual(columns(database, 'deliveries'), beforeColumns, 'the rebuilt table keeps its column order');
     assert.deepEqual(rows(database, 'deliveries'), before.deliveries);
     assert.deepEqual(rows(database, 'dryrun_log'), before.dryrun);

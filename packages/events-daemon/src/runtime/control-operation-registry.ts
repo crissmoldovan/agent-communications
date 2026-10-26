@@ -92,6 +92,22 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'queueDismiss', wireOperation: 'queue-dismiss', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'queueReopen', wireOperation: 'queue-reopen', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'queueClear', wireOperation: 'queue-clear', desktopCallable: true, family: 'owner' },
+  // Routing's lanes (0.31.0). The person's three — list, bind and unbind — are the app's and the CLI's; the rest are an
+  // agent window's own, reached only through the event service's MCP server, and so not desktop calls.
+  { capabilityOperation: 'laneList', wireOperation: 'lane-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'laneBind', wireOperation: 'lane-bind', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'laneUnbind', wireOperation: 'lane-unbind', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'laneWhoami', wireOperation: 'lane-whoami', desktopCallable: false, family: 'owner' },
+  { capabilityOperation: 'laneWatch', wireOperation: 'lane-watch', desktopCallable: false, family: 'owner' },
+  { capabilityOperation: 'laneTaskGet', wireOperation: 'lane-task-get', desktopCallable: false, family: 'owner' },
+  {
+    capabilityOperation: 'laneTaskCancel',
+    wireOperation: 'lane-task-cancel',
+    desktopCallable: false,
+    family: 'owner',
+  },
+  { capabilityOperation: 'laneWait', wireOperation: 'lane-wait', desktopCallable: false, family: 'owner' },
+  { capabilityOperation: 'laneItem', wireOperation: 'lane-item', desktopCallable: false, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

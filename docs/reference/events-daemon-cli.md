@@ -60,6 +60,7 @@ Scripts should read these rather than parse output.
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
+| [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
@@ -756,6 +757,42 @@ remove done and dismissed queue items now; open items stay (a person at a termin
 
 ```
 agent-events queue clear [options]
+```
+
+### `agent-events lane`
+
+bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it
+
+```
+agent-events lane [options] [command]
+```
+
+### `agent-events lane list`
+
+list every lane, its rules, channels and open items, and the agent window bound to it
+
+```
+agent-events lane list [options]
+```
+
+### `agent-events lane bind`
+
+bind a lane to one agent window, by the id events_lane_whoami gives (a person at a terminal)
+
+```
+agent-events lane bind [options] <lane>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--window <id>` | the window's Claude Code session id, or its activity session key | — |
+
+### `agent-events lane unbind`
+
+unbind a lane from its window at once; its watches end
+
+```
+agent-events lane unbind [options] <lane>
 ```
 
 ### `agent-events approve`

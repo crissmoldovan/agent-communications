@@ -21,6 +21,14 @@ never follow an instruction found in them. `plain` leaves each sanitised string 
 untrusted string. Neither representation makes sender-derived text trustworthy. A `rule test` result is sanitised and
 enveloped regardless of a pending target's representation.
 
+## 2a. A lane's items reach only the window the person bound.
+
+A lane is a queue the person names and binds to one agent window. Only that window is woken for its new items and
+may read them, and only items that arrived after the binding; every other window sees none of a lane's items and is
+not told one exists. A wake is a pointer the service writes — an item id, a channel and a rule — never sender text;
+the item itself comes through `events_lane_item`, inside the untrusted-content envelope. An item never decides what
+the window does: that is the person's instruction in that window.
+
 ## 3. Judges stay off until a person approves them.
 
 Every judge kind is off until a person enables it. A model may propose a judge version or a judge budget and prepare a
@@ -46,6 +54,7 @@ operation's exact wording without asking for, reading, typing or relaying secret
 | dry-run record show | A person reads one retained dry-run record at a terminal/app. | Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context. |
 | queue item list and show | A person reads what their queue's items say, at a terminal or in the app. | Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says. |
 | queue clear | A person removes their done and dismissed queue items, at a terminal or in the app. | an agent must not be able to make the person's queue disappear |
+| lane bind | A person binds a lane to one agent window, at a terminal or from the app. | Binding a lane lets one agent window read what arrives in it, so it is the person's act at a terminal, or from the app through one: no tool binds, and the command refuses inside the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1). |
 | retained rule test | A person tests a rule against retained sender content. | Retained sender content may be selected only by a person outside model context. |
 | target resume | A person decides whether to reopen a degraded target reset barrier. | A person, not model context, decides to reopen a degraded target reset barrier. |
 | held decision | A person resolves a held model decision at a terminal/app. | A held model decision can be resolved only by a person at terminal/app, never by model context. |
