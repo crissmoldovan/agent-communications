@@ -134,6 +134,37 @@ test('B7: an agent’s MCP view leaves the challenge the person is answering at 
   });
 });
 
+test('B7: approval view from an agent’s shell, or inside the MCP server, is the agent view: no challenge issued or shown', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  // Security review of 0.34.0, finding 3: an agent's shell still got a fresh view challenge from `approval view`, which
+  // answers the approve wire and replaced the one the person was typing at their terminal.
+  await withLaneOwner(async (harness) => {
+    const { stateDir } = harness;
+    const planned = await pendingRule(harness);
+    const { approvalId } = planned;
+    const digest = planned.binding.digest;
+    const person = new EventControlClient({ stateDir, clientName: 'terminal-approval' });
+    const start = (await person.request('approve-challenge', { approvalId })) as { challenge: string };
+    const before = challengeRow(stateDir, approvalId);
+    for (const env of [{ CLAUDECODE: '1' }, { CODEX_SANDBOX: 'seatbelt' }, { AGENTCOMMS_MCP_SERVER: 'events' }])
+      for (const json of [['--json'], []]) {
+        const shown = await cli(stateDir, ['approval', 'view', approvalId, '--digest', digest, ...json], env);
+        assert.equal(shown.code, 0, shown.err);
+        const view = JSON.parse(shown.out) as Record<string, unknown>;
+        if (json.length > 0 && 'CLAUDECODE' in env)
+          t.diagnostic(`approval view --json, agent shell: ${shown.out.trim()}`);
+        assert.deepEqual(Object.keys(view).sort(), ['approvalId', 'digest', 'kind', 'preview'], JSON.stringify(env));
+        assert.doesNotMatch(shown.out, /challenge/iu, 'no challenge is shown to an agent');
+        assert.deepEqual(challengeRow(stateDir, approvalId), before, 'none is issued, and the person’s stays');
+      }
+    const completed = (await person.request('approve', { approvalId, answer: start.challenge })) as {
+      status: string;
+    };
+    assert.equal(completed.status, 'completed', 'the person’s typed challenge still approves');
+  });
+});
+
 test('B7: an owner from before 0.34.0 still issues a view challenge; the MCP server passes the agent none of it', () => {
   const challenge = 'C'.repeat(32);
   const old = {

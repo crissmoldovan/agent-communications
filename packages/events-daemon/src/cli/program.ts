@@ -26,6 +26,7 @@ import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
+import { approvalViewForAgent } from '../mcp/agent-approval-view.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { integrationSet, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
 import { ruleAnalyse } from '../operations/analyse.ts';
@@ -415,6 +416,17 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .requiredOption('--digest <digest>')
     .action(async (approvalId: string, options) => {
       ran = true;
+      // An agent's shell, or a program inside the event service's MCP server, gets the agent view: the preview alone,
+      // with no challenge issued or shown, as events_approval_view gives it (security review of 0.34.0, finding 3). A
+      // marker is a speed bump: a shell without one runs as the person.
+      if (agentMarker(env) !== null || (env[MCP_SERVER_MARKER] ?? '') !== '') {
+        print(
+          approvalViewForAgent(
+            await approvalView(approvalId, options.digest as string, { ...controlOptions(program), agentView: true }),
+          ),
+        );
+        return;
+      }
       const result = await approvalView(approvalId, options.digest as string, controlOptions(program));
       if (program.opts<EventsCliOptions>().json) print(result);
       else {

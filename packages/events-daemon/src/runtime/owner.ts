@@ -577,7 +577,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             now,
             request.args,
             options.laya !== undefined,
-            request.insideMcpServer === true,
+            request.args.agentView === true,
           );
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
@@ -859,8 +859,9 @@ async function approvalViewFromOwner(
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
-  // An agent's view, from the event service's MCP server (0.34.0 design B7): the preview alone. No challenge is issued
-  // for it, so nothing an agent holds can answer `approve`, and one the person is answering at their terminal stays.
+  // An agent's view — the event service's MCP server, or `approval view` from an agent's shell (0.34.0 design B7, review
+  // finding 3): the preview alone. No challenge is issued for it, so nothing an agent holds can answer `approve`, and
+  // one the person is answering at their terminal stays theirs. The caller's flag only narrows.
   if (agentView)
     return {
       kind: 'READY',
@@ -1929,12 +1930,7 @@ async function handleControl(
     if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
       lanes.assertAgentMayStop(args.deliveryId, caller);
     try {
-      const result = await b3OwnerService.handle({
-        operation: request.operation,
-        args,
-        origin: request.origin,
-        ...(insideMcpServer === true ? { insideMcpServer: true } : {}),
-      });
+      const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.

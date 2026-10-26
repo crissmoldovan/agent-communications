@@ -356,7 +356,7 @@ function buildEventsMcpServer(
       approvalViewForAgent(
         await approvalView(args.approvalId as string, args.digest as string, {
           stateDir: options.stateDir,
-          insideMcpServer: true,
+          agentView: true,
         }),
       ),
   );
