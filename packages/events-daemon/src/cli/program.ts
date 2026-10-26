@@ -31,7 +31,14 @@ import {
   renderB3ApprovalPreviewV1,
 } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
-import { decideHeld, deliveriesList, dropDelivery, heldList, retryDelivery } from '../operations/deliveries.ts';
+import {
+  decideHeld,
+  deliveriesList,
+  deliveryShow,
+  dropDelivery,
+  heldList,
+  retryDelivery,
+} from '../operations/deliveries.ts';
 import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
@@ -97,7 +104,7 @@ import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-ju
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
-import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
+import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
 import { VERSION } from '../version.ts';
 
@@ -762,7 +769,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(await deliveriesList(controlOptions(program)));
   });
-  const delivery = program.command('delivery').description('retry or drop one exact delivery');
+  const delivery = program.command('delivery').description('show, retry or drop one exact delivery');
+  delivery
+    .command('show <delivery-id>')
+    .description('show one delivery: its decision, the event and its source ids, and its target (a person only)')
+    .action(async (deliveryId: string) => {
+      ran = true;
+      // The person's view, at a terminal or in the app (0.32.0, §3.5): never inside an MCP server's process.
+      assertNotMcpServer(env, 'delivery');
+      print(await deliveryShow(deliveryId, controlOptions(program)));
+    });
   delivery.command('retry <delivery-id>').action(async (deliveryId: string) => {
     ran = true;
     print(await retryDelivery(deliveryId, controlOptions(program)));
@@ -788,17 +804,34 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     );
   });
 
-  const dryrun = program.command('dryrun').description('inspect retained local records at an interactive terminal');
-  dryrun.command('list').action(async () => {
-    ran = true;
-    assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
-    streams.stdout.write(`${renderDryRunListForTerminal(await dryrunList(controlOptions(program)))}\n`);
-  });
-  dryrun.command('show <delivery-id>').action(async (deliveryId: string) => {
-    ran = true;
-    assertHumanTerminal(env, streams, program.opts<EventsCliOptions>().json === true);
-    streams.stdout.write(`${renderDryRunRecordForTerminal(await dryrunShow(deliveryId, controlOptions(program)))}\n`);
-  });
+  // The dry-run log (0.32.0, owner feedback §3.5; events design D7: "at the terminal or in the app"): the person's, at a
+  // terminal or in the app, which runs it with --json. Like the queue's content reads (Q1), it refuses inside an MCP
+  // server's process. With --json a record is data, for the app to render as outside text; a terminal gets it enveloped.
+  const dryrun = program
+    .command('dryrun')
+    .description('read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most');
+  dryrun
+    .command('list')
+    .description('list the dry-run log without what it holds (a person, at a terminal or in the app)')
+    .action(async () => {
+      ran = true;
+      assertNotMcpServer(env, 'dryrun');
+      const entries = await dryrunList(controlOptions(program));
+      if (program.opts<EventsCliOptions>().json) print(entries);
+      else streams.stdout.write(`${renderDryRunListForTerminal(entries)}\n`);
+    });
+  dryrun
+    .command('show <delivery-id>')
+    .description(
+      'show one dry-run record: the exact event it would have delivered (a person, at a terminal or in the app)',
+    )
+    .action(async (deliveryId: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'dryrun');
+      const record = await dryrunShow(deliveryId, controlOptions(program));
+      if (program.opts<EventsCliOptions>().json) print(dryRunRecordAsData(record));
+      else streams.stdout.write(`${renderDryRunRecordForTerminal(record)}\n`);
+    });
 
   // The action queue (action queue design §4.4, §8). list and show give a person the content, at a terminal or in the
   // app (which runs them with --json); they refuse inside an MCP server's process (Q1). The rest are content-free.

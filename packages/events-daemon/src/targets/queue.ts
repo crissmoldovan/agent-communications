@@ -16,12 +16,14 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
 }
 
 /**
- * The queue's person-only gate: its content reads (Q1), and `queue clear`, which an agent must not be able to use to
- * make the person's queue disappear. A separate gate from dry-run's terminal-only one, which is unchanged.
+ * The person-only gate: the queue's content reads (Q1), and `queue clear`, which an agent must not be able to use to
+ * make the person's queue disappear; binding a lane; and since 0.32.0 `delivery show`, the dry-run log's `list` and
+ * `show`, `messages list` and `message show`, and judge setup and provider keys. It refuses inside an MCP server's
+ * process; a shell an agent runs is the person's own.
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'messages' | 'setup' = 'read',
+  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -41,6 +43,18 @@ export function assertNotMcpServer(
       message:
         "binding a lane is for a person, at a terminal or in the app — the event service's MCP server cannot bind one",
       hint: 'An agent gives the person its window id from events_lane_whoami; the person binds it.',
+    },
+    // 0.32.0 (owner feedback §3.5): one delivery's whole story — its decision, event and source ids — is the person's.
+    delivery: {
+      message:
+        "a delivery's details are for a person, at a terminal or in the app — the event service's MCP server cannot read them",
+      hint: 'events_deliveries_list gives an agent the content-free delivery rows.',
+    },
+    // 0.32.0 (§3.5, events design D7): the dry-run log holds the exact would-be event, for a person to read.
+    dryrun: {
+      message:
+        "the dry-run log is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
+      hint: 'events_deliveries_list says which deliveries went to a dry-run target, without what they held.',
     },
     // 0.32.0 §3.6: what happened to each message — where it went, who read it — is the person's own view.
     messages: {

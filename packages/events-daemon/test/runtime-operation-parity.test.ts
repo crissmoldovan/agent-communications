@@ -138,6 +138,10 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     assert.ok(!names.includes('events_run'), 'the owner-starting command is not an MCP tool');
     assert.ok(!names.includes('events_approve'), 'standing disclosure approval is terminal-only');
     assert.ok(!names.includes('events_dryrun_list'), 'retained local content has no MCP selection surface');
+    assert.ok(
+      !names.includes('events_delivery_show'),
+      "one delivery's details are the person's, at a terminal or in the app (0.32.0, §3.5)",
+    );
     await assert.rejects(
       client.callTool({ name: 'events_dryrun_show', arguments: { deliveryId: 'delivery-1' } }),
       /not found/,

@@ -83,6 +83,8 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'migrateSecrets', wireOperation: 'migrateSecrets', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'dryrunList', wireOperation: 'dryrun-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'dryrunShow', wireOperation: 'dryrun-show', desktopCallable: true, family: 'owner' },
+  // One delivery's details (0.32.0, owner feedback §3.5): the person's, from the CLI and the app; no tool reaches it.
+  { capabilityOperation: 'deliveryShow', wireOperation: 'delivery-show', desktopCallable: true, family: 'owner' },
   // The action queue (0.30.0). list and show carry item content and are CLI-only; the rest are content-free.
   { capabilityOperation: 'queueList', wireOperation: 'queue-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'queueShow', wireOperation: 'queue-show', desktopCallable: true, family: 'owner' },

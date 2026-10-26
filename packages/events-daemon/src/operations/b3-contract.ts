@@ -6,7 +6,7 @@ import {
   type DisclosureVersionKind,
   neutralise,
 } from '@agentcomms/core';
-import { isJsonValue, type JsonValue } from '@agentcomms/events';
+import { describeRule, isJsonValue, type JsonValue } from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
@@ -57,6 +57,7 @@ import {
   isB3ControlWireOperation,
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
+import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
 import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
 import type {
   QueueClearResultV1,
@@ -551,6 +552,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly dropDelivery: B3DeliveryDropResultV1;
   readonly 'dryrun-list': readonly JsonValue[];
   readonly 'dryrun-show': B3DryRunShowResultV1;
+  readonly 'delivery-show': DeliveryShowResultV1;
   readonly 'queue-list': QueueListResultV1;
   readonly 'queue-show': Readonly<{ item: QueueItemV1 }>;
   readonly 'queue-items': QueueItemsResultV1;
@@ -704,6 +706,8 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly approve: { readonly approvalId: string; readonly answer: string };
   readonly 'dryrun-list': Record<string, never>;
   readonly 'dryrun-show': { readonly deliveryId: string };
+  /** One delivery's details (0.32.0, owner feedback §3.5): the person's, from the CLI and the app. */
+  readonly 'delivery-show': { readonly deliveryId: string };
   readonly 'queue-list': B3QueueListArgumentsV1;
   readonly 'queue-show': { readonly itemId: string };
   readonly 'queue-items': Omit<B3QueueListArgumentsV1, 'since'>;
@@ -941,6 +945,114 @@ function assertQueueStateChange(value: Readonly<Record<string, unknown>>, name: 
   assertIsoTime(value.item.stateAt, `${name} stateAt`);
 }
 
+const DELIVERY_ROW_FIELDS = [
+  'deliveryId',
+  'accountId',
+  'ruleId',
+  'ruleVersion',
+  'targetId',
+  'targetVersion',
+  'subscriberId',
+  'subscriberVersion',
+  'attempts',
+  'nextAt',
+  'expiresAt',
+  'state',
+  'switchGeneration',
+  'deadLetterExpiresAt',
+  'targetKind',
+  'lastErrorCode',
+  'lastStatus',
+  'decisionId',
+  'eventId',
+  'deliveredAt',
+  'deadLetteredAt',
+];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue'];
+
+function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
+  if (value !== null) check(value, name);
+}
+
+/** An event's source ids (`runtime/event-source.ts`): one closed shape per channel, ids only, as `messages list`'s. */
+function assertEventSource(value: unknown, name: string): void {
+  if (!isRecord(value)) throw new TypeError(`${name} must be a closed object`);
+  const keys = typeof value.channel === 'string' ? MESSAGE_SOURCE_FIELDS[value.channel] : undefined;
+  if (keys === undefined) throw new TypeError(`${name} has an unknown channel`);
+  assertClosedRecord(value, keys, name);
+  for (const key of keys) assertText(value[key], `${name} ${key}`);
+}
+
+/** `delivery show` (0.32.0, owner feedback §3.5): content-free ids, times and the judge's yes or no. */
+function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
+  const row = value.delivery;
+  assertClosedRecord(row, DELIVERY_ROW_FIELDS, 'a shown delivery row');
+  for (const field of ['deliveryId', 'accountId', 'ruleId', 'targetId', 'state', 'decisionId'])
+    assertText(row[field], `a shown delivery ${field}`);
+  for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);
+  for (const field of ['attempts', 'expiresAt', 'switchGeneration'])
+    assertNonNegativeInteger(row[field], `a shown delivery ${field}`);
+  for (const field of [
+    'subscriberVersion',
+    'nextAt',
+    'deadLetterExpiresAt',
+    'lastStatus',
+    'deliveredAt',
+    'deadLetteredAt',
+  ])
+    assertNullable(row[field], assertNonNegativeInteger, `a shown delivery ${field}`);
+  for (const field of ['subscriberId', 'lastErrorCode', 'eventId'])
+    assertNullable(row[field], assertText, `a shown delivery ${field}`);
+  if (!DELIVERY_TARGET_KINDS.includes(row.targetKind as string))
+    throw new TypeError('a shown delivery has an unknown target kind');
+  if (value.decision !== null) {
+    assertClosedRecord(value.decision, ['outcome', 'decidedAt', 'judge'], 'a shown decision');
+    assertText(value.decision.outcome, 'a shown decision outcome');
+    assertNullable(value.decision.decidedAt, assertNonNegativeInteger, 'a shown decision time');
+    const judge = value.decision.judge;
+    if (judge !== null) {
+      assertClosedRecord(judge, ['kind', 'answer', 'confidence', 'calibrated'], 'a shown judge');
+      assertText(judge.kind, 'a shown judge kind');
+      if (judge.answer !== null && judge.answer !== 'yes' && judge.answer !== 'no')
+        throw new TypeError('a shown judge answer is yes, no or null');
+      if (judge.confidence !== null && (typeof judge.confidence !== 'number' || !Number.isFinite(judge.confidence)))
+        throw new TypeError('a shown judge confidence is a finite number or null');
+      if (judge.calibrated !== null && typeof judge.calibrated !== 'boolean')
+        throw new TypeError('a shown judge says whether it is calibrated');
+    }
+  }
+  if (value.event !== null) {
+    assertClosedRecord(
+      value.event,
+      ['eventId', 'type', 'accountId', 'occurredAt', 'observedAt', 'source'],
+      'a shown event',
+    );
+    for (const field of ['eventId', 'type', 'accountId']) assertText(value.event[field], `a shown event ${field}`);
+    for (const field of ['occurredAt', 'observedAt'])
+      assertNonNegativeInteger(value.event[field], `a shown event ${field}`);
+    assertNullable(value.event.source, assertEventSource, 'a shown event source');
+  }
+  if (!isRecord(value.target)) throw new TypeError('a shown target must be a closed object');
+  const target = value.target;
+  assertClosedRecord(
+    target,
+    ['kind', 'id', 'version', ...['host', 'lane'].filter((key) => Object.hasOwn(target, key))],
+    'a shown target',
+  );
+  if (!DELIVERY_TARGET_KINDS.includes(target.kind as string)) throw new TypeError('a shown target has an unknown kind');
+  assertText(target.id, 'a shown target id');
+  assertPositiveInteger(target.version, 'a shown target version');
+  if (target.host !== undefined && (target.kind !== 'webhook' || typeof target.host !== 'string' || target.host === ''))
+    throw new TypeError('only a webhook target shows its host');
+  if (target.lane !== undefined && (target.kind !== 'queue' || !isLaneName(target.lane)))
+    throw new TypeError('only a queue target shows its lane');
+  if (value.dryRun !== null) {
+    assertClosedRecord(value.dryRun, ['expiresAt'], 'a shown dry-run entry');
+    if (target.kind !== 'dry-run') throw new TypeError('only a dry-run delivery shows a log entry');
+    assertNullable(value.dryRun.expiresAt, assertNonNegativeInteger, 'a shown dry-run expiry');
+  }
+}
+
 /** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
 function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
   if (value.kind !== 'typesafe' && value.kind !== 'local-endpoint')
@@ -1147,6 +1259,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'lane-list': ['lanes'],
   'lane-bind': ['lane', 'binding'],
   'lane-unbind': ['lane', 'unbound'],
+  'delivery-show': ['delivery', 'decision', 'event', 'target', 'dryRun'],
   'messages-list': ['messages', 'next'],
   'message-show': ['message'],
   'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
@@ -1397,6 +1510,9 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'lane-unbind':
       if (!isLaneName(value.lane)) throw new TypeError('a lane unbind result has a malformed lane name');
       if (value.unbound !== true) throw new TypeError('a lane unbind result says it unbound');
+      return;
+    case 'delivery-show':
+      assertDeliveryShow(value);
       return;
     case 'messages-list':
       if (!Array.isArray(value.messages)) throw new TypeError('a messages list result needs its messages');
@@ -1678,6 +1794,19 @@ export interface B3ApprovalPreviewContext {
 }
 
 /**
+ * A rule's preview in plain words (0.32.0, owner feedback §3.4), above the canonical JSON, which stays: the JSON is what
+ * is approved. Rule-author text is written escaped, as in the JSON, so a line break or a quote in an operand or the
+ * judge's question cannot start a line of its own and pass for part of the preview.
+ */
+function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  const text = describeRule(document.rule)
+    .map((part) => (part.kind === 'untrusted' ? JSON.stringify(part.text).slice(1, -1) : part.text))
+    .join('');
+  return [`In plain words: ${neutralise(text).text}`];
+}
+
+/**
  * Where a rule's hosted judge sends the fields the rule names (owner decision 2026-10-26): to TypeSafe's Jev itself, or
  * to OpenRouter, which passes them on to TypeSafe's Jev. A local or Laya judge sends nothing off this machine.
  */
@@ -1762,6 +1891,7 @@ export function renderB3ApprovalPreviewV1(
     terminal: [
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
+      ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
       ...lanes,

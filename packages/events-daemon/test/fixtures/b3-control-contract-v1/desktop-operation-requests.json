@@ -109,6 +109,10 @@
   { "name": "dryrun-list-request", "request": { "operation": "dryrun-list", "args": {} } },
   { "name": "dryrun-show-request", "request": { "operation": "dryrun-show", "args": { "deliveryId": "delivery-1" } } },
   {
+    "name": "delivery-show-request",
+    "request": { "operation": "delivery-show", "args": { "deliveryId": "delivery-1" } }
+  },
+  {
     "name": "queue-list-request",
     "request": {
       "operation": "queue-list",

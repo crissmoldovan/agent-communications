@@ -2616,6 +2616,17 @@
       "reason": "Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context."
     },
     {
+      "id": "events-daemon.delivery.show",
+      "package": "events-daemon",
+      "cli": "delivery show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "deliveryShow",
+      "argv": ["delivery-1"],
+      "expect": { "deliveryId": "delivery-1" },
+      "reason": "One delivery's details, with the decision, the event and its source's message ids, are the person's own read, at a terminal or in the app (owner feedback 0.32.0, §3.5). It refuses inside the event service's MCP server, and no tool reads it; events_deliveries_list gives an agent the content-free rows."
+    },
+    {
       "id": "events-daemon.queue.list",
       "package": "events-daemon",
       "cli": "queue list",

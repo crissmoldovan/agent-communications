@@ -166,6 +166,69 @@
     }
   },
   {
+    "name": "delivery-show-result",
+    "request": {
+      "operation": "delivery-show",
+      "args": {
+        "deliveryId": "delivery-1"
+      }
+    },
+    "result": {
+      "delivery": {
+        "deliveryId": "delivery-1",
+        "accountId": "account-1",
+        "ruleId": "rule-1",
+        "ruleVersion": 1,
+        "targetId": "target-1",
+        "targetVersion": 1,
+        "subscriberId": null,
+        "subscriberVersion": null,
+        "attempts": 1,
+        "nextAt": null,
+        "expiresAt": 2,
+        "state": "delivered",
+        "switchGeneration": 1,
+        "deadLetterExpiresAt": null,
+        "targetKind": "dry-run",
+        "lastErrorCode": null,
+        "lastStatus": null,
+        "decisionId": "decision-1",
+        "eventId": "event-1",
+        "deliveredAt": 1,
+        "deadLetteredAt": null
+      },
+      "decision": {
+        "outcome": "matched",
+        "decidedAt": 1,
+        "judge": {
+          "kind": "typesafe",
+          "answer": "yes",
+          "confidence": 0.9,
+          "calibrated": true
+        }
+      },
+      "event": {
+        "eventId": "event-1",
+        "type": "gmail.message.received",
+        "accountId": "account-1",
+        "occurredAt": 1,
+        "observedAt": 1,
+        "source": {
+          "channel": "gmail",
+          "messageId": "message-1"
+        }
+      },
+      "target": {
+        "kind": "dry-run",
+        "id": "target-1",
+        "version": 1
+      },
+      "dryRun": {
+        "expiresAt": 2
+      }
+    }
+  },
+  {
     "name": "queue-show-result",
     "request": {
       "operation": "queue-show",

@@ -317,7 +317,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
         );
       const settled = database
         .prepare(
-          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL
+          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
@@ -330,7 +330,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
   #settle(row: ClaimedDelivery, state: 'cancelled' | 'retention-expired'): void {
     const changed = this.#store.database
       .prepare(
-        `UPDATE deliveries SET state = ?, encrypted_record = NULL, lease_until = NULL
+        `UPDATE deliveries SET state = ?, encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
       .run(state, row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
@@ -346,7 +346,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
     this.#store.immediate(() => {
       const changed = this.#store.database
         .prepare(
-          `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL
+          `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;

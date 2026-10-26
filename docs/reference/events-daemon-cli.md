@@ -57,9 +57,9 @@ Scripts should read these rather than parse output.
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`provider`](#agent-events-provider) | the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
-| [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
+| [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
-| [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
+| [`dryrun`](#agent-events-dryrun) | read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
 | [`messages`](#agent-events-messages) | what happened to each message the event service observed: matched, judged, delivered, queued, read |
@@ -671,10 +671,18 @@ agent-events deliveries list [options]
 
 ### `agent-events delivery`
 
-retry or drop one exact delivery
+show, retry or drop one exact delivery
 
 ```
 agent-events delivery [options] [command]
+```
+
+### `agent-events delivery show`
+
+show one delivery: its decision, the event and its source ids, and its target (a person only)
+
+```
+agent-events delivery show [options] <delivery-id>
 ```
 
 ### `agent-events delivery retry`
@@ -711,7 +719,7 @@ agent-events held decide [options] <decision-id> <accept|reject>
 
 ### `agent-events dryrun`
 
-inspect retained local records at an interactive terminal
+read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most
 
 ```
 agent-events dryrun [options] [command]
@@ -719,11 +727,15 @@ agent-events dryrun [options] [command]
 
 ### `agent-events dryrun list`
 
+list the dry-run log without what it holds (a person, at a terminal or in the app)
+
 ```
 agent-events dryrun list [options]
 ```
 
 ### `agent-events dryrun show`
+
+show one dry-run record: the exact event it would have delivered (a person, at a terminal or in the app)
 
 ```
 agent-events dryrun show [options] <delivery-id>

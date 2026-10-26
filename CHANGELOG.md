@@ -55,6 +55,30 @@ its prototype.
   in a lane bound to another window.
 - **One automatic database change** adds the history table and two indexes. Nothing is asked of you.
 
+**Rules and deliveries you can read.** The owner opened the app's Events screens and found raw database rows: "mail
+subject version 1 state active and approval and activation", and a next try "always 1970".
+
+- **No more 1970.** A delivered dry-run, queue or SSE delivery kept the "due now" time it started with, which the app
+  showed as a next try on 1 January 1970. Delivering now clears it, and a migration clears it on the rows already
+  delivered, cancelled or expired.
+- **A rule in plain words.** `agent-events rule show <rule-id>` (and `events_rule_show`) gives each version with when
+  it was switched on, replaced or revoked, a one-sentence `summary` such as "When mail arrives in cue/gmail with
+  'invoice' in the subject, ask Jev '…'. If it says yes, put it in the Queue, lane billing.", and what it did in the
+  last 7 days: matched, judged yes and no, held, delivered and failed. Every word the rule's author wrote is marked as
+  theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve. These fields
+  are added: nothing is renamed or removed.
+- **Deliveries say where they went.** `deliveries list` rows gain the target's kind, the last try's answer, the
+  decision and event they came from, when they were delivered where a log keeps that, and when one failed for good.
+- **One delivery's details:** `agent-events delivery show <delivery-id>` gives its decision and the judge's answer, the
+  message it came from by its own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
+  host only). It is yours, at a terminal or in the app: inside the event service's MCP server it is refused, and no
+  tool reads it.
+- **The dry-run log in the app.** `dryrun list` and `dryrun show` worked only at an interactive terminal, so the app,
+  which reads with `--json`, could not open the log the design gives it. They now refuse only inside the event
+  service's MCP server, like the queue's own content reads; `dryrun show --json` gives the record as data, for the app
+  to show as outside text. As with the queue, a shell an agent runs as you is not refused. The log keeps each entry 24
+  hours at most.
+
 ## 0.31.0
 
 **Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the
