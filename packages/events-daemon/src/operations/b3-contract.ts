@@ -2349,6 +2349,11 @@ export interface B3OwnerRequest {
   readonly args: Readonly<Record<string, unknown>>;
   /** Captured from the authenticated control hello; request arguments cannot choose it. */
   readonly origin?: string | undefined;
+  /**
+   * The caller says it is the event service's MCP server (0.32.0 review, finding 4; 0.34.0 design B7). It only narrows:
+   * `approvalView` then returns the preview without issuing a challenge.
+   */
+  readonly insideMcpServer?: boolean | undefined;
 }
 
 export interface B3OwnerService {

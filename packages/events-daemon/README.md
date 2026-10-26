@@ -392,7 +392,8 @@ channel servers applies, and the result tells you to restart the client. The
   against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's enablement,
   and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and unbind it.
 - **An agent can never:**
-  - approve anything;
+  - approve anything: `events_approval_view` gives it an approval's preview without a challenge (0.34.0), so nothing
+    it reads there can answer an approval, and a challenge you are typing at your terminal stays yours;
   - bind a lane, or read a lane another window is bound to;
   - read what the dry-run log kept, one delivery's details, or what a queue item says outside its own lane;
   - see, set or rotate a webhook secret or stream token;

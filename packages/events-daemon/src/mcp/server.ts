@@ -56,6 +56,7 @@ import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { LanePointerResultV1, LaneTaskV1 } from '../runtime/lanes.ts';
 import { VERSION } from '../version.ts';
+import { approvalViewForAgent } from './agent-approval-view.ts';
 
 export interface EventsMcpServer {
   /** One server instance, for a caller that connects its own transport (tests, the parity drive). */
@@ -344,12 +345,20 @@ function buildEventsMcpServer(
     () => catalogueList(options),
   );
 
+  // 0.34.0 design B7: the preview alone. The owner issues no challenge for an agent's view, and anything an older
+  // owner still returns of one is left out, so nothing an agent holds can answer `approve`.
   strictControlTool(
     'events_approval_view',
     'View pending disclosure approval',
-    'Returns the daemon-authoritative preview and fresh challenge without claiming it.',
+    'Returns the daemon-authoritative preview of a pending approval, without a challenge: the person approves it in the Agent Comms app or at their terminal.',
     { approvalId: z.string().min(1), digest: z.string().min(1) },
-    (args) => approvalView(args.approvalId as string, args.digest as string, options),
+    async (args) =>
+      approvalViewForAgent(
+        await approvalView(args.approvalId as string, args.digest as string, {
+          stateDir: options.stateDir,
+          insideMcpServer: true,
+        }),
+      ),
   );
   strictControlTool(
     'events_rule_test',

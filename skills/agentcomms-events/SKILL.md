@@ -164,9 +164,11 @@ labels (`[{ id, name }]`), who it is assigned to (`"me"`, `{ id }` or `null`), a
 
 An approval id, digest and preview mean the proposed activation is still pending. Give the approval id and preview to
 the person. Standing disclosure can be approved only by a person typing the challenge at an interactive terminal. That
-terminal flow may offer the person a fixed synthetic test for each pending target before it asks for the challenge; an
-app approval screen uses only the complete selector returned by `events_approval_view`. Do not approve, claim, repeat
-the call to force activation, reconstruct a selector, or relay a challenge.
+terminal flow may offer the person a fixed synthetic test for each pending target before it asks for the challenge.
+The Agent Comms app is the person's other place: there they approve a rule's activation, or switching the event service
+on, after its preview. `events_approval_view` gives you that preview without a challenge; the app and the terminal each
+get their own. Do not approve, claim, repeat the call to force activation, reconstruct a selector, or relay a
+challenge.
 
 ## Human-only boundaries
 

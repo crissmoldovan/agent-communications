@@ -50,6 +50,7 @@ import { type LaneWindowIdentity, parseLaneWindowIdentity } from '../domain/lane
 import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import type { AgentApprovalViewV1 } from '../operations/approval-view.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
   type B3ApprovalViewResultV1,
@@ -574,6 +575,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             now,
             request.args,
             options.laya !== undefined,
+            request.insideMcpServer === true,
           );
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
@@ -842,7 +844,8 @@ async function approvalViewFromOwner(
   now: () => number,
   args: Readonly<Record<string, unknown>>,
   layaJudges = false,
-): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3> {
+  agentView = false,
+): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3 | AgentApprovalViewV1> {
   const approvalId = requiredText(args.approvalId, 'approval id');
   const digest = requiredText(args.digest, 'approval digest');
   const row = store.database
@@ -854,6 +857,16 @@ async function approvalViewFromOwner(
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
+  // An agent's view, from the event service's MCP server (0.34.0 design B7): the preview alone. No challenge is issued
+  // for it, so nothing an agent holds can answer `approve`, and one the person is answering at their terminal stays.
+  if (agentView)
+    return {
+      kind: 'READY',
+      approvalId,
+      digest: row.digest,
+      preview,
+      ...(layaJudge === undefined ? {} : { layaJudge }),
+    };
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
   if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
@@ -1908,7 +1921,12 @@ async function handleControl(
     if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
       lanes.assertAgentMayStop(args.deliveryId, caller);
     try {
-      const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
+      const result = await b3OwnerService.handle({
+        operation: request.operation,
+        args,
+        origin: request.origin,
+        ...(insideMcpServer === true ? { insideMcpServer: true } : {}),
+      });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.

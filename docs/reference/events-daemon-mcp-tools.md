@@ -19,7 +19,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_enable_all`](#events_enable_all) | Reports that a standing disclosure approval is required before enablement. |
 | [`events_doctor`](#events_doctor) | Reports content-free lineage, retry, recovery, judge authority, hold-clock and protocol health. |
 | [`events_catalogue_list`](#events_catalogue_list) | Lists selectable local event definitions. |
-| [`events_approval_view`](#events_approval_view) | Returns the daemon-authoritative preview and fresh challenge without claiming it. |
+| [`events_approval_view`](#events_approval_view) | Returns the daemon-authoritative preview of a pending approval, without a challenge: the person approves it in the Agent Comms app or at their terminal. |
 | [`events_rule_test`](#events_rule_test) | Locally evaluates one selectable catalogue example without provider or judge I/O. |
 | [`events_target_test`](#events_target_test) | Sends the fixed synthetic event only to one exact active target version. |
 | [`events_subscribers_list`](#events_subscribers_list) | Lists immutable subscriber metadata. |
@@ -137,7 +137,7 @@ Takes no arguments.
 
 ### `events_approval_view`
 
-Returns the daemon-authoritative preview and fresh challenge without claiming it.
+Returns the daemon-authoritative preview of a pending approval, without a challenge: the person approves it in the Agent Comms app or at their terminal.
 
 *read-only · idempotent*
 
