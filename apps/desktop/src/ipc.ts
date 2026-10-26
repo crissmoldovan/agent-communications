@@ -44,6 +44,13 @@ export type AccountsProduct = 'gmail' | 'slack' | 'resend';
 export type EndpointJudgeKind = 'typesafe' | 'local-endpoint';
 
 /**
+ * The AI providers whose keys Jev uses (0.32.0, `allowlist.rs`, `AiProvider`): TypeSafe itself, and OpenRouter, which
+ * serves TypeSafe's Jev. Settings → AI providers lists them in this order; Jev's setup offers OpenRouter first.
+ */
+export const AI_PROVIDERS = ['typesafe', 'openrouter'] as const;
+export type AiProvider = (typeof AI_PROVIDERS)[number];
+
+/**
  * An approval that no longer waits, as Approvals → Recent reads it (`allowlist.rs`, `FinishedApprovalState`): one list
  * for each. Closed: never `pending` (Waiting's), `sending` or `corrupt`.
  */
@@ -169,6 +176,11 @@ export type Call =
   | { kind: 'eventsDryrunShow'; deliveryId: string }
   | { kind: 'eventsDeliveryRetry'; deliveryId: string }
   | { kind: 'eventsDeliveryDrop'; deliveryId: string }
+  // Judge setup and AI provider keys (0.32.0): the list, a key's removal, and the person's own setup, applied by the CLI
+  // itself. A key is never a call's: `providerKeySet` below hands it to the CLI on stdin.
+  | { kind: 'providerList' }
+  | { kind: 'providerKeyRemove'; provider: AiProvider }
+  | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -305,7 +317,7 @@ export interface AppEvents {
   'quit-requested': null;
 }
 
-/** The twenty-one commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** The twenty-two commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -340,6 +352,11 @@ export interface Bridge {
   openFullDiskAccess(): Promise<void>;
   /** The answer to the quit question; the app then quits. */
   answerQuit(keep: boolean, remember: boolean): Promise<void>;
+  /**
+   * Stores an AI provider's key (0.32.0): Rust hands it to the events CLI's `provider key set` on stdin, never in argv,
+   * and keeps it only for that call. The window clears its field once this is called, and never keeps the key.
+   */
+  providerKeySet(provider: AiProvider, key: string): Promise<CliResult>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -368,6 +385,7 @@ export const tauriBridge: Bridge = {
   answerFirstStart: (start) => invoke('answer_first_start', { start }),
   openFullDiskAccess: () => invoke('open_full_disk_access'),
   answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
+  providerKeySet: (provider, key) => invoke('provider_key_set', { provider, key }),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 

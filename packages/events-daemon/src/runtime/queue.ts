@@ -36,6 +36,7 @@ import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import { EventExpiry } from './expiry.ts';
 import { queueItemLocation, ruleFor } from './queue-dispatcher.ts';
+import { PERSON, type QueueActor, type QueueHistoryKind, recordQueueHistory } from './queue-history.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
 /**
@@ -372,16 +373,20 @@ export class QueueStore {
     };
   }
 
-  done(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
-    return this.#setState(id, 'done', scope);
+  /**
+   * Done, dismiss and reopen. `by` is who asked — an agent window over MCP, or the person at the CLI or in the app (the
+   * default) — and each change that changes the state writes one line of the item's history saying so (0.32.0 §3.6).
+   */
+  done(id: unknown, scope?: QueueScope, by: QueueActor = PERSON): QueueStateChangeResultV1 {
+    return this.#setState(id, 'done', scope, by);
   }
 
-  dismiss(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
-    return this.#setState(id, 'dismissed', scope);
+  dismiss(id: unknown, scope?: QueueScope, by: QueueActor = PERSON): QueueStateChangeResultV1 {
+    return this.#setState(id, 'dismissed', scope, by);
   }
 
-  reopen(id: unknown, scope?: QueueScope): QueueStateChangeResultV1 {
-    return this.#setState(id, 'open', scope);
+  reopen(id: unknown, scope?: QueueScope, by: QueueActor = PERSON): QueueStateChangeResultV1 {
+    return this.#setState(id, 'open', scope, by);
   }
 
   /**
@@ -436,6 +441,38 @@ export class QueueStore {
     };
   }
 
+  /**
+   * For `messages list` and `message show` (0.32.0 §3.6): the sender and subject each item keeps, as `queue show` gives
+   * them — enveloped, after the same read fences — and only for an item whose target keeps a summary (`show: summary`)
+   * and whose content is still kept. An item the fences refuse, or that keeps nothing, is left out.
+   */
+  async keptSummaries(
+    itemIds: readonly string[],
+  ): Promise<ReadonlyMap<string, { readonly from: QueueItemV1['from']; readonly subject?: string }>> {
+    const kept = new Map<string, { readonly from: QueueItemV1['from']; readonly subject?: string }>();
+    if (itemIds.length === 0) return kept;
+    const summaries = this.#store.database
+      .prepare(
+        `SELECT qi.id AS id FROM queue_items qi
+           JOIN target_versions tv ON tv.target_id = qi.target_id AND tv.version = qi.target_version
+          WHERE qi.id IN (SELECT value FROM json_each(?)) AND qi.encrypted_record IS NOT NULL
+            AND json_extract(tv.document, '$.show') = 'summary'`,
+      )
+      .all(JSON.stringify(itemIds)) as Array<{ id: string }>;
+    if (summaries.length === 0) return kept;
+    const config = (await this.#config.load()) as AccountNames;
+    const boundary = newBoundary();
+    for (const { id } of summaries) {
+      const row = this.#row(id);
+      if (row === undefined) continue;
+      const item = await this.#item(row, config, boundary, 'list');
+      if (item === undefined) continue;
+      if (item.from.name === undefined && item.from.address === undefined && item.subject === undefined) continue;
+      kept.set(id, { from: item.from, ...(item.subject === undefined ? {} : { subject: item.subject }) });
+    }
+    return kept;
+  }
+
   /** How many open items each lane holds, for the person's `lane list`. */
   openByLane(): ReadonlyMap<string, number> {
     this.#expiry.sweep();
@@ -457,8 +494,11 @@ export class QueueStore {
     }));
   }
 
-  /** Done, dismiss and reopen change only the person's own list; they tighten and loosen nothing (§4.4, DA10). */
-  #setState(id: unknown, state: QueueState, scope?: QueueScope): QueueStateChangeResultV1 {
+  /**
+   * Done, dismiss and reopen change only the person's own list; they tighten and loosen nothing (§4.4, DA10). The state
+   * and its history line commit together; asking for the state an item already has changes nothing and writes nothing.
+   */
+  #setState(id: unknown, state: QueueState, scope: QueueScope | undefined, by: QueueActor): QueueStateChangeResultV1 {
     const itemId = requireQueueItemId(id);
     const now = this.#now();
     const visible = scopeClause(scope);
@@ -475,6 +515,7 @@ export class QueueStore {
       this.#store.database
         .prepare('UPDATE queue_items SET state = ?, state_at = ? WHERE id = ?')
         .run(state, now, itemId);
+      recordQueueHistory(this.#store.database, { itemId, at: now, kind: HISTORY_KIND[state], by });
       return { item: { id: itemId, state, stateAt: iso(now) } };
     });
   }
@@ -688,6 +729,13 @@ export class QueueStore {
     );
   }
 }
+
+/** The history line a state change writes. */
+const HISTORY_KIND: Readonly<Record<QueueState, QueueHistoryKind>> = Object.freeze({
+  done: 'done',
+  dismissed: 'dismissed',
+  open: 'reopened',
+});
 
 function summary(row: QueueRow, config: AccountNames): QueueItemSummaryV1 {
   return {

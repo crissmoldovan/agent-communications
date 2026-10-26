@@ -69,8 +69,27 @@ export interface EventSecretMigrationResult {
   readonly code?: 'SELECTED_COPY_CHANGED_AFTER_MIGRATION' | undefined;
 }
 
-export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge';
-export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer' | 'judge-key';
+export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge' | 'provider';
+export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer' | 'judge-key' | 'provider-key';
+
+/** The AI providers a person keeps a key for (owner decision 2026-10-26): each slot's owner is the provider itself. */
+export const EVENT_SECRET_PROVIDERS = ['typesafe', 'openrouter'] as const;
+export type EventSecretProvider = (typeof EVENT_SECRET_PROVIDERS)[number];
+
+/**
+ * A provider slot's exact owner. A provider has no immutable document row, so its owner is version 1 and its digest is
+ * the digest of its canonical identity: the same value every time, and never one a judge, target or subscriber has.
+ */
+export function providerSecretOwner(provider: EventSecretProvider): EventSecretOwner {
+  if (!(EVENT_SECRET_PROVIDERS as readonly string[]).includes(provider))
+    throw new EventSecretError('EVENT_SECRET_REFERENCE', 'the AI provider is not one with a key slot');
+  return {
+    kind: 'provider',
+    id: provider,
+    version: 1,
+    digest: sha256Hex(canonicalJson({ kind: 'provider', provider, version: 1 })),
+  };
+}
 
 export interface EventSecretOwner {
   readonly kind: EventSecretOwnerKind;
@@ -165,7 +184,8 @@ function assertPurpose(owner: EventSecretOwner, purpose: EventSecretPurpose): vo
   const valid =
     (owner.kind === 'target' && (purpose === 'secret-url' || purpose === 'webhook-signing')) ||
     (owner.kind === 'subscriber' && purpose === 'sse-bearer') ||
-    (owner.kind === 'judge' && purpose === 'judge-key');
+    (owner.kind === 'judge' && purpose === 'judge-key') ||
+    (owner.kind === 'provider' && purpose === 'provider-key');
   if (!valid) {
     throw new EventSecretError(
       'EVENT_SECRET_REFERENCE',
@@ -179,11 +199,12 @@ function asStoredGeneration(row: Record<string, unknown>): StoredGeneration {
   const purpose = row.purpose;
   const lifecycle = row.lifecycle;
   if (
-    (ownerKind !== 'target' && ownerKind !== 'subscriber' && ownerKind !== 'judge') ||
+    (ownerKind !== 'target' && ownerKind !== 'subscriber' && ownerKind !== 'judge' && ownerKind !== 'provider') ||
     (purpose !== 'secret-url' &&
       purpose !== 'webhook-signing' &&
       purpose !== 'sse-bearer' &&
-      purpose !== 'judge-key') ||
+      purpose !== 'judge-key' &&
+      purpose !== 'provider-key') ||
     (lifecycle !== 'current' && lifecycle !== 'overlap' && lifecycle !== 'retired') ||
     typeof row.owner_id !== 'string' ||
     typeof row.owner_version !== 'number' ||
@@ -806,6 +827,36 @@ export class EventSecretStore {
     });
   }
 
+  /**
+   * Empties one slot: its current generation, and any overlap, become retired, so no boundary can read them again. The
+   * material itself is deleted by the next `reconcileRetiredGenerations`. A slot with nothing current is left as it is.
+   */
+  async retireCurrentGeneration(input: {
+    readonly owner: EventSecretOwner;
+    readonly purpose: EventSecretPurpose;
+  }): Promise<number | null> {
+    assertPurpose(input.owner, input.purpose);
+    return this.withLock(async () => {
+      this.assertSelectedBackend();
+      this.#database.exec('BEGIN IMMEDIATE');
+      try {
+        const current = this.currentGeneration(input.owner, input.purpose);
+        this.#database
+          .prepare(
+            `UPDATE event_secret_generations SET lifecycle = 'retired', expires_at = ?
+             WHERE owner_kind = ? AND owner_id = ? AND owner_version = ? AND purpose = ?
+               AND lifecycle IN ('current', 'overlap')`,
+          )
+          .run(Date.now(), input.owner.kind, input.owner.id, input.owner.version, input.purpose);
+        this.#database.exec('COMMIT');
+        return current?.generation ?? null;
+      } catch (error) {
+        this.#database.exec('ROLLBACK');
+        throw error;
+      }
+    });
+  }
+
   /** Reconciles only proven-retired opaque references after their database rows are no longer reachable. */
   async reconcileRetiredGenerations(
     cipher: EventSecretReferenceCipher,
@@ -945,6 +996,13 @@ export class EventSecretStore {
   }
 
   private assertLiveOwner(owner: EventSecretOwner): void {
+    if (owner.kind === 'provider') {
+      // A provider slot lives as long as the provider is one the release keeps keys for; its owner is fixed.
+      const exact = providerSecretOwner(owner.id as EventSecretProvider);
+      if (owner.version !== exact.version || owner.digest !== exact.digest)
+        throw new EventSecretError('EVENT_SECRET_OWNER_STALE', 'the AI provider key slot owner is not exact');
+      return;
+    }
     const table =
       owner.kind === 'target'
         ? 'target_versions'

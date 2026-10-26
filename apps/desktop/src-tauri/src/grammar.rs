@@ -5,6 +5,8 @@
 //! 2026-10-25-action-queue §8): a queue item's id, and a rule's id as the Queue screen filters by one. Two are its
 //! lanes' (0.31.0, design 2026-10-25-routing §3.1 and B1): a lane's name, and the id of the agent window bound to one.
 //! One is a delivery's (0.32.0, owner feedback §3.5): its id, as the Deliveries screen opens, retries or drops one.
+//! Two are judge setup's (0.32.0, owner decision 2026-10-26): a local model server's URL on this machine, and its
+//! model's name, as `judge setup local-endpoint` takes them.
 
 use regex::Regex;
 use serde::Deserialize;
@@ -30,6 +32,8 @@ struct Source {
     lane_name: String,
     window_id: String,
     delivery_id: String,
+    loopback_url: String,
+    local_model: String,
 }
 
 struct Grammar {
@@ -46,6 +50,8 @@ struct Grammar {
     lane_name: Regex,
     window_id: Regex,
     delivery_id: Regex,
+    loopback_url: Regex,
+    local_model: Regex,
 }
 
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
@@ -67,6 +73,8 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         lane_name: pattern(&source.lane_name),
         window_id: pattern(&source.window_id),
         delivery_id: pattern(&source.delivery_id),
+        loopback_url: pattern(&source.loopback_url),
+        local_model: pattern(&source.local_model),
     }
 });
 
@@ -163,9 +171,77 @@ pub fn delivery_id(value: &str) -> bool {
     plain(value) && GRAMMAR.delivery_id.is_match(value)
 }
 
+/// A local model server's URL, as `judge setup local-endpoint --url` takes it (0.32.0): plain HTTP to the literal
+/// `127.0.0.1` or `[::1]`, a port from 1 to 65535, and no path but `/` or `/v1/systemone`. A hostname, `localhost`
+/// included, HTTPS, another address, a user, a query or a fragment is refused; the event service checks it again.
+pub fn loopback_url(value: &str) -> bool {
+    plain(value)
+        && GRAMMAR
+            .loopback_url
+            .captures(value)
+            .and_then(|parts| parts.get(1))
+            .and_then(|port| port.as_str().parse::<u32>().ok())
+            .is_some_and(|port| (1..=65_535).contains(&port))
+}
+
+/// A local model's name, as `judge setup local-endpoint --model` takes it: a letter or digit, then up to 127 letters,
+/// digits, `.`, `_`, `:`, `/` or `-`.
+pub fn local_model(value: &str) -> bool {
+    plain(value) && GRAMMAR.local_model.is_match(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Judge setup's two words (0.32.0): a URL on this machine, and a model's name; nothing else passes.
+    #[test]
+    fn a_local_model_server_is_on_this_machine_with_a_port() {
+        for good in [
+            "http://127.0.0.1:11434",
+            "http://127.0.0.1:11434/",
+            "http://127.0.0.1:11434/v1/systemone",
+            "http://[::1]:8080",
+            "http://127.0.0.1:65535",
+        ] {
+            assert!(loopback_url(good), "{good}");
+        }
+        for bad in [
+            "",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://127.0.0.1:011434",
+            "http://localhost:11434",
+            "https://127.0.0.1:11434",
+            "http://192.168.1.20:11434",
+            "http://8.8.8.8:11434",
+            "http://[::2]:11434",
+            "http://127.0.0.1:11434/api/generate",
+            "http://127.0.0.1:11434/?q=1",
+            "http://127.0.0.1:11434#x",
+            "http://user@127.0.0.1:11434",
+            "http://127.0.0.1:11434\n",
+            "http://127.0.0.1:11434 --json",
+            "-http://127.0.0.1:11434",
+        ] {
+            assert!(!loopback_url(bad), "{bad:?}");
+        }
+        for good in ["nimble", "clef-flash", "llama3.2:3b", "org/model_v1"] {
+            assert!(local_model(good), "{good}");
+        }
+        for bad in [
+            "",
+            "-nimble",
+            "nim ble",
+            "nimble\n",
+            "--json",
+            "../x",
+            "m".repeat(129).as_str(),
+        ] {
+            assert!(!local_model(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn queue_item_ids_are_qi_and_26_of_crockford_s_letters() {

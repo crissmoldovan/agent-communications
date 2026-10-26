@@ -23,10 +23,12 @@ import {
 import { type ManagedShimWriteResult, removeManagedShimsForRuntimes, type writeManagedShim } from './managed-shims.ts';
 import {
   codexServerFromGet,
+  commandLinePackage,
   displayUrl,
   knownClientConfigs,
   type RegisteredServer,
   scanRegisteredServers,
+  type UnreadableConfig,
 } from './mcp-clients.ts';
 import { nodeProgram } from './node-program.ts';
 import { homeDirectory, shortenHome, withoutPathOptions } from './paths.ts';
@@ -1769,6 +1771,200 @@ async function mergeIntoJsonConfig(
   }
   // Through a link, with the mode it had, in a directory left as it was: the file is the client's, not ours.
   await replaceFileInPlace(path, `${JSON.stringify(current, null, 2)}\n`);
+}
+
+// ── Uninstall ───────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One entry an uninstall took out, or left: its name in the client's file, the file, and why it was left. */
+export interface UninstalledEntry {
+  name: string;
+  path: string;
+}
+
+export interface KeptEntry extends UninstalledEntry {
+  /** In words that never quote the file: why it is still there, and how to take it out. */
+  reason: string;
+}
+
+export interface UninstallResult {
+  client: SupportedClient;
+  /** Each entry of the product taken out of the client's own configuration, user scope. */
+  removed: UninstalledEntry[];
+  /** Each entry of the product still there, with why: a project's own, or one that could not be taken out here. */
+  kept: KeptEntry[];
+  /** The client's configs that could not be read: what they register is not known, so nothing in them was touched. */
+  unreadable: UnreadableConfig[];
+  /** Where the removed entries were saved, owner-only, to put back by hand; absent when nothing was removed. */
+  backupPath: string | undefined;
+}
+
+/**
+ * Takes one product's server out of one client's own configuration (design 2026-10-26-owner-feedback-0320 §3.3): every
+ * entry, at user scope, that starts this product (`isProductServer`) — whatever it is called — and nothing else.
+ *
+ * - **How:** Claude Code's and codex's entries with their own command (`claude mcp remove <name> --scope user`,
+ *   `codex mcp remove <name>`), as an install adds them; every other client's file rewritten in place with those
+ *   entries alone left out — read again just before, so an entry that changed since the scan is judged as it is now,
+ *   and only a plain JSON file: one with comments is the client's, and a rewrite would drop them.
+ * - **Left, and said:** a project's own entry (its `.mcp.json`, or Claude Code's per-project list), which belongs to
+ *   that project; an entry whose client's command is not here, or failed; one in a file that is not plain JSON.
+ * - **Kept, to put back:** what was removed is saved first, owner-only — an entry's env can hold a credential.
+ *
+ * Taking a server away is a tightening, so nobody is asked; the client sees it once it restarts. `--client json` is a
+ * snippet printed, never registered, so there is nothing of it to take out.
+ */
+export async function mcpUninstall(
+  context: InstallContext,
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
+  client: SupportedClient,
+  now: Date = new Date(),
+): Promise<UninstallResult> {
+  if (client === 'json') {
+    throw new CommsError('USAGE', '--client json prints an entry and registers none, so there is nothing to remove', {
+      hint: 'Name the client the entry was pasted into, or take it out of that file by hand.',
+    });
+  }
+  const platform = platformOf(context);
+  const scan = await scanRegisteredServers(context.env);
+  const unreadable = scan.unreadable.filter((file) => file.client === client);
+  const mine = scan.servers.filter((server) => server.client === client && isProductServer(server, product, platform));
+  const kept: KeptEntry[] = [];
+  const toRemove: RegisteredServer[] = [];
+  for (const server of mine) {
+    if (server.scope === 'project') {
+      kept.push({
+        name: server.name,
+        path: server.path,
+        reason: `a project's own entry, kept: take it out of ${server.path}, or with ${client} in that project`,
+      });
+    } else {
+      toRemove.push(server);
+    }
+  }
+  const backupPath = toRemove.length > 0 ? await backUpRemoved(context, client, toRemove, now) : undefined;
+  const removed: UninstalledEntry[] = [];
+  const target = await installTarget(context, { client });
+  if (target.cliName !== null) {
+    const words = (name: string) =>
+      target.cliName === 'claude' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
+    for (const server of toRemove) {
+      const command = clientCommandHint(
+        [target.cliName, ...words(server.name)],
+        platform,
+        `${target.cliName}'s own \`mcp remove\` for "${server.name}"`,
+      );
+      if (target.cliPath === null) {
+        kept.push({
+          name: server.name,
+          path: server.path,
+          reason: `${target.cliName} was not found ${clientCliSearch(context.env)}: remove it with ${command}`,
+        });
+        continue;
+      }
+      try {
+        await run(context.env, target.cliPath, words(server.name));
+        removed.push({ name: server.name, path: server.path });
+      } catch (error) {
+        const message = error instanceof CommsError ? error.message : String(error);
+        // Gone already is what was asked for; anything else is said, never taken for done.
+        if (/no (mcp )?server|not found|does not exist/i.test(message)) {
+          removed.push({ name: server.name, path: server.path });
+        } else {
+          kept.push({ name: server.name, path: server.path, reason: `${command} did not remove it: ${message}` });
+        }
+      }
+    }
+  } else {
+    const byFile = new Map<string, RegisteredServer[]>();
+    for (const server of toRemove) byFile.set(server.path, [...(byFile.get(server.path) ?? []), server]);
+    for (const [path, servers] of byFile) {
+      const outcome = await removeFromJsonConfig(path, servers, product, platform);
+      removed.push(...outcome.removed);
+      kept.push(...outcome.kept);
+    }
+  }
+  return { client, removed, kept, unreadable, backupPath };
+}
+
+/** Saves the entries an uninstall is about to take out, owner-only, and returns where. */
+async function backUpRemoved(
+  context: InstallContext,
+  client: SupportedClient,
+  entries: readonly RegisteredServer[],
+  now: Date,
+): Promise<string> {
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
+  const path = join(context.core.paths.dataDir, 'mcp-backups', `${stamp}-${client}-uninstall.json`);
+  // writeFileAtomic creates the file 0600 and the directory 0700: an entry's env can hold a credential.
+  await writeFileAtomic(
+    path,
+    `${JSON.stringify({ client, removedAt: now.toISOString(), entries: entries.map((entry) => ({ ...entry })) }, null, 2)}\n`,
+  );
+  return path;
+}
+
+/**
+ * Takes `servers` out of one client's JSON file, keeping everything else in it exactly as it was: each from the top
+ * level's `mcpServers` or `servers`, where clients keep them, and only while the entry there still starts this
+ * product. A file that is not plain JSON is left alone.
+ */
+async function removeFromJsonConfig(
+  path: string,
+  servers: readonly RegisteredServer[],
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
+  platform: NodeJS.Platform,
+): Promise<{ removed: UninstalledEntry[]; kept: KeptEntry[] }> {
+  const keep = (reason: string) => ({
+    removed: [],
+    kept: servers.map((server) => ({ name: server.name, path, reason })),
+  });
+  let current: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new SyntaxError('not an object');
+    current = parsed as Record<string, unknown>;
+  } catch {
+    // Comments are fine to VS Code and Gemini, and are what a rewrite through `JSON.stringify` would drop.
+    return keep(`${path} is not plain JSON, so it was left as it was: remove the entry from it by hand`);
+  }
+  const removed: UninstalledEntry[] = [];
+  const kept: KeptEntry[] = [];
+  for (const server of servers) {
+    const holder = ['mcpServers', 'servers']
+      .map((key) => current[key])
+      .find(
+        (list): list is Record<string, unknown> =>
+          typeof list === 'object' && list !== null && !Array.isArray(list) && Object.hasOwn(list, server.name),
+      );
+    const entry = holder?.[server.name] as { command?: unknown; args?: unknown } | undefined;
+    const still =
+      entry !== undefined &&
+      isProductServer(
+        {
+          command: typeof entry.command === 'string' ? entry.command : '',
+          args: Array.isArray(entry.args) ? entry.args.map(String) : [],
+          packageName: commandLinePackage(
+            typeof entry.command === 'string' ? entry.command : '',
+            Array.isArray(entry.args) ? entry.args.map(String) : [],
+          ),
+        },
+        product,
+        platform,
+      );
+    if (holder === undefined || !still) {
+      kept.push({
+        name: server.name,
+        path,
+        reason: 'it is not where this takes entries from, or it changed since it was read: look at the file by hand',
+      });
+      continue;
+    }
+    delete holder[server.name];
+    removed.push({ name: server.name, path });
+  }
+  // Through a link, with the mode it had, in a directory left as it was: the file is the client's, not ours.
+  if (removed.length > 0) await replaceFileInPlace(path, `${JSON.stringify(current, null, 2)}\n`);
+  return { removed, kept };
 }
 
 /** Starts the server exactly as a client would, and completes the handshake. */

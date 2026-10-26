@@ -1,4 +1,5 @@
 import { agentMarker, CommsError, canPrompt, newBoundary, renderFencedBody, wrapUntrusted } from '@agentcomms/core';
+import { isJsonValue, type JsonValue } from '@agentcomms/events';
 import type { DryRunRecord } from '../runtime/dispatcher.ts';
 
 export interface TerminalGateStreams {
@@ -25,7 +26,48 @@ export function assertHumanTerminal(
   if (!canPrompt(env, streams, { json })) throw new CommsError('APPROVAL_REQUIRED', wording.terminal);
 }
 
-/** Renders the already-authorised local record as untrusted terminal text, never as machine-readable output. */
+/** `dryrun show --json` (0.32.0, owner feedback §3.5): the record's metadata and the would-be CloudEvent itself. */
+export interface DryRunRecordDataV1 {
+  readonly deliveryId: string;
+  readonly ruleId: string;
+  readonly ruleVersion: number;
+  readonly targetId: string;
+  readonly targetVersion: number;
+  readonly eventId: string;
+  readonly accountId: string;
+  readonly deliveredAt: number;
+  readonly expiresAt: number;
+  /** The exact would-be CloudEvent, parsed: its `agentcommsuntrusted` names the sender-written fields of its `data`. */
+  readonly record: JsonValue;
+}
+
+/**
+ * The record as data for the person's app, which renders every sender-written field as outside text. This is the
+ * person's read only: the CLI refuses it inside an MCP server's process, and no MCP result ever carries it (D7).
+ */
+export function dryRunRecordAsData(record: DryRunRecord): DryRunRecordDataV1 {
+  let event: unknown;
+  try {
+    event = JSON.parse(record.record.cloudEventBytes);
+  } catch {
+    throw new CommsError('BAD_DATA', 'the retained local record is not a JSON event');
+  }
+  if (!isJsonValue(event)) throw new CommsError('BAD_DATA', 'the retained local record is not a JSON event');
+  return {
+    deliveryId: record.deliveryId,
+    ruleId: record.ruleId,
+    ruleVersion: record.ruleVersion,
+    targetId: record.targetId,
+    targetVersion: record.targetVersion,
+    eventId: record.eventId,
+    accountId: record.accountId,
+    deliveredAt: record.deliveredAt,
+    expiresAt: record.expiresAt,
+    record: event,
+  };
+}
+
+/** Renders the already-authorised local record as untrusted terminal text: the terminal view keeps the envelope. */
 export function renderDryRunRecord(record: DryRunRecord): string {
   const boundary = newBoundary();
   const body = wrapUntrusted(record.record.cloudEventBytes, { field: 'event', id: record.deliveryId }, boundary);
@@ -37,7 +79,7 @@ export function renderDryRunRecord(record: DryRunRecord): string {
   ].join('\n');
 }
 
-/** Lists content-free local record metadata for the same interactive-human surface. */
+/** Lists content-free local record metadata for a person at a terminal. */
 export function renderDryRunList(
   entries: readonly {
     readonly deliveryId: string;

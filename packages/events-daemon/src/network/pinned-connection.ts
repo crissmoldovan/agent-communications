@@ -22,6 +22,11 @@ export interface PinnedConnection {
 }
 
 const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
+/**
+ * The one other hosted endpoint global-only mode admits (owner decision 2026-10-26): OpenRouter's System One endpoint,
+ * which serves TypeSafe's Jev. Exactly this URL — scheme, host `openrouter.ai`, port and path — and nothing else there.
+ */
+const OPENROUTER_GLOBAL_ONLY_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -126,7 +131,9 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   assertPinnedUrl(url);
   const globalOnly = options.addressMode === 'global-only';
   if (globalOnly) {
-    if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
+    if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
+      // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
+    } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
       throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');
     if (options.approvedAddressSetDigest !== undefined)
       throw new AddressPolicyError('global-only address mode does not accept an approvedAddressSet fingerprint');

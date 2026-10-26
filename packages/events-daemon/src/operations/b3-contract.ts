@@ -6,7 +6,7 @@ import {
   type DisclosureVersionKind,
   neutralise,
 } from '@agentcomms/core';
-import { isJsonValue, type JsonValue } from '@agentcomms/events';
+import { describeRule, isJsonValue, type JsonValue } from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
@@ -20,7 +20,8 @@ import {
   type TargetDocument,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import type { CanonicalJudgeDocument } from '../domain/judges.ts';
+import type { SetupJudgeKind } from '../domain/judge-setup.ts';
+import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
   isActivityKey,
   isClaudeCodeSessionId,
@@ -30,6 +31,16 @@ import {
   type LaneListResultV1,
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
+import {
+  isEventId,
+  isMessagesCursor,
+  MESSAGE_DECISION_OUTCOMES,
+  MESSAGE_DELIVERY_STATES,
+  MESSAGE_TARGET_KINDS,
+  MESSAGES_LIST_MAX_LIMIT,
+  type MessageShowResultV1,
+  type MessagesListResultV1,
+} from '../domain/messages.ts';
 import {
   isQueueItemId,
   QUEUE_CHANNELS,
@@ -46,6 +57,8 @@ import {
   isB3ControlWireOperation,
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
+import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
+import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -56,6 +69,7 @@ import type {
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
+import type { EventSecretProvider } from '../store/event-secrets.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -538,6 +552,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly dropDelivery: B3DeliveryDropResultV1;
   readonly 'dryrun-list': readonly JsonValue[];
   readonly 'dryrun-show': B3DryRunShowResultV1;
+  readonly 'delivery-show': DeliveryShowResultV1;
   readonly 'queue-list': QueueListResultV1;
   readonly 'queue-show': Readonly<{ item: QueueItemV1 }>;
   readonly 'queue-items': QueueItemsResultV1;
@@ -549,6 +564,12 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'lane-list': LaneListResultV1;
   readonly 'lane-bind': LaneBindResultV1;
   readonly 'lane-unbind': LaneUnbindResultV1;
+  readonly 'messages-list': MessagesListResultV1;
+  readonly 'message-show': MessageShowResultV1;
+  readonly 'judge-setup': JudgeSetupResultV1;
+  readonly 'provider-list': ProviderListResultV1;
+  readonly 'provider-key-set': ProviderKeyResultV1;
+  readonly 'provider-key-remove': ProviderKeyResultV1;
 };
 
 /**
@@ -685,6 +706,8 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly approve: { readonly approvalId: string; readonly answer: string };
   readonly 'dryrun-list': Record<string, never>;
   readonly 'dryrun-show': { readonly deliveryId: string };
+  /** One delivery's details (0.32.0, owner feedback §3.5): the person's, from the CLI and the app. */
+  readonly 'delivery-show': { readonly deliveryId: string };
   readonly 'queue-list': B3QueueListArgumentsV1;
   readonly 'queue-show': { readonly itemId: string };
   readonly 'queue-items': Omit<B3QueueListArgumentsV1, 'since'>;
@@ -697,6 +720,32 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'lane-list': Record<string, never>;
   readonly 'lane-bind': { readonly lane: string; readonly window: string };
   readonly 'lane-unbind': { readonly lane: string };
+  /** A story per message (0.32.0): the person's read, at a terminal or in the app. */
+  readonly 'messages-list': B3MessagesListArgumentsV1;
+  readonly 'message-show': { readonly eventId: string };
+  /**
+   * The person's own setup (owner decision 2026-10-26). A provider key travels on the wire beside these arguments,
+   * from the person's hidden input, and is no part of the contract: no vector, result or audit line holds it.
+   */
+  readonly 'judge-setup': {
+    readonly kind: SetupJudgeKind;
+    readonly provider?: JevProvider | undefined;
+    readonly url?: string | undefined;
+    readonly model?: string | undefined;
+  };
+  readonly 'provider-list': Record<string, never>;
+  readonly 'provider-key-set': { readonly provider: EventSecretProvider };
+  readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+}
+
+/** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
+export interface B3MessagesListArgumentsV1 {
+  /** Whole milliseconds since 1970; 30 days back by default. */
+  readonly since?: number | undefined;
+  /** Whole milliseconds since 1970, or a page's `next` cursor (`<ms>:<eventId>`). */
+  readonly before?: number | string | undefined;
+  /** 1 to 500; 100 by default. */
+  readonly limit?: number | undefined;
 }
 
 /** `queue list`'s closed filter shape (action queue design §8); every field is optional. */
@@ -896,6 +945,146 @@ function assertQueueStateChange(value: Readonly<Record<string, unknown>>, name: 
   assertIsoTime(value.item.stateAt, `${name} stateAt`);
 }
 
+const DELIVERY_ROW_FIELDS = [
+  'deliveryId',
+  'accountId',
+  'ruleId',
+  'ruleVersion',
+  'targetId',
+  'targetVersion',
+  'subscriberId',
+  'subscriberVersion',
+  'attempts',
+  'nextAt',
+  'expiresAt',
+  'state',
+  'switchGeneration',
+  'deadLetterExpiresAt',
+  'targetKind',
+  'lastErrorCode',
+  'lastStatus',
+  'decisionId',
+  'eventId',
+  'deliveredAt',
+  'deadLetteredAt',
+];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue'];
+
+function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
+  if (value !== null) check(value, name);
+}
+
+/** An event's source ids (`runtime/event-source.ts`): one closed shape per channel, ids only, as `messages list`'s. */
+function assertEventSource(value: unknown, name: string): void {
+  if (!isRecord(value)) throw new TypeError(`${name} must be a closed object`);
+  const keys = typeof value.channel === 'string' ? MESSAGE_SOURCE_FIELDS[value.channel] : undefined;
+  if (keys === undefined) throw new TypeError(`${name} has an unknown channel`);
+  assertClosedRecord(value, keys, name);
+  for (const key of keys) assertText(value[key], `${name} ${key}`);
+}
+
+/** `delivery show` (0.32.0, owner feedback §3.5): content-free ids, times and the judge's yes or no. */
+function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
+  const row = value.delivery;
+  assertClosedRecord(row, DELIVERY_ROW_FIELDS, 'a shown delivery row');
+  for (const field of ['deliveryId', 'accountId', 'ruleId', 'targetId', 'state', 'decisionId'])
+    assertText(row[field], `a shown delivery ${field}`);
+  for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);
+  for (const field of ['attempts', 'expiresAt', 'switchGeneration'])
+    assertNonNegativeInteger(row[field], `a shown delivery ${field}`);
+  for (const field of [
+    'subscriberVersion',
+    'nextAt',
+    'deadLetterExpiresAt',
+    'lastStatus',
+    'deliveredAt',
+    'deadLetteredAt',
+  ])
+    assertNullable(row[field], assertNonNegativeInteger, `a shown delivery ${field}`);
+  for (const field of ['subscriberId', 'lastErrorCode', 'eventId'])
+    assertNullable(row[field], assertText, `a shown delivery ${field}`);
+  if (!DELIVERY_TARGET_KINDS.includes(row.targetKind as string))
+    throw new TypeError('a shown delivery has an unknown target kind');
+  if (value.decision !== null) {
+    assertClosedRecord(value.decision, ['outcome', 'decidedAt', 'judge'], 'a shown decision');
+    assertText(value.decision.outcome, 'a shown decision outcome');
+    assertNullable(value.decision.decidedAt, assertNonNegativeInteger, 'a shown decision time');
+    const judge = value.decision.judge;
+    if (judge !== null) {
+      assertClosedRecord(judge, ['kind', 'answer', 'confidence', 'calibrated'], 'a shown judge');
+      assertText(judge.kind, 'a shown judge kind');
+      if (judge.answer !== null && judge.answer !== 'yes' && judge.answer !== 'no')
+        throw new TypeError('a shown judge answer is yes, no or null');
+      if (judge.confidence !== null && (typeof judge.confidence !== 'number' || !Number.isFinite(judge.confidence)))
+        throw new TypeError('a shown judge confidence is a finite number or null');
+      if (judge.calibrated !== null && typeof judge.calibrated !== 'boolean')
+        throw new TypeError('a shown judge says whether it is calibrated');
+    }
+  }
+  if (value.event !== null) {
+    assertClosedRecord(
+      value.event,
+      ['eventId', 'type', 'accountId', 'occurredAt', 'observedAt', 'source'],
+      'a shown event',
+    );
+    for (const field of ['eventId', 'type', 'accountId']) assertText(value.event[field], `a shown event ${field}`);
+    for (const field of ['occurredAt', 'observedAt'])
+      assertNonNegativeInteger(value.event[field], `a shown event ${field}`);
+    assertNullable(value.event.source, assertEventSource, 'a shown event source');
+  }
+  if (!isRecord(value.target)) throw new TypeError('a shown target must be a closed object');
+  const target = value.target;
+  assertClosedRecord(
+    target,
+    ['kind', 'id', 'version', ...['host', 'lane'].filter((key) => Object.hasOwn(target, key))],
+    'a shown target',
+  );
+  if (!DELIVERY_TARGET_KINDS.includes(target.kind as string)) throw new TypeError('a shown target has an unknown kind');
+  assertText(target.id, 'a shown target id');
+  assertPositiveInteger(target.version, 'a shown target version');
+  if (target.host !== undefined && (target.kind !== 'webhook' || typeof target.host !== 'string' || target.host === ''))
+    throw new TypeError('only a webhook target shows its host');
+  if (target.lane !== undefined && (target.kind !== 'queue' || !isLaneName(target.lane)))
+    throw new TypeError('only a queue target shows its lane');
+  if (value.dryRun !== null) {
+    assertClosedRecord(value.dryRun, ['expiresAt'], 'a shown dry-run entry');
+    if (target.kind !== 'dry-run') throw new TypeError('only a dry-run delivery shows a log entry');
+    assertNullable(value.dryRun.expiresAt, assertNonNegativeInteger, 'a shown dry-run expiry');
+  }
+}
+
+/** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
+function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
+  if (value.kind !== 'typesafe' && value.kind !== 'local-endpoint')
+    throw new TypeError('a judge setup kind is unknown');
+  if (value.enabled !== true || typeof value.enabledNow !== 'boolean')
+    throw new TypeError('a judge setup result says the kind is on');
+  assertClosedRecord(value.judge, ['judgeId', 'version', 'provider', 'model', 'endpoint', 'created'], 'a set-up judge');
+  for (const field of ['judgeId', 'provider', 'model', 'endpoint']) assertText(value.judge[field], field);
+  assertPositiveInteger(value.judge.version, 'a set-up judge version');
+  if (typeof value.judge.created !== 'boolean') throw new TypeError('a set-up judge says whether it is new');
+  assertClosedRecord(value.budget, ['version', 'approvedNow', 'global', 'provider'], 'a set-up budget');
+  assertPositiveInteger(value.budget.version, 'a set-up budget version');
+  if (typeof value.budget.approvedNow !== 'boolean') throw new TypeError('a set-up budget says whether it is new');
+  assertClosedRecord(
+    value.budget.global,
+    ['callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'],
+    'a set-up global budget',
+  );
+  assertClosedRecord(
+    value.budget.provider,
+    ['provider', 'callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'],
+    'a set-up provider budget',
+  );
+  for (const limits of [value.budget.global, value.budget.provider])
+    for (const field of ['callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'])
+      assertPositiveInteger(limits[field], field);
+  if (value.key !== 'stored' && value.key !== 'unchanged' && value.key !== 'none')
+    throw new TypeError('a judge setup key state is unknown');
+  assertText(value.destination, 'a judge setup destination');
+  if (value.approvedBy !== 'desktop-app') throw new TypeError('a judge setup is approved by the person, in the app');
+}
+
 /** A lane's binding, as `lane list` and `lane bind` give it (routing design §6's JSON contract). */
 function assertLaneBinding(value: unknown, name: string): void {
   assertClosedRecord(value, ['window', 'since'], name);
@@ -917,6 +1106,106 @@ function assertLaneBinding(value: unknown, name: string): void {
     if (window.client.version !== undefined) assertText(window.client.version, `${name} client version`);
   }
   assertIsoTime(value.since, `${name} since`);
+}
+
+const MESSAGE_SOURCE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  gmail: ['channel', 'messageId'],
+  slack: ['channel', 'channelId', 'ts'],
+  whatsapp: ['channel', 'chatId', 'messageId'],
+  resend: ['channel', 'emailId'],
+});
+const MESSAGE_HISTORY_KINDS = ['woken', 'read', 'done', 'dismissed', 'reopened'];
+
+/**
+ * One message's story (0.32.0 spec §3.6): ids, times in milliseconds and closed words; `kept` is the only sender text,
+ * and each of its strings is an untrusted-content envelope.
+ */
+function assertMessageEntry(value: unknown, name: string): void {
+  assertClosedRecord(
+    value,
+    [
+      'eventId',
+      'type',
+      'channel',
+      'accountId',
+      'occurredAt',
+      'observedAt',
+      'source',
+      'decisions',
+      'deliveries',
+      'queueItem',
+      'kept',
+    ],
+    name,
+  );
+  if (!isEventId(value.eventId)) throw new TypeError(`${name} has a malformed event id`);
+  for (const field of ['type', 'channel', 'accountId']) assertText(value[field], `${name} ${field}`);
+  for (const field of ['occurredAt', 'observedAt']) assertNonNegativeInteger(value[field], `${name} ${field}`);
+  if (value.source !== null) {
+    if (!isRecord(value.source) || typeof value.source.channel !== 'string')
+      throw new TypeError(`${name} source must be a closed object`);
+    const fields = MESSAGE_SOURCE_FIELDS[value.source.channel];
+    if (fields === undefined) throw new TypeError(`${name} source has an unknown channel`);
+    assertClosedRecord(value.source, fields, `${name} source`);
+    for (const field of fields.slice(1)) assertText(value.source[field], `${name} source ${field}`);
+  }
+  if (!Array.isArray(value.decisions)) throw new TypeError(`${name} needs its decisions`);
+  for (const decision of value.decisions) {
+    assertClosedRecord(decision, ['ruleId', 'ruleVersion', 'outcome', 'judge'], `${name} decision`);
+    assertText(decision.ruleId, `${name} decision rule id`);
+    assertPositiveInteger(decision.ruleVersion, `${name} decision rule version`);
+    if (!MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never))
+      throw new TypeError(`${name} decision has an unknown outcome`);
+    if (decision.judge !== null) {
+      assertClosedRecord(decision.judge, ['kind', 'answer', 'confidence', 'calibrated'], `${name} judge`);
+      assertText(decision.judge.kind, `${name} judge kind`);
+      if (!QUEUE_JUDGE_ANSWERS.includes(decision.judge.answer as never))
+        throw new TypeError(`${name} judge has an unknown answer`);
+      if (typeof decision.judge.confidence !== 'number' || !Number.isFinite(decision.judge.confidence))
+        throw new TypeError(`${name} judge confidence must be a finite number`);
+      if (typeof decision.judge.calibrated !== 'boolean') throw new TypeError(`${name} judge calibrated is a boolean`);
+    }
+  }
+  if (!Array.isArray(value.deliveries)) throw new TypeError(`${name} needs its deliveries`);
+  for (const delivery of value.deliveries) {
+    assertClosedRecord(delivery, ['deliveryId', 'targetKind', 'targetId', 'lane', 'state'], `${name} delivery`);
+    assertText(delivery.deliveryId, `${name} delivery id`);
+    if (!MESSAGE_TARGET_KINDS.includes(delivery.targetKind as never))
+      throw new TypeError(`${name} delivery has an unknown target kind`);
+    assertText(delivery.targetId, `${name} delivery target id`);
+    if (delivery.lane !== null && !isLaneName(delivery.lane)) throw new TypeError(`${name} delivery has a bad lane`);
+    if (!MESSAGE_DELIVERY_STATES.includes(delivery.state as never))
+      throw new TypeError(`${name} delivery has an unknown state`);
+  }
+  if (value.queueItem !== null) {
+    const item = value.queueItem;
+    assertClosedRecord(item, ['itemId', 'state', 'stateAt', 'lane', 'history'], `${name} queue item`);
+    if (!isQueueItemId(item.itemId)) throw new TypeError(`${name} queue item has a malformed id`);
+    if (!QUEUE_STATES.includes(item.state as never)) throw new TypeError(`${name} queue item has an unknown state`);
+    assertNonNegativeInteger(item.stateAt, `${name} queue item stateAt`);
+    if (item.lane !== null && !isLaneName(item.lane)) throw new TypeError(`${name} queue item has a bad lane`);
+    if (!Array.isArray(item.history)) throw new TypeError(`${name} queue item needs its history`);
+    for (const line of item.history) {
+      assertClosedRecord(line, ['at', 'kind', 'actor', 'windowKey'], `${name} history line`);
+      assertNonNegativeInteger(line.at, `${name} history time`);
+      if (!MESSAGE_HISTORY_KINDS.includes(line.kind as string))
+        throw new TypeError(`${name} history line has an unknown kind`);
+      if (line.actor === 'window') {
+        if (!isActivityKey(line.windowKey)) throw new TypeError(`${name} history line names no window`);
+      } else if (line.actor !== 'person' || line.windowKey !== null)
+        throw new TypeError(`${name} history line has an unknown actor`);
+    }
+  }
+  if (value.kept !== null) {
+    const kept = value.kept;
+    if (!isRecord(kept)) throw new TypeError(`${name} kept must be a closed object`);
+    assertClosedRecord(kept, Object.hasOwn(kept, 'subject') ? ['from', 'subject'] : ['from'], `${name} kept`);
+    if (!isRecord(kept.from) || Object.keys(kept.from).some((key) => key !== 'name' && key !== 'address'))
+      throw new TypeError(`${name} kept from must be a closed object`);
+    for (const field of [kept.from.name, kept.from.address, kept.subject])
+      if (field !== undefined && (typeof field !== 'string' || !field.startsWith('<untrusted-content ')))
+        throw new TypeError(`${name} kept sender text must be enveloped`);
+  }
 }
 
 function assertTighteningPreview(value: unknown): void {
@@ -970,6 +1259,13 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'lane-list': ['lanes'],
   'lane-bind': ['lane', 'binding'],
   'lane-unbind': ['lane', 'unbound'],
+  'delivery-show': ['delivery', 'decision', 'event', 'target', 'dryRun'],
+  'messages-list': ['messages', 'next'],
+  'message-show': ['message'],
+  'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
+  'provider-list': ['providers'],
+  'provider-key-set': ['provider', 'hasKey', 'judges'],
+  'provider-key-remove': ['provider', 'hasKey', 'judges'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1214,6 +1510,39 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'lane-unbind':
       if (!isLaneName(value.lane)) throw new TypeError('a lane unbind result has a malformed lane name');
       if (value.unbound !== true) throw new TypeError('a lane unbind result says it unbound');
+      return;
+    case 'delivery-show':
+      assertDeliveryShow(value);
+      return;
+    case 'messages-list':
+      if (!Array.isArray(value.messages)) throw new TypeError('a messages list result needs its messages');
+      if (value.messages.length > MESSAGES_LIST_MAX_LIMIT) throw new TypeError('a messages list page is too long');
+      for (const entry of value.messages) assertMessageEntry(entry, 'a listed message');
+      if (value.next !== null && !isMessagesCursor(value.next))
+        throw new TypeError('a messages list result has a malformed next cursor');
+      return;
+    case 'message-show':
+      assertMessageEntry(value.message, 'a shown message');
+      return;
+    case 'judge-setup':
+      assertJudgeSetupResult(value);
+      return;
+    case 'provider-list':
+      if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
+      for (const entry of value.providers) {
+        assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
+        if (entry.id !== 'typesafe' && entry.id !== 'openrouter') throw new TypeError('a listed provider is unknown');
+        assertText(entry.name, 'a listed provider name');
+        if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
+      }
+      return;
+    case 'provider-key-set':
+    case 'provider-key-remove':
+      if (value.provider !== 'typesafe' && value.provider !== 'openrouter')
+        throw new TypeError('a provider key result names a known provider');
+      if (value.hasKey !== (operation === 'provider-key-set'))
+        throw new TypeError('a provider key result says whether the provider has a key now');
+      assertNonNegativeInteger(value.judges, 'a provider key judge count');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);
@@ -1464,6 +1793,35 @@ export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
 }
 
+/**
+ * A rule's preview in plain words (0.32.0, owner feedback §3.4), above the canonical JSON, which stays: the JSON is what
+ * is approved. Rule-author text is written escaped, as in the JSON, so a line break or a quote in an operand or the
+ * judge's question cannot start a line of its own and pass for part of the preview.
+ */
+function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  const text = describeRule(document.rule)
+    .map((part) => (part.kind === 'untrusted' ? JSON.stringify(part.text).slice(1, -1) : part.text))
+    .join('');
+  return [`In plain words: ${neutralise(text).text}`];
+}
+
+/**
+ * Where a rule's hosted judge sends the fields the rule names (owner decision 2026-10-26): to TypeSafe's Jev itself, or
+ * to OpenRouter, which passes them on to TypeSafe's Jev. A local or Laya judge sends nothing off this machine.
+ */
+function hostedJudgeDestination(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule' || document.rule.agentic === undefined) return [];
+  const judge = document.rule.agentic.judge;
+  if (judge.kind !== 'typesafe') return [];
+  const named = `Judge ${judge.judgeId}@${judge.version}`;
+  return [
+    judge.provider === 'openrouter'
+      ? `${named}: the fields it is given are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev.`
+      : `${named}: the fields it is given are sent to TypeSafe's Jev (api.typesafe.ai).`,
+  ];
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -1533,7 +1891,9 @@ export function renderB3ApprovalPreviewV1(
     terminal: [
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
+      ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
+      ...hostedJudgeDestination(document),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,

@@ -46,6 +46,7 @@ import {
   LAUNCHERS,
   serverInstallChange,
   serverPruneChange,
+  serverUninstallChange,
 } from '../operations/servers.ts';
 import {
   STANDING_CHANGE_KINDS,
@@ -156,7 +157,8 @@ async function buildInstructions(core: Core): Promise<string> {
     'own terminal — you cannot approve it for them, so say so, and learn when they have with comms_approval_wait. If',
     'they say no, call comms_approval_revoke.',
     'Tightening applies at once — even beside a change that waits: comms_org_update with forOtherAddresses "off"',
-    'turns that off before its preview is returned, and the preview marks it done.',
+    'turns that off before its preview is returned, and the preview marks it done. comms_server_uninstall takes a',
+    'server out of a client at once.',
     'comms_standing narrows or ends standing approvals at once. None is created or widened here: slack_standing_add',
     'only prepares one the person asked for, and they approve it at their own terminal with its code, never in chat.',
     '',
@@ -1088,6 +1090,37 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
             processes: options.processes,
           }),
         args.approvalId,
+      ),
+  );
+
+  server.registerTool(
+    'comms_server_uninstall',
+    {
+      title: 'Take a server out of a client',
+      description:
+        'Take one server — `channel` — out of one MCP client’s configuration: every entry of it there, at user scope, whatever it is called, and nothing else. A tightening: it applies at once and asks nobody, and takes no approvalId. A project’s own entry is left, and the result says where it is; what was removed is saved first, to put back by hand. The client keeps the server it started until it is restarted — tell the person. Not `comms_server_prune`, which removes unused runtimes and no registration.',
+      inputSchema: {
+        channel: z.enum(SERVERS as [string, ...string[]]).describe('which server to take out'),
+        client: z
+          .enum(CLIENTS.filter((client) => client !== 'json') as [string, ...string[]])
+          .describe('which MCP client to take it out of'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          serverUninstallChange(
+            core,
+            env,
+            {
+              channel: args.channel as (typeof SERVERS)[number],
+              client: args.client as (typeof CLIENTS)[number],
+            },
+            'mcp',
+            { platform },
+          ),
+        undefined,
       ),
   );
 

@@ -320,3 +320,23 @@ test('QUEUE-A: an unreadable queue delivery ends content-unreadable without a ba
     await rm(setup.stateDir, { recursive: true, force: true });
   }
 });
+
+// 0.32.0 (owner feedback §3.5): a delivered row has no next try, so the app has no 1970 date to show for it.
+test('0.32 B1: a delivered queue row clears next_at, so it has no next try to show', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture(queueRule({ queueMs: 7 * DAY, targetRetentionMs: 7 * DAY }));
+  try {
+    setup.insert('one');
+    setup.store.database.exec("UPDATE deliveries SET next_at = 0 WHERE id = 'one'");
+    assert.deepEqual(await setup.dispatcher().dispatch('one'), { state: 'delivered', deliveryId: 'one' });
+    const row = setup.store.database.prepare("SELECT state, next_at FROM deliveries WHERE id = 'one'").get() as {
+      state: string;
+      next_at: number | null;
+    };
+    assert.deepEqual({ ...row }, { state: 'delivered', next_at: null });
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});
