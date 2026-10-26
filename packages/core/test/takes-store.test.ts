@@ -300,6 +300,15 @@ test('an offer is exclusive, must still be taken, and lapses', async () => {
   assert.ok(taken.record.history.some((line) => line.kind === 'expired'));
 });
 
+test('recordsIn says whether an account holds any take record, from one directory look', async () => {
+  const { store } = storeAt();
+  assert.equal(await store.recordsIn(ACCOUNT), false);
+  await store.take(MESSAGE, ALICE);
+  assert.equal(await store.recordsIn(ACCOUNT), true);
+  assert.equal(await store.recordsIn('acc_ZZZZZZZZZZZZZZZZ'), false);
+  assert.equal(await store.recordsIn('../elsewhere'), false);
+});
+
 test('housekeeping needs no take, but is refused on a message someone else holds', async () => {
   const { store } = storeAt();
   await store.refuseHeldElsewhere([MESSAGE], BOB);

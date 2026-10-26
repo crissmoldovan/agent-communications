@@ -1215,6 +1215,19 @@ export class TakeStore {
       .map((record) => ({ id: record.message.id, view: takenViewOf(record, caller) }));
   }
 
+  /**
+   * Whether an account has any take record at all: one directory look. A channel asks it before reading its provider
+   * for the message an act answers, so an account where nobody takes anything is asked nothing more than before.
+   */
+  async recordsIn(accountId: string): Promise<boolean> {
+    if (!ACCOUNT_ID.test(accountId)) return false;
+    try {
+      return (await readdir(join(this.directory, accountId))).some((name) => RECORD_FILE.test(name));
+    } catch {
+      return false;
+    }
+  }
+
   /** The record a mail's Message-ID was taken under in one account, if any: how a reply by In-Reply-To finds its take. */
   async findByRfc822(channel: TakeChannel, accountId: string, rfc822Id: string): Promise<TakeMessageRef | null> {
     const wanted = rfc822IdOf(rfc822Id);
