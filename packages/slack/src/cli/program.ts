@@ -21,6 +21,7 @@ import {
   integrityRefusal,
   kindOf,
   MAX_WAIT_SECONDS,
+  markMcpServerProcess,
   type OutputOptions,
   openCore,
   PATH_OPTIONS,
@@ -2020,6 +2021,8 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--workspace <name>', 'pin the server to one workspace; every tool then acts on it and no other')
     .action(async (flags: Options) => {
       ran = true;
+      // Every program this server starts inherits the mark, so none of them can make a person's read (§4).
+      markMcpServerProcess(env, 'slack');
       const startSlackStdioServer = deps.startMcp ?? (await import('../mcp/stdio-entry.ts')).startSlackStdioServer;
       await startSlackStdioServer({
         env,

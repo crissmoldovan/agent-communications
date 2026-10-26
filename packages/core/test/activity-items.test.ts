@@ -370,3 +370,32 @@ test('activity items takes only --since and --ids, and --ids goes with no other 
   assert.equal(empty.code, 0, empty.stdout + empty.stderr);
   assert.deepEqual((empty.json() as { data: ActivityItemsResult }).data, { items: {} });
 });
+
+// ── What an acknowledgement did ────────────────────────────────────────────────────────────────────────────────
+
+test('an acknowledgement says what it did — a reply or a reaction — on its line and on each item it names', async () => {
+  const { core } = machine();
+  const ack = { channel: 'slack', account: SLACK, kind: 'write' as const, operation: 'slack.ack', session: ACME };
+  await record(core, [
+    {
+      ...ack,
+      at: ago(10),
+      act: 'reply',
+      items: [
+        { id: PARENT, conversation: 'C1' },
+        { id: POSTED, conversation: 'C1' },
+      ],
+    },
+    { ...ack, at: ago(5), act: 'reaction', items: [{ id: REPLY_TS, conversation: 'C1' }] },
+  ]);
+  const { items } = await activityItems(core, {}, { env: {} });
+  assert.deepEqual(
+    (items[`C1/${PARENT}`] ?? []).map((entry) => [entry.operation, entry.act]),
+    [['slack.ack', 'reply']],
+  );
+  assert.equal(items[`C1/${POSTED}`]?.[0]?.act, 'reply');
+  assert.equal(items[`C1/${REPLY_TS}`]?.[0]?.act, 'reaction');
+  // A word that is neither is no act at all.
+  const odd = activityLineOf(line({ ...ack, act: 'delete everything' } as unknown as Partial<ActivityLineInput>));
+  assert.equal('act' in odd, false);
+});

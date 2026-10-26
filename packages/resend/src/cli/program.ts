@@ -17,6 +17,7 @@ import {
   installExitStatus,
   kindOf,
   MAX_WAIT_SECONDS,
+  markMcpServerProcess,
   type OutputOptions,
   openCore,
   PATH_OPTIONS,
@@ -723,6 +724,8 @@ Exit codes: 0 ok · 1 unexpected · 10 a send or a change was refused or needs a
     .option('--account <name>', 'pin the server to one account; every tool then acts on it and no other')
     .action(async (flags: Options) => {
       ran = true;
+      // Every program this server starts inherits the mark, so none of them can make a person's read (§4).
+      markMcpServerProcess(env, 'resend');
       const startResendStdioServer = deps.startMcp ?? (await import('../mcp/stdio-entry.ts')).startResendStdioServer;
       const core = coreForInvocation();
       await startResendStdioServer({

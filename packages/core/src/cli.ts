@@ -31,6 +31,7 @@ import {
 } from './handoffs.ts';
 import { APPROVAL_ID_PATTERN } from './ids.ts';
 import { installExitStatus, type Launcher, type SupportedClient } from './mcp-install.ts';
+import { markMcpServerProcess } from './mcp-marker.ts';
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
 import {
@@ -727,6 +728,8 @@ export async function main(
   // The server speaks on stdout, so nothing else may: it is run outside `runCommand`, which prints a result there.
   if (command === 'mcp' && sub === undefined) {
     if (values.json) return writeError(usage('`mcp` runs the server; it prints no result'), output);
+    // Every program this server starts inherits the mark, so none of them can make a person's read (§4).
+    markMcpServerProcess(env, 'core');
     const startCoreStdioServer = deps.startMcp ?? (await import('./mcp/server.ts')).startCoreStdioServer;
     await startCoreStdioServer({ core, env, platform });
     return EXIT_CODES.OK;
