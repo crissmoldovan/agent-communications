@@ -67,6 +67,7 @@ EOF
   # A command for the person, with the test profile's folders pinned, so a test never reaches the real one.
   cat > "$profile/bin/$command" <<EOF
 #!/bin/sh
+case "\${1:-}" in --version|-V|--help|-h) exec '$launcher' "\$@" ;; esac
 exec '$launcher' "\$@" $pins
 EOF
   chmod 755 "$profile/bin/$command"
