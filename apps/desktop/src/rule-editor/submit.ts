@@ -434,10 +434,11 @@ function sessionLines(target: JsonObject, fields: RulePart[], mapping: unknown):
 }
 
 /**
- * A Linear title or description, as its author wrote it, and what fills each slot. A constant is the rule's own text,
- * which the issue's description takes as it is — Markdown, so its links and mentions work there.
+ * A Linear title or description, as its author wrote it, and what fills each slot. In the description every slot's
+ * value — the message's, and a constant the rule maps — is quoted as text in a code block, never Markdown, so none can
+ * link or mention anything (`renderLinearIssue`, `outsideBlock`); in the title each is one line of plain text.
  */
-function templateLine(name: string, raw: unknown, mapping: unknown, markdown: boolean): RulePart[] {
+function templateLine(name: string, raw: unknown, mapping: unknown, description: boolean): RulePart[] {
   const template = templateOf(raw);
   if (template === null) return [plain(`${name}, as written: `), authored(written(raw))];
   if (template.kind !== 'text') return [plain(`${name} is `), ...generated(mapping, template), plain('.')];
@@ -449,13 +450,12 @@ function templateLine(name: string, raw: unknown, mapping: unknown, markdown: bo
     authored(template.text),
     ...slots.flatMap((slot, index) => {
       const ref = mappedRef(mapping, `/${slot.split('.').join('/')}`);
-      const constant = resolveMapped(mapping, `/${slot.split('.').join('/')}`).kind !== 'source';
       return [
         plain(index === 0 ? ', where ' : '; '),
         authored(`{{${slot}}}`),
         plain(' is '),
         ...ref,
-        ...(constant && markdown ? [plain(', written into the issue as it is, as Markdown')] : []),
+        ...(description ? [plain(', quoted in the issue as text, never as Markdown')] : []),
       ];
     }),
   ];

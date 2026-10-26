@@ -2546,6 +2546,113 @@ mod tests {
         }
     }
 
+    /// The terminal lines of every person-only change the app sends to a terminal where it cannot attest the person
+    /// (0.33.0): exactly the event service's own words its refusal names (`changeAtTerminal`, `ruleApprovalWords`) —
+    /// `judge setup typesafe --provider …`, `judge setup local-endpoint --url … --model …`, `provider key set <p>`,
+    /// `provider key remove <p>`, `integration set agent-sessions --relay-home …` and `approve <id>` — then the four
+    /// folder pins, and never `--json`: with it the CLI cannot prompt, and the terminal origin is not established.
+    #[test]
+    fn person_only_terminal_lines_are_the_event_services_words_with_the_pins_and_never_json() {
+        let at = |call: serde_json::Value| -> TerminalCommand {
+            serde_json::from_value(serde_json::json!({ "kind": "atTerminal", "call": call }))
+                .expect("the shape")
+        };
+        assert_eq!(ID, "ap_0123456789ABCDEFGHJKMNPQRS");
+        let commands: [(TerminalCommand, &str); 7] = [
+            (
+                at(
+                    serde_json::json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "typesafe" }),
+                ),
+                "judge setup typesafe --provider typesafe",
+            ),
+            (
+                at(
+                    serde_json::json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434", "model": "nimble" }),
+                ),
+                "judge setup local-endpoint --url http://127.0.0.1:11434 --model nimble",
+            ),
+            (
+                serde_json::from_value(
+                    serde_json::json!({ "kind": "providerKeySet", "provider": "openrouter" }),
+                )
+                .expect("the shape"),
+                "provider key set openrouter",
+            ),
+            (
+                at(serde_json::json!({ "kind": "providerKeyRemove", "provider": "linear" })),
+                "provider key remove linear",
+            ),
+            (
+                at(
+                    serde_json::json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
+                ),
+                "integration set agent-sessions --relay-home default",
+            ),
+            (
+                at(
+                    serde_json::json!({ "kind": "integrationSetAgentSessions", "relayHome": "/home/example/relay" }),
+                ),
+                "integration set agent-sessions --relay-home /home/example/relay",
+            ),
+            (
+                serde_json::from_value(
+                    serde_json::json!({ "kind": "ruleApprove", "approvalId": ID }),
+                )
+                .expect("the shape"),
+                "approve ap_0123456789ABCDEFGHJKMNPQRS",
+            ),
+        ];
+        let posix = Folders {
+            config_dir: "/home/example/.config/agent-communications".into(),
+            state_dir: "/home/example/.config/agent-communications/state".into(),
+            data_dir: "/home/example/.local/share/agent-communications".into(),
+            secrets_dir: "/home/example/.config/agent-communications/secrets".into(),
+        };
+        let windows = Folders {
+            config_dir: r"C:\Users\example\AppData\Roaming\agent-communications".into(),
+            state_dir: r"C:\Users\example\AppData\Roaming\agent-communications\state".into(),
+            data_dir: r"C:\Users\example\AppData\Local\agent-communications".into(),
+            secrets_dir: r"C:\Users\example\AppData\Roaming\agent-communications\secrets".into(),
+        };
+        let linux_launcher = "/home/example/.local/share/agent-communications/launch/events-daemon";
+        let linux_pins = "--config-dir /home/example/.config/agent-communications --state-dir /home/example/.config/agent-communications/state --data-dir /home/example/.local/share/agent-communications --secrets-dir /home/example/.config/agent-communications/secrets";
+        for (command, expected) in &commands {
+            let (product, words) = command_words(command).expect("words");
+            assert_eq!(product, Product::EventsDaemon, "{expected}");
+            assert_eq!(words.join(" "), *expected);
+            // Linux: the launcher, the words, the pins; nothing else.
+            let program = crate::launchers::Program {
+                program: linux_launcher.into(),
+                leading: Vec::new(),
+            };
+            let argv = located_line(product, &words, &program, &posix);
+            assert_eq!(
+                argv[argv.len() - 8..],
+                posix.pins(),
+                "the pins come last: {expected}"
+            );
+            assert_eq!(
+                line(&argv, Platform::Linux).expect("a line"),
+                format!("{linux_launcher} {expected} {linux_pins}")
+            );
+            // Windows: Node and the launcher, then the same words and the pins.
+            let program = crate::launchers::Program {
+                program: r"C:\Program Files\nodejs\node.exe".into(),
+                leading: vec![
+                    r"C:\Users\example\AppData\Local\agent-communications\launch\events-daemon"
+                        .into(),
+                ],
+            };
+            let argv = located_line(product, &words, &program, &windows);
+            assert_eq!(argv[argv.len() - 8..], windows.pins(), "{expected}");
+            for platform in [Platform::Linux, Platform::Windows] {
+                let text = line(&argv, platform).expect("a line");
+                assert!(!text.contains("--json"), "{platform:?}: {text}");
+                assert!(!argv.iter().any(|word| word == "--json"), "{expected}");
+            }
+        }
+    }
+
     /// Approve in Terminal, for a rule's activation the editor prepared (0.33.0), where the app cannot attest the person
     /// in the app: the events service's own launcher, `approve <approval-id>` and the pins — the terminal shows the
     /// preview and asks for its challenge. It opens only an approval `eventsRuleEnable` recorded, revokes nothing, keeps
