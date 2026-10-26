@@ -150,6 +150,18 @@ test('E3: activation refuses a slot that names a field the rule does not map, na
     () => canonicalFullRuleDocument(rule(linear({ description: { text: '{{body}}' } }))),
     refusedWith('TEMPLATE_FIELD_NOT_MAPPED', /description names \{\{body\}\}/u),
   );
+  // A field within one the rule keeps from the message is named too, but never within a constant.
+  assert.doesNotThrow(() =>
+    canonicalFullRuleDocument(
+      rule(linear({ title: { text: '{{from.address}}' }, description: { text: 'From {{from.name}}' } }), {
+        from: { $path: '/from' },
+      }),
+    ),
+  );
+  assert.throws(
+    () => canonicalFullRuleDocument(rule(linear({ title: { text: '{{kind.name}}' } }))),
+    refusedWith('TEMPLATE_FIELD_NOT_MAPPED'),
+  );
   // A field kept where it is, `from.address`, is named by its dotted path.
   assert.doesNotThrow(() =>
     canonicalFullRuleDocument(

@@ -33,6 +33,11 @@ export interface DeliveryListRowV1 {
   readonly eventId: string | null;
   readonly deliveredAt: number | null;
   readonly deadLetteredAt: number | null;
+  /**
+   * The Linear issue a Linear delivery added (0.33.0 design §3.4): its identifier (CUE-123) and its address, without
+   * the title's words. Present only once there is one; ids, never what the issue says.
+   */
+  readonly linear?: { readonly identifier: string; readonly url: string };
 }
 
 interface DeliveryListSqlRow {
@@ -57,12 +62,14 @@ interface DeliveryListSqlRow {
   readonly event_id: string | null;
   readonly delivered_at: number | null;
   readonly dead_lettered_at: number | null;
+  readonly linear_identifier: string | null;
+  readonly linear_url: string | null;
 }
 
 const SELECT_ROWS = `SELECT d.id, d.account_id, d.rule_id, d.rule_version, d.target_id, d.target_version, d.subscriber_id,
          d.subscriber_version, d.attempts, d.next_at, d.expires_at, d.state, d.switch_generation,
          d.dead_letter_expires_at, d.target_kind, d.last_error_code, d.last_status, d.decision_id, x.event_id,
-         d.dead_lettered_at,
+         d.dead_lettered_at, d.linear_identifier, d.linear_url,
          CASE WHEN d.state = 'delivered' THEN COALESCE(l.delivered_at, s.delivered_at, q.appended_at) END AS delivered_at
     FROM deliveries AS d
     LEFT JOIN decisions AS x ON x.id = d.decision_id
@@ -93,6 +100,9 @@ function shape(row: DeliveryListSqlRow): DeliveryListRowV1 {
     eventId: row.event_id,
     deliveredAt: row.delivered_at,
     deadLetteredAt: row.dead_lettered_at,
+    ...(row.linear_identifier === null || row.linear_url === null
+      ? {}
+      : { linear: { identifier: row.linear_identifier, url: row.linear_url } }),
   };
 }
 

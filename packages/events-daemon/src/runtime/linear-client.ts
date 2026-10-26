@@ -44,6 +44,12 @@ export interface LinearGates {
   readonly beforeGate?: ((phase: LinearPhase) => Promise<void>) | undefined;
   /** Synchronous and physically adjacent to the phase's action; a throw refuses it. */
   readonly finalGate?: ((phase: LinearPhase) => void) | undefined;
+  /**
+   * Runs the write's synchronous final gate and the write itself, as `send`, inside a caller's lock — the WhatsApp
+   * visibility fence's — and resolves once it has. `send` is never called twice; when it is not called, nothing is
+   * written and the request ends as refused before its write.
+   */
+  readonly write?: ((send: () => void) => Promise<void>) | undefined;
 }
 
 export interface LinearClientOptions {
@@ -274,9 +280,24 @@ export class LinearClient {
       const answer = readAll(socket);
       // A refused write leaves the read unsettled or failed; it is never awaited then, and never unhandled.
       answer.catch(() => undefined);
-      final('write');
-      socket.write(request);
-      wrote = true;
+      const open = socket;
+      const send = () => {
+        if (wrote) return;
+        final('write');
+        open.write(request);
+        wrote = true;
+      };
+      if (input.gates?.write === undefined) send();
+      else {
+        try {
+          await input.gates.write(send);
+        } catch (error) {
+          if (error instanceof LinearGateRefused) throw error;
+          if (!wrote) throw new LinearGateRefused('write', error);
+          throw error;
+        }
+        if (!wrote) throw new LinearGateRefused('write', new Error('the write was not sent'));
+      }
       const parsed = parseHttpResponse(await beforeDeadline(answer, deadline));
       if (parsed === null) return { kind: 'network', preIo: false };
       return classifyLinearResponse(parsed.status, parsed.body);

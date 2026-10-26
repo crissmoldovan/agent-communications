@@ -989,10 +989,26 @@ function assertEventSource(value: unknown, name: string): void {
   for (const key of keys) assertText(value[key], `${name} ${key}`);
 }
 
+/** A Linear delivery's issue (0.33.0 design §3.4): its identifier and its linear.app address, and only on one. */
+function assertDeliveryRowLinear(row: unknown): void {
+  if (!isRecord(row) || !Object.hasOwn(row, 'linear')) return;
+  if (row.targetKind !== 'linear') throw new TypeError('only a Linear delivery shows a Linear issue');
+  assertClosedRecord(row.linear, ['identifier', 'url'], 'a delivery’s Linear issue');
+  if (typeof row.linear.identifier !== 'string' || !/^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u.test(row.linear.identifier))
+    throw new TypeError('a Linear issue identifier is a team key and a number');
+  if (typeof row.linear.url !== 'string' || !row.linear.url.startsWith('https://linear.app/'))
+    throw new TypeError('a Linear issue address is on linear.app');
+}
+
 /** `delivery show` (0.32.0, owner feedback §3.5): content-free ids, times and the judge's yes or no. */
 function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   const row = value.delivery;
-  assertClosedRecord(row, DELIVERY_ROW_FIELDS, 'a shown delivery row');
+  assertDeliveryRowLinear(row);
+  assertClosedRecord(
+    row,
+    [...DELIVERY_ROW_FIELDS, ...(isRecord(row) && Object.hasOwn(row, 'linear') ? ['linear'] : [])],
+    'a shown delivery row',
+  );
   for (const field of ['deliveryId', 'accountId', 'ruleId', 'targetId', 'state', 'decisionId'])
     assertText(row[field], `a shown delivery ${field}`);
   for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);

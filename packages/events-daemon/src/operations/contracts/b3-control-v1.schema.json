@@ -1836,7 +1836,16 @@
         "decisionId": { "$ref": "#/$defs/id" },
         "eventId": { "$ref": "#/$defs/nullableId" },
         "deliveredAt": { "$ref": "#/$defs/nullableCount" },
-        "deadLetteredAt": { "$ref": "#/$defs/nullableCount" }
+        "deadLetteredAt": { "$ref": "#/$defs/nullableCount" },
+        "linear": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["identifier", "url"],
+          "properties": {
+            "identifier": { "type": "string", "pattern": "^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$" },
+            "url": { "type": "string", "pattern": "^https://linear\\.app/", "maxLength": 200 }
+          }
+        }
       }
     },
     "deliveryShow": {

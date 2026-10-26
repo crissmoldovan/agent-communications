@@ -111,6 +111,7 @@ import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwo
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
 import { LinearClient, type LinearClientOptions } from './linear-client.ts';
+import { LinearDispatcher } from './linear-dispatcher.ts';
 import { LinearIntegration } from './linear-integration.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { MessagesStore } from './messages.ts';
@@ -1176,12 +1177,25 @@ async function startOwnerWithLock(
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
   });
+  // The Linear target's delivery (0.33.0 design §3.4): the webhook's fences, through the one Linear client.
+  const linear = new LinearDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    secrets: eventSecrets,
+    client: linearClient,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    now,
+  });
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
     webhook,
     sse,
     queue: queueDispatcher,
+    linear,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.

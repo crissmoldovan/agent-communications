@@ -196,12 +196,28 @@ export function mappedFields(mapping: CompiledMapping): ReadonlyMap<string, Mapp
   return fields;
 }
 
+/**
+ * Where a slot's value comes from: the mapped field it names, or the field from the message it lies within (`from.address`
+ * within a mapped `from`); undefined when the rule keeps no such field.
+ */
+export function slotOrigin(
+  fields: ReadonlyMap<string, MappedFieldOrigin>,
+  slot: string,
+): MappedFieldOrigin | undefined {
+  const exact = fields.get(slot);
+  if (exact !== undefined) return exact;
+  const segments = slot.split('.');
+  for (let length = segments.length - 1; length > 0; length -= 1)
+    if (fields.get(segments.slice(0, length).join('.')) === 'source') return 'source';
+  return undefined;
+}
+
 /** At activation: every slot of a Linear target names one of the rule's mapped fields, or the rule is refused. */
 export function assertLinearSlotsMapped(target: LinearTargetDocument, mapping: CompiledMapping): void {
   const fields = mappedFields(mapping);
   for (const part of ['title', 'description'] as const) {
     for (const slot of linearTemplateSlots(target[part])) {
-      if (fields.has(slot)) continue;
+      if (slotOrigin(fields, slot) !== undefined) continue;
       const known = [...fields.keys()];
       fail(
         `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the rule does not keep; ${
@@ -287,7 +303,7 @@ export function renderLinearIssue(input: {
     return {
       text: valueText(found.found ? found.value : undefined),
       // A field the activation check did not see is treated as the message's: outside, never the person's words.
-      outside: input.fields.get(name) !== 'constant',
+      outside: slotOrigin(input.fields, name) !== 'constant',
     };
   };
   const filledTitle = input.target.title.text.replace(SLOT, (_slot, name: string) => {

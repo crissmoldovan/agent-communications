@@ -9,6 +9,7 @@ import { run } from '../../src/cli/program.ts';
 import { EventControlClient } from '../../src/control/client.ts';
 import type { LaneWindowIdentity } from '../../src/domain/lanes.ts';
 import { createEventsMcpServer } from '../../src/mcp/server.ts';
+import type { LinearClientOptions } from '../../src/runtime/linear-client.ts';
 import { startEventOwner } from '../../src/runtime/owner.ts';
 import { eventPaths } from '../../src/runtime/paths.ts';
 import { openEventDatabase } from '../../src/store/database.ts';
@@ -144,7 +145,10 @@ export interface LaneHarness {
   readonly openCount: () => Promise<number>;
 }
 
-export async function withLaneOwner(work: (harness: LaneHarness) => Promise<void>): Promise<void> {
+export async function withLaneOwner(
+  work: (harness: LaneHarness) => Promise<void>,
+  options: { readonly linearClient?: LinearClientOptions | undefined } = {},
+): Promise<void> {
   const root = await shortTempDir('aev-lane-story-');
   const stateDir = join(root, 'state');
   const configDir = join(root, 'config');
@@ -207,6 +211,7 @@ export async function withLaneOwner(work: (harness: LaneHarness) => Promise<void
     configDir,
     tickMs: 60_000,
     pollIntervalMs: 1,
+    ...options,
     gmailSourceFor: async () =>
       ({
         inboxId: ACCOUNT,

@@ -20,6 +20,8 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/dispatcher.ts',
   'packages/events-daemon/src/runtime/webhook-dispatcher.ts',
   'packages/events-daemon/src/runtime/sse-dispatcher.ts',
+  // The Linear target (0.33.0): its delivery boundary opens the rendered issue through the centrally leased cipher.
+  'packages/events-daemon/src/runtime/linear-dispatcher.ts',
   // The action queue (0.30.0): its delivery boundary seals items; its read model opens them. Both go through the
   // centrally leased cipher.
   'packages/events-daemon/src/runtime/queue-dispatcher.ts',

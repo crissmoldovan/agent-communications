@@ -31,11 +31,12 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.33.0 (the Linear target, design §3.4) is another, also only additive. The provider key wires' provider is
  * `keyedProvider`, which adds `linear` to TypeSafe and OpenRouter; judge setup keeps `aiProvider`, since Linear serves no
  * judge. The target document gains its `linear` branch, and a delivery's target kind the value `linear`. The person's
- * `integration-show` owner wire (Settings → Integrations) is added, with its request and result vectors.
+ * `integration-show` owner wire (Settings → Integrations) is added, with its request and result vectors, and a
+ * delivery row its optional `linear: { identifier, url }`.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '5dfd5a6d079eacdbbf8f78a29c3df15f55e3721bf0242c307952d7d3390aa96a',
+    '2739f1ac6f1d44d920a3afecd8cec370f196a8d40c7e12f75e4caa64ce63d1f0',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
