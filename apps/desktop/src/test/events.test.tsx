@@ -161,14 +161,11 @@ describe('Events', () => {
     expect(await within(status).findByText('running')).toBeTruthy();
     expect(within(status).getByText('on')).toBeTruthy();
 
+    // The rules as cards, one per rule (0.32.0): its two versions are one card, on (`events-rules.test.tsx`).
     await openTab('Rules');
-    const ruleTable = await screen.findByRole('table', { name: 'Rules' });
-    const ruleRows = within(ruleTable).getAllByRole('row');
-    expect(ruleRows).toHaveLength(1 + rules.length);
-    expect(within(ruleTable).getAllByText('rule_example')).toHaveLength(2);
-    expect(within(ruleTable).getByText('active')).toBeTruthy();
-    expect(within(ruleTable).getByText('superseded')).toBeTruthy();
-    expect(within(ruleTable).getByText('ap_1A2B3C4D5E6F7G8H9J0K1M2N3P')).toBeTruthy();
+    expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
+    expect(region('Rules').querySelectorAll('[data-rule]')).toHaveLength(1);
+    expect(within(region('Rules')).getByText('On')).toBeTruthy();
 
     await openTab('Deliveries');
     const deliveryTable = await screen.findByRole('table', { name: 'Recent deliveries' });
@@ -271,15 +268,15 @@ describe('Events', () => {
     expect(reads()).toBe(before);
   });
 
-  it('the Rules and Deliveries tabs count exactly the rows their tables show, and nothing when there are none', async () => {
-    // A row per version, as the table shows it: two versions of one rule are two rows. A row whose id is not text is a
-    // row all the same; an entry that is not a row at all is shown nowhere, and counted nowhere.
+  it('the Rules and Deliveries tabs count exactly what they show, and nothing when there are none', async () => {
+    // A card per rule (0.32.0): two versions of one rule are one card. A row whose id is not text names no rule, and an
+    // entry that is not a row at all is shown nowhere; neither is counted.
     const odd = [...rules, { ...rules[0], rule_id: 7, version: 3 }, 'not a row'];
     const first = renderApp(bridgeWith({}, { eventsRules: odd, eventsDeliveries: deliveries }), { screen: 'events' });
-    expect(await screen.findByRole('tab', { name: 'Rules 3' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Rules 1' })).toBeTruthy();
     expect(await screen.findByRole('tab', { name: `Deliveries ${deliveries.length}` })).toBeTruthy();
     await openTab('Rules');
-    expect(within(screen.getByRole('table', { name: 'Rules' })).getAllByRole('row')).toHaveLength(1 + 3);
+    expect(region('Rules').querySelectorAll('[data-rule]')).toHaveLength(1);
     expect(markOf(await findTab('Rules'))).toBeNull();
     first.unmount();
 
@@ -603,7 +600,7 @@ describe('The event service', () => {
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
     expect(await screen.findByRole('table', { name: 'Recent deliveries' })).toBeTruthy();
     await openTab('Rules');
-    expect(await screen.findByRole('table', { name: 'Rules' })).toBeTruthy();
+    expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
     await openTab('Service');
     expect(await within(region('Status')).findByText('running')).toBeTruthy();
 

@@ -22,7 +22,7 @@ import { ScreenState } from '../components/ScreenState.tsx';
 import { TerminalResult } from '../components/TerminalResult.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { Ago, When } from '../components/When.tsx';
-import { COPY, needsLine } from '../copy.ts';
+import { COPY, needsLine, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
@@ -36,12 +36,14 @@ import {
   errorMessage,
   type TerminalOutcome,
 } from '../ipc.ts';
+import { useEventsLists, useEventsNav } from './events/lists.ts';
+import { RulesTab } from './events/RulesTab.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /*
  * What this screen reads of the events service's bare JSON, field by field (DA13: its CLI keeps its own shape).
  *   status          `packages/events-daemon/src/operations/status.ts`, `EventsDaemonStatus`
- *   rules list      `runtime/owner.ts`, `ruleRows`: one row per rule version, its columns as SQLite names them
+ *   rules list, rule show  `events/lists.ts` and `src/events-rules.ts` (0.32.0's Rules tab)
  *   deliveries list `runtime/b3-operator-control.ts`, `deliveriesList`: content-free metadata, times in epoch ms
  *   judge model status  `operations/contracts/laya-model-status-v1.schema.json`: Laya's closed status (E2)
  *   judge kinds list    `operations/contracts/b3-control-v2.schema.json`, `judgeKindEntry`: each kind's state
@@ -101,25 +103,6 @@ function versioned(id: unknown, version: unknown): ReactNode {
 function moment(value: unknown): ReactNode {
   return typeof value === 'number' ? <When at={value} /> : '-';
 }
-
-/** A digest's first twelve characters, the whole of it on hover. */
-function digest(value: unknown): ReactNode {
-  if (typeof value !== 'string') return '-';
-  return (
-    <span title={value}>
-      <UntrustedText text={value.length > 12 ? `${value.slice(0, 12)}…` : value} />
-    </span>
-  );
-}
-
-const RULE_COLUMNS: readonly Column[] = [
-  { label: 'Rule', show: (row) => plain(row.rule_id), literal: true },
-  { label: 'Version', show: (row) => plain(row.version), numeric: true },
-  { label: 'State', show: (row) => plain(row.state) },
-  { label: 'Approval', show: (row) => plain(row.approval_id), literal: true },
-  { label: 'Activation', show: (row) => plain(row.authorization_activation_id), literal: true },
-  { label: 'Digest', show: (row) => digest(row.digest), literal: true },
-];
 
 const DELIVERY_COLUMNS: readonly Column[] = [
   { label: 'Delivery', show: (row) => plain(row.deliveryId), literal: true },
@@ -604,12 +587,9 @@ function serviceAttention(eventService: Loadable<EventServiceState> | 'absent', 
   );
 }
 
-const RULES: Call = { kind: 'eventsRules' };
-const DELIVERIES: Call = { kind: 'eventsDeliveries' };
-
 /**
- * How many rows a list's table has, as `ListTable` reads them: each entry that is a row, a rule's every version among
- * them; for the deliveries, every one, and not only the most recent it shows. Nothing while it is unread or unreadable.
+ * How many rows a list's table has, as `ListTable` reads them: for the deliveries, every one, and not only the most
+ * recent it shows. Nothing while it is unread or unreadable.
  */
 function listCount(result: Loadable<unknown>): number | null {
   if (result.state !== 'ready' || !Array.isArray(result.value)) return null;
@@ -619,19 +599,6 @@ function listCount(result: Loadable<unknown>): number | null {
 /** Whether a list's read failed, or came back as something `ListTable` cannot read: its view then says so. */
 function listFailed(result: Loadable<unknown>): boolean {
   return result.state === 'error' || (result.state === 'ready' && !Array.isArray(result.value));
-}
-
-/** The rules: read when the screen opens, and again when the service starts or stops running, since they come from it. */
-function Rules({ result }: { result: Loadable<unknown> }) {
-  return (
-    <section aria-label="Rules">
-      <Panel>
-        <InPanel value={result}>
-          {(value) => <ListTable caption="Rules" columns={RULE_COLUMNS} value={value} empty="No rules yet." />}
-        </InPanel>
-      </Panel>
-    </section>
-  );
 }
 
 /** The recent deliveries, read as the rules are. */
@@ -1566,13 +1533,14 @@ type EventsTab = keyof typeof EVENTS_COPY.tabs;
  * the recent deliveries. Every view stays mounted while another is shown, so each is read when the screen opens, as it
  * always was, and a tab's badge can say what waits in it: nothing is hidden behind a tab.
  */
-function EventsTabs() {
+function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined }) {
   const { eventService, eventServiceProblem } = useAppData();
   const judgeReads = useJudgeReads();
-  const rules = useCall<unknown>(RULES);
-  useReloadOnServiceTurn(rules.reload);
-  const deliveries = useCall<unknown>(DELIVERIES);
-  useReloadOnServiceTurn(deliveries.reload);
+  const [selected, setSelected] = useState<EventsTab>('service');
+  const lists = useEventsLists();
+  const nav = useEventsNav(setSelected);
+  const { rules } = lists;
+  const deliveries = { result: lists.deliveriesRaw };
   const { tabs } = EVENTS_COPY;
   const tab = (value: EventsTab, badge: ReactNode) => (
     <Tabs.Tab value={value}>
@@ -1581,7 +1549,7 @@ function EventsTabs() {
     </Tabs.Tab>
   );
   return (
-    <Tabs.Root defaultValue={'service' satisfies EventsTab}>
+    <Tabs.Root value={selected} onValueChange={(value) => setSelected(value as EventsTab)}>
       <Tabs.List aria-label="Events" className="self-start">
         {tab(
           'service',
@@ -1605,10 +1573,10 @@ function EventsTabs() {
         )}
         {tab(
           'rules',
-          listFailed(rules.result) ? (
+          rules.state === 'error' ? (
             <Mark tone="danger" says={EVENTS_COPY.failed} />
           ) : (
-            <Count count={listCount(rules.result)} />
+            <Count count={rules.state === 'ready' ? rules.value.length : null} />
           ),
         )}
         {tab(
@@ -1630,7 +1598,7 @@ function EventsTabs() {
         <Judges reads={judgeReads} />
       </Tabs.Panel>
       <Tabs.Panel value={'rules' satisfies EventsTab} keepMounted>
-        <Rules result={rules.result} />
+        <RulesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
       <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
         <Deliveries result={deliveries.result} />
@@ -1644,13 +1612,13 @@ function EventsTabs() {
  * Resume, its judges with Turn on in Terminal and Turn off, its rules and its recent deliveries. Everything else stays in
  * its CLI and MCP, which carry its secret-handling rules. Nothing here runs unless its launcher is installed.
  */
-export function Events() {
+export function Events({ onScreen }: { onScreen?: (screen: Screen) => void }) {
   const { installation } = useAppData();
   const present = installation.state === 'ready' && installation.value.present.includes('events-daemon');
   return (
     <ScreenFrame title="Events">
       {present ? (
-        <EventsTabs />
+        <EventsTabs onScreen={onScreen} />
       ) : (
         <Panel>
           <EmptyState title="The events service isn't installed." />

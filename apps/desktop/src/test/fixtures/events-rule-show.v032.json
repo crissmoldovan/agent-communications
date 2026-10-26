@@ -1,0 +1,926 @@
+{
+  "invoices": [
+    {
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000000"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "invoice",
+          "caseSensitive": false
+        },
+        "agentic": {
+          "judge": {
+            "judgeId": "jev-billing",
+            "version": 1,
+            "kind": "typesafe",
+            "provider": "openrouter",
+            "model": "jev-1",
+            "endpoint": "https://api.example/system-one",
+            "promptTemplate": "fake-template-1",
+            "protocol": "noul"
+          },
+          "question": "Is this asking me to pay or send something?",
+          "inputs": ["/subject", "/snippet"],
+          "threshold": 0.7,
+          "onUncertain": "no-match",
+          "callsPerRollingHour": 30,
+          "inputTokensPerRolling30Days": 200000,
+          "concurrency": 1,
+          "maxInputTokens": 2000,
+          "maxOutputTokens": 50
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "snippet": {
+            "$path": "/snippet"
+          },
+          "messageId": {
+            "$path": "/messageId"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-queue",
+            "version": 1,
+            "kind": "queue",
+            "retentionMs": 2592000000,
+            "show": "summary",
+            "lane": {
+              "name": "billing"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [
+          {
+            "judgeId": "jev-billing",
+            "version": 1,
+            "kind": "typesafe",
+            "provider": "openrouter",
+            "model": "jev-1",
+            "endpoint": "https://api.example/system-one",
+            "promptTemplate": "fake-template-1",
+            "protocol": "noul"
+          }
+        ],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 2592000000
+        }
+      },
+      "digest": "1f3a5c7e9b0d2f4a6c8e0b1d3f5a7c9e1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a",
+      "state": "superseded",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3A",
+      "authorization_activation_id": "act_example_invoices_1",
+      "activatedAt": 1792832400000,
+      "supersededAt": 1792923240000,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When ",
+          "kind": "plain"
+        },
+        {
+          "text": "mail",
+          "kind": "value"
+        },
+        {
+          "text": " arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000000",
+          "kind": "value"
+        },
+        {
+          "text": " with ",
+          "kind": "plain"
+        },
+        {
+          "text": "invoice",
+          "kind": "untrusted"
+        },
+        {
+          "text": " in the subject, ask ",
+          "kind": "plain"
+        },
+        {
+          "text": "Jev",
+          "kind": "value"
+        },
+        {
+          "text": " ",
+          "kind": "plain"
+        },
+        {
+          "text": "Is this asking me to pay or send something?",
+          "kind": "untrusted"
+        },
+        {
+          "text": ". If it says yes, put it in the ",
+          "kind": "plain"
+        },
+        {
+          "text": "Queue",
+          "kind": "value"
+        },
+        {
+          "text": ", lane ",
+          "kind": "plain"
+        },
+        {
+          "text": "billing",
+          "kind": "value"
+        },
+        {
+          "text": ".",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 3,
+        "judgedYes": 2,
+        "judgedNo": 1,
+        "held": 0,
+        "delivered": 2,
+        "failed": 0
+      }
+    },
+    {
+      "document": {
+        "ruleId": "invoices",
+        "version": 2,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000000"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "any": [
+            {
+              "path": "/subject",
+              "op": "contains",
+              "value": "invoice",
+              "caseSensitive": false
+            },
+            {
+              "path": "/subject",
+              "op": "contains",
+              "value": "payment",
+              "caseSensitive": false
+            }
+          ]
+        },
+        "agentic": {
+          "judge": {
+            "judgeId": "jev-billing",
+            "version": 1,
+            "kind": "typesafe",
+            "provider": "openrouter",
+            "model": "jev-1",
+            "endpoint": "https://api.example/system-one",
+            "promptTemplate": "fake-template-1",
+            "protocol": "noul"
+          },
+          "question": "Is this asking me to pay or send something?",
+          "inputs": ["/subject", "/snippet"],
+          "threshold": 0.7,
+          "onUncertain": "no-match",
+          "callsPerRollingHour": 30,
+          "inputTokensPerRolling30Days": 200000,
+          "concurrency": 1,
+          "maxInputTokens": 2000,
+          "maxOutputTokens": 50
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "snippet": {
+            "$path": "/snippet"
+          },
+          "messageId": {
+            "$path": "/messageId"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-queue",
+            "version": 1,
+            "kind": "queue",
+            "retentionMs": 2592000000,
+            "show": "summary",
+            "lane": {
+              "name": "billing"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [
+          {
+            "judgeId": "jev-billing",
+            "version": 1,
+            "kind": "typesafe",
+            "provider": "openrouter",
+            "model": "jev-1",
+            "endpoint": "https://api.example/system-one",
+            "promptTemplate": "fake-template-1",
+            "protocol": "noul"
+          }
+        ],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 2592000000
+        }
+      },
+      "digest": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+      "state": "active",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3P",
+      "authorization_activation_id": "act_example_invoices_2",
+      "activatedAt": 1792923240000,
+      "supersededAt": null,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When ",
+          "kind": "plain"
+        },
+        {
+          "text": "mail",
+          "kind": "value"
+        },
+        {
+          "text": " arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000000",
+          "kind": "value"
+        },
+        {
+          "text": " with ",
+          "kind": "plain"
+        },
+        {
+          "text": "invoice",
+          "kind": "untrusted"
+        },
+        {
+          "text": " or ",
+          "kind": "plain"
+        },
+        {
+          "text": "payment",
+          "kind": "untrusted"
+        },
+        {
+          "text": " in the subject, ask ",
+          "kind": "plain"
+        },
+        {
+          "text": "Jev",
+          "kind": "value"
+        },
+        {
+          "text": " ",
+          "kind": "plain"
+        },
+        {
+          "text": "Is this asking me to pay or send something?",
+          "kind": "untrusted"
+        },
+        {
+          "text": ". If it says yes, put it in the ",
+          "kind": "plain"
+        },
+        {
+          "text": "Queue",
+          "kind": "value"
+        },
+        {
+          "text": ", lane ",
+          "kind": "plain"
+        },
+        {
+          "text": "billing",
+          "kind": "value"
+        },
+        {
+          "text": ".",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 12,
+        "judgedYes": 8,
+        "judgedNo": 4,
+        "held": 0,
+        "delivered": 8,
+        "failed": 0
+      }
+    }
+  ],
+  "david-on-slack": [
+    {
+      "document": {
+        "ruleId": "david-on-slack",
+        "version": 1,
+        "source": {
+          "channel": "slack",
+          "accountIds": ["acc_01EXAMPLE000000000000001"],
+          "options": {
+            "channel": "slack",
+            "conversations": ["D0EXAMPLE"]
+          }
+        },
+        "event": {
+          "type": "slack.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/user",
+          "op": "equals",
+          "value": "U0DAVIDEX",
+          "caseSensitive": true
+        },
+        "mapping": {
+          "from": {
+            "$path": "/user"
+          },
+          "text": {
+            "$path": "/text"
+          },
+          "workspaceId": {
+            "$path": "/workspaceId"
+          },
+          "channel": {
+            "$path": "/channel/id"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "david-queue",
+            "version": 1,
+            "kind": "queue",
+            "retentionMs": 604800000,
+            "show": "minimal",
+            "lane": {
+              "name": "david"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      },
+      "digest": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+      "state": "active",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3B",
+      "authorization_activation_id": "act_example_david_1",
+      "activatedAt": 1792742400000,
+      "supersededAt": null,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When ",
+          "kind": "plain"
+        },
+        {
+          "text": "U0DAVIDEX",
+          "kind": "value"
+        },
+        {
+          "text": " writes in ",
+          "kind": "plain"
+        },
+        {
+          "text": "acc_01EXAMPLE000000000000001",
+          "kind": "value"
+        },
+        {
+          "text": ", put it in the ",
+          "kind": "plain"
+        },
+        {
+          "text": "Queue",
+          "kind": "value"
+        },
+        {
+          "text": ", lane ",
+          "kind": "plain"
+        },
+        {
+          "text": "david",
+          "kind": "value"
+        },
+        {
+          "text": ". No judge.",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 1,
+        "judgedYes": 0,
+        "judgedNo": 0,
+        "held": 0,
+        "delivered": 1,
+        "failed": 0
+      }
+    }
+  ],
+  "mail-subject": [
+    {
+      "document": {
+        "ruleId": "mail-subject",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000099"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "contains",
+          "value": "test",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "mail-subject-log",
+            "version": 1,
+            "kind": "dry-run",
+            "retentionMs": 86400000
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 86400000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      },
+      "digest": "3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+      "state": "active",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3C",
+      "authorization_activation_id": "act_example_mail_subject_1",
+      "activatedAt": 1792917000000,
+      "supersededAt": null,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When ",
+          "kind": "plain"
+        },
+        {
+          "text": "mail",
+          "kind": "value"
+        },
+        {
+          "text": " arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000099",
+          "kind": "value"
+        },
+        {
+          "text": " with ",
+          "kind": "plain"
+        },
+        {
+          "text": "test",
+          "kind": "untrusted"
+        },
+        {
+          "text": " in the subject, write what it would deliver to the ",
+          "kind": "plain"
+        },
+        {
+          "text": "dry-run log",
+          "kind": "value"
+        },
+        {
+          "text": " on this Mac.",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 2,
+        "judgedYes": 0,
+        "judgedNo": 0,
+        "held": 0,
+        "delivered": 2,
+        "failed": 0
+      }
+    }
+  ],
+  "build-alerts": [
+    {
+      "document": {
+        "ruleId": "build-alerts",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000000"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/from/address",
+          "op": "domainIs",
+          "value": "ci.example",
+          "includeSubdomains": false
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "ci-hook",
+            "version": 1,
+            "kind": "webhook",
+            "url": {
+              "kind": "plain",
+              "value": "https://hooks.ci.example/agentcomms"
+            },
+            "approvedAddressSet": ["192.0.2.10"],
+            "signing": "standard-webhooks",
+            "ordering": "strict",
+            "retryLimit": 5,
+            "representation": "enveloped"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 172800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      },
+      "digest": "4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c",
+      "state": "active",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3D",
+      "authorization_activation_id": "act_example_build_alerts_1",
+      "activatedAt": 1792627200000,
+      "supersededAt": null,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When mail from ",
+          "kind": "plain"
+        },
+        {
+          "text": "ci.example",
+          "kind": "value"
+        },
+        {
+          "text": " arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000000",
+          "kind": "value"
+        },
+        {
+          "text": ", send it to the webhook at ",
+          "kind": "plain"
+        },
+        {
+          "text": "hooks.ci.example",
+          "kind": "value"
+        },
+        {
+          "text": ".",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 4,
+        "judgedYes": 0,
+        "judgedNo": 0,
+        "held": 0,
+        "delivered": 2,
+        "failed": 1
+      }
+    }
+  ],
+  "deploy-alerts": [
+    {
+      "document": {
+        "ruleId": "deploy-alerts",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000000"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/from/address",
+          "op": "equals",
+          "value": "alerts@ops.example",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "ops-hook",
+            "version": 1,
+            "kind": "webhook",
+            "url": {
+              "kind": "secret",
+              "scheme": "https",
+              "host": "hooks.ops.example",
+              "port": 443,
+              "sha256": "9999999999999999999999999999999999999999999999999999999999999999"
+            },
+            "approvedAddressSet": ["192.0.2.20"],
+            "signing": "standard-webhooks",
+            "ordering": "strict",
+            "retryLimit": 3,
+            "representation": "plain"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 172800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      },
+      "digest": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+      "state": null,
+      "approval_id": null,
+      "authorization_activation_id": null,
+      "activatedAt": null,
+      "supersededAt": null,
+      "revokedAt": null,
+      "summary": [
+        {
+          "text": "When mail from ",
+          "kind": "plain"
+        },
+        {
+          "text": "alerts@ops.example",
+          "kind": "untrusted"
+        },
+        {
+          "text": " arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000000",
+          "kind": "value"
+        },
+        {
+          "text": ", send its sender and subject to the webhook at ",
+          "kind": "plain"
+        },
+        {
+          "text": "hooks.ops.example",
+          "kind": "value"
+        },
+        {
+          "text": ".",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 0,
+        "judgedYes": 0,
+        "judgedNo": 0,
+        "held": 0,
+        "delivered": 0,
+        "failed": 0
+      }
+    }
+  ],
+  "newsletters": [
+    {
+      "document": {
+        "ruleId": "newsletters",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["in_01EXAMPLE0000000000000000"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/snippet",
+          "op": "contains",
+          "value": "unsubscribe",
+          "caseSensitive": false
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "reading-queue",
+            "version": 1,
+            "kind": "queue",
+            "retentionMs": 604800000,
+            "show": "summary",
+            "lane": {
+              "name": "reading"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 86400000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      },
+      "digest": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e",
+      "state": "revoked",
+      "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3E",
+      "authorization_activation_id": "act_example_newsletters_1",
+      "activatedAt": 1791622800000,
+      "supersededAt": null,
+      "revokedAt": 1792486800000,
+      "summary": [
+        {
+          "text": "When mail with ",
+          "kind": "plain"
+        },
+        {
+          "text": "unsubscribe",
+          "kind": "untrusted"
+        },
+        {
+          "text": " in its first words arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "in_01EXAMPLE0000000000000000",
+          "kind": "value"
+        },
+        {
+          "text": ", put it in the ",
+          "kind": "plain"
+        },
+        {
+          "text": "Queue",
+          "kind": "value"
+        },
+        {
+          "text": ", lane ",
+          "kind": "plain"
+        },
+        {
+          "text": "reading",
+          "kind": "value"
+        },
+        {
+          "text": ".",
+          "kind": "plain"
+        }
+      ],
+      "counts7d": {
+        "matched": 0,
+        "judgedYes": 0,
+        "judgedNo": 0,
+        "held": 0,
+        "delivered": 0,
+        "failed": 0
+      }
+    }
+  ]
+}
