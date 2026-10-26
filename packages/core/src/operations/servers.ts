@@ -2,6 +2,7 @@ import { access, constants, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GatedChange } from '../change-flow.ts';
+import type { ChangeSurface } from '../changes.ts';
 import type { NarrowingOption } from '../channel-manifest.ts';
 import {
   CHANNEL_SERVERS,
@@ -47,6 +48,7 @@ import {
   type McpProduct,
   managedRuntimeDir,
   mcpInstall,
+  mcpUninstall,
   missingEntryFile,
   type PlannedInstall,
   type PruneResult,
@@ -56,6 +58,7 @@ import {
   reusableRuntime,
   runningCommandLines,
   type SupportedClient,
+  type UninstallResult,
   whichExecutable,
 } from '../mcp-install.ts';
 import { resolveName } from '../names.ts';
@@ -1041,6 +1044,77 @@ function everyServerPruneChange(
         ...(refused ? { refused: [...new Set(looked.map((part) => part.refused))].join('; ') } : {}),
         servers: parts,
         ...(refusedServers.length > 0 ? { refusedServers } : {}),
+      };
+    },
+  };
+}
+
+// ── Uninstall ───────────────────────────────────────────────────────────────────────────────────────────────
+
+export interface ServerUninstallRequest {
+  /** The declared server id, named `channel` as `comms_server_install` names it: `gmail`, `slack`, `core`, `events`. */
+  channel: ServerId;
+  /** The client to take it out of. Not `json`: a printed entry is registered nowhere this can see. */
+  client: SupportedClient;
+}
+
+export interface ServerUninstallResult extends UninstallResult {
+  server: ServerId;
+  /** The server as a person knows it: "agentcomms (core)", "Gmail". */
+  label: string;
+  /** What to tell the person: the client keeps the server it started until it restarts. */
+  restart: string;
+}
+
+/**
+ * Taking one declared server out of one MCP client, as a change (design 2026-10-26-owner-feedback-0320 §3.3, §4):
+ * `agentcomms mcp uninstall --client <c> --server <s>` and comms_server_uninstall. Prune is not this: it removes
+ * runtimes nothing names, and leaves every client's registrations as they are.
+ *
+ * A tightening — an agent and its client can do less after it — so it applies at once and asks nobody, from either
+ * surface: the plan changes no setting and does nothing that cannot be taken back (the entries are saved first, and
+ * registering again puts them back). The audit log records it. What it does is `mcpUninstall`'s.
+ */
+export function serverUninstallChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ServerUninstallRequest,
+  surface: ChangeSurface,
+  deps: { platform?: NodeJS.Platform | undefined } = {},
+): GatedChange<ServerUninstallResult> {
+  const channel = (request as { channel?: unknown } | undefined)?.channel;
+  const client = (request as { client?: unknown } | undefined)?.client;
+  if (typeof channel !== 'string' || !isServer(channel)) {
+    throw new CommsError('USAGE', `"${String(channel).slice(0, 40)}" is not a server this can take out`, {
+      hint: `One of: ${SERVERS.join(', ')}.`,
+    });
+  }
+  if (typeof client !== 'string' || !(CLIENTS as readonly string[]).includes(client) || client === 'json') {
+    throw new CommsError('USAGE', `"${String(client).slice(0, 40)}" is not a client a server can be taken out of`, {
+      hint: `One of: ${CLIENTS.filter((each) => each !== 'json').join(', ')}.`,
+    });
+  }
+  const label = serverLabel(channel);
+  const context: InstallContext = { env, core, ...(deps.platform === undefined ? {} : { platform: deps.platform }) };
+  return {
+    plan: (config) => ({ before: config, after: config, summary: `Take the ${label} server out of ${client}` }),
+    apply: async () => {
+      const result = await mcpUninstall(context, serverFacts(channel), client as SupportedClient);
+      await core.audit.append({
+        inboxId: '',
+        operation: 'mcp.uninstall',
+        outcome: 'ok',
+        surface,
+        reason: `${channel} from ${client}: removed ${result.removed.length}, kept ${result.kept.length}`,
+      });
+      return {
+        server: channel,
+        label,
+        ...result,
+        restart:
+          result.removed.length > 0
+            ? `${client} keeps the ${label} server it started until it is restarted: restart it for this to take effect`
+            : `nothing of the ${label} server was taken out of ${client}`,
       };
     },
   };

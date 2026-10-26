@@ -97,8 +97,11 @@ import {
   type ChannelsReport,
   channelsAvailable,
   installVerification,
+  type ServerUninstallRequest,
+  type ServerUninstallResult,
   serverInstallChange,
   serverPruneChange,
+  serverUninstallChange,
 } from './operations/servers.ts';
 import {
   type StandingChangeRequest,
@@ -270,6 +273,9 @@ Usage — run these with this CLI, each as the words after its program:
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
                                 remove the managed runtimes that nothing uses: every managed server's,
                                 listed by server, or with --server that one's
+  mcp uninstall --client <client> --server <server>
+                                take one server out of one client's configuration: applies at once,
+                                and the client sees it once restarted
   update [--check] [--no-verify] [--approval <id>]
                                 bring every registration, runtime and global package to the latest
                                 release; --check only says what is behind
@@ -1385,7 +1391,47 @@ export async function main(
           writeResult(result, output, (r) => renderPrune(r, output.color));
           return;
         }
-        throw usage('usage: mcp [install|prune]');
+        if (sub === 'uninstall') {
+          if (!values.client) throw usage('name the client to take the server out of with --client');
+          if (!CLIENT_NAMES.includes(values.client) || values.client === 'json') {
+            throw usage(`--client must be one of: ${CLIENT_NAMES.filter((name) => name !== 'json').join(', ')}`);
+          }
+          if (!values.server) throw usage('name the server to take out with --server');
+          // What `mcp install` reads and this does not: refused rather than quietly doing nothing.
+          const notTaken = (
+            [
+              ['name', values.name !== undefined],
+              ['account', values.account !== undefined],
+              ['inbox', values.inbox !== undefined],
+              ['workspace', values.workspace !== undefined],
+              ['read-only', values['read-only']],
+              ['launcher', values.launcher !== undefined],
+              ['force', values.force],
+              ['print', values.print],
+              ['no-verify', values['no-verify']],
+              ['dry-run', values['dry-run']],
+              ['include-printed', values['include-printed']],
+            ] as const
+          ).flatMap(([flag, given]) => (given ? [`--${flag}`] : []));
+          if (notTaken.length > 0) {
+            throw usage(
+              `mcp uninstall takes --client and --server only, not ${notTaken.join(', ')}: every entry of that server in that client goes`,
+            );
+          }
+          const result = await gatedChangeAtTerminal(
+            core,
+            serverUninstallChange(
+              core,
+              env,
+              { channel: values.server as ServerUninstallRequest['channel'], client: values.client as SupportedClient },
+              'cli',
+            ),
+            { ...approval, rerun: ['mcp', 'uninstall', '--client', values.client, '--server', values.server] },
+          );
+          writeResult(result, output, renderUninstall);
+          return;
+        }
+        throw usage('usage: mcp [install|prune|uninstall]');
       }
       case 'update': {
         if (values.later) {
@@ -1833,6 +1879,17 @@ function renderActivityMine(result: ActivityMineResult): string {
     ...(result.summary === null ? [] : [`  ${activityCounts(result.summary)}`]),
     '',
     activityLinesText(result.lines, result.more),
+  ].join('\n');
+}
+
+/** `mcp uninstall`, at a terminal: what went, what stayed and why, and the restart it needs. */
+function renderUninstall(result: ServerUninstallResult): string {
+  return [
+    ...result.removed.map((entry) => `Removed "${entry.name}" from ${entry.path}`),
+    ...result.kept.map((entry) => `Kept "${entry.name}" in ${entry.path}: ${entry.reason}`),
+    ...result.unreadable.map((file) => `Not read: ${file.path} (${file.reason})`),
+    ...(result.backupPath === undefined ? [] : [`What was removed is saved in ${result.backupPath}`]),
+    result.restart,
   ].join('\n');
 }
 

@@ -691,6 +691,18 @@
       "expect": { "request.channel": "events" },
       "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared prune operation."
     },
+    {
+      "id": "core.mcp.uninstall",
+      "package": "core",
+      "cli": "mcp uninstall",
+      "mcp": "comms_server_uninstall",
+      "status": "both",
+      "operation": "serverUninstallChange",
+      "argv": ["--client", "cursor", "--server", "gmail"],
+      "args": { "channel": "gmail", "client": "cursor" },
+      "expect": { "request.channel": "gmail", "request.client": "cursor" },
+      "reason": "`agentcomms mcp uninstall --client <c> --server <s>` takes one server out of one client's configuration, and comms_server_uninstall with `channel` and `client` is this command: a tightening, applied at once with no approval (design 2026-10-26-owner-feedback-0320 §3.3, §4). Prune is not this — it removes runtimes, and no registration."
+    },
 
     {
       "id": "gmail.client.add",
