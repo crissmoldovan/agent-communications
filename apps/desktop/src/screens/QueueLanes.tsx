@@ -1,6 +1,6 @@
 import { AlertDialog, Button, Chip, Dialog, EmptyState, InfoTip, Panel, Row, Spinner } from '@cueplusplus/ui';
 import { Link2Off, SquareTerminal } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { readSessions, type SessionView } from '../activity.ts';
 import { useBridge } from '../bridge-context.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
@@ -15,10 +15,12 @@ import {
   clientWords,
   type LaneBinding,
   type LaneView,
+  type LaneWindow,
   type PickableWindow,
   pickerWindows,
   readUnbound,
   ruleNames,
+  shortWindowId,
 } from '../lanes.ts';
 import { type QueueCounts, queueChannelLabel } from '../queue.ts';
 
@@ -44,7 +46,7 @@ export const LANES_COPY = {
   bindHint: 'You bind it at the terminal, so an agent can never bind itself.',
   pickerBody: 'Agent windows from the last 24 hours.',
   bindInTerminal: 'Bind in Terminal',
-  pickerAfter: 'Run it in Terminal, then come back: the lane shows its window.',
+  windowIdLabel: "This window's whole id",
   noWindows: 'No agent windows in the last 24 hours.',
   noWindowsHint: 'A window shows here once its agent has used agent-communications.',
   hiddenHint:
@@ -72,6 +74,14 @@ export function unboundLine(lane: string): string {
 /** `Bind a window to <lane>` */
 export function pickerTitle(lane: string): string {
   return `Bind a window to ${lane}`;
+}
+
+/**
+ * What the picker says once the terminal has the bind command: the person confirms it there by typing the lane's name
+ * (the event service's gate), then comes back.
+ */
+export function pickerAfterLine(lane: string): string {
+  return `Type ${lane} in Terminal to confirm, then come back here.`;
 }
 
 /** `<n> more not listed`: the sessions in the range the picker cannot offer. */
@@ -239,7 +249,44 @@ function LaneRow({
   );
 }
 
-/** A lane's binding: the window's folder in mono, with the home as `~`; its client, as the client says; and since. */
+/**
+ * A window's id in short, in mono — so two windows in one folder are told apart — with the whole of it in a hint:
+ * `hint` names which id it is, a Claude Code session id or an activity key.
+ */
+function WindowId({ id, hint, slot }: { id: string; hint: ReactNode; slot: string }) {
+  return (
+    <span className="flex items-center gap-(--cue-space-1)">
+      <span className="font-mono text-fg-muted" data-slot={slot}>
+        {shortWindowId(id)}
+      </span>
+      <InfoTip label={LANES_COPY.windowIdLabel} text={hint} />
+    </span>
+  );
+}
+
+/** `Session id <id>. Activity key <key>.`, each id in mono: whichever the window has. */
+function windowIds(window: Pick<LaneWindow, 'sessionId' | 'activityKey'>): ReactNode {
+  return (
+    <span>
+      {window.sessionId === null ? null : (
+        <>
+          Session id <span className="font-mono">{window.sessionId}</span>.
+        </>
+      )}
+      {window.sessionId !== null && window.activityKey !== null ? ' ' : null}
+      {window.activityKey === null ? null : (
+        <>
+          Activity key <span className="font-mono">{window.activityKey}</span>.
+        </>
+      )}
+    </span>
+  );
+}
+
+/**
+ * A lane's binding: the window's folder in mono, with the home as `~`; its session id in short (its activity key when it
+ * has none), the whole of both in a hint; its client, as the client says; and since.
+ */
 function Binding({ binding }: { binding: LaneBinding | null }) {
   if (binding === null) {
     return (
@@ -250,6 +297,8 @@ function Binding({ binding }: { binding: LaneBinding | null }) {
   }
   const bound = binding.window;
   const client = clientWords(bound.client);
+  // A binding by session id is decided by it (§3.3): the person reads the id the window was bound to.
+  const id = bound.sessionId ?? bound.activityKey;
   return (
     <span
       className="flex min-w-0 flex-wrap items-center gap-x-(--cue-space-2) gap-y-(--cue-space-1) text-(length:--cue-text-ui)"
@@ -262,6 +311,7 @@ function Binding({ binding }: { binding: LaneBinding | null }) {
           <UntrustedText text={bound.folder} />
         </span>
       )}
+      {id === null ? null : <WindowId id={id} hint={windowIds(bound)} slot="lane-window-id" />}
       {client === null ? null : (
         <>
           <span aria-hidden="true" className="text-fg-subtle">
@@ -453,7 +503,7 @@ function Picker({ lane, lanes }: { lane: string; lanes: LaneView[] }) {
       {outcome === null ? null : (
         <div className="flex flex-col gap-(--cue-space-1) text-(length:--cue-text-ui)">
           <TerminalResult outcome={outcome} />
-          <p className="text-fg-muted">{LANES_COPY.pickerAfter}</p>
+          <p className="text-fg-muted">{pickerAfterLine(lane)}</p>
         </div>
       )}
       {problem === null ? null : <Problem message={problem} />}
@@ -468,13 +518,17 @@ function WindowRow({ pick, busy, onBind }: { pick: PickableWindow; busy: boolean
   return (
     <Row data-window={session.key} className="items-center gap-(--cue-space-4)">
       <span className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
-        {session.folder === null ? (
-          <span className="text-fg-muted">{LANES_COPY.folderUnknown}</span>
-        ) : (
-          <span className="truncate font-mono text-fg" title={session.folder}>
-            <UntrustedText text={session.folder} />
-          </span>
-        )}
+        <span className="flex min-w-0 items-center gap-(--cue-space-2)">
+          {session.folder === null ? (
+            <span className="text-fg-muted">{LANES_COPY.folderUnknown}</span>
+          ) : (
+            <span className="truncate font-mono text-fg" title={session.folder}>
+              <UntrustedText text={session.folder} />
+            </span>
+          )}
+          {/* The id the bind command names this window by. */}
+          <WindowId id={session.key} hint={windowIds({ sessionId: null, activityKey: session.key })} slot="window-id" />
+        </span>
         <span className="flex flex-wrap gap-x-(--cue-space-2) text-(length:--cue-text-label) text-fg-muted">
           {client === null ? null : (
             <>

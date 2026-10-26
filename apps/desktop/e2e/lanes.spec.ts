@@ -101,6 +101,23 @@ test("Queue shows each item's lane as a quiet chip, and filters by lane", async 
     .toContainEqual({ kind: 'queueList', state: 'open', rule: 'david-on-slack', limit: 100 });
 });
 
+test("a plain queue's item from a rule that sends to a lane too shows no lane, and no lane filter keeps it", async ({
+  page,
+}) => {
+  const david = queueOpen.items.find((item) => item.rule.id === 'david-on-slack') as (typeof queueOpen.items)[number];
+  const plain = { ...david, id: 'qi_01JBH7Z3K9000000000000000P', lane: null };
+  await installMockIpc(page, scenario('0.31.0', { queueList: { open: { items: [david, plain], more: false } } }));
+  await openQueue(page);
+  const open = page.getByRole('region', { name: 'Open' });
+  await expect(open.locator('li[data-item]')).toHaveCount(2);
+  await expect(open.locator(`li[data-item="${david.id}"] [data-slot="queue-lane"]`)).toHaveText('Lane david');
+  await expect(open.locator(`li[data-item="${plain.id}"] [data-slot="queue-lane"]`)).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Lane' }).click();
+  await page.getByRole('option', { name: 'david' }).click();
+  await expect(open.locator('li[data-item]')).toHaveCount(1);
+  await expect(open.locator(`li[data-item="${david.id}"]`)).toBeVisible();
+});
+
 test('Lanes lists each lane with its binding; Unbind asks first and runs exactly its call', async ({ page }) => {
   const dialogs: string[] = [];
   page.on('dialog', (dialog) => {
@@ -116,6 +133,12 @@ test('Lanes lists each lane with its binding; Unbind asks first and runs exactly
   await expect(david.locator('[data-slot="lane-folder"]')).toHaveText('~/work/acme-site');
   await expect(david.locator('[data-slot="lane-client"]')).toContainText('claude-code 2.1.0, as the client says');
   await expect(david.locator('[data-slot="lane-since"] time')).toHaveAttribute('datetime', '2026-10-25T09:12:03.000Z');
+  // Its session id, short and in mono, with the whole of it and the activity key in the hint beside it.
+  await expect(david.locator('[data-slot="lane-window-id"]')).toHaveText('0f8b5c3e');
+  await david.getByRole('button', { name: "This window's whole id" }).hover();
+  await expect(page.getByRole('tooltip')).toHaveText(
+    'Session id 0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90. Activity key 3f9a1c2e7b4d5a60.',
+  );
   const billing = page.locator('[data-lane="billing"]');
   await expect(billing.locator('[data-slot="lane-binding"]')).toHaveText('Not bound');
   await expect(billing.getByRole('button', { name: 'Bind a window…' })).toBeVisible();
@@ -150,13 +173,17 @@ test('Bind a window… offers the grouped windows only, and Bind in Terminal ope
   await expect(picker.locator('[data-window="0c0ffee000000001"]')).toHaveCount(0);
   await expect(picker.locator('[data-slot="picker-hidden"]')).toContainText('2 more not listed');
   await expect(picker.locator('[data-window="3f9a1c2e7b4d5a60"]')).toContainText('Bound to david');
+  await expect(picker.locator('[data-window="7c1e5b9a0d2f4e68"] [data-slot="window-id"]')).toHaveText('7c1e5b9a');
+  await expect(picker.locator('[data-window="3f9a1c2e7b4d5a60"] [data-slot="window-id"]')).toHaveText('3f9a1c2e');
   await expect(
     picker.locator('[data-window="3f9a1c2e7b4d5a60"]').getByRole('button', { name: 'Bind in Terminal' }),
   ).toHaveCount(0);
   expect(await cliCalls(page)).toContainEqual({ kind: 'activitySessions', since: '24h' });
   await picker.locator('[data-window="7c1e5b9a0d2f4e68"]').getByRole('button', { name: 'Bind in Terminal' }).click();
   await expect(picker.getByText('Opened in Terminal.')).toBeVisible();
+  // The command is the bind and nothing else: the person confirms it there by typing the lane's name.
   expect(await terminals(page)).toEqual([{ kind: 'laneBind', lane: 'billing', window: '7c1e5b9a0d2f4e68' }]);
+  await expect(picker.getByText('Type billing in Terminal to confirm, then come back here.')).toBeVisible();
   // The app never binds itself: every lane call it made was a read.
   for (const call of await laneCalls(page)) expect(call).toEqual({ kind: 'laneList' });
 });

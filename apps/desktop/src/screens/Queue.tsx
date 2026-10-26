@@ -275,7 +275,8 @@ function QueueViews() {
   const [filters, setFilters] = useState<Filters>({ rule: null, channel: null, lane: null });
   const [cleared, setCleared] = useState<string | null>(null);
   const [clearProblem, setClearProblem] = useState<string | null>(null);
-  const { lanes, reload: reloadLanes } = useLanes(supports(version, 'lanes'));
+  const lanesOn = supports(version, 'lanes');
+  const { lanes, reload: reloadLanes } = useLanes(lanesOn);
   const known = lanes !== 'unsupported' && lanes.state === 'ready' ? lanes.value : [];
   const { read, reload } = useQueueList(listCall(tab, filters, known));
   const again = useCallback(async () => {
@@ -361,7 +362,7 @@ function QueueViews() {
               <Items
                 tab={each}
                 read={read}
-                lanes={known}
+                lanes={lanesOn ? known : null}
                 lane={filters.lane}
                 filtered={filters.rule !== null || filters.channel !== null || filters.lane !== null}
                 onChanged={again}
@@ -526,8 +527,9 @@ const EMPTY: Readonly<Record<QueueTab, string>> = {
 };
 
 /**
- * One tab's items, newest first, as cards, each with its lane when it is in one; only the chosen lane's, when one is;
- * what it says when there are none; and that more matched.
+ * One tab's items, newest first, as cards, each with its lane when it is in one — once the events service has lanes
+ * (`lanes` is null before) — and only the chosen lane's, when one is; what it says when there are none; and that more
+ * matched.
  */
 function Items({
   tab,
@@ -539,11 +541,12 @@ function Items({
 }: {
   tab: QueueTab;
   read: Loadable<QueueListView>;
-  lanes: readonly LaneView[];
+  lanes: readonly LaneView[] | null;
   lane: string | null;
   filtered: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const laneOf = (item: QueueItem): string | null => (lanes === null ? null : itemLane(item, lanes));
   // An item marked here leaves its tab at once, before the list is read again; each new read says again what is here.
   const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
@@ -552,7 +555,7 @@ function Items({
   if (read.state === 'loading') return <Spinner label={COPY.loading} />;
   if (read.state === 'error') return <Problem message={read.message} />;
   const items = read.value.items.filter(
-    (item) => item.state === tab && !left.has(item.id) && (lane === null || itemLane(item, lanes) === lane),
+    (item) => item.state === tab && !left.has(item.id) && (lane === null || laneOf(item) === lane),
   );
   if (items.length === 0) {
     return (
@@ -568,7 +571,7 @@ function Items({
           <ItemCard
             key={item.id}
             item={item}
-            lane={itemLane(item, lanes)}
+            lane={laneOf(item)}
             onChanged={async () => {
               setLeft((before) => new Set([...before, item.id]));
               await onChanged();

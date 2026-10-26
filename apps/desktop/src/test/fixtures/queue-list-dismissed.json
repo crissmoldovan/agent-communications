@@ -11,6 +11,7 @@
         "version": 2,
         "name": "Mail that asks something"
       },
+      "lane": null,
       "channel": "gmail",
       "account": {
         "id": "in_01EXAMPLE0000000000000000",

@@ -136,13 +136,20 @@ export function ruleNames(lane: LaneView, counts: QueueCounts | null): string[] 
 // ── Which lane an item is in ───────────────────────────────────────────────────────────────────────────────────
 
 /**
- * The lane an item is in: the one the event service names on it, or else the one lane whose rules include the item's
- * rule — never a guess between two. Null when it is in none, or when that cannot be told.
+ * The lane an item is in: the one the event service says, its name or null — a plain queue's item is in no lane even
+ * when its rule sends to a lane too. Only an item that says nothing of a lane (a service older than 0.31.0) is told
+ * from the one lane whose rules include its rule — never a guess between two. Null when it is in none, or when that
+ * cannot be told.
  */
 export function itemLane(item: QueueItem, lanes: readonly LaneView[]): string | null {
-  if (item.lane !== null) return item.lane;
+  if (item.lane !== undefined) return item.lane;
   const feeding = lanes.filter((lane) => lane.rules.includes(item.rule.id));
   return feeding.length === 1 ? (feeding[0] as LaneView).name : null;
+}
+
+/** A window's id in short, as the screen shows it: its first eight characters (a UUID's first group). */
+export function shortWindowId(id: string): string {
+  return id.slice(0, 8);
 }
 
 /** The lanes the screen offers as a filter: those with a name the allow-list takes. */

@@ -2343,6 +2343,22 @@ mod tests {
         );
         assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
         assert!(prepared.map().is_empty());
+        // The person confirms the bind by typing the lane's name at that terminal (the event service's gate): the
+        // app's line never answers it. The lane is named once, and nothing skips, answers or quiets the question.
+        assert_eq!(words.iter().filter(|word| *word == "david").count(), 1);
+        for answer in [
+            "--yes",
+            "-y",
+            "--confirm",
+            "--force",
+            "--json",
+            "--approval",
+        ] {
+            assert!(
+                !words.iter().any(|word| word == answer),
+                "{answer}: {words:?}"
+            );
+        }
         // A Claude Code session id binds the same way.
         let by_session: TerminalCommand = serde_json::from_value(serde_json::json!({
             "kind": "laneBind", "lane": "billing", "window": "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90"
