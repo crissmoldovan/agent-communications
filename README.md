@@ -439,13 +439,19 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
   ```
 
   The prompt is a fixed frame — "[Agent Comms] The rule acme passed you a message from gmail/cue/gmail." — with each
-  part labelled, and every field the sender wrote, and every model's words, inside the untrusted-content envelope. Only
-  fields the rule's mapping keeps are sent. A model writes its part on your own OpenRouter or Anthropic key, at most
-  400 tokens; a file is read only under the relay's allowed roots or a folder you add (`--allow-folder`), at most
-  64 KB. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose `acceptEdits`
+  part labelled, and every field the sender wrote, every model's words and every file's text inside the
+  untrusted-content envelope. Only fields the rule's mapping keeps are sent. A model writes its part on your own
+  OpenRouter or Anthropic key, at most 400 tokens, once for each match. A file is read only under the relay's allowed
+  roots or a folder you add (`--allow-folder`), at most 64 KB, and only when it is a plain file of yours with no other
+  name (no link, hard link or FIFO), never in Agent Comms' own folders; a relay root of `/` or your home folder itself
+  confines nothing, so it is ignored, and `--allow-folder` refuses them. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose `acceptEdits`
   or `plan`; a rule can never fix `bypassPermissions`.
+- **claude-stream keeps what it is sent.** The relay journals each prompt, the sender's words included, under its own
+  retention: Agent Comms' retention settings do not reach it, and the approval preview says so.
 - **A busy session queues the match** until its run ends (or leaves it in the Queue, with `if busy leave it in the
-  queue`): `agent-events session-queue list` shows what waits, and `session-queue drop <delivery-id>` drops one.
+  queue`): `agent-events session-queue list` shows what waits, and `session-queue drop <delivery-id>` drops one. Each
+  time the match finds the session busy is a try, further apart each time; after 12 it fails. A session that becomes
+  one the relay only watches, or one fenced or moved, is not waited on: another is found or started.
 - **A window you opened yourself** is not one the relay can prompt: a session found by a lane whose window claude-stream
   does not run becomes a lane item, as in 0.31.0, and wakes that window.
 

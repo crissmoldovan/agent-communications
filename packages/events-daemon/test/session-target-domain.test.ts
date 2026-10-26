@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { canonicalFullRuleDocument, canonicalTarget, targetLane } from '../src/domain/activation-documents.ts';
+import {
+  type ActivationDocumentV1,
+  canonicalFullRuleDocument,
+  canonicalTarget,
+  targetLane,
+} from '../src/domain/activation-documents.ts';
 import { canonicalSessionTarget, isSessionFolder } from '../src/domain/session-target.ts';
+import { renderB3ApprovalPreviewV1 } from '../src/operations/b3-contract.ts';
 
 /**
  * The agent-session target's document (0.33.0 design §3.5–§3.6): exact keys, its defaults written out, the mode the
@@ -153,5 +159,31 @@ test('SESSION-D5: one target carries a lane, a session target and a queue target
         ),
       ),
     /lane david is carried by two targets of this rule/u,
+  );
+});
+
+test('REVIEW: the approval preview says claude-stream keeps each prompt in its own journal, under its own retention', () => {
+  const view = renderB3ApprovalPreviewV1({
+    kind: 'READY',
+    approvalId: 'ap_00000000000000000000000001',
+    digest: 'a'.repeat(64),
+    preview: {
+      documentVersion: 1,
+      kind: 'rule',
+      rule: canonicalFullRuleDocument(rule([session()])),
+    } as unknown as ActivationDocumentV1,
+    challenge: {
+      approvalId: 'ap_00000000000000000000000001',
+      digest: 'a'.repeat(64),
+      challenge: 'acme',
+      expiresAt: 1_000,
+    },
+  });
+  assert.ok(
+    view.terminal
+      .split('\n')
+      .includes(
+        "Session acme@1: claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.",
+      ),
   );
 });

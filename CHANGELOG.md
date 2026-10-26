@@ -45,6 +45,14 @@ together under one version.
   `events_session_queue_list`. `integration show|set agent-sessions` says where the relay is — yours to set, from the
   app or your terminal. The rule text prints and parses the `session` block. One automatic migration, 32, admits the
   session kind and adds the content-free busy queue.
+  - **From the security review:** the control token goes only to a port your own process listens on (checked with
+    `lsof` on macOS and `/proc/net/tcp` on Linux; not on Windows), and is read from the opened file itself. Only a live
+    run's 409 is busy; each busy answer is a try, with a growing wait, and a session since watched, fenced or moved is
+    left. The prompt is written once for each match, so a model part runs once. A file part is read only when it is a
+    plain file of yours with no other name, never from Agent Comms' own folders, under a deadline; a relay root of `/`
+    or your home folder is ignored. A file's text goes inside the untrusted-content envelope. A lane session target's
+    counts stay out of an unbound window. The approval preview and the README say that claude-stream journals each
+    prompt, the sender's words included, under its own retention.
 - **A judge's exact document** (`@agentcomms/events-daemon`): `agent-events judge show <judgeId> [--version <n>] --json`
   and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
   prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any
