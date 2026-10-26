@@ -188,3 +188,40 @@ test('0.32 B3: delivery show refuses inside the event service’s MCP server, an
     await rm(stateDir, { recursive: true, force: true });
   }
 });
+
+// 0.32.0 (§3.5, events design D7: "at the terminal or in the app"): the dry-run log moves from the human-terminal gate
+// to the queue's Q1 gate. Inside an MCP server's process it is refused; outside it, the app reads it with --json.
+test('0.32 B4: dryrun list and show refuse inside the event service’s MCP server, and are the person’s with --json', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-dryrun-gate-');
+  try {
+    const base = ['--state-dir', stateDir];
+    for (const argv of [
+      [...base, 'dryrun', 'list', '--json'],
+      [...base, 'dryrun', 'show', 'delivery-1', '--json'],
+      [...base, 'dryrun', 'list'],
+      [...base, 'dryrun', 'show', 'delivery-1'],
+    ]) {
+      const refused = await cli(argv, { [MCP_SERVER_MARKER]: 'events' });
+      assert.equal(refused.code, 10, `${argv.join(' ')}: ${refused.err}`);
+      assert.match(refused.err, /the event service's MCP server cannot read it/u);
+      assert.equal(refused.out, '', 'nothing is printed');
+      // Even at a terminal: the marker is the MCP server's own process, whatever its streams are.
+      assert.equal((await cli(argv, { [MCP_SERVER_MARKER]: 'events' }, true)).code, 10);
+    }
+    for (const argv of [
+      [...base, 'dryrun', 'list', '--json'],
+      [...base, 'dryrun', 'show', 'delivery-1', '--json'],
+    ]) {
+      // The app's call: no terminal, --json. It gets as far as asking the owner, which is not running here.
+      const app = await cli(argv, {});
+      assert.equal(app.code, 66, `${argv.join(' ')}: ${app.err}`);
+      assert.match(app.err, /not running/u);
+      // The trade Q1 accepted for the queue: a shell an agent runs is the person's own, and is not refused.
+      assert.equal((await cli(argv, { CLAUDECODE: '1' })).code, 66, argv.join(' '));
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});

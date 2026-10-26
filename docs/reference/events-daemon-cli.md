@@ -58,7 +58,7 @@ Scripts should read these rather than parse output.
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
-| [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
+| [`dryrun`](#agent-events-dryrun) | read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
@@ -662,7 +662,7 @@ agent-events held decide [options] <decision-id> <accept|reject>
 
 ### `agent-events dryrun`
 
-inspect retained local records at an interactive terminal
+read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most
 
 ```
 agent-events dryrun [options] [command]
@@ -670,11 +670,15 @@ agent-events dryrun [options] [command]
 
 ### `agent-events dryrun list`
 
+list the dry-run log without what it holds (a person, at a terminal or in the app)
+
 ```
 agent-events dryrun list [options]
 ```
 
 ### `agent-events dryrun show`
+
+show one dry-run record: the exact event it would have delivered (a person, at a terminal or in the app)
 
 ```
 agent-events dryrun show [options] <delivery-id>

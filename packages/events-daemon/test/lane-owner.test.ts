@@ -719,3 +719,64 @@ test('0.32 B3: delivery show --json gives a delivery’s decision, event, source
     assert.equal(marked.code, 10, marked.err);
   });
 });
+
+// 0.32.0 (§3.5): the dry-run log as the app reads it, with --json and no terminal, through a real owner. The record comes
+// back as data: the would-be CloudEvent parsed, its sender-written fields named in agentcommsuntrusted. The terminal
+// view still wraps the record in the untrusted-content envelope.
+test('0.32 B4: dryrun list and show --json give the app the log as data; the terminal view keeps the envelope', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const messageId = harness.mailbox.send('Dry-run subject the app shows as outside text');
+    for (let index = 0; index < 10 && (await harness.openCount()) === 0; index += 1) await harness.tick();
+    const listed = await cli(harness.stateDir, ['dryrun', 'list', '--json']);
+    assert.equal(listed.code, 0, listed.err);
+    t.diagnostic(`dryrun list --json: ${listed.out.trim()}`);
+    const entries = JSON.parse(listed.out) as Array<Record<string, unknown>>;
+    assert.equal(entries.length, 1);
+    assert.deepEqual(Object.keys(entries[0] ?? {}).sort(), [
+      'accountId',
+      'deliveredAt',
+      'deliveryId',
+      'eventId',
+      'expiresAt',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+    ]);
+    assert.doesNotMatch(listed.out, /Dry-run subject/u, 'the list is content-free');
+    const deliveryId = entries[0]?.deliveryId as string;
+
+    const shown = await cli(harness.stateDir, ['dryrun', 'show', deliveryId, '--json']);
+    assert.equal(shown.code, 0, shown.err);
+    t.diagnostic(`dryrun show --json: ${shown.out.trim()}`);
+    const record = JSON.parse(shown.out) as Record<string, unknown> & {
+      record: { data: Record<string, unknown>; agentcommsuntrusted?: unknown; type: string; dataschema: string };
+    };
+    assert.deepEqual(Object.keys(record), [
+      'deliveryId',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+      'eventId',
+      'accountId',
+      'deliveredAt',
+      'expiresAt',
+      'record',
+    ]);
+    assert.equal(record.deliveryId, deliveryId);
+    assert.equal(record.ruleId, RULE);
+    assert.equal(record.record.data.subject, 'Dry-run subject the app shows as outside text');
+    assert.equal(record.record.data.messageId, messageId);
+    assert.ok(record.record.agentcommsuntrusted !== undefined, 'the event names its sender-written fields');
+    assert.doesNotMatch(shown.out, /<untrusted-content/u, 'data, not a terminal envelope: the app renders OutsideText');
+
+    const terminal = await cli(harness.stateDir, ['dryrun', 'show', deliveryId]);
+    assert.equal(terminal.code, 0, terminal.err);
+    assert.match(terminal.out, /<untrusted-content/u, 'the terminal view keeps the envelope');
+    assert.match(terminal.out, /^Local dry-run delivery /mu);
+  });
+});
