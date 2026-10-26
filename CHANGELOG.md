@@ -3,6 +3,13 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.33.0
+
+- **A rule as text** (`@agentcomms/events`): `printRuleText` writes a rule as the short language the app's text editor
+  shows (`when a new message arrives in cue/gmail, in the inbox`, `match any`, `ask`, `then`, `keep`, `at most`), and
+  `parseRuleText` reads it back to the same document, with each mistake's line and column. Anything the text has no
+  words for is kept as `raw` JSON, so nothing is dropped. The grammar is in `packages/events/src/rule-text/GRAMMAR.md`.
+
 ## 0.31.0
 
 **Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the
