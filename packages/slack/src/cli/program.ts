@@ -120,8 +120,10 @@ import {
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
 import { prepareStandingAdd } from '../operations/standing.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { standingNarrowedView, standingPending } from '../standing-views.ts';
+import { takenLookupFor } from '../taken-lookup.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askHidden, readConfigurationToken } from './config-token.ts';
@@ -1148,6 +1150,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               latest: flags.latest as string | undefined,
               cursor: flags.cursor as string | undefined,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeHistory(channel),
@@ -1174,6 +1177,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               limit,
               cursor: flags.cursor as string | undefined,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeThread,
@@ -1206,6 +1210,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               page,
               ourTeamId: teamId,
               surface: context.surface,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeSearch,
@@ -1759,6 +1764,77 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
             `${data.act === 'reaction' ? 'Reacted to' : 'Replied in the thread of'} ${data.ts} in ${data.channel}, ${
               data.label?.route === 'app' ? 'as the app' : 'labelled as your agent'
             }, under standing approval ${data.standingId}. Notice: ${data.notice}.`,
+          streams,
+        );
+      }),
+    );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): `take` takes a message for the session this command runs in
+   * — its agent window, worked out from the process, never an argument — hands it back, or marks it done; `taken` says
+   * who has messages. At your own terminal a command is you, who take nothing: core's `takes keep` is yours.
+   */
+  workspaceOption(program.command('take <channel> <ts>'))
+    .description('take a message before acting on it, so no other session does; hand it back, or mark it done')
+    .option('--hand-back', 'hand it back: it is not this session’s', false)
+    .option('--reason <reason>', 'why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other')
+    .option('--note <note>', 'at most 200 characters for the person, with --hand-back or --done; no session sees it')
+    .option('--done', 'mark it done: other sessions stay refused', false)
+    .action(
+      act(async (context, _options, channel: string, ts: string, flags: Options) => {
+        if (flags.handBack === true && flags.done === true) {
+          throw new CommsError('USAGE', '--hand-back or --done, not both');
+        }
+        const step = flags.handBack === true ? 'hand-back' : flags.done === true ? 'done' : 'take';
+        const done = await takeMessage(
+          context,
+          String(flags.workspace),
+          channel,
+          ts,
+          { step, reason: flags.reason, note: flags.note },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(
+          done,
+          output(),
+          (data) =>
+            data.step === 'take'
+              ? `${data.changed ? 'Taken' : 'Still yours'}: ${data.message}${data.leaseUntil === null ? '' : `, until ${data.leaseUntil} unless you act on it again`}.`
+              : data.step === 'hand-back'
+                ? `Handed back: ${data.message} is open to every session again.`
+                : `Done: ${data.message}. Other sessions stay refused it.`,
+          streams,
+        );
+      }),
+    );
+
+  workspaceOption(program.command('taken [messages...]'))
+    .description('who has these messages, each <channel>/<ts>, in closed words; none: this session’s own')
+    .action(
+      act(async (context, _options, messages: string[], flags: Options) => {
+        const asked = messages.length === 0 ? undefined : messages;
+        const result = await takenMessages(context, String(flags.workspace), asked);
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            data.messages.length === 0
+              ? asked === undefined
+                ? 'This session has no message taken or offered here.'
+                : 'Nobody has these messages.'
+              : data.messages
+                  .map(({ id, taken }) => {
+                    if (taken === null) return `${id}  nobody`;
+                    const who =
+                      taken.state === 'offered'
+                        ? `offered to ${taken.offered?.to ?? 'another session'}`
+                        : taken.state === 'open'
+                          ? 'open'
+                          : `${taken.state} by ${taken.by ?? 'another session'}`;
+                    const back = taken.handedBack === undefined ? '' : `; handed back: ${taken.handedBack.join(', ')}`;
+                    return `${id}  ${who}${back}`;
+                  })
+                  .join('\n'),
           streams,
         );
       }),

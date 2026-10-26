@@ -517,6 +517,42 @@ shell, running as you — is in the core's README and the repository's SECURITY.
 agent misled by something it read can still say tens of bits an hour by which messages it acknowledges, with what and
 when. Do not make one for an agent that also reads sensitive mail, files or secrets in the same session.
 
+### Taking messages
+
+When several agent sessions read the same workspace, the first to take a message has it, and the others leave it. A
+session takes a message before it acts on it, hands it back when it is not its own — saying why, in closed words — or
+marks it done:
+
+```sh
+agent-slack take --workspace acme/slack C024BE7LR 1729936800.000100                  # this session has it now
+agent-slack take --workspace acme/slack C024BE7LR 1729936800.000100 --hand-back --reason not-mine --note "billing's"
+agent-slack take --workspace acme/slack C024BE7LR 1729936800.000100 --done
+agent-slack taken --workspace acme/slack C024BE7LR/1729936800.000100                   # who has it
+```
+
+Over MCP these are `slack_take` (`step`: `take`, `hand-back` or `done`) and `slack_taken`. Which session is taking is
+worked out by the server or the command from the process it runs in — never from an argument — and a take lapses an
+hour after the session's last act on the message, or as soon as its agent window has ended. Only a message someone
+else sent can be taken: not one of yours, and not one your app posted. A reason is `not-mine`, `wrong-account`,
+`needs-the-person`, `duplicate` or `other`; a note is at most 200 characters and is shown to you alone.
+
+What other sessions learn is closed words only: `you`, `another session` or `the person`, taken or done, offered, and
+the reasons it was handed back — never which session, its folder or its client, and never a note. Every read —
+`read`, `thread`, `search` and their tools — says so on each message, as `taken`.
+
+With `agentcomms taking acme/slack --require on`, a session must take a message before it reacts to it, acknowledges
+it, replies in its thread, or posts at the top of a DM or group DM — where the message answered is the newest from
+someone else there. Without the take the act is refused with `TAKE_REQUIRED` (exit `10`), before any preview or
+approval, and again just before it is sent: a take released in between sends nothing. A message another session has
+is refused with `TAKEN_ELSEWHERE` (exit `10`) whether or not a take is required. A post at the top of a channel, an
+edit or a deletion of your own message, and a local draft answer nobody's message, and need no take. At your own
+terminal you are never held to taking: `agentcomms takes keep` holds a message for you, and `takes list`, `release` and
+`give` are yours too, in core's README.
+
+A take allows nothing by itself: every act still needs the behaviour rules, the send policy and your yes. It keeps two
+sessions from answering the same message; it is not a boundary against a process running as you. This release says
+nothing to the sender when a session takes a message — a 👀 on taking comes later, under a standing approval you make.
+
 ## Your agent's emoji
 
 When your agent posts as the Slack app, its messages can carry your own picture with a small robot badge on it, so

@@ -79,6 +79,7 @@ import {
 } from './label.ts';
 import { isMessageTs } from './message.ts';
 import { type Channel, channelOf, type NameBook } from './people.ts';
+import { postTakeTarget, requireSlackTake, type SlackTakeGate } from './take-gate.ts';
 
 /**
  * The gate between a draft and a channel.
@@ -221,6 +222,12 @@ export interface PrepareDeps {
   readonly label?: LabelDeps | undefined;
   /** This account's own record of what its app posted (S5): written after an app post, read before an app edit. */
   readonly appPosts?: AppPostRecord | undefined;
+  /**
+   * Taking messages (design 2026-10-26-taking-messages §6): who is acting, and the store, for the take an act that
+   * answers a message needs — asked at prepare and again at the claim. `gateDepsFor` always sets it; a gate built by
+   * hand without it asks nothing, as one without the label acts as before the label.
+   */
+  readonly take?: SlackTakeGate | undefined;
   /**
    * The line a post preview opens with when a security fix is out and this machine does not install it on its own
    * (design 2026-10-16, U7): core's `securityNotice`, asked until the person answers a post that carried it — given the
@@ -738,6 +745,13 @@ export async function preparePost(
   }
   const { preview, digest, payload, label, check, decision } = await viewPost(deps, draft, book, requested);
   if (!decision.allowed) throw await actRefusal(deps, decision, check);
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §6): a post that answers a message — the newest from someone else
+   * in its thread, or at the top of a DM — needs this session's take of it when the account asks for one, and is
+   * refused on a message another session has whether or not it does. Before any approval is made.
+   */
+  const target = await postTakeTarget(deps, { channel: payload.channel, threadTs: payload.thread_ts });
+  const held = await requireSlackTake(deps, target, 'slack.post.prepare');
 
   // What the message asked for rides in the flags, so the send and the approval screen decide as this did.
   const riskFlags = [...risksOf(payload, preview.notifies, files.length), ...requestFlags(requested)];
@@ -770,6 +784,9 @@ export async function preparePost(
     expect: expectationFor(payload, preview.notifies),
   });
 
+  // The take pinned while this approval waits, so it does not lapse under it (T3).
+  if (held?.held === true) await requireSlackTake(deps, target, 'slack.post.prepare', record.approvalId);
+
   await deps.audit?.append({
     inboxId: deps.accountId,
     alias: deps.workspaceName,
@@ -788,6 +805,7 @@ export async function preparePost(
     preview: {
       ...(security === null ? {} : { security }),
       ...preview,
+      ...(held?.line ? { taken: held.line } : {}),
       context: { ...preview.context, approvalId: record.approvalId },
       policy: describePolicy(stricterPolicy(deps.policy, requiredPolicy)),
     },
@@ -1100,10 +1118,17 @@ export async function claimOrHandOver(
   check: BehaviourCheck,
   pendingHint: string,
   unclaimed: () => CommsError = () => cancelledPost(NOT_USED),
+  /**
+   * Taking messages (design 2026-10-26-taking-messages §6): the take an act that answers a message needs, asked again
+   * here, so a take released or taken elsewhere since the prepare stops it before the claim — the approval unused, and
+   * Slack asked nothing more. Edits and deletions answer no message, and pass none.
+   */
+  take?: (() => Promise<unknown>) | undefined,
 ): Promise<{ claimToken: string; claimed: ApprovalObject }> {
   // A standing child only on `ack`'s path, and nothing else there (S9): every act comes through here to be claimed.
   requireClaimRoute(deps, approvalId, await recordForClaim(deps, approvalId));
   await requireAllowed(deps, check);
+  await take?.();
   let claim: SendClaim;
   try {
     claim = await deps.approvals.claimForSend(approvalId, live, {
@@ -1249,6 +1274,14 @@ async function postClassified(
     },
     check,
     waitingHint('post', deps.surface, approvalId, deps.handoffs),
+    undefined,
+    // The message it answers, read again now, and this session's take of it asked again (§6).
+    async () =>
+      requireSlackTake(
+        deps,
+        await postTakeTarget(deps, { channel: payload.channel, threadTs: payload.thread_ts }),
+        deps.standingUse === undefined ? 'slack.post.send' : 'slack.ack',
+      ),
   );
   // Claimed: from here until its outcome is recorded, the claim's lease is renewed while Slack's work is outstanding.
   return withSendingLease(deps.approvals, approvalId, claimToken, async () => {
@@ -2029,6 +2062,8 @@ export interface PreparedReaction {
   readonly label?: LabelView | undefined;
   /** What the rules allow where it lands (design 2026-10-19-agent-behaviour-rules, B4): `Allowed here: …`. */
   readonly allowedHere: string;
+  /** "Taken by this session at 11:02." — when this session holds the message (design 2026-10-26-taking-messages §6). */
+  readonly taken?: string | undefined;
   /** Where its approval stands (design 2026-10-05 §D8): pending, and whether a yes in the chat makes it. */
   readonly approval: ApprovalObject;
 }
@@ -2278,6 +2313,9 @@ export async function prepareReaction(
   const check = await reactionCheckOf(deps, options, room);
   const here = await allowedHere(deps, check);
   if (!here.decision.allowed) throw await actRefusal(deps, here.decision, check);
+  // Taking messages (§6): a reaction answers the message it is on — this session's take of it, before any approval.
+  const target = { channel: options.channel, ts: options.ts };
+  const held = await requireSlackTake(deps, target, 'slack.react');
   const label = await reactionLabel(deps, options, requested, room);
   const digest = reactionDigest(deps, options, label, check);
   const record = await deps.approvals.create({
@@ -2306,6 +2344,8 @@ export async function prepareReaction(
     ],
     expect: reactionExpectation(options),
   });
+  // The take pinned while this approval waits (T3).
+  if (held?.held === true) await requireSlackTake(deps, target, 'slack.react', record.approvalId);
   return {
     approvalId: record.approvalId,
     channel: options.channel,
@@ -2316,6 +2356,7 @@ export async function prepareReaction(
     expect: record.expect,
     ...(label === undefined ? {} : { label: labelView(label, reactionLine(label)) }),
     allowedHere: here.line,
+    ...(held?.line ? { taken: held.line } : {}),
     approval: await deps.approvals.approvalOf(record),
   };
 }
@@ -2506,6 +2547,14 @@ export async function reactPrepared(
     },
     check,
     waitingHint('reaction', deps.surface, approvalId, deps.handoffs),
+    undefined,
+    // This session's take of the message, asked again now (§6): released since, and nothing is sent.
+    () =>
+      requireSlackTake(
+        deps,
+        { channel: options.channel, ts: options.ts },
+        deps.standingUse === undefined ? 'slack.react.send' : 'slack.ack',
+      ),
   );
   // Claimed: the lease is renewed while Slack's answer is outstanding.
   const done = await withSendingLease(deps.approvals, approvalId, claim.claimToken, async () => {
