@@ -371,6 +371,134 @@ describe('Events → Deliveries', () => {
     await waitFor(() => expect(drops()).toContainEqual({ kind: 'eventsDeliveryDrop', deliveryId: ID.waiting }));
   });
 
+  it('a match waiting for a busy session (0.33.0): "Waiting for a session", since when, and Drop… asked first', async () => {
+    // As the session target writes it (`session-dispatcher.ts`, #busy): retryable, due only at its own expiry, its last
+    // answer the relay's 409; and its busy-queue item as `session-queue list` gives it (SESSION-O3).
+    const busy = '0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b07';
+    const busyRow = {
+      ...(deliveries as Array<Record<string, unknown>>)[3],
+      deliveryId: busy,
+      ruleId: 'acme',
+      targetId: 'acme-session',
+      attempts: 1,
+      nextAt: 1793101920000,
+      expiresAt: 1793101920000,
+      targetKind: 'session',
+      lastErrorCode: 'SESSION_BUSY',
+      lastStatus: 409,
+      decisionId: 'dec-07',
+      eventId: 'evt-07',
+    };
+    const busyShow = {
+      ...(deliveryShows as Record<string, Record<string, unknown>>)[ID.retry],
+      delivery: busyRow,
+      target: { kind: 'session', id: 'acme-session', version: 1, host: null },
+    };
+    const item = {
+      deliveryId: busy,
+      relaySessionId: 'sess_example_0001',
+      ruleId: 'acme',
+      ruleVersion: 1,
+      targetId: 'acme-session',
+      targetVersion: 1,
+      lane: null,
+      queuedAt: '2026-10-25T12:00:00.000Z',
+      released: false,
+      expiresAt: '2026-10-27T11:12:00.000Z',
+    };
+    let dropped = false;
+    const bridge = deliveriesBridge({
+      version: '0.33.0',
+      eventsDeliveries: () => [
+        dropped ? { ...busyRow, state: 'cancelled', nextAt: null, lastErrorCode: 'DROPPED_BY_PERSON' } : busyRow,
+        ...(deliveries as unknown[]),
+      ],
+      eventsDeliveryShow: (call: Call) =>
+        deliveryId(call) === busy
+          ? dropped
+            ? {
+                ...busyShow,
+                delivery: { ...busyRow, state: 'cancelled', nextAt: null, lastErrorCode: 'DROPPED_BY_PERSON' },
+              }
+            : busyShow
+          : (deliveryShows as Shows)[deliveryId(call)],
+      sessionQueueList: () => ({ items: dropped ? [] : [item] }),
+      sessionQueueDrop: (call: Call) => {
+        dropped = true;
+        return { deliveryId: (call as Extract<Call, { kind: 'sessionQueueDrop' }>).deliveryId, dropped: true };
+      },
+    });
+    renderApp(bridge, { screen: 'events' });
+    await openTab('Deliveries');
+    const line = await row(busy);
+    expect(title(line)).toBe('acme → Agent session');
+    expect(within(line).getByText('Waiting for a session')).toBeTruthy();
+    expect(line.textContent).toContain("passed on when the session's run ends");
+    // Due only at its expiry: no next try is shown for it.
+    expect(line.querySelector('[data-slot="next-try"]')).toBeNull();
+
+    const page = await openDelivery(busy);
+    expect(await within(page).findByText('Waiting for a session')).toBeTruthy();
+    const tries = within(page).getByRole('region', { name: 'Tries' });
+    expect(tries.textContent).toContain('Its last try: the session was busy.');
+    await waitFor(() => expect(tries.textContent).toContain("Waiting for the session's run to end since"));
+    expect(tries.querySelector('[data-slot="waiting"] time')?.getAttribute('datetime')).toBe(
+      '2026-10-25T12:00:00.000Z',
+    );
+    expect(tries.textContent).toContain('It waits at most until');
+    expect(tries.querySelector('[data-slot="next-try"]')).toBeNull();
+    expect(within(page).queryByRole('button', { name: 'Try now' })).toBeNull();
+    expect(within(page).queryByRole('button', { name: 'Stop trying…' })).toBeNull();
+    expect(rawWordsIn(page)).toEqual([]);
+    noEpoch(page);
+
+    const drops = () => cliCalls(bridge).filter((each) => each.kind === 'sessionQueueDrop');
+    fireEvent.click(await within(page).findByRole('button', { name: 'Drop…' }));
+    let dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Drop this waiting match?')).toBeTruthy();
+    expect(dialog.textContent).toContain('it is never passed on');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(drops()).toEqual([]);
+    fireEvent.click(within(page).getByRole('button', { name: 'Drop…' }));
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Drop it' }));
+    await waitFor(() => expect(drops()).toEqual([{ kind: 'sessionQueueDrop', deliveryId: busy }]));
+    expect(cliCalls(bridge).filter((each) => each.kind === 'eventsDeliveryDrop')).toEqual([]);
+    // Read again: cancelled, its last answer that it was dropped, and nothing more to do.
+    expect(await within(page).findByText('Cancelled')).toBeTruthy();
+    await waitFor(() =>
+      expect(within(page).getByRole('region', { name: 'Tries' }).textContent).toContain(
+        'Its last try: the session was busy, and it was dropped while it waited.',
+      ),
+    );
+    expect(within(page).queryByRole('button', { name: 'Drop…' })).toBeNull();
+  }, 15_000);
+
+  it('a busy match on an events service before 0.33.0 offers no Drop…, and does not read the busy queue', async () => {
+    const busyRow = {
+      ...(deliveries as Array<Record<string, unknown>>)[3],
+      targetKind: 'session',
+      lastErrorCode: 'SESSION_BUSY',
+      lastStatus: 409,
+    };
+    const bridge = deliveriesBridge({
+      eventsDeliveries: [busyRow],
+      eventsDeliveryShow: {
+        ...(deliveryShows as Record<string, Record<string, unknown>>)[ID.retry],
+        delivery: busyRow,
+        target: { kind: 'session', id: 'ci-hook', version: 1, host: null },
+      },
+    });
+    renderApp(bridge, { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery(ID.retry);
+    expect(await within(page).findByText('Waiting for a session')).toBeTruthy();
+    expect(within(page).queryByRole('button', { name: 'Drop…' })).toBeNull();
+    expect(within(page).queryByRole('button', { name: 'Try now' })).toBeNull();
+    expect(cliKinds(bridge)).not.toContain('sessionQueueList');
+  });
+
   it('a delivery being sent right now cannot be stopped: the page says so plainly, and reads it again', async () => {
     const inner = deliveriesBridge();
     const bridge = deliveriesBridge(

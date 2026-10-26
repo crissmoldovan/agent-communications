@@ -110,9 +110,19 @@ const WAITING: ReadonlySet<string> = new Set(['queued', 'retryable']);
  * When a delivery is tried next: only while it is queued or will try again, and only a positive time. A delivered,
  * failed or cancelled delivery has none, and 0 ("due now") or less is never a date.
  */
-export function nextTry(row: Pick<DeliveryRow, 'state' | 'nextAt'>): number | null {
+export function nextTry(row: Pick<DeliveryRow, 'state' | 'nextAt'> & { lastErrorCode?: string | null }): number | null {
   if (!WAITING.has(row.state)) return null;
+  // A match waiting for a busy session is due only at its expiry: it is passed on when the session's run ends.
+  if (waitingForSession(row)) return null;
   return moment(row.nextAt);
+}
+
+/**
+ * Whether a delivery waits for a busy agent session (0.33.0, design §3.5): the event service keeps it `retryable`,
+ * its last answer the relay's 409 (`SESSION_BUSY`), in its busy queue until the session's run ends.
+ */
+export function waitingForSession(row: { state: string; lastErrorCode?: string | null }): boolean {
+  return row.state === 'retryable' && row.lastErrorCode === 'SESSION_BUSY';
 }
 
 /** The filters the list offers, and which states each holds. */
@@ -139,7 +149,11 @@ export function deliveryGroup(row: Pick<DeliveryRow, 'state'>): DeliveryGroup | 
 export type ChipTone = 'ok' | 'accent' | 'warn' | 'danger' | 'neutral' | 'busy';
 
 /** A delivery's state in plain words, and its chip's tone. A delivered dry run is recorded: nothing was sent. */
-export function stateWords(row: Pick<DeliveryRow, 'state' | 'targetKind'>): { words: string; tone: ChipTone } {
+export function stateWords(row: Pick<DeliveryRow, 'state' | 'targetKind'> & { lastErrorCode?: string | null }): {
+  words: string;
+  tone: ChipTone;
+} {
+  if (waitingForSession(row)) return { words: 'Waiting for a session', tone: 'neutral' };
   switch (row.state) {
     case 'delivered':
       return row.targetKind === 'dry-run' ? { words: 'Recorded', tone: 'accent' } : { words: 'Delivered', tone: 'ok' };
@@ -177,6 +191,9 @@ export function madeAt(row: Pick<DeliveryRow, 'deliveredAt' | 'expiresAt'>, rete
 /** What a delivery's last try got, in words to follow "Its last try:", or null when nothing is recorded. */
 export function lastAnswer(row: Pick<DeliveryRow, 'lastErrorCode' | 'lastStatus' | 'targetKind'>): string | null {
   const who = row.targetKind === 'webhook' ? 'the webhook' : 'the target';
+  if (row.lastErrorCode === 'SESSION_BUSY') return 'the session was busy';
+  // `session-queue drop` (0.33.0) cancels a match that waited for a busy session, and says so in its last error.
+  if (row.lastErrorCode === 'DROPPED_BY_PERSON') return 'the session was busy, and it was dropped while it waited';
   if (row.lastErrorCode === 'NETWORK') return `${who} could not be reached`;
   if (row.lastStatus !== null) {
     const unavailable = row.lastStatus === 503 ? ', it is unavailable' : '';
@@ -184,6 +201,51 @@ export function lastAnswer(row: Pick<DeliveryRow, 'lastErrorCode' | 'lastStatus'
   }
   if (row.lastErrorCode !== null) return `${who} failed: ${row.lastErrorCode}`;
   return null;
+}
+
+// ── The busy queue ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * One match waiting for a busy agent session, as `session-queue list --json` gives it (0.33.0, design §3.5): its
+ * delivery, when it was queued, whether the session's run has ended and let it go, and when it runs out of time. Ids
+ * and times only: the queue holds no sender text.
+ */
+export interface SessionQueueItem {
+  deliveryId: string;
+  ruleId: string;
+  /** The lane the target finds its session by; null for a session found by its folder. */
+  lane: string | null;
+  queuedAt: number;
+  released: boolean;
+  expiresAt: number | null;
+}
+
+const isoMoment = (value: unknown): number | null => {
+  if (typeof value !== 'string') return null;
+  const at = Date.parse(value);
+  return Number.isFinite(at) && at > 0 ? at : null;
+};
+
+/** `{ items: [...] }`, oldest first; an item the app cannot read is left out, and an unreadable answer is null. */
+export function readSessionQueue(value: unknown): SessionQueueItem[] | null {
+  if (!isRecord(value) || !Array.isArray(value.items)) return null;
+  const items: SessionQueueItem[] = [];
+  for (const each of value.items) {
+    if (!isRecord(each)) continue;
+    const deliveryId = text(each.deliveryId);
+    const ruleId = text(each.ruleId);
+    const queuedAt = isoMoment(each.queuedAt);
+    if (deliveryId === null || ruleId === null || queuedAt === null || typeof each.released !== 'boolean') continue;
+    items.push({
+      deliveryId,
+      ruleId,
+      lane: text(each.lane),
+      queuedAt,
+      released: each.released,
+      expiresAt: isoMoment(each.expiresAt),
+    });
+  }
+  return items;
 }
 
 // ── One delivery ───────────────────────────────────────────────────────────────────────────────────────────────

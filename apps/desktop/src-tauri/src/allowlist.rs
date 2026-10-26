@@ -1043,6 +1043,12 @@ pub enum Call {
     /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
     /// to a process the app did not start). The token in that folder is never a call's.
     IntegrationSetAgentSessions { relay_home: RelayHomeSetting },
+    /// The events service's `session-queue list` (0.33.0, design §3.5): the matches waiting for a busy agent session,
+    /// oldest first — ids and times, content-free. The person's read, refused inside an MCP server. No argument.
+    SessionQueueList {},
+    /// The events service's `session-queue drop <delivery>` (0.33.0): drops one waiting match — its delivery is
+    /// cancelled and what it held purged — a tightening the app applies itself (DA10), once the person confirms.
+    SessionQueueDrop { delivery_id: DeliveryId },
     /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
     /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
     ActivityItems {
@@ -1538,6 +1544,10 @@ impl Call {
                 "--relay-home",
                 relay_home.as_str(),
             ]),
+            Call::SessionQueueList {} => events(&["session-queue", "list"]),
+            Call::SessionQueueDrop { delivery_id } => {
+                events(&["session-queue", "drop", delivery_id.as_str()])
+            }
         })
     }
 
@@ -1622,7 +1632,9 @@ impl Call {
             | Call::EventsRuleApprove { .. }
             | Call::EventsRuleAnalyse { .. }
             | Call::IntegrationShow { .. }
-            | Call::IntegrationSetAgentSessions { .. } => Some(RULE_EDITOR_VERSION),
+            | Call::IntegrationSetAgentSessions { .. }
+            | Call::SessionQueueList {}
+            | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
             _ => None,
         }
     }
@@ -1787,6 +1799,8 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
+        json!({ "kind": "sessionQueueList" }),
+        json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
     ];
     values
         .into_iter()
@@ -4071,6 +4085,8 @@ mod tests {
             "eventsRuleAnalyse",
             "integrationShow",
             "integrationSetAgentSessions",
+            "sessionQueueList",
+            "sessionQueueDrop",
         ];
         let mut seen = 0;
         for (sample, value) in samples() {
@@ -4083,7 +4099,15 @@ mod tests {
             assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
             assert!(!sample.prepares_change(), "{value}");
         }
-        assert_eq!(seen, 17);
+        assert_eq!(seen, 19);
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueList" })),
+            ["session-queue", "list"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY })),
+            ["session-queue", "drop", DELIVERY]
+        );
         assert_eq!(
             line(json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" })),
             ["integration", "show", "linear", "--team", "CUE"]
@@ -4185,6 +4209,11 @@ mod tests {
             refused(json!({ "kind": "integrationShow", "integration": "linear", "team": team }));
         }
         refused(json!({ "kind": "integrationSetAgentSessions" }));
+        refused(json!({ "kind": "sessionQueueList", "deliveryId": DELIVERY }));
+        refused(json!({ "kind": "sessionQueueDrop" }));
+        for delivery in ["", "--json", "a b", "x/y"] {
+            refused(json!({ "kind": "sessionQueueDrop", "deliveryId": delivery }));
+        }
         refused(json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }));
         refused(
             json!({ "kind": "integrationSetAgentSessions", "relayHome": "default", "token": "fake-token" }),

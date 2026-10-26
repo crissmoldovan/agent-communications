@@ -13,7 +13,14 @@ import { aliasOf } from '../../account-aliases.ts';
 import { productLabel } from '../../components/ApprovalCard.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY } from '../../copy.ts';
-import { type DeliveryGroup, type DeliveryRow, deliveryGroup, nextTry, stateWords } from '../../events-deliveries.ts';
+import {
+  type DeliveryGroup,
+  type DeliveryRow,
+  deliveryGroup,
+  nextTry,
+  stateWords,
+  waitingForSession,
+} from '../../events-deliveries.ts';
 import { channelOf } from '../../events-rules.ts';
 import { DeliveryDetail } from './DeliveryDetail.tsx';
 import type { EventsLists, EventsNav } from './lists.ts';
@@ -34,6 +41,7 @@ export const DELIVERIES_COPY = {
   showAll: 'Show all',
   everyOne: 'The events CLI and MCP list every one.',
   everyOneLabel: 'Where every one is listed',
+  untilFree: "passed on when the session's run ends",
 } as const;
 
 /** `The <n> most recent of <all>.` */
@@ -71,6 +79,8 @@ function rowFacts(lists: EventsLists, row: DeliveryRow): ReactNode[] {
       facts.push(row.attempts === 0 ? 'not tried yet' : tries(row.attempts));
       break;
     case 'retryable':
+      facts.push(waitingForSession(row) ? DELIVERIES_COPY.untilFree : tries(row.attempts));
+      break;
     case 'disclosing':
       facts.push(tries(row.attempts));
       break;
@@ -100,7 +110,11 @@ function rowFacts(lists: EventsLists, row: DeliveryRow): ReactNode[] {
 function DeliveryLine({ row, lists, onOpen }: { row: DeliveryRow; lists: EventsLists; onOpen: () => void }) {
   const kind = row.targetKind ?? targetOf(lists, row)?.kind ?? '';
   const Icon = ICONS[kind] ?? FileText;
-  const { words, tone } = stateWords({ state: row.state, targetKind: kind === '' ? null : kind });
+  const { words, tone } = stateWords({
+    state: row.state,
+    targetKind: kind === '' ? null : kind,
+    lastErrorCode: row.lastErrorCode,
+  });
   const made = madeAtOf(lists, row);
   const body = (
     <>
