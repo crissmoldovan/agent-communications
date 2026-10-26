@@ -61,6 +61,7 @@ Scripts should read these rather than parse output.
 | [`dryrun`](#agent-events-dryrun) | inspect retained local records at an interactive terminal |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
+| [`messages`](#agent-events-messages) | what happened to each message the event service observed: matched, judged, delivered, queued, read |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
@@ -794,6 +795,28 @@ unbind a lane from its window at once; its watches end
 ```
 agent-events lane unbind [options] <lane>
 ```
+
+### `agent-events messages`
+
+what happened to each message the event service observed: matched, judged, delivered, queued, read
+
+```
+agent-events messages [options] [command]
+```
+
+### `agent-events messages list`
+
+list observed messages newest first, each with its decisions, deliveries and queue item (a person)
+
+```
+agent-events messages list [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--since <ms>` | the oldest observation time, in milliseconds since 1970 | `30 days back` |
+| `--before <ms\|next>` | only messages observed before this time, or the next an earlier page gave | — |
+| `--limit <n>` | at most this many messages (1 to 500, default 100) | — |
 
 ### `agent-events approve`
 

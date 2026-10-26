@@ -2736,6 +2736,15 @@
       "reason": "It reads a lane's item for the one agent window the person bound to that lane, and only items that arrived after the binding. The person reads every item, a lane's included, with the queue's own content reads at a terminal or in the app (routing design 2026-10-25, B2, B3, §3.7)."
     },
     {
+      "id": "events-daemon.messages.list",
+      "package": "events-daemon",
+      "cli": "messages list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "messagesList",
+      "reason": "What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

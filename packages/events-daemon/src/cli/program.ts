@@ -49,6 +49,7 @@ import {
   updateJudge,
 } from '../operations/judges.ts';
 import { laneBind, laneList, laneUnbind } from '../operations/lanes.ts';
+import { messagesList } from '../operations/messages.ts';
 import { pause, resume } from '../operations/pause.ts';
 import {
   queueClear,
@@ -90,6 +91,7 @@ import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
+import { parseMessagesQuery } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
@@ -858,6 +860,31 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await laneUnbind(requireLaneName(name), controlOptions(program)));
     });
 
+  // A story per message (0.32.0 §3.6): what happened to each message the event service observed — each rule's decision,
+  // each delivery, its queue item and that item's history. The person's, at a terminal or in the app (which runs it with
+  // --json); it refuses inside an MCP server's process, as the queue's content reads do.
+  const messages = program
+    .command('messages')
+    .description('what happened to each message the event service observed: matched, judged, delivered, queued, read');
+  messages
+    .command('list')
+    .description('list observed messages newest first, each with its decisions, deliveries and queue item (a person)')
+    .option('--since <ms>', 'the oldest observation time, in milliseconds since 1970 (default: 30 days back)')
+    .option('--before <ms|next>', 'only messages observed before this time, or the next an earlier page gave')
+    .option('--limit <n>', 'at most this many messages (1 to 500, default 100)')
+    .action(async (options: Record<string, unknown>) => {
+      ran = true;
+      assertNotMcpServer(env, 'messages');
+      const filters = {
+        ...(options.since === undefined ? {} : { since: parseMilliseconds(options.since as string, '--since') }),
+        ...(options.before === undefined ? {} : { before: parseBefore(options.before as string) }),
+        ...(options.limit === undefined ? {} : { limit: parseLimit(options.limit as string) }),
+      };
+      // The owner parses these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseMessagesQuery(filters, Date.now());
+      print(await messagesList(filters, controlOptions(program)));
+    });
+
   program
     .command('approve <approval-id>')
     .description('approve a standing disclosure by typing its challenge at this terminal, after optional target tests')
@@ -947,6 +974,19 @@ function parseLimit(value: string): number {
   const limit = Number(value);
   if (!/^\d+$/u.test(value) || !Number.isSafeInteger(limit)) throw new CommsError('USAGE', '--limit is a whole number');
   return limit;
+}
+
+/** A whole number of milliseconds since 1970, as `--since` and `--before` take one. */
+function parseMilliseconds(value: string, flag: string): number {
+  const at = Number(value);
+  if (!/^\d{1,16}$/u.test(value) || !Number.isSafeInteger(at))
+    throw new CommsError('USAGE', `${flag} is a time in whole milliseconds since 1970`);
+  return at;
+}
+
+/** `--before`: whole milliseconds, or the `next` cursor an earlier page of `messages list` gave, as it gave it. */
+function parseBefore(value: string): number | string {
+  return /^\d+$/u.test(value) ? parseMilliseconds(value, '--before') : value;
 }
 
 function parseVersion(value: string): number {

@@ -905,7 +905,8 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     // A queue item's history (0.32.0 spec §3.6): a window woken for it, a window reading it, and Done, Dismiss and
     // Reopen, each with who did it — an agent window by its activity session key, or the person (no key). Ids and times
     // only. It goes with its item: the trigger runs on every delete of an item row, whichever path purges it (expiry,
-    // revocation, account removal, queue clear). Never read over MCP, and never written to core's activity log.
+    // revocation, account removal, queue clear). Never read over MCP, and never written to core's activity log. Two
+    // indexes serve `messages list`, which joins observed events to their queue items.
     version: 26,
     name: 'event-queue-item-history-v1',
     statements: [
@@ -928,6 +929,9 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
         BEGIN
           DELETE FROM queue_item_history WHERE item_id = OLD.id;
         END`,
+      // `messages list` reads observed events newest first, and joins each to its queue item by event id.
+      'CREATE INDEX ingest_observed ON ingest(observed_at, event_id)',
+      'CREATE INDEX queue_items_event ON queue_items(event_id)',
       "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
     ],
   },

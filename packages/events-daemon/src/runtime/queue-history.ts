@@ -96,3 +96,31 @@ export function queueItemHistory(database: DatabaseSync, itemId: string): QueueH
       .all(itemId) as unknown as HistoryRow[]
   ).map(line);
 }
+
+/**
+ * For each item, the newest line of each kind it has, oldest first: what a list needs to say how far an item got — who
+ * last read it, who last marked it, when it was last woken — without every line of every item.
+ */
+export function latestQueueHistory(
+  database: DatabaseSync,
+  itemIds: readonly string[],
+): ReadonlyMap<string, QueueHistoryLineV1[]> {
+  const result = new Map<string, QueueHistoryLineV1[]>();
+  if (itemIds.length === 0) return result;
+  const rows = database
+    .prepare(
+      `SELECT item_id, at, kind, actor, window_key FROM (
+         SELECT item_id, at, kind, actor, window_key, rowid AS seq,
+                ROW_NUMBER() OVER (PARTITION BY item_id, kind ORDER BY at DESC, rowid DESC) AS rank
+           FROM queue_item_history
+          WHERE item_id IN (SELECT value FROM json_each(?))
+       ) WHERE rank = 1 ORDER BY item_id, at, seq`,
+    )
+    .all(JSON.stringify(itemIds)) as unknown as HistoryRow[];
+  for (const row of rows) {
+    const lines = result.get(row.item_id) ?? [];
+    lines.push(line(row));
+    result.set(row.item_id, lines);
+  }
+  return result;
+}

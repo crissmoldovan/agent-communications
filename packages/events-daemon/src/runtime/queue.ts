@@ -441,6 +441,38 @@ export class QueueStore {
     };
   }
 
+  /**
+   * For `messages list` and `message show` (0.32.0 §3.6): the sender and subject each item keeps, as `queue show` gives
+   * them — enveloped, after the same read fences — and only for an item whose target keeps a summary (`show: summary`)
+   * and whose content is still kept. An item the fences refuse, or that keeps nothing, is left out.
+   */
+  async keptSummaries(
+    itemIds: readonly string[],
+  ): Promise<ReadonlyMap<string, { readonly from: QueueItemV1['from']; readonly subject?: string }>> {
+    const kept = new Map<string, { readonly from: QueueItemV1['from']; readonly subject?: string }>();
+    if (itemIds.length === 0) return kept;
+    const summaries = this.#store.database
+      .prepare(
+        `SELECT qi.id AS id FROM queue_items qi
+           JOIN target_versions tv ON tv.target_id = qi.target_id AND tv.version = qi.target_version
+          WHERE qi.id IN (SELECT value FROM json_each(?)) AND qi.encrypted_record IS NOT NULL
+            AND json_extract(tv.document, '$.show') = 'summary'`,
+      )
+      .all(JSON.stringify(itemIds)) as Array<{ id: string }>;
+    if (summaries.length === 0) return kept;
+    const config = (await this.#config.load()) as AccountNames;
+    const boundary = newBoundary();
+    for (const { id } of summaries) {
+      const row = this.#row(id);
+      if (row === undefined) continue;
+      const item = await this.#item(row, config, boundary, 'list');
+      if (item === undefined) continue;
+      if (item.from.name === undefined && item.from.address === undefined && item.subject === undefined) continue;
+      kept.set(id, { from: item.from, ...(item.subject === undefined ? {} : { subject: item.subject }) });
+    }
+    return kept;
+  }
+
   /** How many open items each lane holds, for the person's `lane list`. */
   openByLane(): ReadonlyMap<string, number> {
     this.#expiry.sweep();
