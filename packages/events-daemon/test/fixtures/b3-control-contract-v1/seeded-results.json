@@ -1007,6 +1007,28 @@
     "result": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e", "dropped": true }
   },
   {
+    "name": "rule-approve-result",
+    "request": {
+      "operation": "rule-approve",
+      "args": {
+        "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+        "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0"
+      }
+    },
+    "result": {
+      "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+      "ruleId": "david-by-mail",
+      "version": 1,
+      "approved": true,
+      "approvedBy": "desktop-app",
+      "completion": {
+        "intentId": "act_abc238ade1f281e860491b9ebbc1385d",
+        "status": "completed",
+        "usedAt": "2026-10-26T07:52:14.172Z"
+      }
+    }
+  },
+  {
     "name": "judge-show-result",
     "request": {
       "operation": "judge-show",

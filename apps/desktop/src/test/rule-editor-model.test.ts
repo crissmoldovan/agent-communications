@@ -183,9 +183,19 @@ describe('the rule editor model', () => {
       ],
     } as unknown as JsonObject;
     const lines = text(whatLeaves(acting));
-    expect(lines[0]).toContain('An issue is added in Linear (api.linear.app), team CUE');
-    expect(lines[1]).toContain('go to a Claude Code session in /example/home/work/acme, where it asks before it acts.');
-    expect(lines[2]).toBe('The file /example/home/work/acme/HOW.md goes to the session.');
+    expect(lines.slice(0, 5)).toEqual([
+      'An issue is added in Linear (api.linear.app), with your Linear key, team CUE, from the sender, the subject, the first 300 characters and a link to the message.',
+      'Its title: {{subject}}',
+      'Its description: ',
+      'It has no labels.',
+      "It is assigned to the Linear key's own user.",
+    ]);
+    expect(lines.slice(5)).toEqual([
+      'the sender, the subject, the first 300 characters and a link to the message and the context below go to a Claude Code session in /example/home/work/acme, a coding agent there, which may act: it asks before it acts.',
+      'If there is no such session, one is started in that folder.',
+      'While the session is busy, the match waits for it, and goes when its run ends.',
+      'Context part 1: the file /example/home/work/acme/HOW.md, read when the match is passed on (at most 64 KB).',
+    ]);
     const quiet = {
       ...invoices,
       agentic: undefined,

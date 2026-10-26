@@ -286,6 +286,9 @@ pub fn applescript_string(text: &str) -> String {
 ///   kind from its closed enum, as Laya's Enable (0.27.1).
 /// - **Binding a lane:** the events service's `lane bind <lane> --window <id>` (0.31.0, design 2026-10-25-routing B1):
 ///   the person runs it; the app never binds (DA10). The lane and the window each come from a closed grammar.
+/// - **Approving a rule at a terminal:** the events service's `approve <approval-id>` (0.33.0), for a rule's activation
+///   the editor prepared: the terminal shows its preview and takes its challenge; `open_with` opens only one `Prepared`
+///   recorded.
 pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>), AppError> {
     Ok(match command {
         TerminalCommand::Approve {
@@ -357,6 +360,10 @@ pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>)
                 "enable".to_string(),
                 judge_kind.word().to_string(),
             ],
+        ),
+        TerminalCommand::RuleApprove { approval_id } => (
+            Product::EventsDaemon,
+            vec!["approve".to_string(), approval_id.as_str().to_string()],
         ),
         TerminalCommand::LaneBind { lane, window } => (
             Product::EventsDaemon,
@@ -459,6 +466,17 @@ impl Prepared {
         ))
     }
 
+    /// Whether `id` is a rule's activation the rule editor prepared (`record`, for `eventsRuleEnable`): only that one
+    /// opens in the terminal for its approval. The record is kept.
+    pub fn rule_activation(&self, id: &ApprovalId) -> Result<(), AppError> {
+        match self.map().get(id.as_str()) {
+            Some(Call::EventsRuleApprove { approval_id, .. }) if approval_id == id => Ok(()),
+            _ => Err(AppError::refused(
+                "that approval is not a rule activation the app prepared: review the rule again",
+            )),
+        }
+    }
+
     /// Takes `id` whatever change it was for, giving the change back: refused unless it was recorded.
     pub fn take(&self, id: &ApprovalId) -> Result<Call, AppError> {
         self.map().remove(id.as_str()).ok_or_else(|| {
@@ -520,12 +538,16 @@ pub fn open_with(
     if let TerminalCommand::Change { call, revoke } = &command {
         prepared.take_for(revoke, call)?;
     }
+    if let TerminalCommand::RuleApprove { approval_id } = &command {
+        prepared.rule_activation(approval_id)?;
+    }
     let revoked = match &command {
         TerminalCommand::Change { revoke, .. } => Some(effects.revoke(revoke, ctx)),
         TerminalCommand::Approve { .. }
         | TerminalCommand::SignIn { .. }
         | TerminalCommand::JudgeKindEnable { .. }
         | TerminalCommand::LaneBind { .. }
+        | TerminalCommand::RuleApprove { .. }
         | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
@@ -2400,6 +2422,75 @@ mod tests {
             argv_for(&command, &bare).expect_err("not installed").code,
             "APP_NOT_INSTALLED"
         );
+    }
+
+    /// Approve in Terminal, for a rule's activation the editor prepared (0.33.0), where the app cannot attest the person
+    /// in the app: the events service's own launcher, `approve <approval-id>` and the pins — the terminal shows the
+    /// preview and asks for its challenge. It opens only an approval `eventsRuleEnable` recorded, revokes nothing, keeps
+    /// the record for the review's Back, and its line answers nothing.
+    #[test]
+    fn rule_approve_opens_only_an_activation_the_app_prepared_and_answers_nothing() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let command: TerminalCommand =
+            serde_json::from_value(serde_json::json!({ "kind": "ruleApprove", "approvalId": ID }))
+                .expect("Approve in Terminal's shape");
+        let words = argv_for(&command, &ctx).expect("words");
+        assert_eq!(
+            words,
+            located(&ctx, Product::EventsDaemon, &["approve", ID])
+        );
+        for answer in ["--yes", "--digest", "--challenge", "--json", "--approval"] {
+            assert!(
+                !words.iter().any(|word| word == answer),
+                "{answer}: {words:?}"
+            );
+        }
+        // Nothing prepared, or an approval that is a change's and not a rule's: nothing opens.
+        let effects = Fake::new(true);
+        let refusal = open_with(command.clone(), &ctx, &effects, &Prepared::default())
+            .expect_err("not prepared");
+        assert_eq!(refusal.code, "APP_REFUSED");
+        let change = prepared_for(&TerminalCommand::Change {
+            call: Call::UpdateLevel {
+                level: UpdateLevel::Never,
+            },
+            revoke: id(),
+        });
+        assert!(open_with(command.clone(), &ctx, &effects, &change).is_err());
+        assert!(effects.log.borrow().is_empty(), "nothing ran");
+        // The activation the editor prepared: the terminal opens once, nothing is revoked, and the record stays.
+        let prepared = Prepared::default();
+        prepared.record(
+            &serde_json::from_value::<Call>(
+                serde_json::json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 }),
+            )
+            .expect("enable"),
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::json!({ "approvalId": ID, "binding": { "digest": "0f".repeat(32) } }),
+            },
+        );
+        let outcome = open_with(command, &ctx, &effects, &prepared).expect("an outcome");
+        assert!(
+            matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+        assert_eq!(prepared.map().len(), 1, "kept for Back's revoke");
+        // Its shape is the approval and nothing else.
+        for value in [
+            serde_json::json!({ "kind": "ruleApprove" }),
+            serde_json::json!({ "kind": "ruleApprove", "approvalId": "ap_short" }),
+            serde_json::json!({ "kind": "ruleApprove", "approvalId": "--json" }),
+            serde_json::json!({ "kind": "ruleApprove", "approvalId": ID, "digest": "0f".repeat(32) }),
+            serde_json::json!({ "kind": "ruleApprove", "approvalId": ID, "challenge": "c" }),
+            serde_json::json!({ "kind": "ruleApprove", "approvalId": ID, "product": "events-daemon" }),
+        ] {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(value.clone()).is_err(),
+                "{value}"
+            );
+        }
     }
 
     /// No free text reaches the bind line: the lane is 1 to 40 of `[a-z0-9-]`, the window a lowercase UUID or an

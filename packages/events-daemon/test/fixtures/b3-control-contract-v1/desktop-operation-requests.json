@@ -240,6 +240,16 @@
     "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } }
   },
   {
+    "name": "rule-approve-request",
+    "request": {
+      "operation": "rule-approve",
+      "args": {
+        "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+        "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0"
+      }
+    }
+  },
+  {
     "name": "judge-show-request",
     "request": {
       "operation": "judge-show",

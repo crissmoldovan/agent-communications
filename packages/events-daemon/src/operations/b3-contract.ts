@@ -66,7 +66,12 @@ import {
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
-import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
+import type {
+  JudgeSetupResultV1,
+  ProviderKeyResultV1,
+  ProviderListResultV1,
+  RuleApprovalResultV1,
+} from '../runtime/judge-setup.ts';
 import type { JudgeShowResultV1 } from '../runtime/judge-show.ts';
 import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 import type {
@@ -577,6 +582,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'messages-list': MessagesListResultV1;
   readonly 'message-show': MessageShowResultV1;
   readonly 'judge-setup': JudgeSetupResultV1;
+  readonly 'rule-approve': RuleApprovalResultV1;
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
@@ -749,6 +755,11 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
     readonly url?: string | undefined;
     readonly model?: string | undefined;
   };
+  /**
+   * A rule's activation, approved by the person in the app after its preview (0.33.0 design §3.1): the approval `rule
+   * enable` prepared, and the digest the preview showed. No challenge is in it: the owner issues and answers its own.
+   */
+  readonly 'rule-approve': { readonly approvalId: string; readonly digest: string };
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
@@ -1419,6 +1430,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'messages-list': ['messages', 'next'],
   'message-show': ['message'],
   'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
+  'rule-approve': ['approvalId', 'ruleId', 'version', 'approved', 'approvedBy', 'completion'],
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
@@ -1777,6 +1789,22 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       return;
     case 'judge-setup':
       assertJudgeSetupResult(value);
+      return;
+    case 'rule-approve':
+      assertText(value.approvalId, 'an approved approval id');
+      assertText(value.ruleId, 'an approved rule id');
+      assertPositiveInteger(value.version, 'an approved rule version');
+      if (value.approved !== true) throw new TypeError('a rule approval says it approved');
+      if (
+        typeof value.approvedBy !== 'string' ||
+        value.approvedBy === 'terminal' ||
+        !(PERSON_SETUP_APPROVERS as readonly string[]).includes(value.approvedBy)
+      )
+        throw new TypeError('a rule approval names the app it came from');
+      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a rule approval's completion");
+      assertText(value.completion.intentId, 'a completed activation');
+      if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
+      assertText(value.completion.usedAt, 'when the approval was used');
       return;
     case 'provider-list':
       if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
