@@ -140,6 +140,12 @@ export interface LaneWakeRow {
   readonly channel: QueueChannel;
 }
 
+/** Where a binding's wakes have reached: the last item named, by its append time and then its id. */
+export interface LaneWakeMark {
+  readonly appendedAt: number;
+  readonly id: string;
+}
+
 export interface QueueQuery {
   readonly state: QueueStateFilter;
   readonly ruleId?: string;
@@ -395,19 +401,39 @@ export class QueueStore {
     return this.show(itemId);
   }
 
-  /** The open items of `lane` a wake may name (B3), oldest first: after `since`, with their content still kept. */
-  laneWakeRows(lane: string, since: number): readonly LaneWakeRow[] {
+  /**
+   * The next open item of `lane` a wake may name (B3): after `since`, with its content still kept, and past the
+   * binding's high-water mark `after` (append time, then id), oldest first — and how many such items wait. The mark,
+   * not a list of items already woken, is what keeps a window from waking twice for one item, however many are open.
+   */
+  laneWake(
+    lane: string,
+    since: number,
+    after: LaneWakeMark | undefined,
+  ): { readonly next: (LaneWakeRow & LaneWakeMark) | undefined; readonly waiting: number } {
     this.#expiry.sweep();
-    return (
-      this.#store.database
-        .prepare(
-          `SELECT qi.id AS id, qi.rule_id AS rule_id, qi.channel AS channel FROM queue_items qi
-            WHERE qi.state = 'open' AND qi.encrypted_record IS NOT NULL AND qi.expires_at > ?
-              AND ${ITEM_LANE} = ? AND qi.arrived_at > ? AND qi.appended_at > ?
-            ORDER BY qi.appended_at, qi.id LIMIT 500`,
-        )
-        .all(this.#now(), lane, since, since) as Array<{ id: string; rule_id: string; channel: QueueChannel }>
-    ).map((row) => ({ id: row.id, ruleId: row.rule_id, channel: row.channel }));
+    const where = `qi.state = 'open' AND qi.encrypted_record IS NOT NULL AND qi.expires_at > ?
+      AND ${ITEM_LANE} = ? AND qi.arrived_at > ? AND qi.appended_at > ?
+      AND (qi.appended_at > ? OR (qi.appended_at = ? AND qi.id > ?))`;
+    const values = [this.#now(), lane, since, since, after?.appendedAt ?? 0, after?.appendedAt ?? 0, after?.id ?? ''];
+    const row = this.#store.database
+      .prepare(
+        `SELECT qi.id AS id, qi.rule_id AS rule_id, qi.channel AS channel, qi.appended_at AS appended_at
+           FROM queue_items qi WHERE ${where} ORDER BY qi.appended_at, qi.id LIMIT 1`,
+      )
+      .get(...values) as { id: string; rule_id: string; channel: QueueChannel; appended_at: number } | undefined;
+    const waiting = (
+      this.#store.database.prepare(`SELECT COUNT(*) AS count FROM queue_items qi WHERE ${where}`).get(...values) as {
+        count: number;
+      }
+    ).count;
+    return {
+      next:
+        row === undefined
+          ? undefined
+          : { id: row.id, ruleId: row.rule_id, channel: row.channel, appendedAt: row.appended_at },
+      waiting,
+    };
   }
 
   /** How many open items each lane holds, for the person's `lane list`. */

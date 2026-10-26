@@ -602,3 +602,41 @@ test('LANE-B: a report cannot change the session id recorded for an activity key
     assert.equal(lanes.scopeFor({ ...sessionOnly, activityKey: 'dddddddddddddddd' }).lane, 'david');
   });
 });
+
+// Review of 0.31.0, finding 3: the wake read the first 500 open items before leaving out those already woken, so a
+// lane with more than 500 open items never woke again.
+test('LANE-B: with more than 500 open items a window still wakes on each next one, and never twice for one', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLanes(async ({ store, lanes, clock }) => {
+    lanes.seen(DAVID);
+    lanes.bind('david', DAVID.sessionId as string);
+    const seeded = new Set<string>();
+    for (let index = 0; index < 520; index += 1)
+      seeded.add(seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 1_000 + index }));
+    clock.value = NOW + 10 * 60_000;
+    const woken: string[] = [];
+    for (let index = 0; index < 520; index += 1) {
+      const task = lanes.watch('david', DAVID);
+      assert.equal(task.status, 'completed', `wake ${index + 1} of 520`);
+      woken.push(task.pointer?.item as string);
+      if (index === 0) assert.equal(task.pointer?.waiting, 520, 'the count is every open item waiting');
+    }
+    assert.equal(new Set(woken).size, 520, 'no item woke the window twice');
+    assert.deepEqual(new Set(woken), seeded, 'and every one woke it, oldest first');
+    assert.deepEqual(woken, [...seeded], 'in the order they arrived');
+    const next = lanes.watch('david', DAVID);
+    assert.equal(next.status, 'working', 'nothing new: the watch waits');
+    const fresh = seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 5 * 60_000 });
+    lanes.notifyAppended();
+    const done = lanes.taskGet(next.taskId, DAVID);
+    assert.equal(done.status, 'completed');
+    assert.equal(done.pointer?.item, fresh, 'the 521st item wakes it');
+    assert.equal(done.pointer?.waiting, 1);
+    // An item reopened behind the window's mark does not wake it again.
+    const first = woken[0] as string;
+    store.database.prepare("UPDATE queue_items SET state = 'done' WHERE id = ?").run(first);
+    store.database.prepare("UPDATE queue_items SET state = 'open' WHERE id = ?").run(first);
+    assert.equal(lanes.watch('david', DAVID).status, 'working');
+  });
+});
