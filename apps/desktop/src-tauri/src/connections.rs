@@ -19,7 +19,8 @@ pub const MCP_APP_APPROVAL_VERSION: &str = "0.32.0";
 
 impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
-    /// `mcpInstall` of the same app and server. None for every other call.
+    /// `mcpInstall` of the same app and server, and `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
+    /// with, for the same digest (0.33.0). None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -33,6 +34,9 @@ impl Call {
                     server: *server,
                 },
             )),
+            // A rule's activation the app prepared with `eventsRuleEnable`, for this very digest (0.33.0): what
+            // `Prepared::record` keeps for it is the approval that may answer it.
+            Call::EventsRuleApprove { approval_id, .. } => Some((approval_id, self.clone())),
             _ => None,
         }
     }
@@ -557,6 +561,90 @@ mod tests {
         )
         .expect("a read");
         assert!(matches!(other, crate::ipc::CliResult::Ok { .. }));
+    }
+
+    /// A rule's activation the rule editor prepared (0.33.0): `rule enable`'s answer is recorded, with its digest, as
+    /// the one `eventsRuleApprove` that may answer it; another digest, another approval, one an agent prepared, or the
+    /// same press twice is refused before anything runs. A run that did not apply keeps it for Cancel's revoke.
+    #[test]
+    fn the_app_approves_only_the_rule_activation_it_prepared_for_that_digest() {
+        use crate::allowlist::{DIGEST, ID};
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approved": true }),
+            }
+        };
+        let enable =
+            call(json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 }));
+        let prepared_rule = || {
+            let prepared = crate::terminal::Prepared::default();
+            prepared.record(
+                &enable,
+                &crate::ipc::CliResult::Ok {
+                    exit: 0,
+                    data: json!({ "approvalId": ID, "binding": { "digest": DIGEST }, "status": "pending" }),
+                },
+            );
+            prepared
+        };
+        let approve = |digest: &str| {
+            call(json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": digest }))
+        };
+        // Nothing prepared — an approval an agent prepared at the event service is one the app never recorded.
+        let refusal = run_app_approval(&crate::terminal::Prepared::default(), &approve(DIGEST), ok)
+            .expect_err("not prepared");
+        assert_eq!(refusal.code, "APP_REFUSED");
+        // Another digest than the one `rule enable` bound.
+        let other = "a".repeat(64);
+        assert!(run_app_approval(&prepared_rule(), &approve(&other), ok).is_err());
+        assert_eq!(ran.get(), 0);
+        // An answer that is not a prepared activation records nothing.
+        let unread = crate::terminal::Prepared::default();
+        unread.record(
+            &enable,
+            &crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approvalId": ID, "binding": {} }),
+            },
+        );
+        assert!(run_app_approval(&unread, &approve(DIGEST), ok).is_err());
+        // The one it prepared: it runs once.
+        let prepared = prepared_rule();
+        assert!(matches!(
+            run_app_approval(&prepared, &approve(DIGEST), ok).expect("it runs"),
+            crate::ipc::CliResult::Ok { exit: 0, .. }
+        ));
+        assert_eq!(ran.get(), 1);
+        assert!(run_app_approval(&prepared, &approve(DIGEST), ok).is_err());
+        assert_eq!(ran.get(), 1, "never twice");
+        // Not applied: kept, so the preview's Cancel can revoke it.
+        let prepared = prepared_rule();
+        let failed = run_app_approval(&prepared, &approve(DIGEST), || {
+            crate::ipc::CliResult::Failed {
+                exit: 66,
+                code: "APPROVAL_VOID".into(),
+                message: "m".into(),
+                hint: None,
+            }
+        })
+        .expect("it ran");
+        assert!(matches!(failed, crate::ipc::CliResult::Failed { .. }));
+        let id = crate::allowlist::ApprovalId::try_from(ID.to_string()).expect("an id");
+        let revoked =
+            crate::terminal::revoke_preview_with(&prepared, &id, |_| crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "state": "revoked" }),
+            })
+            .expect("Cancel revokes the app's own");
+        assert!(matches!(revoked, crate::ipc::CliResult::Ok { .. }));
+        assert!(prepared.take(&id).is_err(), "and it is gone");
+        // A rule activation is never opened in the terminal as a change, and never approves an install.
+        assert!(!enable.prepares_change());
+        assert!(run_app_approval(&prepared_rule(), &approved("claude-code", "gmail"), ok).is_err());
     }
 
     /// In the test build, Connections only shows (0.32.0): the test profile's core would edit the person's real client

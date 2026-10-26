@@ -1,8 +1,9 @@
 //! Runs one allowed call through its launcher, with no shell, and reads what it printed (DA4).
 //!
 //! The process gets the allow-list's words and nothing else: the launcher (or, on Windows, Node with the launcher as
-//! its first word), the call's words, `--json` and the four folder pins. stdin is closed, so nothing can prompt; a call
-//! is killed at its timeout; stdout is capped at 8 MiB; and stdout is parsed, never logged.
+//! its first word), the call's words, `--json` and the four folder pins. stdin is closed, so nothing can prompt — but
+//! for a provider's key (0.32.0) and a document the rule editor wrote (0.33.0), which are written to it and it is closed
+//! after them; a call is killed at its timeout; stdout is capped at 8 MiB; and stdout is parsed, never logged.
 
 use crate::allowlist::{Call, Shape, Words};
 use crate::grammar;
@@ -178,10 +179,14 @@ pub(crate) fn command_with_env(
     command
 }
 
-/// Runs `call`, or says why it was not run. Never panics.
+/// Runs `call`, or says why it was not run, with the document it hands the CLI on stdin when it hands one (0.33.0).
+/// Never panics.
 pub fn run(call: &Call, ctx: &RunContext) -> CliResult {
     match call.words() {
-        Ok(words) => run_words(&words, ctx),
+        Ok(words) => match call.input() {
+            Some(document) => run_inner(&words, ctx, STDOUT_CAP, Some(Input::Document(document))),
+            None => run_words(&words, ctx),
+        },
         Err(refused) => refused.into(),
     }
 }
@@ -195,7 +200,17 @@ pub fn run_words(words: &Words, ctx: &RunContext) -> CliResult {
 /// provider's key, from Settings → AI providers — reaches a launcher. It is never a word of the command line or of its
 /// environment, and nothing here logs or keeps it.
 pub fn run_with_input(words: &Words, ctx: &RunContext, input: &[u8]) -> CliResult {
-    run_inner(words, ctx, STDOUT_CAP, Some(input))
+    run_inner(words, ctx, STDOUT_CAP, Some(Input::Secret(input)))
+}
+
+/// What a call writes to the launcher's stdin.
+enum Input<'a> {
+    /// A provider's key: a few bytes, written before anything else into the empty pipe, so the write never waits, and
+    /// never copied, so the one copy the app holds is the one that is overwritten.
+    Secret(&'a [u8]),
+    /// A document the rule editor wrote (0.33.0): up to tens of KiB, written from a thread of its own, so a document
+    /// past the pipe's buffer never holds the watchdog below while the CLI starts.
+    Document(Vec<u8>),
 }
 
 /// `run_words`, with the stdout cap named.
@@ -204,7 +219,7 @@ pub(crate) fn run_with(words: &Words, ctx: &RunContext, cap: usize) -> CliResult
 }
 
 /// Runs `words`, with `input` written to stdin when there is any, and stdin closed otherwise.
-fn run_inner(words: &Words, ctx: &RunContext, cap: usize, input: Option<&[u8]>) -> CliResult {
+fn run_inner(words: &Words, ctx: &RunContext, cap: usize, input: Option<Input<'_>>) -> CliResult {
     // Windows starts every launcher with Node: without one, nothing is looked for or started.
     if ctx.platform == Platform::Windows && ctx.node.is_none() {
         return AppError::no_node().into();
@@ -233,20 +248,39 @@ fn run_inner(words: &Words, ctx: &RunContext, cap: usize, input: Option<&[u8]>) 
                 .into()
         }
     };
-    if let Some(input) = input {
-        // At most a few KiB, into an empty pipe: the write never waits on the child. Dropping the handle closes stdin,
-        // so the CLI reads to its end.
-        let handed = child.stdin.take().is_some_and(|mut stdin| {
-            stdin.write_all(input).is_ok()
-                && stdin.write_all(b"\n").is_ok()
-                && stdin.flush().is_ok()
-        });
-        if !handed {
-            let _ = child.kill();
-            let _ = child.wait();
-            return AppError::io(format!("the {name} launcher could not be given its input"))
-                .into();
+    let mut document_writer = None;
+    match input {
+        Some(Input::Secret(input)) => {
+            // At most a few KiB, into an empty pipe: the write never waits on the child. Dropping the handle closes
+            // stdin, so the CLI reads to its end.
+            let handed = child.stdin.take().is_some_and(|mut stdin| {
+                stdin.write_all(input).is_ok()
+                    && stdin.write_all(b"\n").is_ok()
+                    && stdin.flush().is_ok()
+            });
+            if !handed {
+                let _ = child.kill();
+                let _ = child.wait();
+                return AppError::io(format!("the {name} launcher could not be given its input"))
+                    .into();
+            }
         }
+        Some(Input::Document(document)) => {
+            let Some(mut stdin) = child.stdin.take() else {
+                let _ = child.kill();
+                let _ = child.wait();
+                return AppError::io(format!("the {name} launcher could not be given its input"))
+                    .into();
+            };
+            // The thread ends when the CLI has read it all, or has gone; its handle is dropped either way, which
+            // closes stdin.
+            document_writer = Some(thread::spawn(move || {
+                stdin.write_all(&document).is_ok()
+                    && stdin.write_all(b"\n").is_ok()
+                    && stdin.flush().is_ok()
+            }));
+        }
+        None => {}
     }
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         let _ = child.kill();
@@ -300,6 +334,13 @@ fn run_inner(words: &Words, ctx: &RunContext, cap: usize, input: Option<&[u8]>) 
         thread::sleep(POLL);
     };
     let exit = status.code().unwrap_or(-1);
+    // A CLI that answered without reading its whole document did not read the document it was given.
+    if let Some(writer) = document_writer {
+        if !writer.join().unwrap_or(false) && exit == 0 {
+            return AppError::io(format!("the {name} launcher could not be given its input"))
+                .into();
+        }
+    }
     let output = match output {
         Some(read) => read,
         // The process has ended; its stdout closes with it, unless something it started still holds it open.
@@ -934,6 +975,52 @@ mod tests {
                 version: "0.24.0".into()
             }
         );
+    }
+
+    /// A document the rule editor wrote reaches the events launcher on stdin, whole, and never in argv (0.33.0): one
+    /// larger than a pipe's buffer too, while the launcher waits before it reads, and its answer is read as the events
+    /// CLI's bare JSON.
+    #[cfg(unix)]
+    #[test]
+    fn a_document_reaches_the_launcher_on_stdin_whole_and_never_in_argv() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, folders) = fake_installation("#!/bin/sh\nexit 1\n");
+        let launcher = dir.path().join("launch").join("events-daemon");
+        std::fs::write(
+            &launcher,
+            "#!/bin/sh\nhere=$(dirname \"$0\")\nprintf '%s\\n' \"$@\" > \"$here/argv\"\nsleep 0.2\ncat > \"$here/stdin\"\nprintf '{\"objectId\":\"invoices\",\"version\":3}\\n'\n",
+        )
+        .expect("a launcher");
+        std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755))
+            .expect("executable");
+        // Past macOS's 16 KiB pipe buffer, inside the editor's 48 KiB.
+        let long = "x".repeat(40 * 1024);
+        let document = json!({ "ruleId": "invoices", "version": 3, "note": long });
+        let call: Call =
+            serde_json::from_value(json!({ "kind": "eventsRuleUpdate", "document": document }))
+                .expect("a call");
+        let result = run(&call, &context(folders.clone()));
+        assert_eq!(
+            result,
+            CliResult::Ok {
+                exit: 0,
+                data: json!({ "objectId": "invoices", "version": 3 })
+            }
+        );
+        let given = std::fs::read(dir.path().join("launch").join("stdin")).expect("stdin");
+        let mut expected = serde_json::to_vec(&document).expect("json");
+        expected.push(b'\n');
+        assert_eq!(given, expected);
+        let argv = std::fs::read_to_string(dir.path().join("launch").join("argv")).expect("argv");
+        let mut words = vec![
+            "rule".to_string(),
+            "update".into(),
+            "-".into(),
+            "--json".into(),
+        ];
+        words.extend(folders.pins());
+        assert_eq!(argv.lines().collect::<Vec<_>>(), words);
+        assert!(!argv.contains("xxxx"), "the document is never a word");
     }
 
     /// An environment an agent's terminal, CI and a hostile login could leave the app with.

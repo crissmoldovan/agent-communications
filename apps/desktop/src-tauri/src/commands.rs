@@ -1,7 +1,7 @@
 //! The twenty-three commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
-use crate::allowlist::{AccountName, AiProvider, ApprovalId, Call, ConversationId};
+use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId, KeyProvider};
 use crate::build_info::{self, AppBuild};
 use crate::ipc::{
     AppError, AppSettings, CliResult, DeepLinkTarget, EventServiceState, Installation,
@@ -12,8 +12,8 @@ use crate::paths::FolderOverrides;
 use crate::provider_keys::{self, ProviderKey};
 use crate::runner::{run, RunContext};
 use crate::{
-    connections, deeplink, event_service, links, login_item, settings, terminal, tray, updater,
-    AppState,
+    connections, deeplink, event_service, links, login_item, rule_editor, settings, terminal, tray,
+    updater, AppState,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -90,6 +90,14 @@ pub async fn cli(
         blocking(move || connections::run_app_approval(&prepared, &call, || run(&call, &ctx)))
             .await??;
     state.prepared.record(&asked, &result);
+    // The approval view reaches the window without its challenges: only the CLI answers one (0.33.0).
+    let result = match (&asked, result) {
+        (Call::EventsApprovalView { .. }, CliResult::Ok { exit, data }) => CliResult::Ok {
+            exit,
+            data: rule_editor::without_challenges(data),
+        },
+        (_, result) => result,
+    };
     if let (Call::ApprovalRevoke { approval_id }, CliResult::Ok { exit: 0, .. }) = (&asked, &result)
     {
         state.prepared.forget(approval_id.as_str());
@@ -272,7 +280,7 @@ pub async fn answer_quit(keep: bool, remember: bool, app: AppHandle) -> Result<(
 /// never holds the key, is given back as it is.
 #[tauri::command]
 pub async fn provider_key_set(
-    provider: AiProvider,
+    provider: KeyProvider,
     key: ProviderKey,
     state: State<'_, AppState>,
 ) -> Result<CliResult, AppError> {

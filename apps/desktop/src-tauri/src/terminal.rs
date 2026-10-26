@@ -420,8 +420,25 @@ impl Prepared {
         self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Records what `call` came to, when it is a change the app prepares and it came back waiting for approval.
+    /// Records what `call` came to, when it is a change the app prepares and it came back waiting for approval; or,
+    /// when it is a rule's activation the rule editor prepared (0.33.0), the approval that came back and its digest, as
+    /// the `eventsRuleApprove` that alone may answer it in the app.
     pub fn record(&self, call: &Call, result: &CliResult) {
+        if let (Call::EventsRuleEnable { .. }, CliResult::Ok { data, .. }) = (call, result) {
+            let approve = crate::rule_editor::prepared_activation(data).and_then(|(id, digest)| {
+                serde_json::from_value::<Call>(serde_json::json!({
+                    "kind": "eventsRuleApprove",
+                    "approvalId": id,
+                    "digest": digest,
+                }))
+                .ok()
+                .map(|approve| (id, approve))
+            });
+            if let Some((id, approve)) = approve {
+                self.map().insert(id, approve);
+            }
+            return;
+        }
         if !call.prepares_change() {
             return;
         }
