@@ -7,15 +7,20 @@ import {
   appOfClient,
   CLIENT_NAMES,
   changePlan,
+  installServers,
   lastUsedByApp,
+  olderLine,
   readChannels,
+  readUpdateCheck,
   recentWindows,
   SERVER_LABELS,
+  serverNames,
 } from '../connections.ts';
 import { MCP_CLIENTS, MCP_SERVERS } from '../ipc.ts';
 import sessionsFixture from './fixtures/activity-sessions-clients.json';
 import channels from './fixtures/channels.json';
 import none from './fixtures/channels.none.json';
+import updateCheck from './fixtures/update-check.json';
 
 const HOME = '/example/home';
 
@@ -77,10 +82,13 @@ describe("Connections' table, from core's channels (spec §3.3)", () => {
     ]);
   });
 
-  it('a cell is a tick, or a note: behind core, its file missing, or a project with its folder', () => {
+  it('a cell is a tick, or a note: its file missing, or a project with its folder; never "behind core"', () => {
     const code = app('claude-code');
     expect(code.cells.core).toEqual({ registered: true, ok: true, notes: [] });
-    expect(code.cells.gmail).toEqual({ registered: true, ok: false, notes: ['behind core'] });
+    // Its entry pins a release older than the core answering (`behindCore`), which is not what `update` compares with:
+    // without `update --check`'s answer, nothing is said of its version.
+    expect(code.cells.gmail).toEqual({ registered: true, ok: true, notes: [] });
+    expect(code.older).toBeNull();
     expect(code.cells.slack).toEqual({ registered: true, ok: false, notes: ['file missing'] });
     expect(code.cells.resend).toEqual({ registered: false, ok: false, notes: [] });
     expect(code.cells.whatsapp).toEqual({ registered: false, ok: false, notes: [] });
@@ -228,7 +236,61 @@ describe('which app a window says it is (spec §3.3, L: approximate)', () => {
   });
 });
 
+describe('which entries start an older Agent Comms, by `update --check` (0.34.0)', () => {
+  const check = () => {
+    const read = readUpdateCheck(updateCheck);
+    if (read === null) throw new Error('the fixture is an update check');
+    return read;
+  };
+
+  it("reads the check's registrations that are behind, by app and server, and whether anything at all is", () => {
+    expect(check()).toEqual({ latest: '0.32.0', older: { 'claude-code': { gmail: '0.31.0' } }, anyBehind: true });
+    // Only a runtime behind: no entry is older, and there is still something to bring up to date.
+    const runtime = { ...updateCheck, behind: updateCheck.behind.filter((item) => item.kind === 'runtime') };
+    expect(readUpdateCheck(runtime)).toEqual({ latest: '0.32.0', older: {}, anyBehind: true });
+    expect(readUpdateCheck({ ...updateCheck, behind: [] })?.anyBehind).toBe(false);
+    // An app or server it does not know, or an entry without a version, is not read as one.
+    const odd = {
+      ...updateCheck,
+      behind: [
+        { kind: 'registration', client: 'windsurf', channel: 'gmail', version: '0.1.0' },
+        { kind: 'registration', client: 'codex', channel: 'telegram', version: '0.1.0' },
+        { kind: 'registration', client: 'codex', channel: 'core', version: null },
+        { kind: 'registration', client: '__proto__', channel: 'core', version: '0.1.0' },
+      ],
+    };
+    expect(readUpdateCheck(odd)?.older).toEqual({});
+    for (const bad of [null, [], 'behind', { behind: 'x' }, { latest: {} }]) expect(readUpdateCheck(bad)).toBeNull();
+  });
+
+  it('marks the older entry and says what it means for the app, in plain words', () => {
+    const read = readChannels(channels, HOME, check());
+    const code = read?.apps.find((row) => row.client === 'claude-code');
+    expect(code?.cells.gmail).toEqual({ registered: true, ok: false, notes: ['older (0.31.0)'] });
+    expect(code?.cells.core).toEqual({ registered: true, ok: true, notes: [] });
+    expect(code?.older).toBe('Starts an older Agent Comms (0.31.0); this Mac has 0.32.0.');
+    expect(read?.apps.find((row) => row.client === 'codex')?.older).toBeNull();
+    // The newest version any entry starts: which Agent Comms the apps start.
+    expect(read?.started).toBe('0.32.0');
+    expect(readChannels(none, HOME)?.started).toBeNull();
+  });
+
+  it("says this Mac's version when the entry is older than it, and otherwise the latest", () => {
+    expect(olderLine('0.30.0', '0.34.0', '0.34.0')).toBe('Starts an older Agent Comms (0.30.0); this Mac has 0.34.0.');
+    expect(olderLine('0.33.0', '0.33.0', '0.34.0')).toBe('Starts an older Agent Comms (0.33.0); the latest is 0.34.0.');
+    expect(olderLine('0.33.0', null, null)).toBe('Starts an older Agent Comms (0.33.0).');
+  });
+});
+
 describe('a change to one app', () => {
+  it('gives core one server on its own and several as a list, and names them as a person lists them', () => {
+    expect(installServers(['gmail'])).toBe('gmail');
+    expect(installServers(['core', 'gmail', 'events'])).toEqual(['core', 'gmail', 'events']);
+    expect(serverNames(['gmail'])).toBe('Gmail');
+    expect(serverNames(['gmail', 'slack'])).toBe('Gmail and Slack');
+    expect(serverNames(['core', 'gmail', 'events'])).toBe('Core, Gmail and Events');
+  });
+
   it('takes away the servers unticked and adds the ones ticked, each in the table order', () => {
     const code = app('claude-code');
     expect(changePlan(code, ['resend', 'core', 'events', 'whatsapp'])).toEqual({

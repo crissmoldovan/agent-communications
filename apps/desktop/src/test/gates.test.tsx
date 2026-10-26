@@ -51,6 +51,8 @@ describe('what each CLI version supports', () => {
       messages: '0.32.0',
       ruleEditor: '0.33.0',
       labelChanges: '0.34.0',
+      severalServers: '0.34.0',
+      bringUpToDate: '0.34.0',
       accountAppApproval: '0.34.0',
     });
     // An account page's loosenings are approved in the app from core 0.34.0, a pull request's build of it included.

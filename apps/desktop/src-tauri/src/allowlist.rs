@@ -8,7 +8,10 @@
 //! `labelWord`, `labelName`, `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app
 //! prepared for the same call without it.
 
-use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
+use crate::connections::{
+    McpClient, McpServer, McpServers, MCP_APP_APPROVAL_VERSION, MCP_SEVERAL_VERSION,
+    MCP_UNINSTALL_VERSION, UPDATE_APP_APPROVAL_VERSION,
+};
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::label::{
@@ -1011,12 +1014,13 @@ pub enum Call {
     /// is installed, each client entry that starts it, and the client configs core could not read. Read-only, and it
     /// never returns an entry's `env`. It takes no argument.
     Channels {},
-    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app.
-    /// It prepares a change: core answers with its preview, and the person approves it in Terminal (DA10). Both words
-    /// are closed (`connections`), and nothing else rides along.
+    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app,
+    /// or from core 0.34.0 several, `--server <a,b,c>`, in one approval (`McpServers`). It prepares a change: core
+    /// answers with its preview, and the person approves it (DA10). Every word is closed (`connections`), and nothing
+    /// else rides along.
     McpInstall {
         client: McpClient,
-        server: McpServer,
+        server: McpServers,
     },
     /// Core `mcp uninstall --client <client> --server <server>` (0.32.0): takes one server away from one app. It gives an
     /// agent nothing, a tightening, which core applies at once.
@@ -1030,9 +1034,18 @@ pub enum Call {
     /// (`connections::run_app_approval`), once.
     McpInstallApproved {
         client: McpClient,
-        server: McpServer,
+        server: McpServers,
         approval_id: ApprovalId,
     },
+    /// Core `update --check` (0.34.0's Connections): what is behind npm's latest release on this machine — each entry,
+    /// runtime and global package — by the yardstick `update` itself uses. A read; it takes no argument.
+    UpdateCheck {},
+    /// Core `update` (0.34.0's Bring everything up to date): prepares a change, whose preview the person approves in
+    /// the app (`UpdateApproved`), or in Terminal where nothing attests the app. It takes no argument.
+    Update {},
+    /// Core `update --app-approval <id>` (0.34.0): the person approved, in the app, the update the app prepared with
+    /// `Update`. Only an approval `cli` recorded for it is answered (`connections::run_app_approval`), once.
+    UpdateApproved { approval_id: ApprovalId },
     /// The events service's `messages list --since <ms> [--before <ms|cursor>] [--limit <n>]` (0.32.0, spec §3.6): the
     /// events it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
     /// person's read, refused inside an MCP server; every argument is a checked number or the cursor the last page
@@ -1239,6 +1252,9 @@ pub struct Words {
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// An install the person approved in the app: it may fetch a runtime and start the server to prove it (0.32.0).
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
+/// An update the person approved in the app (0.34.0): it may fetch and verify a runtime for every server, register
+/// entries again and prove each starts, so it has the longest of any call.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
 /// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1565,14 +1581,10 @@ impl Call {
             // A first install may read the release's document and verify it before it shows its preview.
             Call::McpInstall { client, server } => Words {
                 timeout: DOCTOR_TIMEOUT,
-                ..core(&[
-                    "mcp",
-                    "install",
-                    "--client",
-                    client.word(),
-                    "--server",
-                    server.word(),
-                ])
+                ..with(
+                    core(&["mcp", "install", "--client", client.word(), "--server"]),
+                    [server.word()],
+                )
             },
             Call::McpUninstall { client, server } => core(&[
                 "mcp",
@@ -1589,16 +1601,29 @@ impl Call {
                 approval_id,
             } => Words {
                 timeout: INSTALL_TIMEOUT,
-                ..core(&[
-                    "mcp",
-                    "install",
-                    "--client",
-                    client.word(),
-                    "--server",
-                    server.word(),
-                    "--app-approval",
-                    approval_id.as_str(),
-                ])
+                ..with(
+                    core(&["mcp", "install", "--client", client.word(), "--server"]),
+                    [
+                        server.word(),
+                        "--app-approval".to_string(),
+                        approval_id.as_str().to_string(),
+                    ],
+                )
+            },
+            // It reads npm's registry and verifies the latest release before it answers.
+            Call::UpdateCheck {} => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&["update", "--check"])
+            },
+            // Its preview is planned as `--check` reads, from the registry and the verified release.
+            Call::Update {} => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&["update"])
+            },
+            // It fetches and verifies every runtime behind, registers entries again and switches launchers.
+            Call::UpdateApproved { approval_id } => Words {
+                timeout: UPDATE_TIMEOUT,
+                ..core(&["update", "--app-approval", approval_id.as_str()])
             },
             Call::EventsMessagesList {
                 since,
@@ -1777,8 +1802,8 @@ impl Call {
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the six change shapes, the label's four changes without the app's approval (0.34.0), and a Slack style of
-    /// `labelled` (0.34.0's account page; `app` applies at once), and only those.
+    /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
+    /// and a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1786,6 +1811,7 @@ impl Call {
                 | Call::UpdateRollback {}
                 | Call::UpdateBackgroundJob { on: true }
                 | Call::McpInstall { .. }
+                | Call::Update {}
                 | Call::BehaviourAllow { .. }
                 | Call::BehaviourClear { .. }
                 | Call::LabelWord {
@@ -1847,7 +1873,15 @@ impl Call {
                 Some(JUDGE_SETUP_VERSION)
             }
             Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
+            Call::McpInstall { server, .. } | Call::McpInstallApproved { server, .. }
+                if server.several() =>
+            {
+                Some(MCP_SEVERAL_VERSION)
+            }
             Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
+            Call::UpdateCheck {} | Call::Update {} | Call::UpdateApproved { .. } => {
+                Some(UPDATE_APP_APPROVAL_VERSION)
+            }
             Call::BehaviourAllowApproved { .. }
             | Call::BehaviourClearApproved { .. }
             | Call::LabelStyleApproved { .. } => Some(ACCOUNT_APP_APPROVAL_VERSION),
@@ -2013,6 +2047,11 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
         json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
         json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
+        json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
+        json!({ "kind": "mcpInstallApproved", "client": "codex", "server": ["core", "gmail", "events"], "approvalId": ID }),
+        json!({ "kind": "updateCheck" }),
+        json!({ "kind": "update" }),
+        json!({ "kind": "updateApproved", "approvalId": ID }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": BEFORE_MS, "limit": 100 }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": "1792972800000:0123456789abcdef0123456789abcdef" }),
@@ -2857,6 +2896,8 @@ mod tests {
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
                 json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
                 json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+                json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
+                json!({ "kind": "update" }),
                 json!({ "kind": "labelWord", "word": "assistant" }),
                 json!({ "kind": "labelName", "name": "Jo Example" }),
                 json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
