@@ -1,0 +1,13 @@
+{
+  "integration": "agent-sessions",
+  "home": "claude-stream",
+  "homes": [
+    { "home": "claude-stream", "path": "/example/home/.agent-relay", "found": true },
+    {
+      "home": "pilot",
+      "path": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+      "found": false
+    }
+  ],
+  "relay": { "state": "running", "version": "0.2.20", "protocol": 1, "allowedRoots": ["/example/home/work"] }
+}

@@ -2,7 +2,8 @@ import { AI_PROVIDERS, type AiProvider } from './ipc.ts';
 
 /*
  * The AI providers whose keys Jev uses (0.32.0), as the events service's `provider list` answers: TypeSafe and
- * OpenRouter, each with whether it has a key — never a key, nor any part of one.
+ * OpenRouter, each with whether it has a key — never a key, nor any part of one. From 0.33.0 the list may name
+ * Anthropic and Linear as well (`keyOf` reads any of them).
  */
 
 /** `provider list`, read as the event service gives it, or `null` when it is not exactly that. */
@@ -14,11 +15,40 @@ export function readProviders(value: unknown): Record<AiProvider, boolean> | nul
   for (const entry of providers) {
     if (typeof entry !== 'object' || entry === null) return null;
     const { id, hasKey } = entry as { id?: unknown; hasKey?: unknown };
-    if (typeof hasKey !== 'boolean' || !(AI_PROVIDERS as readonly unknown[]).includes(id)) return null;
-    found[id as AiProvider] = hasKey;
+    if (typeof hasKey !== 'boolean' || typeof id !== 'string') return null;
+    // Since 0.33.0 the list names Anthropic and Linear too: Linear's key is Settings → Integrations' to show.
+    if ((AI_PROVIDERS as readonly unknown[]).includes(id)) found[id as AiProvider] = hasKey;
   }
   if (AI_PROVIDERS.some((provider) => found[provider] === undefined)) return null;
   return found as Record<AiProvider, boolean>;
+}
+
+/** `judges list`, read leniently: only to say whether Jev uses a key, and which judges a rule may ask. */
+export function readListedJudges(value: unknown): ListedJudge[] | null {
+  if (!Array.isArray(value)) return null;
+  return value.filter(
+    (entry): entry is ListedJudge =>
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as ListedJudge).kind === 'string' &&
+      typeof (entry as ListedJudge).provider === 'string',
+  );
+}
+
+/** Whether `provider list` says `provider` has a key: false when it does not name it. */
+export function keyOf(value: unknown, provider: string): boolean {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const providers = (value as { providers?: unknown }).providers;
+  return (
+    Array.isArray(providers) &&
+    providers.some(
+      (entry) =>
+        typeof entry === 'object' &&
+        entry !== null &&
+        (entry as { id?: unknown }).id === provider &&
+        (entry as { hasKey?: unknown }).hasKey === true,
+    )
+  );
 }
 
 /** A judge as `judges list` gives it: content-free, the fields the Judges rows read. */

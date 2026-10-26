@@ -174,7 +174,7 @@ export function weekCounts(versions: readonly RuleVersionView[]): RuleCounts | n
 
 /** A target of a rule, as much of it as the screen says. */
 export interface TargetView {
-  kind: 'dry-run' | 'queue' | 'webhook' | 'sse' | 'other';
+  kind: 'dry-run' | 'queue' | 'webhook' | 'sse' | 'linear' | 'session' | 'other';
   id: string | null;
   version: number | null;
   lane: string | null;
@@ -184,6 +184,12 @@ export interface TargetView {
   /** A queue's `summary` or `minimal`. */
   show: string | null;
   retryLimit: number | null;
+  /** A Linear issue's team, by its key (0.33.0). */
+  team: string | null;
+  /** An agent session's folder, or the lane it is bound to (0.33.0). */
+  folder: string | null;
+  /** Whether the session runs Codex rather than Claude Code. */
+  codex: boolean;
 }
 
 /** A webhook URL's host, as the person approved it, or null. */
@@ -199,7 +205,7 @@ function hostOf(url: unknown): string | null {
   }
 }
 
-const TARGET_KINDS: readonly TargetView['kind'][] = ['dry-run', 'queue', 'webhook', 'sse'];
+const TARGET_KINDS: readonly TargetView['kind'][] = ['dry-run', 'queue', 'webhook', 'sse', 'linear', 'session'];
 
 /** A rule document's targets. */
 export function targetsOf(document: Json | null): TargetView[] {
@@ -213,6 +219,9 @@ export function targetsOf(document: Json | null): TargetView[] {
     retentionMs: whole(target.retentionMs),
     show: text(target.show),
     retryLimit: whole(target.retryLimit),
+    team: isRecord(target.team) ? (text(target.team.key) ?? text(target.team.id)) : null,
+    folder: isRecord(target.find) ? (text(target.find.folder) ?? text(target.find.lane)) : null,
+    codex: target.provider === 'codex',
   }));
 }
 
@@ -519,6 +528,14 @@ export function targetWords(target: TargetView): RulePart[] {
       return target.host === null ? [value('Webhook')] : [value('Webhook'), plain(', '), value(target.host)];
     case 'sse':
       return [value('Live stream')];
+    case 'linear':
+      return target.team === null
+        ? [value('Linear issue')]
+        : [value('Linear issue'), plain(', team '), value(target.team)];
+    case 'session':
+      return target.folder === null
+        ? [value('Agent session')]
+        : [value('Agent session'), plain(', '), authored(target.folder)];
     default:
       return [value(target.id ?? 'A target')];
   }
@@ -550,6 +567,13 @@ export function whereTheyGo(document: Json | null): PanelLine[] {
         };
       case 'sse':
         return { main: targetWords(target), detail: [plain('To the apps that subscribe to it')] };
+      case 'linear':
+        return { main: targetWords(target), detail: [plain('Adds an issue, through your Linear key')] };
+      case 'session':
+        return {
+          main: targetWords(target),
+          detail: [plain(target.codex ? 'Hands it to a Codex session' : 'Hands it to a Claude Code session')],
+        };
       default:
         return { main: targetWords(target), detail: [] };
     }

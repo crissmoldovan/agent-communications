@@ -20,7 +20,7 @@ import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { AI_PROVIDERS, type AiProvider, type Call, errorMessage } from '../ipc.ts';
 import { takeDestination, useNavigate } from '../navigation.tsx';
-import { type ListedJudge, providerInUse, readProviders } from '../providers.ts';
+import { providerInUse, readListedJudges, readProviders } from '../providers.ts';
 import { keyLabel, keyPlaceholder, PROVIDERS_COPY, removeKeyTitle } from './judges/copy.ts';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
@@ -40,18 +40,6 @@ const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 const PROVIDER_LIST: Call = { kind: 'providerList' };
 const JUDGES: Call = { kind: 'judgesList' };
 
-/** `judges list`, read leniently: only to say whether Jev uses a key. Anything else claims nothing. */
-function readListedJudges(value: unknown): ListedJudge[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.filter(
-    (entry): entry is ListedJudge =>
-      typeof entry === 'object' &&
-      entry !== null &&
-      typeof (entry as ListedJudge).kind === 'string' &&
-      typeof (entry as ListedJudge).provider === 'string',
-  );
-}
-
 /** The section, once the events service is one with provider keys; otherwise what it needs first, or nothing. */
 export function AiProviders() {
   const { installation } = useAppData();
@@ -59,7 +47,7 @@ export function AiProviders() {
   const sectionRef = useRef<HTMLElement>(null);
   // A link from Events → Judges lands here: the section is scrolled to, and focus moves to it.
   useEffect(() => {
-    if (takeDestination('settings') === null) return;
+    if (takeDestination('settings', (destination) => destination.section === 'ai-providers') === null) return;
     sectionRef.current?.scrollIntoView?.({ block: 'start' });
     sectionRef.current?.focus();
   }, []);

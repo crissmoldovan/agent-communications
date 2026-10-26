@@ -1,0 +1,27 @@
+{
+  "suggestions": [
+    {
+      "part": "/agentic/question",
+      "before": "Is this asking me to pay or send something?",
+      "after": "Is the sender asking me to pay them, or to send them an invoice?",
+      "why": "Jev answers one yes-or-no question best when it names who asks and for what.",
+      "evidence": { "matched": 14, "judgedYes": 6, "judgedNo": 8 }
+    },
+    {
+      "part": "/agentic/threshold",
+      "before": 0.7,
+      "after": 0.75,
+      "why": "Every yes you kept was above 0.85. The two you dismissed were 0.71 and 0.73.",
+      "evidence": { "kept": 4, "dismissed": 2 }
+    },
+    {
+      "part": "/agentic/inputs",
+      "before": ["/subject", "/snippet"],
+      "after": ["/from/address", "/subject", "/snippet"],
+      "why": "<img src=x onerror=alert(1)> Real invoice requests came from 5 domains.",
+      "evidence": { "domains": 5 }
+    }
+  ],
+  "provider": "openrouter",
+  "model": "anthropic/claude-sonnet"
+}
