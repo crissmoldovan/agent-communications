@@ -4,6 +4,8 @@ import { EventsError } from '../result.ts';
 import { parseRuleText } from './parse.ts';
 import {
   CHANNELS,
+  DEFAULT_QUEUE_RETENTION,
+  DEFAULT_RETENTION,
   DEFAULTED_FIELDS,
   EVENT_PHRASES,
   fieldPointer,
@@ -12,11 +14,14 @@ import {
   formatName,
   formatNames,
   hasKeys,
+  hasQueue,
   isCount,
   isFieldText,
   isRecord,
   isStringArray,
+  pointerTokens,
   REQUIRED_SECTIONS,
+  RETENTION_LINES,
 } from './vocabulary.ts';
 
 type Doc = Readonly<Record<string, JsonValue>>;
@@ -79,6 +84,28 @@ function writeDocument(doc: Doc, readable: boolean): string {
       said.add('subscribers');
     }
     if (Array.isArray(doc.judges) && doc.judges.length === 0) said.add('judges');
+    const tail: string[] = [];
+    const keep = Object.hasOwn(doc, 'mapping') ? keepLine(doc.mapping as JsonValue) : undefined;
+    if (keep !== undefined) {
+      tail.push(keep);
+      said.add('mapping');
+    }
+    if (isCount(doc.deliveryRateCap)) {
+      tail.push(`at most ${doc.deliveryRateCap} an hour`);
+      said.add('deliveryRateCap');
+    }
+    if (typeof doc.cloudEventType === 'string') {
+      tail.push(`cloud event type ${JSON.stringify(doc.cloudEventType)}`);
+      said.add('cloudEventType');
+    }
+    const retention = Object.hasOwn(doc, 'retention')
+      ? retentionLines(doc.retention as JsonValue, hasQueue(doc.targets))
+      : undefined;
+    if (retention !== undefined) {
+      if (retention.length > 0) tail.push('keep for', ...retention);
+      said.add('retention');
+    }
+    if (tail.length > 0) blocks.push(tail);
   }
   const raw = rawLines(doc, said);
   if (raw.length > 0) blocks.push(raw);
@@ -445,4 +472,61 @@ function askLines(agentic: JsonValue): string[] | undefined {
     ...(each.length === 0 ? [] : [`  each call up to ${each.join(' and ')}`]),
     ...judged,
   ];
+}
+
+const SEGMENT = /^[A-Za-z0-9_-]+$/;
+
+/** Where a mapping keeps a value: keys joined by dots, each bare or quoted. */
+function formatPath(path: readonly string[]): string {
+  return path.map((key) => (SEGMENT.test(key) ? key : JSON.stringify(key))).join('.');
+}
+
+/** Whether a template member is a reference the readable form can say: `{ $path }`, and `missing` when it has one. */
+function isReference(value: JsonValue): value is Doc {
+  return (
+    isRecord(value) &&
+    hasKeys(value, ['$path'], ['missing']) &&
+    isFieldText(value.$path) &&
+    (value.missing === undefined || typeof value.missing === 'string')
+  );
+}
+
+function keepItems(template: Doc, path: readonly string[]): string[] {
+  return Object.keys(template).flatMap((key) => {
+    const value = template[key] as JsonValue;
+    const at = [...path, key];
+    if (isReference(value)) {
+      const pointer = value.$path as string;
+      const tokens = pointerTokens(pointer);
+      const same = tokens.length === at.length && tokens.every((token, index) => token === at[index]);
+      const missing = value.missing === undefined ? '' : ` if missing ${formatName(value.missing as string)}`;
+      return [`${formatField(pointer)}${same ? '' : ` as ${formatPath(at)}`}${missing}`];
+    }
+    if (isRecord(value) && !Object.hasOwn(value, '$path') && Object.keys(value).length > 0) return keepItems(value, at);
+    return [`${formatPath(at)} = ${canonicalJson(value)}`];
+  });
+}
+
+/** The `keep` line for a mapping that is an object of fields; anything else (a bare reference, a constant) is raw. */
+function keepLine(mapping: JsonValue): string | undefined {
+  if (!isRecord(mapping) || Object.hasOwn(mapping, '$path')) return undefined;
+  const items = keepItems(mapping, []);
+  return `keep ${items.length === 0 ? 'nothing' : items.join(', ')}`;
+}
+
+/** The `keep for` lines that differ from the defaults, or undefined when retention has a shape they cannot say. */
+function retentionLines(retention: JsonValue, queued: boolean): string[] | undefined {
+  if (!isRecord(retention)) return undefined;
+  const fields = RETENTION_LINES.map(([, field]) => field);
+  if (!hasKeys(retention, Object.keys(DEFAULT_RETENTION), ['queueMs'])) return undefined;
+  if (fields.some((field) => retention[field] !== undefined && !isCount(retention[field]))) return undefined;
+  if (queued && retention.queueMs === undefined) return undefined;
+  const lines: string[] = [];
+  for (const [words, field] of RETENTION_LINES) {
+    const value = retention[field];
+    if (value === undefined) continue;
+    const fallback = field === 'queueMs' ? (queued ? DEFAULT_QUEUE_RETENTION : undefined) : DEFAULT_RETENTION[field];
+    if (value !== fallback) lines.push(`  ${words.join(' ')} ${formatDuration(value as number)}`);
+  }
+  return lines;
 }

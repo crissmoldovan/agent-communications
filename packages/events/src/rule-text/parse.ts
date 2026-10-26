@@ -5,10 +5,15 @@ import { Cursor, lineTree, RuleTextFailure, type TextLine } from './lines.ts';
 import type { RuleTextError, RuleTextParseResult } from './types.ts';
 import {
   CHANNELS,
+  DEFAULT_QUEUE_RETENTION,
+  DEFAULT_RETENTION,
   DURATION_UNITS,
   EVENT_PHRASES,
+  hasQueue,
   isFieldText,
+  pointerTokens,
   REQUIRED_SECTIONS,
+  RETENTION_LINES,
   RULE_FIELDS,
   suggestion,
 } from './vocabulary.ts';
@@ -23,8 +28,8 @@ const STATEMENTS: ReadonlyMap<string, readonly string[]> = new Map([
   ['ask', ['agentic']],
   ['then', ['targets']],
 ]);
-const TOP_LEVEL = ['rule', 'when', 'match', 'ask', 'then', 'subscriber', 'raw'];
-const TOP_LEVEL_WORDS = 'rule, when, match, ask, then, subscriber or raw';
+const TOP_LEVEL = ['rule', 'when', 'match', 'ask', 'then', 'keep', 'at', 'cloud', 'subscriber', 'raw'];
+const TOP_LEVEL_WORDS = 'rule, when, match, ask, then, keep, keep for, at most, cloud event type, subscriber or raw';
 
 interface State {
   /** Fields a section set, with the line that set them. */
@@ -121,6 +126,35 @@ function statement(line: TextLine, state: State): void {
     case 'then':
       once(state, 'then', line, cursor);
       thenSection(cursor, line, state);
+      break;
+    case 'keep': {
+      const saved = cursor.save();
+      if (cursor.take('keep', 'for') && cursor.atEnd()) {
+        cursor.restore(saved);
+        once(state, 'keep for', line, cursor);
+        setNatural(state, 'keep for', line, 'retention', retention(line));
+      } else {
+        cursor.restore(saved);
+        once(state, 'keep', line, cursor);
+        setNatural(state, 'keep', line, 'mapping', keep(cursor, line));
+      }
+      break;
+    }
+    case 'at':
+      if (!cursor.isNext('at', 'most')) cursor.fail('a line that starts with at says at most <n> an hour', at);
+      once(state, 'at most', line, cursor);
+      cursor.take('at', 'most');
+      setNatural(state, 'at most', line, 'deliveryRateCap', cursor.integer('the hourly cap'));
+      cursor.expect(['an', 'hour'], '"an hour" after the cap');
+      cursor.expectEnd('the hourly cap');
+      noChildren(line, 'at most');
+      break;
+    case 'cloud':
+      once(state, 'cloud event type', line, cursor);
+      cursor.expect(['cloud', 'event', 'type'], '"cloud event type <type>"');
+      setNatural(state, 'cloud event type', line, 'cloudEventType', cursor.string('the CloudEvent type'));
+      cursor.expectEnd('the CloudEvent type');
+      noChildren(line, 'cloud event type');
       break;
     case 'subscriber':
       state.subscribers.push(subscriber(cursor, line));
@@ -628,6 +662,13 @@ function assemble(state: State, errors: RuleTextError[], end: number): JsonObjec
   }
   if (!has('judges')) doc.judges = [];
   if (!has('subscribers')) doc.subscribers = [];
+  if (!state.raw.has('retention')) {
+    const queued = hasQueue(doc.targets);
+    const overrides = state.natural.get('retention')?.value as Record_ | undefined;
+    const retention: Record_ = { ...DEFAULT_RETENTION };
+    if (queued) retention.queueMs = DEFAULT_QUEUE_RETENTION;
+    doc.retention = { ...retention, ...overrides };
+  }
   return doc;
 }
 
@@ -833,4 +874,84 @@ function ask(cursor: Cursor, line: TextLine): JsonValue {
     ],
   ]);
   return agentic;
+}
+
+/** The `keep for` block: one retention per line, each a duration. */
+function retention(line: TextLine): JsonValue {
+  const overrides: Record_ = {};
+  if (line.children.length === 0)
+    fail(line, 'keep for needs its retentions on the lines indented under it, such as  events 7 days');
+  block(
+    line,
+    'keep for',
+    RETENTION_LINES.map(([words, field]) => [
+      words,
+      (cursor: Cursor) => {
+        overrides[field] = duration(cursor, `how long it keeps ${words.join(' ')}`);
+      },
+    ]),
+  );
+  return overrides;
+}
+
+/** Sets `value` at `path` in a mapping under construction, through objects this parse made, never over a value. */
+function place(
+  root: Record_,
+  path: readonly string[],
+  value: JsonValue,
+  made: Set<object>,
+  cursor: Cursor,
+  at: number,
+): void {
+  let node = root;
+  for (const key of path.slice(0, -1)) {
+    if (!Object.hasOwn(node, key)) {
+      const child: Record_ = {};
+      setOwn<JsonValue>(node, key, child);
+      made.add(child);
+      node = child;
+      continue;
+    }
+    const existing = node[key];
+    if (typeof existing !== 'object' || existing === null || !made.has(existing))
+      cursor.fail(`${path.join('.')} is kept inside a value that is already kept`, at);
+    node = existing as Record_;
+  }
+  const last = path.at(-1) as string;
+  if (Object.hasOwn(node, last)) cursor.fail(`${path.join('.')} is kept twice`, at);
+  setOwn(node, last, value);
+}
+
+/** The `keep` line: the mapping, as fields, fields kept elsewhere (`as`), and fixed values (`name = JSON`). */
+function keep(cursor: Cursor, line: TextLine): JsonValue {
+  cursor.take('keep');
+  noChildren(line, 'keep');
+  const saved = cursor.save();
+  if (cursor.take('nothing') && cursor.atEnd()) return {};
+  cursor.restore(saved);
+  const root: Record_ = {};
+  const made = new Set<object>();
+  do {
+    const at = cursor.mark();
+    const start = cursor.save();
+    const named = cursor.segments('a kept name');
+    if (named !== undefined && cursor.take('=')) {
+      place(root, named, cursor.json('the fixed value'), made, cursor, at);
+      continue;
+    }
+    cursor.restore(start);
+    const pointer = field(cursor, 'a field to keep');
+    let path = pointerTokens(pointer);
+    if (cursor.take('as')) {
+      const as = cursor.segments('where the field is kept');
+      if (as === undefined) cursor.fail(`expected a name after as; found ${cursor.describeNext()}`, cursor.mark());
+      path = as as readonly string[];
+    }
+    if (path.length === 0) cursor.fail('the whole event is kept under a name: "" as <name>', at);
+    const reference: Record_ = { $path: pointer };
+    if (cursor.take('if', 'missing')) reference.missing = cursor.name('what happens when the field is missing');
+    place(root, path, reference, made, cursor, at);
+  } while (cursor.comma());
+  cursor.expectEnd('the kept fields');
+  return root;
 }

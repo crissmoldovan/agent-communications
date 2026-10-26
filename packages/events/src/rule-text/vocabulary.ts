@@ -109,6 +109,11 @@ export function isRecord(value: unknown): value is Readonly<Record<string, JsonV
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/** Whether a rule's targets include a queue: then its retention has a queue line, 7 days unless said. */
+export function hasQueue(targets: JsonValue | undefined): boolean {
+  return Array.isArray(targets) && targets.some((target) => isRecord(target) && target.kind === 'queue');
+}
+
 /** A whole number the text can write: 0 or more, and safe. */
 export function isCount(value: unknown): value is number {
   return Number.isSafeInteger(value) && (value as number) >= 0;

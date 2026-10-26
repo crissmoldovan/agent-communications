@@ -10,6 +10,17 @@ import { CATALOGUE, type JsonObject, parseRuleText, printRuleText } from '../src
 
 const DAY = 86_400_000;
 
+/** The design's defaults (local-event-emission design, D2): what a rule keeps when its text says nothing. */
+const DEFAULT_RETENTION = {
+  ingestMs: 7 * DAY,
+  holdMs: 7 * DAY,
+  deliveryMs: 7 * DAY,
+  dryrunMs: DAY,
+  sseReplayMs: 7 * DAY,
+  deadLetterMs: 7 * DAY,
+  decisionMetadataMs: 90 * DAY,
+};
+
 const SHORT_RETENTION = {
   ingestMs: 60_000,
   holdMs: 60_000,
@@ -74,6 +85,7 @@ test('a rule starts with its id and version, then says when it applies, which me
     'match subject exists',
   ]);
   assert.deepEqual(section(text, 'then'), ['then', '  dry run invoices-log, version 1, keep 1 day']);
+  assert.doesNotMatch(text, /^raw /m, 'a canonical rule needs no escape');
 });
 
 test('when: every catalogue event has a phrase, and every source option of the four channels is written out', () => {
@@ -488,4 +500,144 @@ test('ask: an agentic part the readable form cannot say is raw, whole', () => {
   assert.doesNotMatch(text, /^ask /m);
   roundTrip(rule({ agentic: { judge: { ...JEV, extra: true }, question: 'q' } }));
   roundTrip(rule({ agentic: { question: 'no judge' } }));
+});
+
+test('keep: the fields a rule keeps, where it keeps them, what happens when one is missing, and fixed values', () => {
+  const mapping = {
+    subject: { $path: '/subject' },
+    from: { address: { $path: '/from/address' }, name: { $path: '/from/name', missing: 'null' } },
+    sender: { $path: '/from/address', missing: 'omit' },
+    channel: { id: { $path: '/channel/id' } },
+    kind: 'invoice',
+    count: 3,
+    tags: ['a', { $path: '/subject' }],
+    empty: {},
+    'odd key': { $path: '/subject' },
+    whole: { $path: '' },
+    weird: { $path: '/x', missing: 'reject' },
+    notReference: { $path: 7 },
+  };
+  assert.deepEqual(section(roundTrip(rule({ mapping })), 'keep'), [
+    'keep channel.id, count = 3, empty = {}, from.address, from.name if missing null, kind = "invoice", notReference = {"$path":7}, subject as "odd key", from.address as sender if missing omit, subject, tags = ["a",{"$path":"/subject"}], x as weird if missing reject, "" as whole',
+  ]);
+  assert.deepEqual(section(roundTrip(rule({ mapping: {} })), 'keep'), ['keep nothing']);
+  assert.deepEqual(section(roundTrip(rule({ mapping: { constant: 'safe' } })), 'keep'), ['keep constant = "safe"']);
+  for (const mapping of [{ $path: '/subject' }, 'all of it', ['/subject']])
+    assert.match(
+      roundTrip(rule({ mapping })),
+      /^raw \/mapping = /m,
+      'a mapping that is not an object of fields is raw',
+    );
+});
+
+test('at most, cloud event type: the hourly cap and the CloudEvent type the rule sends as', () => {
+  const text = roundTrip(rule({ deliveryRateCap: 1, cloudEventType: 'com.example.invoice' }));
+  assert.equal(section(text, 'at')[0], 'at most 1 an hour');
+  assert.equal(section(text, 'cloud')[0], 'cloud event type "com.example.invoice"');
+});
+
+test('keep for: retention says only what differs from the defaults, and the parser fills the rest', () => {
+  assert.doesNotMatch(roundTrip(rule({ retention: DEFAULT_RETENTION })), /keep for/);
+  assert.deepEqual(section(roundTrip(rule()), 'keep for'), [
+    'keep for',
+    '  events 1 minute',
+    '  held events 1 minute',
+    '  deliveries 1 hour',
+    '  dry runs 1 hour',
+    '  stream replay 1 minute',
+    '  dead letters 1 minute',
+    '  decisions 1 minute',
+  ]);
+  const queued = (retention: object) =>
+    rule({
+      retention,
+      mapping: { from: { $path: '/from' }, subject: { $path: '/subject' } },
+      targets: [{ targetId: 'q', version: 1, kind: 'queue', retentionMs: 7 * DAY, show: 'summary' }],
+    });
+  assert.doesNotMatch(roundTrip(queued({ ...DEFAULT_RETENTION, queueMs: 7 * DAY })), /keep for/);
+  assert.deepEqual(section(roundTrip(queued({ ...DEFAULT_RETENTION, queueMs: 3 * DAY, holdMs: DAY })), 'keep for'), [
+    'keep for',
+    '  held events 1 day',
+    '  queue items 3 days',
+  ]);
+  assert.match(roundTrip(queued(DEFAULT_RETENTION)), /^raw \/retention = /m, 'a queued rule without queueMs is raw');
+  assert.deepEqual(section(roundTrip(rule({ retention: { ...DEFAULT_RETENTION, queueMs: DAY } })), 'keep for'), [
+    'keep for',
+    '  queue items 1 day',
+  ]);
+  const parsed = parseRuleText(
+    'rule r, version 1\nwhen a new message arrives in a, in the inbox\nmatch subject exists\nthen\n  dry run d, version 1\n',
+  );
+  assert.ok(parsed.ok);
+  assert.deepEqual(parsed.doc.retention, DEFAULT_RETENTION);
+  assert.deepEqual([parsed.doc.subscribers, parsed.doc.judges], [[], []]);
+});
+
+/** The prototype's invoices rule (RuleEditText), as close as today's targets allow: a lane queue and a dry run. */
+const INVOICES = rule({
+  ruleId: 'invoices',
+  version: 4,
+  condition: {
+    any: [
+      { path: '/subject', op: 'contains', value: 'invoice', caseSensitive: false },
+      { path: '/subject', op: 'contains', value: 'payment', caseSensitive: false },
+    ],
+  },
+  agentic: {
+    judge: JEV,
+    question: 'Is this asking me to pay or send something?',
+    inputs: ['/from/address', '/subject', '/snippet'],
+    threshold: 0.7,
+    onUncertain: 'no-match',
+    ...LIMITS,
+  },
+  mapping: {
+    from: { address: { $path: '/from/address' }, name: { $path: '/from/name' } },
+    subject: { $path: '/subject' },
+    snippet: { $path: '/snippet' },
+  },
+  targets: [
+    {
+      targetId: 'billing',
+      version: 1,
+      kind: 'queue',
+      retentionMs: 7 * DAY,
+      show: 'summary',
+      lane: { name: 'billing' },
+    },
+    { targetId: 'invoices-log', version: 1, kind: 'dry-run', retentionMs: DAY },
+  ],
+  retention: { ...DEFAULT_RETENTION, queueMs: 7 * DAY },
+});
+
+test("the prototype's invoices rule prints as the prototype draws it, where today's targets allow", () => {
+  assert.equal(
+    roundTrip(INVOICES),
+    `rule invoices, version 4
+
+when a new message arrives in cue/gmail, in the inbox
+match any
+  subject contains "invoice"
+  subject contains "payment"
+
+ask jev, version 2, via typesafe
+  question "Is this asking me to pay or send something?"
+  looking at from.address, subject, snippet
+  yes at 0.7, if unsure drop
+  at most 60 calls an hour, 1000000 input tokens in 30 days, 1 at a time
+  each call up to 2000 tokens in and 16 tokens out
+  judge typesafe, model jev-1.13.0
+    endpoint https://api.typesafe.ai/v1/systemone
+    prompt template typesafe-jev-noul-v1
+    protocol noul
+
+then
+  queue billing, version 1, in lane billing, keep 7 days
+
+  dry run invoices-log, version 1, keep 1 day
+
+keep from.address, from.name, snippet, subject
+at most 60 an hour
+`,
+  );
 });
