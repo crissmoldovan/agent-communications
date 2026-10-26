@@ -62,6 +62,7 @@ import {
 } from '../domain/untrusted-fields.ts';
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
+import { SENT_FOR_SEARCH } from '../search-capture.ts';
 import { VERSION } from '../version.ts';
 import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
@@ -1536,7 +1537,7 @@ async function sendApproved(
       unrecorded.push(`the audit log could not record it (${error instanceof Error ? error.message : String(error)})`);
     }
 
-    return {
+    const result: SendResult = {
       inbox: alias,
       approvalId: options.approvalId,
       draftId,
@@ -1553,6 +1554,15 @@ async function sendApproved(
       approval: approval ?? (await approvalNow(context, options.approvalId, resolved.inbox.id, claimedApproval)),
       ...(legacyDrain === undefined ? {} : { legacyDrain }),
     };
+    // What went, as the draft the send read had it, for Search's `out` row (design 2026-10-26-local-search, S3):
+    // registered after Gmail accepted it, beside the result and not in it, and read only by the capture that follows.
+    SENT_FOR_SEARCH.set(result, {
+      text: before.analysis.text,
+      subject: liveSubject,
+      threadId: sent.threadId ?? before.analysis.threadId,
+      replyTo: binding?.proof?.messageId,
+    });
+    return result;
   });
 }
 

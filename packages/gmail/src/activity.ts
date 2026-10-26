@@ -10,6 +10,7 @@ import {
   withActivity,
 } from '@agentcomms/core';
 import type { GmailContext } from './context.ts';
+import { captureGmail } from './search-capture.ts';
 
 /**
  * Gmail's half of the activity log (design 2026-10-25-activity §4.2, §8 Task 2a): every operation a capability row
@@ -68,7 +69,7 @@ export async function recorded<T>(
 ): Promise<T> {
   if (recording.getStore() === true) return fn();
   const account = await accountOf(context, mailboxes);
-  return recording.run(true, () =>
+  const result = await recording.run(true, () =>
     withActivity(
       {
         core: context.core,
@@ -84,6 +85,10 @@ export async function recorded<T>(
       describe,
     ),
   );
+  // What the call had in hand, for Search on this machine, where the person switched it on: never thrown, never
+  // changing the result (design 2026-10-26-local-search §5).
+  await captureGmail(context, operation, result);
+  return result;
 }
 
 const ENVELOPE = new RegExp(

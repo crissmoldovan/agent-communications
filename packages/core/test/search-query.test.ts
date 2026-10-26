@@ -402,6 +402,40 @@ test('a sent reply is kept as what was done, and shows on the message it answers
   );
 });
 
+test('a reply whose send proved no message is linked by its thread, to the last message before it', async () => {
+  const machine = searchMachine({ enabled: 'on', accounts: [MAIL.id] });
+  const out = (id: string, ago: number): SearchCapture => ({
+    channel: 'gmail',
+    direction: 'out',
+    sourceId: id,
+    threadId: '18c00000000000t1',
+    subject: 'Re: plan',
+    text: 'our answer about the plan',
+    at: NOW - ago,
+    partial: false,
+  });
+  const ask = (id: string, ago: number): SearchCapture => ({
+    ...gmail(id, DAVID, 'plan', 'what is the plan', ago),
+    threadId: '18c00000000000t1',
+  });
+  resetCaptureForTests();
+  await captureForSearch(
+    machine.core,
+    MAIL,
+    [
+      ask('18c00000000000p1', 4 * HOUR),
+      out('18c00000000000r1', 3 * HOUR),
+      ask('18c00000000000p2', 2 * HOUR),
+      out('18c00000000000r2', HOUR),
+    ],
+    { secrets: machine.deps.secrets },
+  );
+  const found = await query(machine, 'plan');
+  const answered = new Map(found.hits.map((hit) => [hit.sourceId, hit.answeredBy.map((answer) => answer.sourceId)]));
+  assert.deepEqual(answered.get('18c00000000000p1'), ['18c00000000000r1']);
+  assert.deepEqual(answered.get('18c00000000000p2'), ['18c00000000000r2']);
+});
+
 test('a new digest starts a new set of vectors; the old one serves until the new one is complete', async () => {
   const { machine, close } = await seeded(true);
   try {

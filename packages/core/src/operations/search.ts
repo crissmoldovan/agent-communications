@@ -697,7 +697,7 @@ export async function searchQuery(
           return row === undefined ? [] : [[entry.id, row] as const];
         }),
       );
-      const answers = store.answers([...rows.values()].map((row) => row.sourceId));
+      const answers = store.answers([...rows.values()]);
       const hits: SearchHit[] = [];
       for (const entry of fused) {
         const row = rows.get(entry.id);
@@ -863,7 +863,7 @@ export async function searchPerson(
       ...(since === undefined ? {} : { since }),
     };
     const rows = store.rows(filter, limit + 1);
-    const answers = store.answers(rows.map((row) => row.sourceId));
+    const answers = store.answers(rows);
     const messages = rows.slice(0, limit).flatMap((row): SearchPersonMessage[] => {
       const account = opened.kept.get(row.accountId);
       if (account === undefined) return [];
@@ -949,7 +949,7 @@ export async function searchShow(
         replyTo: row.replyTo,
         flags: flagsOf(row),
         partial: row.partial,
-        answeredBy: store.answers([row.sourceId]).get(row.sourceId) ?? [],
+        answeredBy: store.answers([row]).get(row.sourceId) ?? [],
         rank: { words: null, meaning: null },
       },
     };

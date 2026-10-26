@@ -211,10 +211,14 @@ export async function sendPost(
   return made.posted;
 }
 
-/** A post as `postDraftOf` makes it: what Slack said, and the thread its draft went into — null for a new message. */
+/**
+ * A post as `postDraftOf` makes it: what Slack said, the thread its draft went into — null for a new message — and the
+ * words the draft held, for Search's `out` row (design 2026-10-26-local-search, S3). Only `posted` leaves `sendPost`.
+ */
 interface MadePost {
   readonly posted: (PostedMessage | PostedFiles) & LegacyDrainNote;
   readonly thread: string | null;
+  readonly said: string;
 }
 
 async function postDraftOf(
@@ -233,7 +237,7 @@ async function postDraftOf(
     await postPrepared({ ...gate, signal: input.signal }, draft, input.approvalId, input.expectChannel, new NameBook()),
     legacyDrain,
   );
-  return { posted, thread: draft.payload.thread_ts ?? null };
+  return { posted, thread: draft.payload.thread_ts ?? null, said: draft.source };
 }
 
 /**

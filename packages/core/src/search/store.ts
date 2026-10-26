@@ -554,20 +554,45 @@ export class SearchStore {
     ).map(rowOf);
   }
 
-  /** The replies Agent Comms sent to each of `sourceIds`, oldest first. */
-  answers(sourceIds: readonly string[]): Map<string, { sourceId: string; at: number }[]> {
+  /**
+   * The replies Agent Comms sent to each message, oldest first (S3): an `out` row that names it as what it answers —
+   * and, where a send could not prove which message it answered (a Gmail reply whose binding needed no proof), one in
+   * its thread sent after it and before the next message there that someone else sent.
+   */
+  answers(
+    messages: readonly Pick<MessageRow, 'sourceId' | 'threadId' | 'at' | 'direction'>[],
+  ): Map<string, { sourceId: string; at: number }[]> {
     const answered = new Map<string, { sourceId: string; at: number }[]>();
-    if (sourceIds.length === 0) return answered;
-    const rows = this.db
+    const asked = messages.filter((message) => message.direction === 'in');
+    if (asked.length === 0) return answered;
+    const add = (key: string, entry: { sourceId: string; at: number }) => {
+      const list = answered.get(key) ?? [];
+      if (!list.some((held) => held.sourceId === entry.sourceId)) list.push(entry);
+      answered.set(key, list);
+    };
+    const named = this.db
       .prepare(
-        `SELECT reply_to, source_id, at FROM messages WHERE direction = 'out' AND reply_to IN (${placeholders(sourceIds.length)}) ORDER BY at`,
+        `SELECT reply_to, source_id, at FROM messages WHERE direction = 'out' AND reply_to IN (${placeholders(asked.length)}) ORDER BY at`,
       )
-      .all(...sourceIds) as { reply_to: string; source_id: string; at: number }[];
-    for (const row of rows) {
-      const list = answered.get(row.reply_to) ?? [];
-      list.push({ sourceId: row.source_id, at: Number(row.at) });
-      answered.set(row.reply_to, list);
+      .all(...asked.map((message) => message.sourceId)) as { reply_to: string; source_id: string; at: number }[];
+    for (const row of named) add(row.reply_to, { sourceId: row.source_id, at: Number(row.at) });
+    const next = this.db.prepare(
+      "SELECT min(at) AS at FROM messages WHERE direction = 'in' AND thread_id = ? AND at > ?",
+    );
+    const unproven = this.db.prepare(
+      "SELECT source_id, at FROM messages WHERE direction = 'out' AND reply_to IS NULL AND thread_id = ? AND at > ? AND at < ? ORDER BY at",
+    );
+    for (const message of asked) {
+      if (message.threadId === null) continue;
+      const following = (next.get(message.threadId, message.at) as { at: number | null } | undefined)?.at ?? null;
+      const rows = unproven.all(
+        message.threadId,
+        message.at,
+        following === null ? Number.MAX_SAFE_INTEGER : Number(following),
+      ) as { source_id: string; at: number }[];
+      for (const row of rows) add(message.sourceId, { sourceId: row.source_id, at: Number(row.at) });
     }
+    for (const list of answered.values()) list.sort((a, b) => a.at - b.at);
     return answered;
   }
 
