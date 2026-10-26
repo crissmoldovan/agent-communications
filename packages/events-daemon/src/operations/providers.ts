@@ -1,5 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
-import { PERSON_SETUP_ORIGIN } from '../domain/judge-setup.ts';
+import type { PersonSetupOrigin } from '../domain/judge-setup.ts';
 
 type Options = { readonly stateDir?: string | undefined };
 
@@ -16,16 +16,22 @@ export function providerList(options: Options = {}): Promise<unknown> {
 }
 
 /** Stores the provider's key, replacing any it had, and gives it to every live Jev judge of that provider. */
-export function providerKeySet(provider: string, options: Options & { readonly hidden: string }): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir, clientName: PERSON_SETUP_ORIGIN }).request(
+export function providerKeySet(
+  provider: string,
+  options: Options & { readonly hidden: string; readonly origin: PersonSetupOrigin },
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir, clientName: options.origin }).request(
     'provider-key-set',
     { provider, hidden: options.hidden },
   );
 }
 
 /** Removes the provider's key, and the copy its Jev judges hold: they then refuse their calls until a key is added. */
-export function providerKeyRemove(provider: string, options: Options = {}): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir, clientName: PERSON_SETUP_ORIGIN }).request(
+export function providerKeyRemove(
+  provider: string,
+  options: Options & { readonly origin: PersonSetupOrigin },
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir, clientName: options.origin }).request(
     'provider-key-remove',
     { provider },
   );

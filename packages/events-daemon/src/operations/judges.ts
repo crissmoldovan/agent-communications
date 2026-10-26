@@ -1,5 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
-import { PERSON_SETUP_ORIGIN } from '../domain/judge-setup.ts';
+import type { PersonSetupOrigin } from '../domain/judge-setup.ts';
 import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
 import type { B3JudgeUnavailableV1 } from './b3-contract.ts';
 
@@ -59,15 +59,12 @@ export function judgeSetup(
     readonly url?: string | undefined;
     readonly model?: string | undefined;
   } = {},
-  options: Options = {},
+  options: Options & { readonly origin: PersonSetupOrigin },
 ): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir, clientName: PERSON_SETUP_ORIGIN }).request(
-    'judge-setup',
-    {
-      kind,
-      ...(input.provider === undefined ? {} : { provider: input.provider }),
-      ...(input.url === undefined ? {} : { url: input.url }),
-      ...(input.model === undefined ? {} : { model: input.model }),
-    },
-  );
+  return new EventControlClient({ stateDir: options.stateDir, clientName: options.origin }).request('judge-setup', {
+    kind,
+    ...(input.provider === undefined ? {} : { provider: input.provider }),
+    ...(input.url === undefined ? {} : { url: input.url }),
+    ...(input.model === undefined ? {} : { model: input.model }),
+  });
 }

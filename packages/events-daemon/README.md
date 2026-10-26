@@ -332,7 +332,7 @@ your TypeSafe and OpenRouter keys, and Events → Judges → Set up Jev picks th
 these commands, which you can run yourself:
 
 ```bash
-# 1. your provider's key: typed at this terminal, hidden, or piped in on stdin — never an argument
+# 1. your provider's key: typed at this terminal, hidden — never piped in, never an argument
 agent-events provider key set openrouter      # or typesafe
 agent-events provider list                    # whether each provider has a key; never the key
 
@@ -346,14 +346,17 @@ agent-events judge setup local-endpoint --url http://127.0.0.1:11434 --model nim
 `judge setup` adds the judge (`jev`, or `local-model`), gives Jev its provider's stored key, approves the daemon-wide
 budget when there is none for the judge's provider — 60 calls per rolling hour, 1,000,000 input tokens per rolling 30
 days and two calls at a time, overall and for that provider — and turns the kind on. Running the command is your
-approval of those enablements: each is recorded as approved through the app (`approvedVia: app` on its approval, and
-`approvedBy: desktop-app` in the audit log). Running it again changes nothing, or makes the next judge version when the
+approval of those enablements: each is recorded as approved through the app (`approvedVia: app` on its approval), and
+the audit log says where you ran it — `approvedBy: desktop-app` from the Agent Comms app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
 provider, the URL or the model changed; a rule keeps using the judge version it names until you update it. A local
 model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `provider key set` again replaces a key,
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
-refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands refuses an
-agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list` says only
-whether each provider has a key.
+refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
+where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
+key on stdin — on macOS only when the app's code signature attests that it started the command (core's
+`desktopAppOrigin`). Windows and Linux attest nothing, a known limit: there a command without an agent's marker counts as
+the app's, and its audit line says `desktop-app (unattested)`. Each refuses an agent's shell and the event service's MCP
+server, and no MCP tool performs them; `events_provider_list` says only whether each provider has a key.
 
 Or step by step, at your terminal, to ask Jev about received mail:
 
