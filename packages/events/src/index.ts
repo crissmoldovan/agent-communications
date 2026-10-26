@@ -21,6 +21,8 @@ export {
   type FieldLabels,
   type RulePart,
 } from './rules/describe-rule.ts';
+export * from './retention.ts';
+export * from './rule-text/index.ts';
 export type { JsonSchema } from './schema/to-json-schema.ts';
 export * from './text.ts';
 export * from './unicode/fold.ts';
