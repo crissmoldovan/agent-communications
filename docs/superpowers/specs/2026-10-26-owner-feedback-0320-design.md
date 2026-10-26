@@ -61,8 +61,8 @@ and shows "unavailable" with no explanation.
 - **L:** the event service gains `judge setup <typesafe|local-endpoint>`, the person's act, approved by their press in
   the app after the preview of what the judge sees and its budget — or by running it at an interactive terminal. A key
   is the app's stdin, or the person's hidden input at a terminal, never a pipe otherwise. It is refused to agent
-  markers, inside an MCP server, and on macOS to any process the app did not start, which core's `desktopAppOrigin`
-  attests from the app's code signature (see the note at the end of §4). Turning a judge off is a tightening and
+  markers, inside an MCP server, and on macOS to any process the app did not start: core's `desktopAppOrigin`
+  checks that the app started this process: a speed bump against agents, not a boundary against code running as you (see the notes at the end of §4). Turning a judge off is a tightening and
   applies at once.
 - **L:** the local model server's address must be on this Mac (loopback), as the local-endpoint judge already requires.
 
@@ -132,8 +132,8 @@ not see any MCP section on the left sidebar. Why?"
 - **L:** Add runs `mcp install --client <c> --server <s>`, which comes back waiting for approval with core's preview of
   what the server lets agents do; the app shows it, and the person's press of Approve and add, after that preview, is
   the approval (the owner-approved prototype; §5 question 3): the app runs `mcp install … --app-approval <id>`, which
-  approves that change through the app channel and applies it, never as a silent change. On macOS core first attests,
-  from the app's code signature, that the app started the command (the note at the end of §4). Remove is a tightening and applies at once. If core
+  approves that change through the app channel and applies it, never as a silent change. On macOS core first
+  checks that the app started this process: a speed bump against agents, not a boundary against code running as you (the notes at the end of §4). Remove is a tightening and applies at once. If core
   has no per-app removal (prune is not the same), core gains `mcp uninstall --client <c> --server <s>`, a tightening
   with an MCP twin for parity.
 - **L:** cloud sessions are explained, not detected. Nothing on this Mac can see them.
@@ -470,7 +470,8 @@ anything … an exchange of information that can happen easily."
 - **Keys** are read from stdin and never echoed, logged or returned. `provider key list` returns presence and dates.
 - **Changes from the app:**
   - adding a server to an app and setting up a judge are the person's acts: a press in the app, after the preview, with
-    the app's origin attested on macOS; refused to agent markers and inside an MCP server's process;
+    a check on macOS that the app started the command (a speed bump against agents, not a boundary against code
+    running as you); refused to agent markers and inside an MCP server's process;
   - adding a server goes through the app's approval: core's change approval, answered through the app channel;
   - removing a server, turning a judge off and turning a rule off are tightenings and apply at once.
 
@@ -481,16 +482,32 @@ two weaknesses beside it. Each is fixed:
   core plans first, refuses a change that needs no approval, checks the approval is a waiting change whose stored
   digest is exactly this install's, and only then answers it and claims it in the same flow, revoking it if it is not
   applied. The review's scenarios are regression tests.
-- **The app's origin is attested (macOS).** Core's `desktopAppOrigin()` checks that this process's parent is Agent
-  Comms itself: its executable inside an app bundle whose signature verifies — the release, against the owner's
-  requirement (its identifier, Apple's anchor, team `75K3LTUM8A`); or the local test build, ad-hoc signed, by its
-  identifier and only beside a local build of the CLI, never a managed release runtime. `--app-approval`, `judge setup`
-  and `provider key set|remove` require it on macOS, and the audit says `approvedBy: desktop-app` only when attested.
+- **The app's origin is checked (macOS).** Core's `desktopAppOrigin()` checks that the app started this process — the
+  release, against the owner's requirement (its identifier, Apple's anchor, team `75K3LTUM8A`), or the local test
+  build, ad-hoc signed. `--app-approval`, `judge setup` and `provider key set|remove` require it on macOS, and the
+  audit says `approvedBy: desktop-app` only for the release. (The second look below changed how it checks.)
 - **`provider key set` from a pipe (medium).** It got around `judge key set`'s terminal gate. Now a key, and judge
-  setup, come only from the attested app (the key on stdin) or an interactive terminal (hidden input, never a pipe),
-  and the audit records the real origin.
-- **What it does not close:** Windows and Linux attest nothing (§7). There the app's path keeps the marker checks, and
+  setup, come only from the app the check found (the key on stdin) or an interactive terminal (hidden input, never a
+  pipe), and the audit records the real origin.
+- **What it does not close:** Windows and Linux check nothing (§7). There the app's path keeps the marker checks, and
   its audit line says `desktop-app (unattested)`.
+
+**Settled after the second look (2026-10-26).** An independent second look confirmed the high finding above closed, and
+found the origin check spoofable two ways and two smaller gaps. Each is fixed:
+- **The parent's argv[0] was trusted (high).** `ps -o comm=` reports the name a process gives itself, so `exec -a` with
+  the app's path passed. Codesign now verifies the running parent by its pid; the path is read only for the message.
+- **Any home-made ad-hoc app passed as the test build (high).** A test-build origin now holds only when the parent's
+  running code says `com.cueplusplus.agentcomms.test`, the config folder holds `.agentcomms-test-profile` (written by
+  `scripts/local-test-release.sh` and nowhere else), and that folder is not the person's real, default one. Its
+  approvals are audited `desktop-app (test build)`.
+- **An approval could stay approved after its answer (low).** Any throw after the code is answered, the audit write
+  included, now revokes it.
+- **The event service's `approvedBy` was not the real origin (low).** Judge setup's result and its enablements now
+  carry where the person was, as the CLI established it: the release app, the test build, the app unattested, or a
+  terminal (approved on the terminal's own challenge).
+- **What this is:** the origin check confirms the app started the command — a speed bump against agents, not a boundary
+  against code running as you, which can approve in-process anyway. The event service's origin label rides on a
+  same-user control token, likewise a speed bump.
 
 ## 5. Questions the prototype puts to the owner (with the lead's default)
 
@@ -523,6 +540,7 @@ No migration is asked of anyone. Two schema migrations run automatically: `queue
 - **Ingest rows** for observed events are not pruned, as before.
 - **The dry-run log** keeps an entry 24 hours at most, so a dry run older than that shows its delivery but not its
   content.
-- **The app's origin is attested on macOS only.** On Windows and Linux an approval in the app (adding a server, judge
-  setup, a provider key) rests on the agent-marker checks, a speed bump an agent's shell could get past; its audit
-  line says `desktop-app (unattested)`.
+- **The app's origin is checked on macOS only, and only as a speed bump.** On macOS it confirms the app started the
+  command, which code running as you can get around. On Windows and Linux an approval in the app (adding a server,
+  judge setup, a provider key) rests on the agent-marker checks, a speed bump an agent's shell could get past; its
+  audit line says `desktop-app (unattested)`. The event service's origin label is a same-user control client's word.

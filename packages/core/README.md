@@ -65,11 +65,13 @@ request, and the other way round.
 core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`. That plans
 the install first, checks the approval is a waiting one for exactly that install, and only then approves it through
 the app channel (`approvedVia: app`) and applies it; an approval for anything else, or a plan that refuses, approves
-nothing. On macOS the command must have been started by Agent Comms itself, which its code signature attests
-(`desktopAppOrigin`: the release, signed by the owner's team, or the local test build, ad-hoc signed, beside a local
-build of the CLI), and its audit line says `approvedBy: desktop-app`. Windows and Linux attest nothing, a known limit:
-there it rests on the agent-marker checks, and the audit line says `desktop-app (unattested)`. `--app-approval` is
-always refused to an agent's shell and inside an MCP server's process, takes no `--approval`, and no MCP tool has it.
+nothing. On macOS core checks that the app started this process: a speed bump against agents, not a boundary against code running as you. `desktopAppOrigin` has codesign verify the
+running parent, by its pid: the release, signed by the owner's team, audited `approvedBy: desktop-app`; or the local
+test build, ad-hoc signed, only for a test profile — a config folder holding `.agentcomms-test-profile`, which
+`scripts/local-test-release.sh` writes, and not your real, default one — audited `desktop-app (test build)`. Windows
+and Linux check nothing, a known limit: there it rests on the agent-marker checks, and the audit line says
+`desktop-app (unattested)`. `--app-approval` is always refused to an agent's shell and inside an MCP server's process,
+takes no `--approval`, and no MCP tool has it.
 
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,

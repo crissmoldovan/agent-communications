@@ -57,8 +57,8 @@ describe('the local test release stamps the build it makes (spec §3.7)', () => 
     const built = lines.findIndex((line) => line.includes('tauri build'));
     expect(stamped).toBeGreaterThan(-1);
     expect(built).toBeGreaterThan(stamped);
-    // The test app is sealed with an ad-hoc signature once it is in place, so core can attest the approvals it makes
-    // (`desktopAppOrigin`): an unsealed bundle does not pass codesign --verify --strict.
+    // The test app is sealed with an ad-hoc signature once it is in place, so core can check that it started the
+    // commands it runs (`desktopAppOrigin`): an unsealed bundle does not pass codesign --verify --strict.
     const copied = lines.findIndex((line) => line.startsWith('cp -R "$built" "$app_dest"'));
     const sealed = lines.findIndex((line) => line.startsWith('codesign --force --deep --sign - "$app_dest"'));
     expect(copied).toBeGreaterThan(built);
