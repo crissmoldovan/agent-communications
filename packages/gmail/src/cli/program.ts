@@ -26,6 +26,7 @@ import {
   installExitStatus,
   kindOf,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
+  markMcpServerProcess,
   type OutputOptions,
   openCore,
   orgAddChange,
@@ -1692,6 +1693,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .action(
       act(async (context, _globalOptions, options: Options) => {
         ran = true;
+        // Every program this server starts inherits the mark, so none of them can make a person's read (§4).
+        markMcpServerProcess(env, 'gmail');
         const startStdioServer = deps.startMcp ?? (await import('../mcp/stdio-entry.ts')).startStdioServer;
         // Returns when the client disconnects.
         await startStdioServer({

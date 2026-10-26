@@ -9,7 +9,7 @@ import { parseArgs } from 'node:util';
  * same server. Options mirror that command: `--inbox <alias>` serves one mailbox, `--read-only` registers only the
  * tools that cannot change anything.
  */
-import { createGmailMcpServer, type GmailCommandOptions, gmailCommand } from '@agentcomms/gmail';
+import { createGmailMcpServer, type GmailCommandOptions, gmailCommand, markMcpServerProcess } from '@agentcomms/gmail';
 import { serverHelp } from './help.ts';
 
 const argv = process.argv.slice(2);
@@ -66,6 +66,9 @@ const pathOverrides = values && {
 if (values?.help) {
   process.stderr.write(help(pathOverrides));
 } else if (values) {
+  // Gmail's server, started without Gmail's CLI: marked here as that CLI's `mcp` marks it, so every program it starts
+  // inherits the mark and none of them can make a person's read (§4).
+  markMcpServerProcess(process.env, 'gmail');
   const server = await createGmailMcpServer({
     inbox: values.inbox,
     readOnly: values['read-only'],

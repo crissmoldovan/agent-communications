@@ -14,6 +14,7 @@ import {
   type Handoff,
   handoffSentence,
   installExitStatus,
+  markMcpServerProcess,
   type OutputOptions,
   openCore,
   PATH_OPTIONS,
@@ -487,6 +488,8 @@ a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 con
         output(),
         async () => {
           requireSupportedNode();
+          // Every program this server starts inherits the mark, so none of them can make a person's read (§4).
+          markMcpServerProcess(env, 'whatsapp');
           const startWhatsAppStdioServer =
             deps.startMcp ?? (await import('../mcp/stdio-entry.ts')).startWhatsAppStdioServer;
           await startWhatsAppStdioServer({

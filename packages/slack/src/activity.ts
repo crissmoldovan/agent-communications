@@ -314,11 +314,15 @@ export function describeDeleted(deleted: DeletedMessage): ActivityDetail {
   return { approvalId: deleted.approvalId, items: [{ id: deleted.ts, conversation: deleted.channel }] };
 }
 
-/** An acknowledgement under a standing approval: the message acknowledged, and the reply posted when there was one. */
+/**
+ * An acknowledgement under a standing approval: the message acknowledged, the reply posted when there was one, and
+ * (0.32.0) what it did — `reply` or `reaction` — so a message an agent answered reads apart from one it marked seen.
+ */
 export function describeAck(result: AckResult): ActivityDetail {
   const reply = result.posted?.ts;
   return {
     approvalId: result.approvalId,
+    act: result.act,
     items: [
       { id: result.ts, conversation: result.channel },
       ...(reply === undefined ? [] : [{ id: reply, conversation: result.channel }]),

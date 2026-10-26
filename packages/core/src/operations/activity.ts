@@ -1,6 +1,7 @@
 import {
   ACTIVITY_KINDS,
   ACTIVITY_OUTCOMES,
+  type ActivityAct,
   type ActivityFilters,
   type ActivityItem,
   type ActivityKind,
@@ -31,6 +32,7 @@ import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { type Remedy, remedy } from '../handoffs.ts';
+import { MCP_SERVER_MARKER, mcpServerOf } from '../mcp-marker.ts';
 import { homeDirectory, shortenHome } from '../paths.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import type { DoctorCheck } from './maintenance.ts';
@@ -290,17 +292,9 @@ export async function activityMine(
 
 // ── By item ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * The environment variable an MCP server sets in its own process, so every program it starts inherits it: the event
- * service's (`agent-events mcp`) does. The same marker its queue and dry-run reads refuse on: what is the person's view
- * is not read from inside a server an agent drives.
- */
-const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
-
 /** Refuses, as exit 10, when this process is an MCP server's or one it started: the person's view is not read there. */
 function refuseInsideMcpServer(env: NodeJS.ProcessEnv): void {
-  const marker = env[MCP_SERVER_MARKER];
-  if (marker === undefined || marker === '') return;
+  if (mcpServerOf(env) === undefined) return;
   throw new CommsError(
     'APPROVAL_REQUIRED',
     "every agent window's activity, item by item, is for a person, at a terminal or in the app — an MCP server's process cannot read it",
@@ -332,7 +326,8 @@ export interface ActivityItemSession {
  * One line, as `activity items` lists it under an item it names: which window, what, when and how it ended; the
  * item's subject and sender as recorded — a sender's words, in the untrusted-content envelope — when the line names
  * the item itself; and the links (§3.6) where the line has them: the message it answers, the thread it went into —
- * named as the message it is, `<channelId>/<ts>`, or null for a new message — and the draft it made, prepared or sent.
+ * named as the message it is, `<channelId>/<ts>`, or null for a new message — the draft it made, prepared or sent, and
+ * what an acknowledgement did (`act`: a reply or a reaction).
  */
 export interface ActivityItemEntry {
   readonly session: ActivityItemSession;
@@ -344,6 +339,7 @@ export interface ActivityItemEntry {
   readonly replyTo?: ActivityReplyTo | undefined;
   readonly thread?: string | null | undefined;
   readonly draftId?: string | undefined;
+  readonly act?: ActivityAct | undefined;
 }
 
 export interface ActivityItemsResult {
@@ -496,6 +492,7 @@ export async function activityItems(
         ...(line.replyTo === undefined ? {} : { replyTo: line.replyTo }),
         ...(thread === undefined ? {} : { thread }),
         ...(line.draftId === undefined ? {} : { draftId: line.draftId }),
+        ...(line.act === undefined ? {} : { act: line.act }),
       };
       const held = items.get(id);
       if (held === undefined) items.set(id, [entry]);

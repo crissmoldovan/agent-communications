@@ -90,10 +90,13 @@ days. It holds ids, subjects, senders and file names, and never a message body, 
 - `agentcomms activity items [--since <ms>] [--ids <id,…>] --json` lists every call that names an item, grouped by
   the item: a Gmail message by its id, a Slack message as `<channelId>/<ts>`. Each line names the window (its key,
   folder and client), the operation, when, and how it ended. A reply also links to what it answers: a Gmail reply
-  draft and its send's prepare carry `replyTo`, a send carries its `draftId` and `threadId`, and a Slack post its
-  `thread` (null for a new message). That is how the app tells which message an agent read or answered. Subjects and
-  senders are the sender's words, inside the untrusted-content envelope. It is your view: refused inside an MCP
-  server's process, with exit `10`, and has no tool, as `agentcomms activity show` has none.
+  draft and its send's prepare carry `replyTo`, a send carries its `draftId` and `threadId`, a Slack post its
+  `thread` (null for a new message), and a Slack acknowledgement its `act`: `reply` or `reaction`. That is how the app
+  tells which message an agent read, answered or only marked seen. Subjects and senders are the sender's words, inside
+  the untrusted-content envelope. It is your view: refused inside an MCP server's process, with exit `10`, and has no
+  tool, as `agentcomms activity show` has none. Every MCP server of this suite marks its own process as it starts
+  (`AGENTCOMMS_MCP_SERVER`) — core's, each channel's and the event service's — so the refusal holds in any program one
+  of them starts.
 - An agent sees only its own window, through `comms_activity` (or `agentcomms activity mine`).
 
 ## What an agent may do, and how it writes

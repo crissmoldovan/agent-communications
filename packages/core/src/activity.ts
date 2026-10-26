@@ -144,6 +144,9 @@ export interface ActivityReplyTo {
   readonly threadId?: string | undefined;
 }
 
+/** What an acknowledgement did (0.32.0): posted a reply, or added a reaction. */
+export type ActivityAct = 'reply' | 'reaction';
+
 /**
  * One call, as the log keeps it (§4.2, S1, S2, S4). Content never: what was touched, by id, subject and sender, and
  * how it ended.
@@ -158,6 +161,7 @@ export interface ActivityReplyTo {
  *   send prepared as a reply answers, the draft a line made, prepared or sent, and the thread a send went into.
  * - `channelId` and `thread` are Slack's (0.32.0 §3.6): the conversation a post went to or a history read read, by its
  *   id — the name a read keeps is not what an event names — and the parent ts a post went into, null for a new message.
+ * - `act` is what an acknowledgement did (0.32.0): `reply` or `reaction`.
  */
 export interface ActivityLine {
   readonly at: string;
@@ -181,6 +185,7 @@ export interface ActivityLine {
   readonly threadId?: string | undefined;
   readonly channelId?: string | undefined;
   readonly thread?: string | null | undefined;
+  readonly act?: ActivityAct | undefined;
   /**
    * The line was cut to `MAX_ACTIVITY_LINE_BYTES`: items, then recipients, dropped from the end, and long words
    * shortened. `count` still says how many items there were.
@@ -421,6 +426,7 @@ function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
   const channelId = providerId(raw.channelId);
   // Null is a statement — a new message, in no thread — and kept as one; anything else that is not an id goes.
   const thread = raw.thread === null ? null : providerId(raw.thread);
+  const act = raw.act === 'reply' || raw.act === 'reaction' ? (raw.act as ActivityAct) : undefined;
   return {
     at,
     channel: cut(raw.channel, BOUNDS.word) ?? '',
@@ -445,6 +451,7 @@ function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
     ...(threadId === undefined ? {} : { threadId }),
     ...(channelId === undefined ? {} : { channelId }),
     ...(thread === undefined ? {} : { thread }),
+    ...(act === undefined ? {} : { act }),
     ...(raw.truncated === true ? { truncated: true as const } : {}),
   };
 }
@@ -1677,6 +1684,7 @@ export interface ActivityDetail {
   readonly threadId?: string | undefined;
   readonly channelId?: string | undefined;
   readonly thread?: string | null | undefined;
+  readonly act?: ActivityAct | undefined;
 }
 
 /** The refusals a call can end in — a policy, an approval, a rule, a cap or a usage mistake — rather than a failure. */
@@ -1738,6 +1746,7 @@ async function recordCall(
       ...(detail.threadId === undefined ? {} : { threadId: detail.threadId }),
       ...(detail.channelId === undefined ? {} : { channelId: detail.channelId }),
       ...(detail.thread === undefined ? {} : { thread: detail.thread }),
+      ...(detail.act === undefined ? {} : { act: detail.act }),
     });
   } catch {
     // Recording never fails the call.

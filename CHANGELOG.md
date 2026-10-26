@@ -18,13 +18,19 @@ screen).
   - Slack: a post (`slack.post.send`) names its conversation by id (`channelId`) and the thread it went into
     (`thread`: the parent's ts, or null for a new message).
   - Slack: a history read (`slack.read`) names its conversation by id (`channelId`), beside the name it already kept.
+  - Slack: an acknowledgement under a standing approval (`slack.ack`) says what it did (`act`: `reply` or `reaction`),
+    so a message an agent answered reads apart from one it only marked seen.
 - **`agentcomms activity items [--since <ms>] [--ids <id,…>] --json`** lists every call that names an item, grouped
   by the item. A Gmail message keeps its id, and a Slack message is `<channelId>/<ts>`. Each line names the window
-  (key, folder, client), the operation, when it ran and how it ended, with `replyTo`, `thread` and `draftId` where it
-  has them. A line appears under each item it names and each item it links to, so a message leads to its reply draft,
-  and that draft to its send. Subjects and senders are the sender's words, returned in the untrusted-content
-  envelope. It is the person's view: refused inside an MCP server's process (exit 10), with no MCP tool, like
-  `agentcomms activity show`.
+  (key, folder, client), the operation, when it ran and how it ended, with `replyTo`, `thread`, `draftId` and `act`
+  where it has them. A line appears under each item it names and each item it links to, so a message leads to its
+  reply draft, and that draft to its send. Subjects and senders are the sender's words, returned in the
+  untrusted-content envelope. It is the person's view: refused inside an MCP server's process (exit 10), with no MCP
+  tool, like `agentcomms activity show`.
+- **Every MCP server marks its own process as it starts.** Core's server and the Gmail, Slack, Resend and WhatsApp
+  servers now set `AGENTCOMMS_MCP_SERVER`, as the event service's already did, and `@agentcomms/gmail-mcp` does too.
+  Every program a server starts inherits the mark, so `agentcomms activity items` and the event service's person-only
+  reads refuse there as well. Your terminal is not marked, and nor is a shell an agent's client runs itself.
 - **`agentcomms mcp uninstall --client <c> --server <s>`**, and `comms_server_uninstall` from a chat, take one server
   out of one client. They remove every user-scope entry that starts it, whatever it is called. This is a tightening:
   it applies at once and asks nobody. Each removed entry is saved first, owner-only, and the change is audited.
