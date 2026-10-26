@@ -77,7 +77,8 @@ the app's own: it refuses an agent's shell and the event service's MCP server, a
 started it (core's `desktopAppOrigin`), a speed bump against agents, not a boundary against code running as you. On
 Windows and Linux nothing attests the app, so it is refused with `APPROVAL_REQUIRED` (exit 10, reason
 `ORIGIN_UNATTESTED`), naming `approve <approval-id>`, and the app offers Do it in Terminal, where you type the challenge
-as above. **Switch off** is `disable-all`: it takes away, so it applies at once, from anywhere.
+as above. **Switch off** is `disable-all`: it takes away, so it applies at once, from anywhere, and its result's `said` tells you
+in plain words what it did.
 
 An approval that `rule enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
 approve it, nothing is turned on. On its next tick, or when it next starts, the service cancels the activation that
@@ -366,7 +367,9 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
     Earlier tries are counted, not kept one by one.
 - **Control:**
   - `pause` / `resume`;
-  - `disable-all`, which stops collection and purges pending work at once;
+  - `disable-all`, which stops collection and purges pending work at once, and says so in its result's `said`: your
+    rules are kept; deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are cleared;
+    each lane's window is unbound; and switching on again needs your approval;
   - `doctor`, a content-free health report.
   
   Every command takes `--json`. The [CLI reference](../../docs/reference/events-daemon-cli.md) lists them all.

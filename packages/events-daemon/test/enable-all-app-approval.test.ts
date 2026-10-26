@@ -6,7 +6,17 @@ import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
 import { run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT } from '../src/domain/lifecycle.ts';
-import { DAVID, dryRun, type LaneHarness, RULE, rule, withLaneOwner } from './support/lane-harness.ts';
+import { DISABLE_ALL_SAID } from '../src/operations/disable-all.ts';
+import {
+  DAVID,
+  dryRun,
+  type LaneHarness,
+  RULE,
+  rule,
+  structured,
+  tool,
+  withLaneOwner,
+} from './support/lane-harness.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /*
@@ -321,9 +331,9 @@ test('the app switches the event service on: only the enable-all approval it was
   });
 });
 
-test('switching on: the attested test build approves as itself; the terminal approve with its typed challenge is unchanged', {
+test('switching on: the attested test build approves as itself; switching off says what it did; the terminal approve is unchanged', {
   skip: WINDOWS_SKIP,
-}, async () => {
+}, async (t) => {
   await withLaneOwner(async (harness) => {
     const { stateDir } = harness;
     await ruleOn(harness);
@@ -338,10 +348,27 @@ test('switching on: the attested test build approves as itself; the terminal app
     assert.equal((JSON.parse(fromTestBuild.stdout) as { approvedBy: string }).approvedBy, 'desktop-app (test build)');
     assert.equal(await switchedOn(stateDir), true);
 
-    // Switch off (a tightening, at once), then on again at the terminal: approve asks for the challenge, as before.
+    // Switch off: a tightening, at once, from anywhere, whose result says what it did in plain words.
     const off = await cli(stateDir, ['--json', 'disable-all']);
     assert.equal(off.code, 0, off.stderr);
+    t.diagnostic(`disable-all --json: ${off.stdout.trim()}`);
+    const offResult = JSON.parse(off.stdout) as Record<string, unknown>;
+    assert.deepEqual(Object.keys(offResult).sort(), ['enabled', 'paused', 'said', 'switchGeneration']);
+    assert.deepEqual([offResult.enabled, offResult.paused, offResult.said], [false, false, DISABLE_ALL_SAID]);
     assert.equal(await switchedOn(stateDir), false);
+    // What it says holds: the rule is kept, still on, for the next switch-on.
+    assert.deepEqual(
+      ((await harness.control.request('rules-list')) as { version: number; state: string | null }[]).map(
+        (row) => `${row.version}:${row.state}`,
+      ),
+      ['1:active'],
+    );
+    // An agent may switch off too, over MCP, and reads the same words.
+    const david = await harness.window(DAVID);
+    const viaMcp = structured(await tool(david, 'events_disable_all'));
+    assert.deepEqual([viaMcp.enabled, viaMcp.said], [false, DISABLE_ALL_SAID]);
+
+    // Then on again at the terminal: approve asks for the challenge, as before.
     const second = await prepare(stateDir);
     const typed = await cli(stateDir, ['approve', second.approvalId], {
       typeChallenge: true,
