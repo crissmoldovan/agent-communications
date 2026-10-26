@@ -2,6 +2,7 @@
 import type { JsonObject, JsonValue } from '../json.ts';
 import { setOwn } from '../own-property.ts';
 import { Cursor, lineTree, RuleTextFailure, type TextLine } from './lines.ts';
+import { parseSessionTarget, type SessionParseHelpers } from './session.ts';
 import type { RuleTextError, RuleTextParseResult } from './types.ts';
 import {
   CHANNELS,
@@ -468,7 +469,10 @@ function representationReader(cursor: Cursor, target: Record_, word: 'plain' | '
   };
 }
 
-const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'raw'];
+const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'session', 'raw'];
+
+/** What the session target's parser (`session.ts`) borrows from this one. */
+const SESSION_HELPERS: SessionParseHelpers = { targetHead, clauses, block, field, noChildren };
 
 function thenSection(cursor: Cursor, line: TextLine, state: State): void {
   cursor.take('then');
@@ -567,8 +571,9 @@ function target(line: TextLine): JsonValue {
     noChildren(line, 'a stream');
     return target;
   }
+  if (cursor.take('session')) return parseSessionTarget(cursor, line, SESSION_HELPERS);
   const word = cursor.peekWord();
-  if (word === 'session' || word === 'linear')
+  if (word === 'linear')
     return cursor.fail(
       `a ${word} target is not in this version of the rule text yet; write it as raw followed by its JSON document`,
       at,

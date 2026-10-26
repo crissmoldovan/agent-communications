@@ -2,6 +2,7 @@
 import { canonicalJson, type JsonValue } from '../json.ts';
 import { EventsError } from '../result.ts';
 import { parseRuleText } from './parse.ts';
+import { sessionTargetLines } from './session.ts';
 import {
   CHANNELS,
   DEFAULT_QUEUE_RETENTION,
@@ -345,6 +346,8 @@ function targetLines(target: JsonValue): string[] {
         subscriberId === undefined ? '' : `, to subscriber ${formatName(subscriberId)} version ${subscriberVersion}`;
       return [`  stream ${head}${to}${representation === undefined ? '' : `, ${representation}`}`];
     }
+    case 'session':
+      return sessionTargetLines(target) ?? raw;
     default:
       return raw;
   }

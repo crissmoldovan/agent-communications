@@ -688,7 +688,8 @@ test('errors: an unknown keyword is named where it stands, with the keyword it i
   assert.deepEqual(target, {
     line: 5,
     column: 3,
-    message: 'a target starts with dry run, queue, webhook, stream or raw; found "queu". Did you mean "queue"?',
+    message:
+      'a target starts with dry run, queue, webhook, stream, session or raw; found "queu". Did you mean "queue"?',
   });
   const [inAsk] = errorsOf([...VALID, 'ask jev, version 1', '  questoin "x"'].join('\n'));
   assert.deepEqual(inAsk, {
@@ -749,7 +750,7 @@ test('errors: each mistake is reported, in order, with the column of what is wro
     'match subject contains "unclosed',
     'then',
     '  dry run log, version 1, keep 7 weeks',
-    '  session working in /example/home/acme',
+    '  session triage, version 1',
     'raw /a/b = 1',
   ].join('\n');
   assert.deepEqual(errorsOf(text), [
@@ -768,9 +769,8 @@ test('errors: each mistake is reported, in order, with the column of what is wro
     },
     {
       line: 6,
-      column: 3,
-      message:
-        'a session target is not in this version of the rule text yet; write it as raw followed by its JSON document',
+      column: 28,
+      message: 'a session says where it is found: working in <folder>, or in lane <name>',
     },
     { line: 7, column: 5, message: 'raw names one top-level field as a JSON Pointer, such as /retention' },
   ]);

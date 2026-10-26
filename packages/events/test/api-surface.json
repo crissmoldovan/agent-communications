@@ -137,6 +137,7 @@
   "resendEmailStatusChangedV1",
   "slackMessagePostedV1",
   "sourceSchema",
+  "targetQueues",
   "toAsciiDomain",
   "unmappedContextFields",
   "utf8ByteLength",
