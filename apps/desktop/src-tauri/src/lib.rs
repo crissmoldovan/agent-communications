@@ -2,6 +2,7 @@
 
 pub mod allowlist;
 pub mod commands;
+pub mod connections;
 pub mod deeplink;
 pub mod event_service;
 pub mod grammar;

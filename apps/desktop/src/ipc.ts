@@ -89,6 +89,17 @@ export type QueueState = 'open' | 'done' | 'dismissed' | 'all';
 export const QUEUE_CHANNELS = ['gmail', 'slack', 'resend', 'whatsapp'] as const;
 export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
 
+/**
+ * The apps Connections adds a server to or takes one from (0.32.0, `connections.rs`, `McpClient`): core's clients, less
+ * `json`, which prints an entry rather than registering one. In core's order.
+ */
+export const MCP_CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemini', 'vscode'] as const;
+export type McpClient = (typeof MCP_CLIENTS)[number];
+
+/** The servers core registers (`connections.rs`, `McpServer`): its own, the four channels and the event service's. */
+export const MCP_SERVERS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
+export type McpServer = (typeof MCP_SERVERS)[number];
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -159,6 +170,11 @@ export type Call =
   // lane is 1 to 40 of `[a-z0-9-]`. Binding is never a call: the person binds at a terminal (`laneBind` below).
   | { kind: 'laneList' }
   | { kind: 'laneUnbind'; lane: string }
+  // Connections (0.32.0): core's channels, read; adding one server to one app, a change the person approves in
+  // Terminal (DA10); and taking one away, a tightening core applies at once.
+  | { kind: 'channels' }
+  | { kind: 'mcpInstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpUninstall'; client: McpClient; server: McpServer }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
