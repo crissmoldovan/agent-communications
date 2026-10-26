@@ -9,7 +9,7 @@ import { EventControlClient } from '../src/control/client.ts';
 import { eventPaths } from '../src/runtime/paths.ts';
 import type { ContextGenerator } from '../src/runtime/session-context.ts';
 import { SESSION_RETRY_LIMIT } from '../src/runtime/session-dispatcher.ts';
-import { releaseBackoffMs } from '../src/runtime/session-queue.ts';
+import { busyBackoffMs } from '../src/runtime/session-queue.ts';
 import { FakeRelay, type FakeRelayOptions } from './support/fake-relay.ts';
 import {
   ACCOUNT,
@@ -30,7 +30,7 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
  * counts stay out of an unbound window (5); a 409 that is not "busy" never loops the busy queue, and a match's model
  * part runs once (3); a FIFO named by a file part never stalls the event service (4). The second look's, as REVIEW2-n: a
  * delivery starts at most one session (1); a dead letter keeps no record, and a waiting match's kept file part goes only
- * while its folder is still allowed (2).
+ * while its folder is still allowed (2); a busy session never fails a match, and other failures still count (3).
  */
 
 const PERSON = 'person-setup:terminal';
@@ -272,14 +272,6 @@ function writeDatabase(harness: LaneHarness, sql: string): void {
   }
 }
 
-const released = (harness: LaneHarness): boolean =>
-  readDatabase(
-    harness.stateDir,
-    (database) =>
-      (database.prepare('SELECT COUNT(*) AS n FROM session_queue WHERE released_at IS NOT NULL').get() as { n: number })
-        .n > 0,
-  );
-
 async function settle(harness: LaneHarness, ms: number): Promise<void> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -373,31 +365,67 @@ test('REVIEW-3: a relay that repeats run ends cannot drive the busy queue faster
   });
 });
 
-test('REVIEW-3: a session never free fails its delivery after SESSION_RETRY_LIMIT tries, each further apart', {
+test('REVIEW2-3: a session someone keeps busy never fails the match: its busy tries are given back, further apart', {
   skip: WINDOWS_SKIP,
 }, async () => {
-  assert.deepEqual([1, 2, 3, 4, 12, 30].map(releaseBackoffMs), [0, 1_000, 2_000, 4_000, 300_000, 300_000]);
+  // An eighth of the time waited, at most five minutes.
+  assert.deepEqual(
+    [0, 8_000, 60_000, 40 * 60_000, 7 * 24 * 60 * 60_000].map(busyBackoffMs),
+    [0, 1_000, 7_500, 300_000, 300_000],
+  );
+  let generated = 0;
   await withReview(
     async ({ harness, relay, folder }) => {
-      const session = relay.addSession({ cwd: folder });
-      relay.startRunElsewhere(session.id);
-      await approveRule(harness, [queued(folder, false)]);
-      harness.mailbox.send('never free');
+      relay.addSession({ cwd: folder });
+      // Every run start loses the race to the person's own, until they stop.
+      relay.refuseRunsAsBusy = 1_000;
+      await approveRule(harness, [queued(folder)]);
+      harness.mailbox.send('the person keeps the session busy');
       await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
-      // Its tries so far, as if it had been let go and found busy again many times.
+      // As if it had already failed in other ways SESSION_RETRY_LIMIT - 1 times: one more failure would end it.
       writeDatabase(
         harness,
         `UPDATE deliveries SET attempts = ${SESSION_RETRY_LIMIT - 1} WHERE target_kind = 'session'`,
       );
-      await until(harness, () => relay.streamCount > 0, 'the follower');
-      relay.publishRunEnd(session.id);
-      // Let go after a backoff that grows with its tries; the backoff passes.
-      await until(harness, () => released(harness), 'the release');
-      writeDatabase(harness, "UPDATE deliveries SET next_at = 0 WHERE target_kind = 'session'");
+      const before = runPosts(relay);
+      await until(harness, () => runPosts(relay) >= before + 3, 'three more busy tries', 15_000);
+      const [waiting] = sessionDeliveries(harness);
+      assert.equal(waiting?.state, 'retryable', 'still waiting, never dead-lettered for being busy');
+      assert.equal(waiting?.last_error_code, 'SESSION_BUSY');
+      assert.equal(waiting?.attempts, SESSION_RETRY_LIMIT - 1, 'no busy try counted');
+      relay.refuseRunsAsBusy = 0;
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'delivered', 'the delivery', 15_000);
+      assert.equal(generated, 1, 'its model part ran once for all those tries');
+    },
+    {
+      reconcileMs: 100,
+      generate: async () => {
+        generated += 1;
+        return { ok: true, text: 'summary' };
+      },
+    },
+  );
+});
+
+test('REVIEW2-3: other failures still count: the try after SESSION_RETRY_LIMIT - 1 of them fails the match', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      relay.addSession({ cwd: folder });
+      relay.refuseNextRunAsBusy = true;
+      await approveRule(harness, [queued(folder, false)]);
+      harness.mailbox.send('busy, then a relay failure');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      writeDatabase(
+        harness,
+        `UPDATE deliveries SET attempts = ${SESSION_RETRY_LIMIT - 1} WHERE target_kind = 'session'`,
+      );
+      relay.failNextRunWith = 500;
       await until(harness, () => sessionDeliveries(harness)[0]?.state === 'dead-lettered', 'the dead letter');
-      assert.equal(sessionDeliveries(harness)[0]?.last_error_code, 'SESSION_BUSY');
+      assert.equal(sessionDeliveries(harness)[0]?.last_error_code, 'RELAY_FAILED');
       assert.equal(sessionDeliveries(harness)[0]?.attempts, SESSION_RETRY_LIMIT);
-      assert.equal(runPosts(relay), 0);
+      assert.equal(relay.runs.length, 0);
     },
     { reconcileMs: 100 },
   );

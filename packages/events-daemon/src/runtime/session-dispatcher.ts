@@ -461,9 +461,9 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
   async #busy(delivery: Delivery, relaySessionId: string): Promise<DispatchResult> {
     if (delivery.target.ifBusy === 'queue-only')
       return this.#leaveInQueue(delivery, 'lane' in delivery.target.find ? delivery.target.find.lane : undefined);
-    // Each time it finds the session busy is a try: a session never free for it fails the delivery, as a relay that
-    // keeps refusing does (security review of 0.33.0, finding 3).
-    if (delivery.row.attempts >= SESSION_RETRY_LIMIT) return this.#deadLetter(delivery, 'SESSION_BUSY');
+    // A busy session is not a failure: the try is given back, so a session the person keeps busy never fails the match.
+    // It waits, until its own expiry, each try further apart (security review of 0.33.0, second look, 3); a try is cheap,
+    // since its context was resolved once. Only other failures count against SESSION_RETRY_LIMIT.
     const now = this.#now();
     const queued = this.#store.immediate(() => {
       const database = this.#store.database;
@@ -472,7 +472,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       const changed = database
         .prepare(
           `UPDATE deliveries SET state = 'retryable', lease_until = NULL, next_at = expires_at,
-                  last_error_code = 'SESSION_BUSY', last_status = 409
+                  attempts = MAX(0, attempts - 1), last_error_code = 'SESSION_BUSY', last_status = 409
             WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(delivery.claim.id, delivery.claim.attemptId, delivery.claim.leaseToken, delivery.claim.leaseUntil).changes;
@@ -617,7 +617,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     return visible === true;
   }
 
-  /** A relay failure: tried again with a backoff, dead-lettered after `SESSION_RETRY_LIMIT` tries. */
+  /** A relay failure: tried again with a backoff, dead-lettered after `SESSION_RETRY_LIMIT` tries; busy ones are not. */
   #retry(delivery: Delivery, code: string): DispatchResult {
     // The claim already counted this try.
     const attempts = delivery.row.attempts;

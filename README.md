@@ -452,9 +452,11 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
 - **claude-stream keeps what it is sent.** The relay journals each prompt, the sender's words included, under its own
   retention: Agent Comms' retention settings do not reach it, and the approval preview says so.
 - **A busy session queues the match** until its run ends (or leaves it in the Queue, with `if busy leave it in the
-  queue`): `agent-events session-queue list` shows what waits, and `session-queue drop <delivery-id>` drops one. Each
-  time the match finds the session busy is a try, further apart each time; after 12 it fails. A session that becomes
-  one the relay only watches, or one fenced or moved, is not waited on: another is found or started.
+  queue`): `agent-events session-queue list` shows what waits, and `session-queue drop <delivery-id>` drops one. A busy
+  session is never a failure: the match waits until the session is free or the match itself expires, tried again
+  further apart the longer it has waited (at most every five minutes), and its context is resolved once however long it
+  waits. Other failures count: after 12 the match fails. A session that becomes one the relay only watches, or one
+  fenced or moved, is not waited on: another is found or started.
 - **A window you opened yourself** is not one the relay can prompt: a session found by a lane whose window claude-stream
   does not run becomes a lane item, as in 0.31.0, and wakes that window.
 - **A match starts at most one session.** If the session it started is fenced or moved to another executor, watched or
