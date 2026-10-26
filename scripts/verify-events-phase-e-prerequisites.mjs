@@ -42,10 +42,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.33.0 (rules edited in the app, design §3.1) is another, also only additive: the schema and vectors gain the person's
  * `rule-approve` owner wire, which approves a rule's activation from the app after its preview, its arguments (the
  * approval and the digest the preview showed) and its result. No existing branch changed.
+ *
+ * 0.33.0's second security look (2026-10-26) narrows the value 0.32.0's second look widened: on Windows and Linux
+ * nothing attests the app, and every person-only change from there is now sent to the terminal, so `judge-setup`'s
+ * result `approvedBy` names `desktop-app`, `desktop-app (test build)` or `terminal`, and `rule-approve`'s the first two.
+ * Neither ever names `desktop-app (unattested)`. No branch an earlier release shipped changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'e5dd746431a31c07916b011de9904571acbeb3aaff01459ac367bbe9f50d4d65',
+    'aaff0abf87bba6c9a051fe4270862666d888a57b7c50ed14bd8dcd689e17880b',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':

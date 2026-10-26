@@ -23,7 +23,7 @@ import {
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import { ANALYSE_PROVIDERS, ANALYSE_ROUTES, type AnalyseProvider } from '../domain/analyse-model.ts';
-import { PERSON_SETUP_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
+import { PERSON_CHANGE_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
 import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
   isActivityKey,
@@ -1185,9 +1185,9 @@ function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void 
   if (value.key !== 'stored' && value.key !== 'unchanged' && value.key !== 'none')
     throw new TypeError('a judge setup key state is unknown');
   assertText(value.destination, 'a judge setup destination');
-  // Where the person was (0.32.0, the second look at the release): the release app, the test build, the app unattested
-  // on Windows and Linux, or a terminal.
-  if (!(PERSON_SETUP_APPROVERS as readonly unknown[]).includes(value.approvedBy))
+  // Where the person was (0.32.0, the second look at the release): the release app, the test build, or a terminal. On
+  // Windows and Linux nothing attests the app, so a setup there is made at a terminal (0.33.0, the second look).
+  if (!(PERSON_CHANGE_APPROVERS as readonly unknown[]).includes(value.approvedBy))
     throw new TypeError('a judge setup is approved by the person, in the app or at a terminal');
 }
 
@@ -1798,7 +1798,7 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (
         typeof value.approvedBy !== 'string' ||
         value.approvedBy === 'terminal' ||
-        !(PERSON_SETUP_APPROVERS as readonly string[]).includes(value.approvedBy)
+        !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
       )
         throw new TypeError('a rule approval names the app it came from');
       assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a rule approval's completion");

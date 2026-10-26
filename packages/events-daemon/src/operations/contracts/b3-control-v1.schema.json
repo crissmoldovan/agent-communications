@@ -2644,7 +2644,7 @@
             "key": { "enum": ["stored", "unchanged", "none"] },
             "destination": { "type": "string", "minLength": 1 },
             "approvedBy": {
-              "enum": ["desktop-app", "desktop-app (test build)", "desktop-app (unattested)", "terminal"]
+              "enum": ["desktop-app", "desktop-app (test build)", "terminal"]
             }
           }
         },
@@ -2732,7 +2732,7 @@
             "ruleId": { "$ref": "#/$defs/id" },
             "version": { "$ref": "#/$defs/positive" },
             "approved": { "const": true },
-            "approvedBy": { "enum": ["desktop-app", "desktop-app (test build)", "desktop-app (unattested)"] },
+            "approvedBy": { "enum": ["desktop-app", "desktop-app (test build)"] },
             "completion": {
               "type": "object",
               "additionalProperties": false,
