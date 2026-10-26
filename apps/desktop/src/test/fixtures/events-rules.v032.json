@@ -1,0 +1,58 @@
+[
+  {
+    "rule_id": "build-alerts",
+    "version": 1,
+    "digest": "4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c4c",
+    "state": "active",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3D",
+    "authorization_activation_id": "act_example_build_alerts_1"
+  },
+  {
+    "rule_id": "david-on-slack",
+    "version": 1,
+    "digest": "2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a2a",
+    "state": "active",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3B",
+    "authorization_activation_id": "act_example_david_1"
+  },
+  {
+    "rule_id": "deploy-alerts",
+    "version": 1,
+    "digest": "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d",
+    "state": null,
+    "approval_id": null,
+    "authorization_activation_id": null
+  },
+  {
+    "rule_id": "invoices",
+    "version": 1,
+    "digest": "1f3a5c7e9b0d2f4a6c8e0b1d3f5a7c9e1b3d5f7a9c0e2b4d6f8a0c2e4b6d8f0a",
+    "state": "superseded",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3A",
+    "authorization_activation_id": "act_example_invoices_1"
+  },
+  {
+    "rule_id": "invoices",
+    "version": 2,
+    "digest": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "state": "active",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3P",
+    "authorization_activation_id": "act_example_invoices_2"
+  },
+  {
+    "rule_id": "mail-subject",
+    "version": 1,
+    "digest": "3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b3b",
+    "state": "active",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3C",
+    "authorization_activation_id": "act_example_mail_subject_1"
+  },
+  {
+    "rule_id": "newsletters",
+    "version": 1,
+    "digest": "6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e6e",
+    "state": "revoked",
+    "approval_id": "ap_1A2B3C4D5E6F7G8H9J0K1M2N3E",
+    "authorization_activation_id": "act_example_newsletters_1"
+  }
+]

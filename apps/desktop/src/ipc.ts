@@ -177,6 +177,16 @@ export type Call =
   // lane is 1 to 40 of `[a-z0-9-]`. Binding is never a call: the person binds at a terminal (`laneBind` below).
   | { kind: 'laneList' }
   | { kind: 'laneUnbind'; lane: string }
+  // The event service's rules and deliveries (0.32.0): one rule's versions, read; Turn off and Remove, tightenings the
+  // app applies itself (DA10). One delivery and its dry-run record, read; Try now and Stop trying, applied the same way.
+  // A rule is a checked rule id; a delivery a word of letters, digits, `_` and `-`. Switching a rule on is never a call.
+  | { kind: 'eventsRuleShow'; ruleId: string }
+  | { kind: 'eventsRuleDisable'; ruleId: string }
+  | { kind: 'eventsRuleRemove'; ruleId: string }
+  | { kind: 'eventsDeliveryShow'; deliveryId: string }
+  | { kind: 'eventsDryrunShow'; deliveryId: string }
+  | { kind: 'eventsDeliveryRetry'; deliveryId: string }
+  | { kind: 'eventsDeliveryDrop'; deliveryId: string }
   // Judge setup and AI provider keys (0.32.0): the list, a key's removal, and the person's own setup, applied by the CLI
   // itself. A key is never a call's: `providerKeySet` below hands it to the CLI on stdin.
   | { kind: 'providerList' }
