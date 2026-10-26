@@ -429,9 +429,22 @@ describe('Events → Deliveries', () => {
       },
     });
     renderApp(bridge, { screen: 'events' });
-    await openTab('Deliveries');
+    const view = await openTab('Deliveries');
     const line = await row(busy);
     expect(title(line)).toBe('acme → Agent session');
+    // It has a filter of its own, and is not one of those that will try again.
+    const show = within(view).getByRole('group', { name: 'Show' });
+    expect(
+      within(show)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual(['All 7', 'Will try again 2', 'Waiting for a session 1', 'Failed 1', 'Done 3']);
+    fireEvent.click(within(show).getByRole('button', { name: 'Waiting for a session 1' }));
+    await waitFor(() => expect(rowIds(view)).toEqual([busy]));
+    fireEvent.click(within(show).getByRole('button', { name: 'Will try again 2' }));
+    await waitFor(() => expect(rowIds(view).sort()).toEqual([ID.retry, ID.waiting].sort()));
+    fireEvent.click(within(show).getByRole('button', { name: 'All 7' }));
+    await row(busy);
     expect(within(line).getByText('Waiting for a session')).toBeTruthy();
     expect(line.textContent).toContain("passed on when the session's run ends");
     // Due only at its expiry: no next try is shown for it.

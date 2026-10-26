@@ -125,8 +125,11 @@ export function waitingForSession(row: { state: string; lastErrorCode?: string |
   return row.state === 'retryable' && row.lastErrorCode === 'SESSION_BUSY';
 }
 
-/** The filters the list offers, and which states each holds. */
-export type DeliveryGroup = 'trying' | 'failed' | 'done';
+/**
+ * The filters the list offers, and which states each holds. A match waiting for a busy session (0.33.0) is under
+ * Waiting for a session, not Will try again: it is not tried until the session's run ends.
+ */
+export type DeliveryGroup = 'trying' | 'waiting' | 'failed' | 'done';
 
 const GROUPS: Readonly<Record<string, DeliveryGroup>> = {
   queued: 'trying',
@@ -142,7 +145,10 @@ const GROUPS: Readonly<Record<string, DeliveryGroup>> = {
 };
 
 /** Which filter a delivery is under; an unknown state is under none but All. */
-export function deliveryGroup(row: Pick<DeliveryRow, 'state'>): DeliveryGroup | null {
+export function deliveryGroup(
+  row: Pick<DeliveryRow, 'state'> & { lastErrorCode?: string | null },
+): DeliveryGroup | null {
+  if (waitingForSession(row)) return 'waiting';
   return GROUPS[row.state] ?? null;
 }
 
