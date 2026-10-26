@@ -24,7 +24,8 @@ test('D11: the D owner composition always creates a concrete visibility fence be
   try {
     const composition = createPhaseDWhatsAppOwnerComposition({
       database,
-      eventOperations: openWhatsAppEventOperations({ configDir }),
+      // A temporary home: the channel's other folders are never the person's own.
+      eventOperations: openWhatsAppEventOperations({ configDir, env: { HOME: stateDir, USERPROFILE: stateDir } }),
     });
     let writes = 0;
     const visible = await composition.visibilityFence.withCurrentSseFrameVisibility(
@@ -54,7 +55,8 @@ test('D11: a supplied retained-content constructor registers each participant ex
     let constructors = 0;
     const composition = createPhaseDWhatsAppOwnerComposition({
       database,
-      eventOperations: openWhatsAppEventOperations({ configDir }),
+      // A temporary home: the channel's other folders are never the person's own.
+      eventOperations: openWhatsAppEventOperations({ configDir, env: { HOME: stateDir, USERPROFILE: stateDir } }),
       createRetainedContentParticipants: () => {
         constructors += 1;
         return {

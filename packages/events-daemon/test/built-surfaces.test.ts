@@ -53,7 +53,16 @@ async function referenceFixture(): Promise<{ readonly root: string; readonly par
 test('BOOT-B1/B3: the built command has clean help and its MCP server exposes the paired content-free control tools', async () => {
   const state = await mkdtemp(join(tmpdir(), 'events-daemon-state-'));
   try {
-    const env = { ...process.env, AGENT_COMMS_STATE_DIR: state, NO_COLOR: '1' };
+    // Every folder pinned under the test's own, and a temporary home: the built command never reads the person's.
+    const env = {
+      ...process.env,
+      HOME: state,
+      USERPROFILE: state,
+      AGENT_COMMS_CONFIG_DIR: join(state, 'config'),
+      AGENT_COMMS_STATE_DIR: state,
+      AGENT_COMMS_DATA_DIR: join(state, 'data'),
+      NO_COLOR: '1',
+    };
     const help = await run(process.execPath, ['--import', PRELOAD, CLI, '--help'], { env });
     assert.match(help.stdout, /Usage: agent-events/);
     assert.doesNotMatch(help.stdout, /ExperimentalWarning/, 'the command keeps its user-facing output on stdout clean');

@@ -1552,7 +1552,8 @@ test('agentcomms: a command that takes no approval is refused one as usage, befo
 test('a dry run, or a migration with nothing to rename, takes no approval: the id is refused as usage, and nothing is shown or claimed', async () => {
   // The daily check off: the refusal is the path's own, whatever the notice would have said.
   const m = machine({ AGENT_COMMS_UPDATE_CHECK: 'off' });
-  const later = await preparedFor(m, updateLevelChange(m.core, 'never'));
+  // The machine's own environment, with its temporary home: the update job is looked for there, never in the real one.
+  const later = await preparedFor(m, updateLevelChange(m.core, 'never', { env: m.env }));
   const configFile = join(m.core.paths.configDir, 'config.json');
   const before = readFileSync(configFile, 'utf8');
   const { call, close } = await connect(m);
