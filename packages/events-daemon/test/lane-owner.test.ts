@@ -99,6 +99,10 @@ const rule = (version: number, targets: readonly Record<string, unknown>[]) => (
 });
 
 async function cli(stateDir: string, argv: readonly string[], env: NodeJS.ProcessEnv = {}) {
+  // `lane bind` is a person's, at an interactive terminal, who types the lane's name: the test is that person.
+  const binding = argv[0] === 'lane' && argv[1] === 'bind';
+  const stdin = Object.assign(new PassThrough(), { isTTY: binding });
+  if (binding) stdin.write(`${argv[2]}\n`);
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   let out = '';
@@ -112,9 +116,9 @@ async function cli(stateDir: string, argv: readonly string[], env: NodeJS.Proces
   const code = await run(['--state-dir', stateDir, ...argv], {
     env,
     streams: {
-      stdin: Object.assign(new PassThrough(), { isTTY: false }),
-      stdout: Object.assign(stdout, { isTTY: false }),
-      stderr: Object.assign(stderr, { isTTY: false }),
+      stdin,
+      stdout: Object.assign(stdout, { isTTY: binding }),
+      stderr: Object.assign(stderr, { isTTY: binding }),
     },
   });
   await new Promise((resolve) => setImmediate(resolve));
@@ -439,10 +443,34 @@ test('LANE-E: a bound window is woken by a new item with a pointer and no sender
     assert.ok(beats.length >= 1, 'progress while it waited');
     assert.deepEqual(structured(await tool(david, 'events_wait', { lane: 'david', seconds: 1 })), { waiting: true });
 
+    // A wait the client cancels stops its heartbeat and ends its wait in the owner, so it takes no item with it.
+    const cancelledId = david.nextId();
+    const cancelled = tool(david, 'events_wait', { lane: 'david', seconds: 30 }, { progressToken: 'wait-2' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const beatsFor = () =>
+      david.notifications.filter(
+        (message) =>
+          message.method === 'notifications/progress' &&
+          (message.params as { progressToken?: unknown }).progressToken === 'wait-2',
+      ).length;
+    assert.ok(beatsFor() >= 1, 'it was beating while it waited');
+    await david.notify('notifications/cancelled', { requestId: cancelledId, reason: 'the person moved on' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const atCancel = beatsFor();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(beatsFor(), atCancel, 'no heartbeat after the cancel');
+    void cancelled;
+    await deliver(harness, 'David once more: after the cancelled wait');
+    assert.match(
+      resultText(await tool(david, 'events_watch', { lane: 'david' })),
+      /^1 new item in lane david /u,
+      'the cancelled wait ended in the owner and took nothing: the next watch wakes on the new item',
+    );
+
     const everything = [...david.wire, ...other.wire]
       .filter((line) => !line.includes('"events_lane_item"') && !line.includes('untrusted-content'))
       .join('\n');
-    for (const content of [SENDER, SENDER_NAME, 'David contract', 'second question', 'snippet of'])
+    for (const content of [SENDER, SENDER_NAME, 'David contract', 'second question', 'snippet of', 'once more'])
       assert.ok(!everything.includes(content), `no wake, pointer, list or refusal carries ${content}`);
     assert.ok(!other.wire.join('\n').includes('David contract'), 'the unbound window never saw the content');
   });
@@ -532,5 +560,84 @@ test('LANE-E: a binding follows its lane across a new approved target version, a
     assert.equal(structured(await tool(david, 'events_lane_whoami')).lane, null, 'the binding ended');
     const listed = JSON.parse((await cli(harness.stateDir, ['lane', 'list', '--json'])).out) as { lanes: unknown[] };
     assert.deepEqual(listed.lanes, []);
+  });
+});
+
+// Review of 0.31.0, finding 5: events_deliveries_list named every lane target's deliveries to every MCP caller.
+test('LANE-E: a lane target’s deliveries are listed over MCP only to the window bound to the lane (B4)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A delivery the other window must not see listed');
+    const targets = (rows: unknown) =>
+      [...new Set((rows as Array<{ targetId: string }>).map((row) => row.targetId))].sort();
+    const listed = (message: RawMessage) => {
+      assert.notEqual(message.result?.isError, true, resultText(message));
+      return JSON.parse(resultText(message)) as unknown;
+    };
+    const person = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as unknown;
+    assert.deepEqual(targets(person), ['dry-david', 'lane-david'], 'the person sees every delivery');
+    assert.deepEqual(targets(listed(await tool(david, 'events_deliveries_list'))), ['dry-david', 'lane-david']);
+    assert.deepEqual(
+      targets(listed(await tool(other, 'events_deliveries_list'))),
+      ['dry-david'],
+      'a window not bound to the lane sees none of its target’s deliveries',
+    );
+  });
+});
+
+// Review of 0.31.0, finding 6: activating a rule that adds matches to a bound lane must say which window reads them.
+test('LANE-E: the approval preview of a rule sending to a bound lane names the window bound to it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [lane(1)]);
+    const david = await harness.window(DAVID);
+    structured(await tool(david, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    const since = (
+      JSON.parse((await cli(harness.stateDir, ['lane', 'list', '--json'])).out) as {
+        lanes: Array<{ binding: { since: string } }>;
+      }
+    ).lanes[0]?.binding.since;
+    // A second rule sends more matches to the same lane's target.
+    await harness.control.request('rule-create', { document: { ...rule(1, [lane(1)]), ruleId: 'david-again' } });
+    const planned = (await harness.control.request('rule-enable', { ruleId: 'david-again', version: 1 })) as {
+      approvalId: string;
+      binding: { digest: string };
+    };
+    const shown = await cli(harness.stateDir, [
+      'approval',
+      'view',
+      planned.approvalId,
+      '--digest',
+      planned.binding.digest,
+    ]);
+    assert.equal(shown.code, 0, shown.err);
+    assert.match(
+      shown.out,
+      new RegExp(
+        `^Items in lane david will be read by the window bound to it: /example/home/work/david-project \\(claude-code\\), since ${since?.replaceAll('.', '\\.')}\\.$`,
+        'mu',
+      ),
+    );
+    assert.doesNotMatch(shown.out, /can be read by the agent window you bind to it/u);
+    // Over MCP the same view names no window (B4).
+    const viewed = await tool(david, 'events_approval_view', {
+      approvalId: planned.approvalId,
+      digest: planned.binding.digest,
+    });
+    assert.doesNotMatch(JSON.stringify(viewed), /david-project|claude-code/u);
   });
 });

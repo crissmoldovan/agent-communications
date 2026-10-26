@@ -25,6 +25,7 @@ import {
   isActivityKey,
   isClaudeCodeSessionId,
   isLaneName,
+  type LaneBindingV1,
   type LaneBindResultV1,
   type LaneListResultV1,
   type LaneUnbindResultV1,
@@ -1454,7 +1455,26 @@ export interface B3ApprovalPreviewTerminalView {
  * preview representation; it never consumes a secret operation or claims the approval. A B3 v3 rule preview naming a
  * Laya judge also carries D11's Laya limits, rendered after the preview.
  */
-export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerminalView {
+/**
+ * What the terminal knows beside a view: each lane's binding, from the person's `lane list`. A preview of a rule that
+ * sends to a bound lane names the window that will read it (review of 0.31.0). Never part of the v1 view itself, so no
+ * MCP caller is told another window's folder through an approval view (routing B4).
+ */
+export interface B3ApprovalPreviewContext {
+  readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
+}
+
+/** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
+function boundWindowText(binding: LaneBindingV1): string {
+  const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
+  const client = binding.window.client === null ? '' : ` (${binding.window.client.name})`;
+  return `${folder}${client}, since ${binding.since}`;
+}
+
+export function renderB3ApprovalPreviewV1(
+  value: unknown,
+  context: B3ApprovalPreviewContext = {},
+): B3ApprovalPreviewTerminalView {
   if (
     !isRecord(value) ||
     typeof value.kind !== 'string' ||
@@ -1488,7 +1508,12 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
               target.kind === 'queue' && target.lane !== undefined ? [target.lane.name] : [],
             ),
           ),
-        ].map((name) => `Items in lane ${name} can be read by the agent window you bind to it.`)
+        ].map((name) => {
+          const binding = context.lanes?.find((lane) => lane.name === name)?.binding ?? null;
+          return binding === null
+            ? `Items in lane ${name} can be read by the agent window you bind to it.`
+            : `Items in lane ${name} will be read by the window bound to it: ${boundWindowText(binding)}.`;
+        })
       : [];
   const structured = {
     approvalId: value.approvalId,

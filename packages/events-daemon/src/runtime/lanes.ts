@@ -17,7 +17,7 @@ import {
 } from '../domain/lanes.ts';
 import type { QueueChannel } from '../domain/queue-target.ts';
 import type { EventDatabase } from '../store/database.ts';
-import type { QueueItemV1, QueueScope, QueueStore } from './queue.ts';
+import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
 
 /**
  * Routing's lanes in the owner (routing design 2026-10-25, §3 and §6): which window the person bound to each lane, who
@@ -30,10 +30,10 @@ import type { QueueItemV1, QueueScope, QueueStore } from './queue.ts';
  *   when neither has, the one whose grouped activity key equals the binding's.
  * - **A binding ends** on unbind, when no active rule's queue target carries its lane any more, and with disable-all
  *   (the database's own triggers, migration 25), so every path that moves a rule pointer ends it.
- * - **A wake** names one open item of the lane that arrived after the binding (B3) and that the window has not been
- *   woken for. Which items have woken a window is kept here, in memory: after a restart a window may be woken again for
- *   an item still open, and no item is ever missed. Tasks live here too, and end on completion, cancellation, unbinding
- *   or the service stopping; none times out by itself.
+ * - **A wake** names the oldest open item of the lane that arrived after the binding (B3) and lies past the binding's
+ *   high-water mark (append time, then id), and moves the mark to it. The mark is kept here, in memory: after a restart
+ *   a window may be woken again for an item still open, and no item is ever missed. Tasks live here too, and end on
+ *   completion, cancellation, unbinding or the service stopping; none times out by itself.
  */
 
 const TASK_ID = /^lt_[0-9a-f]{32}$/u;
@@ -119,7 +119,7 @@ interface Waiter {
 
 export interface LaneServiceOptions {
   readonly store: EventDatabase;
-  readonly queue: Pick<QueueStore, 'laneItem' | 'laneWakeRows' | 'openByLane'>;
+  readonly queue: Pick<QueueStore, 'laneItem' | 'laneWake' | 'openByLane'>;
   readonly now?: (() => number) | undefined;
   /** How often a long-poll looks again without being told of an append (an item reopened, say). */
   readonly recheckMs?: number | undefined;
@@ -172,6 +172,10 @@ function noSuchWatch(): never {
   });
 }
 
+function waitCancelled(): CommsError {
+  return new CommsError('TRANSIENT', 'the wait was cancelled: its caller has gone');
+}
+
 function stopped(): CommsError {
   return new CommsError('NOT_FOUND', 'the local event service stopped, so this wait ended', {
     hint: 'Call events_wait again once the event service is running.',
@@ -179,15 +183,20 @@ function stopped(): CommsError {
 }
 
 function sameWindow(owner: Task['owner'], caller: LaneWindowIdentity): boolean {
-  if (owner.sessionId !== null || caller.sessionId !== null) return owner.sessionId === caller.sessionId;
-  return owner.grouped && caller.grouped && owner.activityKey === caller.activityKey;
+  return isBoundWindow({ session_id: owner.sessionId, activity_key: owner.grouped ? owner.activityKey : null }, caller);
 }
 
-/** §3.3: the session id decides when either side has one; otherwise a grouped activity key, and only a grouped one. */
-function isBoundWindow(binding: BindingRow, caller: LaneWindowIdentity): boolean {
-  if (binding.session_id !== null || caller.sessionId !== null)
-    return binding.session_id !== null && binding.session_id === caller.sessionId;
-  return caller.grouped && binding.activity_key !== null && binding.activity_key === caller.activityKey;
+/**
+ * §3.3: the session id decides when either side has one; otherwise a grouped activity key, and only a grouped one.
+ * A binding that recorded both — a Claude Code window with a grouped key — needs both to match (review of 0.31.0).
+ */
+function isBoundWindow(binding: Pick<BindingRow, 'session_id' | 'activity_key'>, caller: LaneWindowIdentity): boolean {
+  const key = binding.activity_key !== null && caller.grouped && binding.activity_key === caller.activityKey;
+  if (binding.session_id !== null || caller.sessionId !== null) {
+    if (binding.session_id === null || binding.session_id !== caller.sessionId) return false;
+    return binding.activity_key === null || key;
+  }
+  return key;
 }
 
 function bindingView(row: BindingRow, home: string): LaneBindingV1 {
@@ -224,8 +233,11 @@ export class LaneService {
   readonly #recheckMs: number;
   readonly #home: string;
   readonly #tasks = new Map<string, Task>();
-  /** Per binding, the items it has been woken for: in memory, so a restart wakes again rather than misses. */
-  readonly #woken = new Map<string, Set<string>>();
+  /**
+   * Per binding, its high-water mark: the last item a wake named. Wakes name only items past it, oldest first, so none
+   * is named twice however many are open. In memory, so a restart wakes again from the binding rather than misses.
+   */
+  readonly #marks = new Map<string, LaneWakeMark>();
   readonly #waiters = new Set<Waiter>();
   #stopped = false;
 
@@ -237,10 +249,30 @@ export class LaneService {
     this.#home = options.home ?? homeDirectory();
   }
 
-  /** Records a window the event service's MCP server reported, so the person can bind it by either id (B1). */
+  /**
+   * Records a window the event service's MCP server reported, so the person can bind it by either id (B1). A report
+   * may refresh a recorded window's folder, client and time, never its identity: one that names another Claude Code
+   * session id for a recorded activity key — or none for one that had one, or flips whether it was grouped — is
+   * refused and changes nothing, so no process can redirect a binding the person makes by that key (review of 0.31.0).
+   */
   seen(window: LaneWindowIdentity): void {
     const now = this.#now();
     this.#store.immediate(() => {
+      const recorded = this.#store.database
+        .prepare('SELECT session_id, grouped FROM lane_windows WHERE activity_key = ?')
+        .get(window.activityKey) as { session_id: string | null; grouped: number } | undefined;
+      if (
+        recorded !== undefined &&
+        (recorded.session_id !== window.sessionId || recorded.grouped !== (window.grouped ? 1 : 0))
+      )
+        throw new CommsError(
+          'BAD_DATA',
+          'this activity session was reported before with another Claude Code session id or grouping, so the event service refused this report and changed nothing',
+          {
+            hint: 'A window keeps the ids it was first reported with; a report that changes them is not that window.',
+            details: { reason: 'WINDOW_REPORT_CONFLICT' },
+          },
+        );
       this.#store.database
         .prepare(
           `INSERT INTO lane_windows (activity_key, session_id, grouped, folder, client_name, client_version, last_seen_at)
@@ -402,10 +434,33 @@ export class LaneService {
           .prepare('DELETE FROM lane_bindings WHERE lane = ? AND binding_id = ?')
           .run(lane, binding.binding_id),
       );
-      this.#woken.delete(binding.binding_id);
+      this.#marks.delete(binding.binding_id);
     }
     this.#settleAll();
     return { lane, unbound: true };
+  }
+
+  /**
+   * An agent window's delivery list (B4): a lane target's deliveries only for the window bound to that lane. Each row
+   * names its exact target version, whose document says whether it is a lane, as the person approved it.
+   */
+  visibleDeliveries(rows: unknown, caller: LaneWindowIdentity): unknown {
+    if (!Array.isArray(rows)) return rows;
+    const lanes = new Map(
+      (
+        this.#store.database
+          .prepare(
+            "SELECT target_id, version, json_extract(document, '$.lane.name') AS lane FROM target_versions WHERE json_extract(document, '$.lane.name') IS NOT NULL",
+          )
+          .all() as Array<{ target_id: string; version: number; lane: string }>
+      ).map((row) => [`${row.target_id}@${row.version}`, row.lane]),
+    );
+    const mine = this.#bindingFor(caller)?.lane ?? null;
+    return rows.filter((row) => {
+      const target = row as { readonly targetId?: unknown; readonly targetVersion?: unknown };
+      const lane = lanes.get(`${String(target.targetId)}@${String(target.targetVersion)}`);
+      return lane === undefined || lane === mine;
+    });
   }
 
   /** What an MCP caller may see of the queue (B3, B4): items outside lanes, and its own lane's since it was bound. */
@@ -459,7 +514,12 @@ export class LaneService {
   }
 
   /** `events_wait`: until the lane's next item or `seconds` (1–50), whichever is first (§3.6). */
-  async wait(laneValue: unknown, seconds: unknown, caller: LaneWindowIdentity): Promise<LaneWaitResultV1> {
+  async wait(
+    laneValue: unknown,
+    seconds: unknown,
+    caller: LaneWindowIdentity,
+    signal?: AbortSignal,
+  ): Promise<LaneWaitResultV1> {
     const lane = requireLaneName(laneValue);
     if (!Number.isSafeInteger(seconds) || (seconds as number) < 1 || (seconds as number) > LANE_WAIT_MAX_SECONDS)
       usage(`seconds is a whole number from 1 to ${LANE_WAIT_MAX_SECONDS}`);
@@ -470,6 +530,8 @@ export class LaneService {
     };
     const first = bound();
     if (first === undefined) return notBoundHere(lane);
+    // A caller that has gone takes no item: an aborted wait ends before it looks, and as soon as it is aborted.
+    if (signal?.aborted) throw waitCancelled();
     const woke = this.#wake(first);
     if (woke !== null) return { pointer: woke };
     if (this.#stopped) throw stopped();
@@ -480,6 +542,7 @@ export class LaneService {
         settled = true;
         clearTimeout(deadline);
         clearInterval(recheck);
+        signal?.removeEventListener('abort', onAbort);
         this.#waiters.delete(waiter);
         outcome();
       };
@@ -501,8 +564,10 @@ export class LaneService {
         },
         stop: (error) => finish(() => reject(error)),
       };
+      const onAbort = () => finish(() => reject(waitCancelled()));
       const deadline = setTimeout(() => finish(() => resolve({ waiting: true })), (seconds as number) * 1_000);
       const recheck = setInterval(() => waiter.check(), this.#recheckMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.#waiters.add(waiter);
     });
   }
@@ -525,7 +590,7 @@ export class LaneService {
   close(): void {
     this.#stopped = true;
     this.#tasks.clear();
-    this.#woken.clear();
+    this.#marks.clear();
     for (const waiter of [...this.#waiters]) waiter.stop(stopped());
   }
 
@@ -560,33 +625,18 @@ export class LaneService {
     task.lastUpdatedAt = this.#now();
   }
 
-  /** The oldest open item of the binding's lane, after its `since`, that it has not been woken for — marked woken. */
+  /** The oldest open item of the binding's lane, after its `since` and past its mark — and the mark moves to it. */
   #wake(binding: BindingRow): LanePointerResultV1 | null {
-    const rows = this.#queue.laneWakeRows(binding.lane, binding.since);
-    let woken = this.#woken.get(binding.binding_id);
-    if (woken === undefined) {
-      woken = new Set();
-      this.#woken.set(binding.binding_id, woken);
-    }
-    const open = new Set(rows.map((row) => row.id));
-    for (const id of woken) if (!open.has(id)) woken.delete(id);
-    const fresh = rows.filter((row) => !woken.has(row.id));
-    const next = fresh[0];
+    const { next, waiting } = this.#queue.laneWake(binding.lane, binding.since, this.#marks.get(binding.binding_id));
     if (next === undefined) return null;
-    woken.add(next.id);
-    const pointer = {
-      lane: binding.lane,
-      itemId: next.id,
-      channel: next.channel,
-      ruleId: next.ruleId,
-      waiting: fresh.length,
-    };
+    this.#marks.set(binding.binding_id, { appendedAt: next.appendedAt, id: next.id });
+    const pointer = { lane: binding.lane, itemId: next.id, channel: next.channel, ruleId: next.ruleId, waiting };
     return {
       lane: binding.lane,
       item: next.id,
       channel: next.channel,
       rule: { id: next.ruleId },
-      waiting: fresh.length,
+      waiting,
       text: lanePointerText(pointer),
     };
   }

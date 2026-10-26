@@ -6,6 +6,7 @@ import {
   type AuditLog,
   CommsError,
   type ConfigStore,
+  isCommsError,
   openCore,
   resolvePaths,
   sha256Hex,
@@ -1701,8 +1702,14 @@ async function handleControl(
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
+    // Routing B4 (review of 0.31.0): an agent window's delivery list leaves out every lane it is not bound to.
+    const { caller, args } =
+      request.operation === OWNER_CONTROL_WIRES.deliveriesList
+        ? splitCaller(request.args)
+        : { caller: undefined, args: request.args };
     try {
-      return await b3OwnerService.handle({ operation: request.operation, args: request.args, origin: request.origin });
+      const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
+      return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.
       if (error instanceof EventDomainError)
@@ -1774,7 +1781,7 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.laneTaskCancel:
       return lanes.taskCancel(request.args.taskId, requiredCaller(request.args));
     case OWNER_CONTROL_WIRES.laneWait:
-      return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args));
+      return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args), request.signal);
     case OWNER_CONTROL_WIRES.laneItem:
       return lanes.item(request.args.itemId, requiredCaller(request.args));
     case OWNER_CONTROL_WIRES.catalogueList:
@@ -1861,7 +1868,12 @@ function requiredCaller(args: Readonly<Record<string, unknown>>): LaneWindowIden
 /** What a caller may see of the queue: everything for the person, and an agent window's lane scope for a window. */
 function callerScope(lanes: LaneService, caller: LaneWindowIdentity | undefined): QueueScope | undefined {
   if (caller === undefined) return undefined;
-  lanes.seen(caller);
+  try {
+    lanes.seen(caller);
+  } catch (error) {
+    // A report the lanes refuse (it names other ids for a recorded window) is not recorded; the scope still holds.
+    if (!isCommsError(error)) throw error;
+  }
   return lanes.scopeFor(caller);
 }
 

@@ -840,6 +840,35 @@ test('B3 CLI exceptions name their operation and strict parity rejects every MCP
   );
 });
 
+// Review of 0.31.0, finding 7: the daemon's MCP-only carve-out is routing's four window tools by name, no others.
+test('only the four lane window tools may be MCP-only daemon exceptions without an operation', () => {
+  const f = fixture();
+  f.registries['events-daemon'] = {
+    binary: 'agent-events',
+    commands: [],
+    groups: [],
+    tools: ['events_lane_whoami', 'events_watch', 'events_wait', 'events_lane_item', 'events_secret_peek'],
+  };
+  const windowRow = (tool) => ({
+    id: `events-daemon.${tool}`,
+    package: 'events-daemon',
+    cli: null,
+    mcp: tool,
+    status: 'exception',
+    reason: 'It means something only to the agent window that calls it.',
+  });
+  for (const tool of ['events_lane_whoami', 'events_watch', 'events_wait', 'events_lane_item'])
+    f.table.capabilities.push(windowRow(tool));
+  f.table.capabilities.push(windowRow('events_secret_peek'));
+  const problems = checkParity(f.table, f.registries, { strict: true });
+  assertNamed(problems, 'row "events-daemon.events_secret_peek" is a B3 exception but names no CLI command');
+  for (const tool of ['events_lane_whoami', 'events_watch', 'events_wait', 'events_lane_item'])
+    assert.ok(
+      !problems.some((problem) => problem.includes(`row "events-daemon.${tool}"`)),
+      `${tool} stays an MCP-only window exception: ${listed(problems)}`,
+    );
+});
+
 test('B3 exception parity rejects a CLI recorder swapped to another owner operation', () => {
   const changed = structuredClone(driven);
   changed.reports['events-daemon.run'].cli.calls = ['events-daemon:stop'];

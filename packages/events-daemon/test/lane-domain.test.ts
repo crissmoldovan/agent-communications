@@ -172,6 +172,38 @@ test('LANE-A: the approval preview says the bound window may read the lane’s i
     challenge: { approvalId: 'approval-plain', digest: 'digest-plain', challenge: 'plain', expiresAt: 1 },
   });
   assert.doesNotMatch(plain.terminal, /lane/u, 'a queue without a lane says nothing of windows');
+  // Review of 0.31.0: a lane already bound is read by that window, and the preview says which.
+  const bound = renderB3ApprovalPreviewV1(
+    {
+      kind: 'READY',
+      approvalId: 'approval-lane',
+      digest: 'digest-lane',
+      preview,
+      challenge: { approvalId: 'approval-lane', digest: 'digest-lane', challenge: 'lane-challenge', expiresAt: 1 },
+    },
+    {
+      lanes: [
+        {
+          name: 'david',
+          binding: {
+            window: {
+              sessionId: null,
+              activityKey: '0123456789abcdef',
+              folder: '/example/home/work/x',
+              folderShown: '~/work/x',
+              client: { name: 'claude-code', version: '2.1.310' },
+            },
+            since: '2026-10-26T09:00:00.000Z',
+          },
+        },
+      ],
+    },
+  );
+  assert.match(
+    bound.terminal,
+    /^Items in lane david will be read by the window bound to it: ~\/work\/x \(claude-code\), since 2026-10-26T09:00:00\.000Z\.$/mu,
+  );
+  assert.doesNotMatch(bound.terminal, /you bind to it/u);
 });
 
 test('LANE-A: the wake is a pointer the service writes, with no sender text (§2, §3.4)', () => {

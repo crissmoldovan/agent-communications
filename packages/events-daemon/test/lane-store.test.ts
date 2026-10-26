@@ -297,12 +297,13 @@ test('LANE-B: who the bound window is — the session id when either side has on
     lanes.bind('david', DAVID.sessionId as string);
     lanes.bind('billing', GROUPED_ONLY.activityKey);
     assert.equal(lanes.whoami(DAVID).lane, 'david');
-    assert.equal(lanes.whoami({ ...DAVID, activityKey: '9999999999999999' }).lane, 'david', 'the session id decides');
-    assert.equal(lanes.whoami({ ...DAVID, sessionId: null }).lane, null, 'no session id is not this binding’s window');
+    // The binding recorded the window's grouped key with its session id: a caller needs both (review finding 2).
+    assert.equal(lanes.whoami({ ...DAVID, activityKey: '9999999999999999' }).lane, null, 'the session id alone');
+    assert.equal(lanes.scopeFor({ ...DAVID, sessionId: null }).lane, null, 'the key alone');
     assert.equal(lanes.whoami(GROUPED_ONLY).lane, 'billing');
-    assert.equal(lanes.whoami({ ...GROUPED_ONLY, grouped: false }).lane, null, 'only a grouped key identifies');
+    assert.equal(lanes.scopeFor({ ...GROUPED_ONLY, grouped: false }).lane, null, 'only a grouped key identifies');
     assert.equal(
-      lanes.whoami({ ...GROUPED_ONLY, sessionId: OTHER.sessionId }).lane,
+      lanes.scopeFor({ ...GROUPED_ONLY, sessionId: OTHER.sessionId }).lane,
       null,
       'a window with a session id is not a session-less binding’s',
     );
@@ -550,5 +551,115 @@ test('LANE-B: a long-poll returns the pointer on a new item, or waiting at the e
     const unbound = lanes.wait('david', 30, DAVID);
     lanes.unbind('david');
     await assert.rejects(unbound, refused('APPROVAL_REQUIRED', /not bound to this window/u), 'unbinding ends a wait');
+  });
+});
+
+// Review of 0.31.0, finding 2: a self-reported window row could redirect a binding made by its activity key.
+test('LANE-B: a report cannot change the session id recorded for an activity key, and a binding needs both ids', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLanes(async ({ store, lanes }) => {
+    lanes.seen(DAVID);
+    const recorded = () =>
+      store.database.prepare('SELECT session_id FROM lane_windows WHERE activity_key = ?').get(DAVID.activityKey) as {
+        session_id: string | null;
+      };
+    for (const forged of [
+      { ...OTHER, activityKey: DAVID.activityKey },
+      { ...DAVID, sessionId: null },
+      { ...UNGROUPED, activityKey: DAVID.activityKey },
+    ])
+      assert.throws(
+        () => lanes.seen(forged),
+        refused('BAD_DATA', /another Claude Code session id/u),
+        JSON.stringify(forged.sessionId),
+      );
+    assert.equal(recorded().session_id, DAVID.sessionId, 'nothing was recorded');
+    assert.throws(() => lanes.whoami({ ...OTHER, activityKey: DAVID.activityKey }), refused('BAD_DATA', /refused/u));
+    lanes.seen(DAVID);
+    // A key first reported without a session id keeps that, too, and whether it was grouped.
+    lanes.seen(GROUPED_ONLY);
+    assert.throws(() => lanes.seen({ ...GROUPED_ONLY, sessionId: OTHER.sessionId }), refused('BAD_DATA', /refused/u));
+    assert.throws(() => lanes.seen({ ...GROUPED_ONLY, grouped: false }), refused('BAD_DATA', /refused/u));
+
+    // The person binds by the key the app lists: the binding is David's window, with both of its ids.
+    const bound = lanes.bind('david', DAVID.activityKey);
+    assert.equal(bound.binding.window.sessionId, DAVID.sessionId);
+    assert.equal(bound.binding.window.activityKey, DAVID.activityKey);
+    assert.equal(lanes.scopeFor(DAVID).lane, 'david');
+    for (const other of [
+      { ...OTHER, activityKey: DAVID.activityKey },
+      { ...DAVID, activityKey: OTHER.activityKey },
+      { ...DAVID, grouped: false },
+      { ...DAVID, sessionId: null },
+    ])
+      assert.equal(lanes.scopeFor(other).lane, null, `${JSON.stringify(other)} is not the bound window`);
+    // A binding made by session id for a window with no grouped key needs the session id alone.
+    lanes.unbind('david');
+    const sessionOnly = { ...OTHER, activityKey: 'cccccccccccccccc', grouped: false };
+    lanes.seen(sessionOnly);
+    assert.equal(lanes.bind('david', OTHER.sessionId as string).binding.window.activityKey, null);
+    assert.equal(lanes.scopeFor({ ...sessionOnly, activityKey: 'dddddddddddddddd' }).lane, 'david');
+  });
+});
+
+// Review of 0.31.0, finding 3: the wake read the first 500 open items before leaving out those already woken, so a
+// lane with more than 500 open items never woke again.
+test('LANE-B: with more than 500 open items a window still wakes on each next one, and never twice for one', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLanes(async ({ store, lanes, clock }) => {
+    lanes.seen(DAVID);
+    lanes.bind('david', DAVID.sessionId as string);
+    const seeded = new Set<string>();
+    for (let index = 0; index < 520; index += 1)
+      seeded.add(seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 1_000 + index }));
+    clock.value = NOW + 10 * 60_000;
+    const woken: string[] = [];
+    for (let index = 0; index < 520; index += 1) {
+      const task = lanes.watch('david', DAVID);
+      assert.equal(task.status, 'completed', `wake ${index + 1} of 520`);
+      woken.push(task.pointer?.item as string);
+      if (index === 0) assert.equal(task.pointer?.waiting, 520, 'the count is every open item waiting');
+    }
+    assert.equal(new Set(woken).size, 520, 'no item woke the window twice');
+    assert.deepEqual(new Set(woken), seeded, 'and every one woke it, oldest first');
+    assert.deepEqual(woken, [...seeded], 'in the order they arrived');
+    const next = lanes.watch('david', DAVID);
+    assert.equal(next.status, 'working', 'nothing new: the watch waits');
+    const fresh = seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 5 * 60_000 });
+    lanes.notifyAppended();
+    const done = lanes.taskGet(next.taskId, DAVID);
+    assert.equal(done.status, 'completed');
+    assert.equal(done.pointer?.item, fresh, 'the 521st item wakes it');
+    assert.equal(done.pointer?.waiting, 1);
+    // An item reopened behind the window's mark does not wake it again.
+    const first = woken[0] as string;
+    store.database.prepare("UPDATE queue_items SET state = 'done' WHERE id = ?").run(first);
+    store.database.prepare("UPDATE queue_items SET state = 'open' WHERE id = ?").run(first);
+    assert.equal(lanes.watch('david', DAVID).status, 'working');
+  });
+});
+
+// Review of 0.31.0, finding 4: a long-poll whose caller has gone must end, and must not take an item with it.
+test('LANE-B: a long-poll ends at once when its signal aborts, and the next item still wakes the window', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLanes(async ({ store, lanes, clock }) => {
+    lanes.seen(DAVID);
+    lanes.bind('david', DAVID.sessionId as string);
+    const abort = new AbortController();
+    const started = Date.now();
+    const waiting = lanes.wait('david', 30, DAVID, abort.signal);
+    setTimeout(() => abort.abort(), 50);
+    await assert.rejects(waiting, refused('TRANSIENT', /cancelled/u));
+    assert.ok(Date.now() - started < 5_000, 'it ended at once, not at its 30 seconds');
+    const gone = new AbortController();
+    gone.abort();
+    await assert.rejects(lanes.wait('david', 30, DAVID, gone.signal), refused('TRANSIENT', /cancelled/u));
+    clock.value = NOW + 5_000;
+    const item = seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 4_000 });
+    lanes.notifyAppended();
+    assert.equal(lanes.watch('david', DAVID).pointer?.item, item, 'the cancelled wait took nothing');
   });
 });

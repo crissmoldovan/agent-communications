@@ -69,6 +69,9 @@ async function serve(
   }
 
   const frames = new ControlFrameReader();
+  // A caller that closes its connection has given up on its request: a long-poll waiting for it stops.
+  const connection = new AbortController();
+  socket.once('close', () => connection.abort());
   let session: ReturnType<ControlSessions['create']> | null = null;
   let ended = false;
   let pending = Promise.resolve();
@@ -149,7 +152,7 @@ async function serve(
       write(socket, {
         ok: true,
         requestId: message.requestId,
-        data: await options.handle({ ...message, origin: active.clientName }),
+        data: await options.handle({ ...message, origin: active.clientName, signal: connection.signal }),
       });
     } catch (error) {
       write(socket, { ok: false, requestId: message.requestId, error: operationError(error) });

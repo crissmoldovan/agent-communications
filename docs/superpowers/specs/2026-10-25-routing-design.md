@@ -179,3 +179,18 @@ Each answer overrides the section it names. Every call takes the more cautious s
   unidentifiable window.
 - **`lane unbind <lane> --json`** gives `{ lane, unbound: true }`.
 - **Exit codes:** 66 for an unknown lane, 64 for a bad name or id, 10 inside MCP.
+
+## 7. Known limits (0.31.0)
+
+Recorded 2026-10-26, after the review of the merged branch.
+
+- **A binding outlives its window.** §3.2's automatic end — when the window's identity can no longer be found because
+  its parent process has gone — is not built. A binding ends on Unbind, in the app or at the terminal, when no active
+  rule's queue target carries its lane, and with `disable-all`. A window that has closed matches no other window, so
+  nothing can read its lane through the binding; but the lane stays bound to it until the person unbinds it.
+- **Only one legacy protocol is tested.** The event service's MCP server serves the 2025 era through `serveStdio`, and
+  the tests drive a client that opens with a 2025-11-25 `initialize`. No earlier 2025 revision is tested.
+- **A window's ids are fixed by its first report.** A report that names another Claude Code session id for a
+  recorded activity key, or drops it, is refused, so no process can redirect a binding the person makes by that key.
+  If a real window's session id ever changed under the same key, that window could not be bound by the key until its
+  earlier record lapses (30 days unseen).

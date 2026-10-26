@@ -39,9 +39,12 @@ interface Capability {
   readonly unchecked?: string;
 }
 
-function tty(): EventsCliStreams {
+/** An interactive terminal; `typed` is the line the person types when asked (lane bind asks for the lane's name). */
+function tty(typed?: string): EventsCliStreams {
+  const stdin = new PassThrough();
+  if (typed !== undefined) stdin.write(`${typed}\n`);
   return {
-    stdin: Object.assign(new PassThrough(), { isTTY: true }),
+    stdin: Object.assign(stdin, { isTTY: true }),
     stdout: Object.assign(new PassThrough(), { isTTY: true }),
     stderr: Object.assign(new PassThrough(), { isTTY: true }),
   };
@@ -52,13 +55,14 @@ async function cli(
   stateDir: string,
   options: {
     readonly human?: boolean;
+    readonly typed?: string | undefined;
     readonly readSecret?: () => Promise<string>;
     readonly owner?: B3OwnerService;
   } = {},
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const streams =
     options.human === true
-      ? tty()
+      ? tty(options.typed)
       : {
           stdin: new PassThrough(),
           stdout: new PassThrough(),
@@ -824,6 +828,8 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
       for (const row of rows) {
         const result = await cli([...commandWords(row), ...exceptionArguments(row)], stateDir, {
           human: true,
+          // lane bind asks the person to type the lane's name, its first argument.
+          typed: row.id === 'events-daemon.lane.bind' ? exceptionArguments(row)[0] : undefined,
           readSecret: async () => 'https://receiver.invalid/synthetic-hidden-value',
         });
         assertProductionResponse(result, row);

@@ -110,6 +110,7 @@ interface RequestContext {
     readonly envelope?: Readonly<Record<string, unknown>>;
     readonly _meta?: Readonly<Record<string, unknown>>;
     readonly notify?: (notification: { method: string; params?: Record<string, unknown> }) => Promise<void>;
+    readonly signal?: AbortSignal;
   };
 }
 
@@ -493,8 +494,16 @@ function buildEventsMcpServer(
     () => removeJudgeModel(options),
     true,
   );
-  strictControlTool('events_deliveries_list', 'List deliveries', 'Lists content-free delivery metadata.', {}, () =>
-    deliveriesList(options),
+  // Routing B4: a lane target's deliveries are listed only to the window bound to the lane.
+  server.registerTool(
+    'events_deliveries_list',
+    {
+      title: 'List deliveries',
+      description: 'Lists content-free delivery metadata.',
+      inputSchema: z.strictObject({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (_args, ctx) => reply(await deliveriesList(await scoped(ctx))),
   );
   strictControlTool(
     'events_delivery_retry',
@@ -781,12 +790,14 @@ function registerLaneTools(
     async (args, ctx) => {
       const request = (ctx as RequestContext | undefined)?.mcpReq;
       const token = request?._meta?.progressToken;
+      const signal = request?.signal;
       const every = options.progressIntervalMs ?? WAIT_PROGRESS_INTERVAL_MS;
       let beats = 0;
       const heartbeat =
         token === undefined || request?.notify === undefined
           ? undefined
           : setInterval(() => {
+              if (signal?.aborted) return;
               beats += 1;
               void request
                 .notify?.({
@@ -795,11 +806,17 @@ function registerLaneTools(
                 })
                 .catch(() => undefined);
             }, every);
+      // A cancelled request stops its heartbeat at once, and its signal ends the wait in the owner (review of 0.31.0).
+      const stopBeating = () => {
+        if (heartbeat !== undefined) clearInterval(heartbeat);
+      };
+      signal?.addEventListener('abort', stopBeating, { once: true });
       try {
-        const result = await laneWait(args.lane, args.seconds, await scoped(ctx));
+        const result = await laneWait(args.lane, args.seconds, { ...(await scoped(ctx)), signal });
         return 'pointer' in result ? pointerReply(result.pointer) : reply({ waiting: true });
       } finally {
-        if (heartbeat !== undefined) clearInterval(heartbeat);
+        signal?.removeEventListener('abort', stopBeating);
+        stopBeating();
       }
     },
   );

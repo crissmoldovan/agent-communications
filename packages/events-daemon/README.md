@@ -150,7 +150,8 @@ agent-events lane list               # every lane, its rules, channels, open ite
 agent-events lane unbind david       # at once; the window's watches end
 ```
 
-- **Binding is yours.** No MCP tool binds a lane, and `lane bind` refuses inside the event service's MCP server. A
+- **Binding is yours.** No MCP tool binds a lane. `lane bind` asks you to type the lane's name, and refuses an
+  agent's shell, anything without an interactive terminal, and the event service's MCP server. A
   window's id is its Claude Code session id, or its activity session key; `agent-events mcp` works out both for the
   window it runs in. Only a window that can be told apart from others can be bound: one with a Claude Code session
   id, or a grouped activity session (not Windows, and not a server started in `/`, the home folder or a system
