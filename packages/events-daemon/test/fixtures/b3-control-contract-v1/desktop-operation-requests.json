@@ -145,5 +145,25 @@
       "args": { "lane": "david", "window": "25f971a3-0c69-44e3-971c-3a4656afa986" }
     }
   },
-  { "name": "lane-unbind-request", "request": { "operation": "lane-unbind", "args": { "lane": "david" } } }
+  { "name": "lane-unbind-request", "request": { "operation": "lane-unbind", "args": { "lane": "david" } } },
+  {
+    "name": "judge-setup-request",
+    "request": { "operation": "judge-setup", "args": { "kind": "typesafe", "provider": "openrouter" } }
+  },
+  {
+    "name": "judge-setup-local-request",
+    "request": {
+      "operation": "judge-setup",
+      "args": { "kind": "local-endpoint", "url": "http://127.0.0.1:11434", "model": "nimble" }
+    }
+  },
+  { "name": "provider-list-request", "request": { "operation": "provider-list", "args": {} } },
+  {
+    "name": "provider-key-set-request",
+    "request": { "operation": "provider-key-set", "args": { "provider": "openrouter" } }
+  },
+  {
+    "name": "provider-key-remove-request",
+    "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+  }
 ]

@@ -52,6 +52,11 @@ before anything is prepared. Report that state.
   only once a rule naming it is approved. `events_budget_update` creates a pending judge budget, and
   `events_judge_kind_enable` prepares a kind's enablement. Each returns an approval: follow the handoff below. A
   rule's judge goes in its `agentic` part, with only the fields the question needs in `inputs`.
+- **The person sets a judge up.** Jev, from TypeSafe or through OpenRouter, and a model server on the person's machine
+  are set up and turned on in one step by the person: in the desktop app (Events → Judges, with their keys in Settings
+  → AI providers), or with the event service's own setup command at their terminal. `events_provider_list` says whether
+  TypeSafe and OpenRouter each have a key, never the key. When the person wants a judge on, point them there; never ask
+  for, repeat or pass on a key.
 - **A Laya judge is configuration.** Add one with `events_judge_add` and exactly `judgeId`, `version`,
   `"kind": "laya"`, `"provider": "laya"`, `"model"` set to the reviewed manifest id — read it from the `manifestId`
   field of `events_judge_model_status` — and `"promptTemplate": "laya-noul-v1"`; it has no endpoint or key. It answers only after a person has approved Laya's
@@ -108,8 +113,8 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 
 ## Human-only boundaries
 
-Do not invoke dry-run record reads, queue item reads, clearing the queue, binding a lane, retained rule tests, target
-resume, held decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly
+Do not invoke dry-run record reads, queue item reads, clearing the queue, binding a lane, judge setup, AI provider keys,
+retained rule tests, target resume, held decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly
 and hand it to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
@@ -117,6 +122,8 @@ and hand it to the person:
 - Queue item list and show: “Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says.”
 - Queue clear: “an agent must not be able to make the person's queue disappear.”
 - Lane bind: “Binding a lane lets one agent window read what arrives in it, so it is the person's act at an interactive terminal, where they type the lane's name, or from the app through one: no tool binds, and the command refuses an agent's shell and the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1).”
+- Judge setup: “Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2).”
+- AI provider keys: “An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26).”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”
