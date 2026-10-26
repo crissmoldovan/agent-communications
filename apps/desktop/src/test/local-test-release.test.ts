@@ -57,12 +57,16 @@ describe('the local test release stamps the build it makes (spec §3.7)', () => 
     const built = lines.findIndex((line) => line.includes('tauri build'));
     expect(stamped).toBeGreaterThan(-1);
     expect(built).toBeGreaterThan(stamped);
-    // The test app is sealed with an ad-hoc signature once it is in place, so core can attest the approvals it makes
-    // (`desktopAppOrigin`): an unsealed bundle does not pass codesign --verify --strict.
+    // The test app is sealed with an ad-hoc signature once it is in place, so core can check that it started the
+    // commands it runs (`desktopAppOrigin`): an unsealed bundle does not pass codesign --verify --strict.
     const copied = lines.findIndex((line) => line.startsWith('cp -R "$built" "$app_dest"'));
     const sealed = lines.findIndex((line) => line.startsWith('codesign --force --deep --sign - "$app_dest"'));
     expect(copied).toBeGreaterThan(built);
     expect(sealed).toBeGreaterThan(copied);
+    // The test profile is marked, in its config folder and nowhere else: core lets the test app approve only for a
+    // folder that holds the mark (`desktopAppOrigin`).
+    const marks = lines.filter((line) => line.includes('.agentcomms-test-profile') && !line.trim().startsWith('#'));
+    expect(marks).toEqual([': > "$profile/config/.agentcomms-test-profile"']);
     // The names the app reads (`build_info.rs`).
     const rust = readFileSync(join(APP, 'src-tauri', 'src', 'build_info.rs'), 'utf8');
     expect(rust).toContain('option_env!("AGENTCOMMS_BUILD_COMMIT")');

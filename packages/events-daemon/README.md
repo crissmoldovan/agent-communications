@@ -358,10 +358,13 @@ model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
 refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
 where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
-key on stdin — on macOS only when the app's code signature attests that it started the command (core's
-`desktopAppOrigin`). Windows and Linux attest nothing, a known limit: there a command without an agent's marker counts as
-the app's, and its audit line says `desktop-app (unattested)`. Each refuses an agent's shell and the event service's MCP
-server, and no MCP tool performs them; `events_provider_list` says only whether each provider has a key.
+key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its pid; the local test
+build counts only for its own marked test profile). Windows and Linux check nothing, a known limit: there a command
+without an agent's marker counts as the app's, and its audit line says `desktop-app (unattested)`. The result and the
+audit line say where you were — `desktop-app`, `desktop-app (test build)`, `desktop-app (unattested)` or `terminal` —
+as the CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
+refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`
+says only whether each provider has a key.
 
 Or step by step, at your terminal, to ask Jev about received mail:
 

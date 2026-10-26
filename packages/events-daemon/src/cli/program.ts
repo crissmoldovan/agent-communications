@@ -706,8 +706,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step,
   // and the AI provider keys Jev uses. The app runs these; a person may run them at a terminal. After the release's
   // security review (2026-10-26) each is taken only from where the person is: an interactive terminal, or the Agent
-  // Comms app — on macOS one whose code signature core's `desktopAppOrigin` attests as this process's parent; on
-  // Windows and Linux, which attest nothing (a known limit), a process without an agent's marker, said to be unattested.
+  // Comms app — on macOS one core's `desktopAppOrigin` finds started this process (a speed bump against agents, not a
+  // boundary against code running as the person); on Windows and Linux, which check nothing (a known limit), a process
+  // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
   const personSetupOrigin = async (what: string): Promise<PersonSetupOrigin> => {
@@ -724,8 +725,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
       return PERSON_SETUP_ORIGINS.terminal;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin()))();
-    if (origin.ok) return PERSON_SETUP_ORIGINS.desktopApp;
+    // The config folder this run is for: a test build speaks only for a marked test profile's.
+    const configDir = program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
+    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir })))();
+    if (origin.ok)
+      return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
     if (origin.reason === 'unattested-platform') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
     throw new CommsError(
       'APPROVAL_REQUIRED',

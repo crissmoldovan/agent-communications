@@ -67,6 +67,9 @@ echo "2/5 Installing and building (a few minutes)"
 echo "3/5 Writing the test profile in $profile"
 mkdir -p "$profile/config" "$profile/state" "$profile/data/launch" "$profile/bin"
 chmod 700 "$profile" "$profile/config" "$profile/state" "$profile/data" "$profile/data/launch"
+# The test profile's mark, in its config folder and nowhere else: the test app's approvals speak only for a folder that
+# holds it (core's desktopAppOrigin), never for the real installation's.
+: > "$profile/config/.agentcomms-test-profile"
 pins="--config-dir '$profile/config' --state-dir '$profile/state' --data-dir '$profile/data' --secrets-dir '$profile/config/secrets'"
 for entry in core:core:agentcomms gmail:gmail:agent-gmail slack:slack:agent-slack resend:resend:agent-resend \
   whatsapp:whatsapp:agent-whatsapp events-daemon:events-daemon:agent-events; do
@@ -102,8 +105,8 @@ osascript -e "quit app \"$app_name\"" >/dev/null 2>&1 || true
 mkdir -p "$home/Applications"
 rm -rf "$app_dest"
 cp -R "$built" "$app_dest"
-# Sealed with an ad-hoc signature, so the test profile's CLIs can verify that their approvals in the app come from this
-# app (core's desktopAppOrigin): an unsealed bundle does not pass codesign --verify --strict.
+# Sealed with an ad-hoc signature, so the test profile's CLIs can check that this app started them (core's
+# desktopAppOrigin; a speed bump against agents, not a boundary): an unsealed bundle fails codesign --verify --strict.
 codesign --force --deep --sign - "$app_dest" >/dev/null 2>&1 || { echo "the app could not be ad-hoc signed" >&2; exit 1; }
 
 echo "5/5 Pointing Agent Comms Test at the test profile"

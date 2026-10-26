@@ -74,7 +74,10 @@ export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge' | 'provider
 export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer' | 'judge-key' | 'provider-key';
 
 /** The AI providers a person keeps a key for (owner decision 2026-10-26): each slot's owner is the provider itself. */
-export const EVENT_SECRET_PROVIDERS: readonly [typeof JUDGE_KIND_TYPESAFE, 'openrouter'] = [JUDGE_KIND_TYPESAFE, 'openrouter'];
+export const EVENT_SECRET_PROVIDERS: readonly [typeof JUDGE_KIND_TYPESAFE, 'openrouter'] = [
+  JUDGE_KIND_TYPESAFE,
+  'openrouter',
+];
 export type EventSecretProvider = (typeof EVENT_SECRET_PROVIDERS)[number];
 
 /**

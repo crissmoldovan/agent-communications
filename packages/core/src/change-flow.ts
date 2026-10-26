@@ -391,9 +391,9 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * revoked. A plan that refuses or throws, or an approval for anything else, approves nothing (the release's security
  * review, 2026-10-26).
  *
- * Who may: the person, in the Agent Comms app — on macOS a process the app itself started, which its code signature
- * attests (`desktopAppOrigin`); on Windows and Linux, which attest nothing (a known limit), any process without an
- * agent's marker, said `desktop-app (unattested)`. Always refused to an agent's shell (its marker) and inside an MCP
+ * Who may: the person, in the Agent Comms app — on macOS a process the app itself started, as `desktopAppOrigin` checks
+ * (a speed bump against agents, not a boundary against code running as the person); on Windows and Linux, which check
+ * nothing (a known limit), any process without an agent's marker, said `desktop-app (unattested)`. Always refused to an agent's shell (its marker) and inside an MCP
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
  * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
  */
@@ -432,9 +432,9 @@ async function appliedFromApp<T>(
         { details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER } },
       );
     }
-    // On macOS the process that started this one must be Agent Comms itself, verified by its signature; Windows and
-    // Linux attest nothing, and keep the checks above (known limit).
-    origin = await (options.appOrigin ?? (() => desktopAppOrigin()))();
+    // On macOS the process that started this one must be Agent Comms itself, its running code verified by its pid;
+    // Windows and Linux check nothing, and keep the checks above (known limit).
+    origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
     if (!origin.ok && origin.reason !== 'unattested-platform') {
       throw new CommsError(
         'APPROVAL_REQUIRED',
@@ -455,7 +455,11 @@ async function appliedFromApp<T>(
   await approveChangeInApp(core, approvalId, request, {
     surface: 'app',
     platform,
-    approvedBy: origin.ok ? 'desktop-app' : 'desktop-app (unattested)',
+    approvedBy: !origin.ok
+      ? 'desktop-app (unattested)'
+      : origin.build === 'test'
+        ? 'desktop-app (test build)'
+        : 'desktop-app',
   });
   try {
     const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });
