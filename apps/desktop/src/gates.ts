@@ -8,8 +8,9 @@
  * ships phase E2's Laya status and disable (`allowlist.rs`, `LAYA_JUDGE_VERSION`); `judges` is too, the first with
  * judges at all (Phase E, 0.17.0), whose `judge kinds list` and `judges list` the Judges section reads
  * (`JUDGE_KINDS_VERSION`), `queue`, the first with the action queue (`QUEUE_VERSION`), and `lanes`, the first with
- * lanes (`LANES_VERSION`). The rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`).
- * `messages` is both's (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`.
+ * lanes (`LANES_VERSION`), and `judgeSetup`, the first with judge setup and AI provider keys (`JUDGE_SETUP_VERSION`). The
+ * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
+ * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -21,6 +22,7 @@ export const GATES = {
   activity: '0.29.0',
   queue: '0.30.0',
   lanes: '0.31.0',
+  judgeSetup: '0.32.0',
   messages: '0.32.0',
 } as const;
 

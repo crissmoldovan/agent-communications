@@ -2,6 +2,7 @@ import { readFile, stat } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 import {
   type ActivityDetail,
+  type ActivityReplyTo,
   type AttachPolicy,
   approvalOutcome,
   asLegacy,
@@ -475,14 +476,33 @@ export async function replyDraft(
   messageId: string,
   input: ReplyInput,
 ): Promise<DraftResult> {
-  return recorded(
+  const made = await recorded(
     context,
     'gmail.draft.reply',
     'write',
     alias,
     () => draftReplyTo(context, alias, messageId, input),
-    draftLine,
+    replyLine,
   );
+  return made.draft;
+}
+
+/** A reply as `draftReplyTo` makes it: the draft, and the message it answers — none for a forward, which answers none. */
+interface MadeReply {
+  readonly draft: DraftResult;
+  readonly replyTo: ActivityReplyTo | undefined;
+}
+
+/**
+ * A reply draft as its activity line keeps it (0.32.0 §3.6): its id and subject, the draft by its id, and the message
+ * it answers with that message's thread — so the send of this draft can be tied to the message it replies to.
+ */
+function replyLine(made: MadeReply): ActivityDetail {
+  return {
+    ...draftLine(made.draft),
+    draftId: made.draft.draftId,
+    ...(made.replyTo === undefined ? {} : { replyTo: made.replyTo }),
+  };
 }
 
 async function draftReplyTo(
@@ -490,7 +510,7 @@ async function draftReplyTo(
   alias: string,
   messageId: string,
   input: ReplyInput,
-): Promise<DraftResult> {
+): Promise<MadeReply> {
   // Checked before anything is read, so a word that is not a mode is refused the same way from either surface.
   const mode = oneOf(input.mode, REPLY_MODES, 'a reply mode') ?? 'reply';
   const resolved = await context.inbox(alias);
@@ -582,7 +602,7 @@ async function draftReplyTo(
     recipientDomains: recipientDomains([...to, ...cc, ...bcc]),
   });
 
-  return {
+  const draft: DraftResult = {
     inbox: alias,
     draftId: created.draftId,
     messageId: created.messageId,
@@ -613,6 +633,10 @@ async function draftReplyTo(
     warnings,
     profile: input.includeProfile ? await profileFor(context, alias) : undefined,
   };
+  // A reply answers the message it was asked for, in that message's thread; a forward starts a conversation of its own.
+  const answers =
+    mode === 'forward' ? undefined : { messageId, ...(original.threadId ? { threadId: original.threadId } : {}) };
+  return { draft, replyTo: answers };
 }
 
 export interface DraftSummary {

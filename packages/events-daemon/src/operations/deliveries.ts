@@ -1,6 +1,7 @@
 import { EventControlClient } from '../control/client.ts';
 
 import type { LaneWindowIdentity } from '../domain/lanes.ts';
+import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
 
 type Options = { readonly stateDir?: string | undefined };
 
@@ -15,6 +16,16 @@ export async function deliveriesList(
     'deliveriesList',
     options.caller === undefined ? {} : { caller: options.caller },
   );
+}
+
+/**
+ * One delivery's details (0.32.0, owner feedback §3.5): its row, decision, event and source ids, and target. The
+ * person's view: the CLI refuses it inside an MCP server's process, and no MCP tool calls it.
+ */
+export async function deliveryShow(deliveryId: string, options: Options = {}): Promise<DeliveryShowResultV1> {
+  return (await new EventControlClient({ stateDir: options.stateDir }).request('delivery-show', {
+    deliveryId,
+  })) as DeliveryShowResultV1;
 }
 
 export async function retryDelivery(deliveryId: string, options: Options = {}): Promise<unknown> {

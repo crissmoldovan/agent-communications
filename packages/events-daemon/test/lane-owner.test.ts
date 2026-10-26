@@ -591,6 +591,31 @@ test('LANE-E: a lane target’s deliveries are listed over MCP only to the windo
       ['dry-david'],
       'a window not bound to the lane sees none of its target’s deliveries',
     );
+    // 0.32.0 (§3.5): the rows gain their target's kind, last answer, decision and event, additively; a delivered row
+    // has no next try; and the new fields reveal no lane delivery to a window that is not bound to it.
+    const shaped = (rows: unknown) =>
+      (rows as Array<Record<string, unknown>>)
+        .map((row) => ({
+          targetId: row.targetId,
+          targetKind: row.targetKind,
+          state: row.state,
+          nextAt: row.nextAt,
+          lastErrorCode: row.lastErrorCode,
+          lastStatus: row.lastStatus,
+          decision: typeof row.decisionId,
+          event: typeof row.eventId,
+          delivered: typeof row.deliveredAt,
+        }))
+        .sort((left, right) => String(left.targetId).localeCompare(String(right.targetId)));
+    const common = { state: 'delivered', nextAt: null, lastErrorCode: null, lastStatus: null };
+    const kinds = { decision: 'string', event: 'string', delivered: 'number' };
+    assert.deepEqual(shaped(person), [
+      { targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds },
+      { targetId: 'lane-david', targetKind: 'queue', ...common, ...kinds },
+    ]);
+    const others = listed(await tool(other, 'events_deliveries_list'));
+    assert.deepEqual(shaped(others), [{ targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds }]);
+    assert.doesNotMatch(JSON.stringify(others), /lane-david|"queue"/u, 'no lane delivery is named to the other window');
   });
 });
 
@@ -639,5 +664,119 @@ test('LANE-E: the approval preview of a rule sending to a bound lane names the w
       digest: planned.binding.digest,
     });
     assert.doesNotMatch(JSON.stringify(viewed), /david-project|claude-code/u);
+  });
+});
+
+// 0.32.0 (owner feedback §3.5): one delivery as the person reads it, through a real owner, with no terminal and --json
+// as the app runs it. The source ids come from the event's dedupe key; a lane target names its lane.
+test('0.32 B3: delivery show --json gives a delivery’s decision, event, source ids and target; an unknown one is 66', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const messageId = harness.mailbox.send('A delivery the person opens');
+    for (let index = 0; index < 10 && (await harness.openCount()) === 0; index += 1) await harness.tick();
+    const rows = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Array<{
+      deliveryId: string;
+      targetKind: string;
+    }>;
+    const dry = rows.find((row) => row.targetKind === 'dry-run')?.deliveryId as string;
+    const queued = rows.find((row) => row.targetKind === 'queue')?.deliveryId as string;
+    const shown = await cli(harness.stateDir, ['delivery', 'show', dry, '--json']);
+    assert.equal(shown.code, 0, shown.err);
+    t.diagnostic(`delivery show --json (dry-run): ${shown.out.trim()}`);
+    const detail = JSON.parse(shown.out) as {
+      delivery: Record<string, unknown>;
+      decision: Record<string, unknown>;
+      event: Record<string, unknown>;
+      target: Record<string, unknown>;
+      dryRun: { expiresAt: number | null } | null;
+    };
+    assert.deepEqual(Object.keys(detail), ['delivery', 'decision', 'event', 'target', 'dryRun']);
+    assert.equal(detail.delivery.deliveryId, dry);
+    assert.equal(detail.delivery.state, 'delivered');
+    assert.equal(detail.delivery.nextAt, null);
+    assert.deepEqual({ ...detail.decision, decidedAt: null }, { outcome: 'matched', decidedAt: null, judge: null });
+    assert.equal(detail.event.type, 'gmail.message.received');
+    assert.equal(detail.event.accountId, ACCOUNT);
+    assert.deepEqual(detail.event.source, { channel: 'gmail', messageId });
+    assert.deepEqual(detail.target, { kind: 'dry-run', id: 'dry-david', version: 1 });
+    assert.equal(typeof detail.dryRun?.expiresAt, 'number');
+    assert.doesNotMatch(shown.out, new RegExp(`${SENDER}|${SENDER_NAME}|A delivery the person opens`, 'u'));
+
+    const inLane = JSON.parse((await cli(harness.stateDir, ['delivery', 'show', queued, '--json'])).out) as {
+      target: unknown;
+      dryRun: unknown;
+    };
+    assert.deepEqual(inLane.target, { kind: 'queue', id: 'lane-david', version: 1, lane: 'david' });
+    assert.equal(inLane.dryRun, null);
+
+    const unknown = await cli(harness.stateDir, ['delivery', 'show', 'delivery-that-never-was', '--json']);
+    assert.equal(unknown.code, 66, unknown.err);
+    const marked = await cli(harness.stateDir, ['delivery', 'show', dry, '--json'], {
+      AGENTCOMMS_MCP_SERVER: 'events',
+    });
+    assert.equal(marked.code, 10, marked.err);
+  });
+});
+
+// 0.32.0 (§3.5): the dry-run log as the app reads it, with --json and no terminal, through a real owner. The record comes
+// back as data: the would-be CloudEvent parsed, its sender-written fields named in agentcommsuntrusted. The terminal
+// view still wraps the record in the untrusted-content envelope.
+test('0.32 B4: dryrun list and show --json give the app the log as data; the terminal view keeps the envelope', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const messageId = harness.mailbox.send('Dry-run subject the app shows as outside text');
+    for (let index = 0; index < 10 && (await harness.openCount()) === 0; index += 1) await harness.tick();
+    const listed = await cli(harness.stateDir, ['dryrun', 'list', '--json']);
+    assert.equal(listed.code, 0, listed.err);
+    t.diagnostic(`dryrun list --json: ${listed.out.trim()}`);
+    const entries = JSON.parse(listed.out) as Array<Record<string, unknown>>;
+    assert.equal(entries.length, 1);
+    assert.deepEqual(Object.keys(entries[0] ?? {}).sort(), [
+      'accountId',
+      'deliveredAt',
+      'deliveryId',
+      'eventId',
+      'expiresAt',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+    ]);
+    assert.doesNotMatch(listed.out, /Dry-run subject/u, 'the list is content-free');
+    const deliveryId = entries[0]?.deliveryId as string;
+
+    const shown = await cli(harness.stateDir, ['dryrun', 'show', deliveryId, '--json']);
+    assert.equal(shown.code, 0, shown.err);
+    t.diagnostic(`dryrun show --json: ${shown.out.trim()}`);
+    const record = JSON.parse(shown.out) as Record<string, unknown> & {
+      record: { data: Record<string, unknown>; agentcommsuntrusted?: unknown; type: string; dataschema: string };
+    };
+    assert.deepEqual(Object.keys(record), [
+      'deliveryId',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+      'eventId',
+      'accountId',
+      'deliveredAt',
+      'expiresAt',
+      'record',
+    ]);
+    assert.equal(record.deliveryId, deliveryId);
+    assert.equal(record.ruleId, RULE);
+    assert.equal(record.record.data.subject, 'Dry-run subject the app shows as outside text');
+    assert.equal(record.record.data.messageId, messageId);
+    assert.ok(record.record.agentcommsuntrusted !== undefined, 'the event names its sender-written fields');
+    assert.doesNotMatch(shown.out, /<untrusted-content/u, 'data, not a terminal envelope: the app renders OutsideText');
+
+    const terminal = await cli(harness.stateDir, ['dryrun', 'show', deliveryId]);
+    assert.equal(terminal.code, 0, terminal.err);
+    assert.match(terminal.out, /<untrusted-content/u, 'the terminal view keeps the envelope');
+    assert.match(terminal.out, /^Local dry-run delivery /mu);
   });
 });

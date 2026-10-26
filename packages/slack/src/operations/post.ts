@@ -200,14 +200,21 @@ export async function sendPost(
   slack: SessionDeps = {},
 ): Promise<(PostedMessage | PostedFiles) & LegacyDrainNote> {
   // The outcome recorded around the gate, never through it: `postPrepared` is the one way a post leaves.
-  return recordSlack(
+  const made = await recordSlack(
     context,
     alias,
     'slack.post.send',
     'write',
     () => postDraftOf(context, alias, input, slack),
-    describePosted(input.draftId),
+    ({ posted, thread }) => describePosted(input.draftId, thread)(posted),
   );
+  return made.posted;
+}
+
+/** A post as `postDraftOf` makes it: what Slack said, and the thread its draft went into — null for a new message. */
+interface MadePost {
+  readonly posted: (PostedMessage | PostedFiles) & LegacyDrainNote;
+  readonly thread: string | null;
 }
 
 async function postDraftOf(
@@ -215,17 +222,18 @@ async function postDraftOf(
   alias: string,
   input: SendPostInput,
   slack: SessionDeps,
-): Promise<(PostedMessage | PostedFiles) & LegacyDrainNote> {
+): Promise<MadePost> {
   // First, as every claim does: version 3, and an earlier release's records retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
   const gate = await gateDepsFor(context, alias, slack);
   const store = openDraftStore(context.core.paths.stateDir, context.now, context.handoffs);
   // Another workspace's draft is absent here: drafts share one directory, and the id alone proves nothing.
   const draft = await ownDraft(store, gate.accountId, input.draftId);
-  return noting(
+  const posted = noting(
     await postPrepared({ ...gate, signal: input.signal }, draft, input.approvalId, input.expectChannel, new NameBook()),
     legacyDrain,
   );
+  return { posted, thread: draft.payload.thread_ts ?? null };
 }
 
 /**
