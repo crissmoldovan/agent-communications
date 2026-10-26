@@ -562,3 +562,34 @@ test('LANE-E: a binding follows its lane across a new approved target version, a
     assert.deepEqual(listed.lanes, []);
   });
 });
+
+// Review of 0.31.0, finding 5: events_deliveries_list named every lane target's deliveries to every MCP caller.
+test('LANE-E: a lane target’s deliveries are listed over MCP only to the window bound to the lane (B4)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A delivery the other window must not see listed');
+    const targets = (rows: unknown) =>
+      [...new Set((rows as Array<{ targetId: string }>).map((row) => row.targetId))].sort();
+    const listed = (message: RawMessage) => {
+      assert.notEqual(message.result?.isError, true, resultText(message));
+      return JSON.parse(resultText(message)) as unknown;
+    };
+    const person = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as unknown;
+    assert.deepEqual(targets(person), ['dry-david', 'lane-david'], 'the person sees every delivery');
+    assert.deepEqual(targets(listed(await tool(david, 'events_deliveries_list'))), ['dry-david', 'lane-david']);
+    assert.deepEqual(
+      targets(listed(await tool(other, 'events_deliveries_list'))),
+      ['dry-david'],
+      'a window not bound to the lane sees none of its target’s deliveries',
+    );
+  });
+});

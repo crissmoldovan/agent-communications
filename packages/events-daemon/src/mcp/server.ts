@@ -494,8 +494,16 @@ function buildEventsMcpServer(
     () => removeJudgeModel(options),
     true,
   );
-  strictControlTool('events_deliveries_list', 'List deliveries', 'Lists content-free delivery metadata.', {}, () =>
-    deliveriesList(options),
+  // Routing B4: a lane target's deliveries are listed only to the window bound to the lane.
+  server.registerTool(
+    'events_deliveries_list',
+    {
+      title: 'List deliveries',
+      description: 'Lists content-free delivery metadata.',
+      inputSchema: z.strictObject({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (_args, ctx) => reply(await deliveriesList(await scoped(ctx))),
   );
   strictControlTool(
     'events_delivery_retry',

@@ -440,6 +440,29 @@ export class LaneService {
     return { lane, unbound: true };
   }
 
+  /**
+   * An agent window's delivery list (B4): a lane target's deliveries only for the window bound to that lane. Each row
+   * names its exact target version, whose document says whether it is a lane, as the person approved it.
+   */
+  visibleDeliveries(rows: unknown, caller: LaneWindowIdentity): unknown {
+    if (!Array.isArray(rows)) return rows;
+    const lanes = new Map(
+      (
+        this.#store.database
+          .prepare(
+            "SELECT target_id, version, json_extract(document, '$.lane.name') AS lane FROM target_versions WHERE json_extract(document, '$.lane.name') IS NOT NULL",
+          )
+          .all() as Array<{ target_id: string; version: number; lane: string }>
+      ).map((row) => [`${row.target_id}@${row.version}`, row.lane]),
+    );
+    const mine = this.#bindingFor(caller)?.lane ?? null;
+    return rows.filter((row) => {
+      const target = row as { readonly targetId?: unknown; readonly targetVersion?: unknown };
+      const lane = lanes.get(`${String(target.targetId)}@${String(target.targetVersion)}`);
+      return lane === undefined || lane === mine;
+    });
+  }
+
   /** What an MCP caller may see of the queue (B3, B4): items outside lanes, and its own lane's since it was bound. */
   scopeFor(window: LaneWindowIdentity): QueueScope {
     const binding = this.#bindingFor(window);
