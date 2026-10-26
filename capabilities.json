@@ -1596,6 +1596,60 @@
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"resend\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
+      "id": "resend.take",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take"
+      },
+      "reason": "A session takes a received email before it replies to it, so no other session answers it (design 2026-10-26-taking-messages §5): the session is the server's or the command's own, never an argument. `step` tells the take from the hand-back and the done."
+    },
+    {
+      "id": "resend.take.hand-back",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back"
+      },
+      "reason": "Only the holder hands an email back, with a closed reason other sessions see and a note only the person does (T8)."
+    },
+    {
+      "id": "resend.take.done",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done"
+      },
+      "reason": "Only the holder marks an email done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "resend.taken",
+      "package": "resend",
+      "cli": "taken",
+      "mcp": "resend_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each received email, in closed words — `you`, `another session`, `the person` — never who another session is (T7); with none named, this session's own."
+    },
+    {
       "id": "slack.manifest",
       "package": "slack",
       "cli": "manifest",

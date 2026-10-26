@@ -5,9 +5,11 @@ import {
   checkForUpdates,
   type GatedChange,
   gatedChange,
+  HAND_BACK_REASONS,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
   strictToolArguments,
+  TAKE_STEPS,
   toCommsError,
   updateToolNotice,
   waitCallOptions,
@@ -41,6 +43,7 @@ import {
 } from '../operations/read.ts';
 import { cancelScheduledChange } from '../operations/scheduled.ts';
 import { executeSend, prepareSend, sendStatus } from '../operations/send.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -108,6 +111,7 @@ export async function buildInstructions(context: ResendContext, pinned: string |
     'above 10 recipients — the person runs the approve command the preparation gives, at their own terminal;',
     'you cannot approve it yourself, so say so; resend_send_wait tells you when they have. Under `never` nothing',
     'sends. Never repeat a send whose outcome is unknown: check it with `resend_send_status`.',
+    'Before replying to a received email, take it with resend_take; one another session has, leave.',
     '',
     'Read-only is enforced by this package’s own code, not by the key: Resend has no read-only key.',
     'A key is added only by a person, at their own terminal. Never ask for one in chat.',
@@ -429,6 +433,58 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
           attachmentId: args.attachmentId,
           out: args.out,
         }),
+    ),
+  );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): a session takes a received email before it replies to it,
+   * hands it back, or marks it done. The session is the server's own, worked out from its process, never an argument —
+   * so no argument here names one, and one passed is refused as a key the tool does not declare.
+   */
+  server.registerTool(
+    'resend_take',
+    {
+      title: 'Take a received email',
+      description: `Take a received email before acting on it — replying — so no other session answers it; or hand it back (\`step: "hand-back"\`, with a \`reason\`: ${HAND_BACK_REASONS.join(', ')}) when it is not this session's, or mark it done (\`step: "done"\`). A take is this session's for 60 minutes after its last act on the email, and longer while a send prepared under it waits. Another session's take is refused with TAKEN_ELSEWHERE: leave the email. A \`note\`, for the person alone, may say more on a hand-back or a done; other sessions never see it. Reads the email from Resend to check it was received here; says nothing to its sender.`,
+      inputSchema: {
+        ...accountArg,
+        email: z.string().describe('the received email id'),
+        step: words(TAKE_STEPS).optional().describe('take (the default), hand-back or done'),
+        reason: words(HAND_BACK_REASONS).optional().describe('with hand-back: why, in closed words'),
+        note: z.string().optional().describe('with hand-back or done: for the person alone, at most 200 characters'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    wrapped(
+      async (args: {
+        account?: string | undefined;
+        email: string;
+        step?: string | undefined;
+        reason?: string | undefined;
+        note?: string | undefined;
+      }) =>
+        takeMessage(context, await resolve(args.account), args.email, {
+          step: args.step ?? 'take',
+          ...(args.reason === undefined ? {} : { reason: args.reason }),
+          ...(args.note === undefined ? {} : { note: args.note }),
+        }),
+    ),
+  );
+
+  server.registerTool(
+    'resend_taken',
+    {
+      title: 'Who has these emails',
+      description:
+        'Who has each of these received emails — `you`, `another session` or `the person` — whether it is done, offered or handed back, and why in closed words; null for one nobody took. With no `emails`, the ones this session holds or is offered in the account. Never names another session. Reads only this machine.',
+      inputSchema: {
+        ...accountArg,
+        emails: z.array(z.string()).max(50).optional().describe('received email ids, at most 50'),
+      },
+      annotations: readsLocal,
+    },
+    wrapped(async (args: { account?: string | undefined; emails?: string[] | undefined }) =>
+      takenMessages(context, await resolve(args.account), args.emails),
     ),
   );
 

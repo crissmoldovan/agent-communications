@@ -15,6 +15,8 @@ import {
   resolveInsideRoot,
   safeFilename,
   TaintCollector,
+  type TakenView,
+  takenViews,
   UNTRUSTED_NOTICE,
   wholeNumber,
 } from '@agentcomms/core';
@@ -425,6 +427,23 @@ export interface ReceivedRow {
   /** Bare while it is a well-formed Message-ID; the sender's server chose it. */
   messageId: string | null;
   attachments: number;
+  /**
+   * Who has it (design 2026-10-26-taking-messages §6, T7): null when nobody took it, or its state and `you`, `another
+   * session` or `the person` — never who another session is.
+   */
+  taken: TakenView;
+}
+
+/** Who has each of these received emails, as this call's session sees it: one file look each, never failing the read. */
+async function takenOf(
+  context: ResendContext,
+  named: NamedAccount,
+  ids: readonly string[],
+): Promise<Map<string, TakenView>> {
+  const refs = ids
+    .filter((id) => RESEND_ID.test(id))
+    .map((id) => ({ channel: 'resend' as const, accountId: named.account.id, id: id.toLowerCase() }));
+  return takenViews(context.core.takes, refs, await context.taker().catch(() => null));
 }
 
 /** The emails the team received, recorded by each one's id, subject and sender. */
@@ -472,9 +491,16 @@ async function receivedOf(
         subject: wrapField(String(entry.subject ?? ''), 'subject', envelope),
         messageId: messageIdField(entry.message_id, envelope),
         attachments: Array.isArray(entry.attachments) ? entry.attachments.length : 0,
+        taken: null,
       });
     }
     await recordTaint(context, named, transport, collector, page.data ?? []);
+    const taken = await takenOf(
+      context,
+      named,
+      emails.map((email) => email.id),
+    );
+    for (const email of emails) email.taken = taken.get(email.id.toLowerCase()) ?? null;
     const hasMore = page.has_more === true;
     return { emails, hasMore, next: hasMore ? (emails.at(-1)?.id ?? null) : null, notice: UNTRUSTED_NOTICE };
   });
@@ -551,6 +577,8 @@ async function receivedEmailOf(
       ...body,
       warnings,
       attachments: attachmentsOf(entry.attachments, envelope),
+      // Who has it, in closed words (design 2026-10-26-taking-messages §6, T7).
+      taken: (await takenOf(context, named, [emailId])).get(emailId) ?? null,
     };
     // The raw message's signed link is never passed on: it is a credential for the whole message, attachments and all.
     await recordTaint(context, named, transport, collector, [entry]);
