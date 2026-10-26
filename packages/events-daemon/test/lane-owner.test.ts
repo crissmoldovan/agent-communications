@@ -593,3 +593,51 @@ test('LANE-E: a lane target’s deliveries are listed over MCP only to the windo
     );
   });
 });
+
+// Review of 0.31.0, finding 6: activating a rule that adds matches to a bound lane must say which window reads them.
+test('LANE-E: the approval preview of a rule sending to a bound lane names the window bound to it', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [lane(1)]);
+    const david = await harness.window(DAVID);
+    structured(await tool(david, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    const since = (
+      JSON.parse((await cli(harness.stateDir, ['lane', 'list', '--json'])).out) as {
+        lanes: Array<{ binding: { since: string } }>;
+      }
+    ).lanes[0]?.binding.since;
+    // A second rule sends more matches to the same lane's target.
+    await harness.control.request('rule-create', { document: { ...rule(1, [lane(1)]), ruleId: 'david-again' } });
+    const planned = (await harness.control.request('rule-enable', { ruleId: 'david-again', version: 1 })) as {
+      approvalId: string;
+      binding: { digest: string };
+    };
+    const shown = await cli(harness.stateDir, [
+      'approval',
+      'view',
+      planned.approvalId,
+      '--digest',
+      planned.binding.digest,
+    ]);
+    assert.equal(shown.code, 0, shown.err);
+    assert.match(
+      shown.out,
+      new RegExp(
+        `^Items in lane david will be read by the window bound to it: /example/home/work/david-project \\(claude-code\\), since ${since?.replaceAll('.', '\\.')}\\.$`,
+        'mu',
+      ),
+    );
+    assert.doesNotMatch(shown.out, /can be read by the agent window you bind to it/u);
+    // Over MCP the same view names no window (B4).
+    const viewed = await tool(david, 'events_approval_view', {
+      approvalId: planned.approvalId,
+      digest: planned.binding.digest,
+    });
+    assert.doesNotMatch(JSON.stringify(viewed), /david-project|claude-code/u);
+  });
+});

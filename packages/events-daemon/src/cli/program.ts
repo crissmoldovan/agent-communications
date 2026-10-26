@@ -9,6 +9,7 @@ import {
   resolvePaths,
 } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
+import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
@@ -20,6 +21,7 @@ import {
 } from '../operations/approve.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
+  type B3ApprovalPreviewContext,
   type B3CliRegistrar,
   type B3ControlOperation,
   type B3PendingTargetSelectorV1,
@@ -135,8 +137,22 @@ export function terminalSafeJson(value: unknown): string {
 }
 
 /** The approval preview a person reads before deciding: the B3 terminal renderer, with every dangerous character shown. */
-export function renderApprovalViewForTerminal(result: unknown): string {
-  return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);
+export function renderApprovalViewForTerminal(result: unknown, context: B3ApprovalPreviewContext = {}): string {
+  return escapeForDisplay(renderB3ApprovalPreviewV1(result, context).terminal);
+}
+
+/** Whether a ready view's rule sends to a lane: only then does the terminal read which window each lane is bound to. */
+function previewHasLane(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null) return false;
+  const view = result as {
+    readonly kind?: unknown;
+    readonly preview?: { readonly rule?: { readonly targets?: unknown } };
+  };
+  const targets = view.kind === 'READY' ? view.preview?.rule?.targets : undefined;
+  return (
+    Array.isArray(targets) &&
+    targets.some((target) => typeof target === 'object' && target !== null && 'lane' in (target as object))
+  );
 }
 
 /**
@@ -337,7 +353,18 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       const result = await approvalView(approvalId, options.digest as string, controlOptions(program));
       if (program.opts<EventsCliOptions>().json) print(result);
-      else streams.stdout.write(`${renderApprovalViewForTerminal(result)}\n`);
+      else {
+        // A rule that sends to a lane already bound adds what that window will read: the preview names the window.
+        let lanes: B3ApprovalPreviewContext['lanes'];
+        if (previewHasLane(result)) {
+          try {
+            lanes = ((await laneList(controlOptions(program))) as LaneListResultV1).lanes;
+          } catch {
+            lanes = undefined;
+          }
+        }
+        streams.stdout.write(`${renderApprovalViewForTerminal(result, { lanes })}\n`);
+      }
     });
   const catalogue = program.command('catalogue').description('inspect the local event catalogue');
   catalogue.command('list').action(async () => {
