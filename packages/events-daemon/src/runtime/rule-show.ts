@@ -94,7 +94,7 @@ export class RuleReader {
         activatedAt: row.activated_at,
         supersededAt: row.superseded_at,
         revokedAt: row.revoked_at,
-        summary: describeRule(document, { accounts: aliases }),
+        summary: describeRule(document, { accountNames: aliases }),
         counts7d: this.#counts(ruleId, row.version, document.agentic !== undefined, since),
       };
     });

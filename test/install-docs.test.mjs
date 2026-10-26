@@ -72,8 +72,13 @@ test('the local event service README states its boundaries for the person using 
     prose,
     /Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal/i,
   );
-  assert.match(prose, /dry-run log you read at your terminal/i);
-  assert.match(prose, /only a person at a terminal can read/i);
+  assert.match(prose, /dry-run log you read at your terminal or in the desktop app/i);
+  // 0.32.0 (owner feedback §3.5, events design D7): the log is the person's at a terminal or in the app, never an agent's
+  // through MCP, and it keeps each entry 24 hours at most.
+  assert.match(prose, /only you can read, at your terminal or in the desktop app/i);
+  assert.match(prose, /keeps each entry 24 hours at most/i);
+  assert.match(prose, /Inside the event service's MCP server both refuse/i);
+  assert.match(prose, /`agent-events delivery show <delivery-id>`/u);
   assert.match(prose, /Gmail, Slack, Resend and WhatsApp/i);
   assert.match(prose, /Slack messages and thread replies/i);
   assert.match(prose, /Resend received mail and sent-mail status/i);

@@ -5,7 +5,7 @@ agent-communications. When an event matches a rule you approved, it delivers tha
 - a signed HTTPS webhook;
 - a local live stream (server-sent events) for your own tools;
 - a queue you work through in the desktop app or at your terminal, or a lane of it that wakes one agent window;
-- a dry-run log you read at your terminal.
+- a dry-run log you read at your terminal or in the desktop app, which keeps each entry 24 hours at most.
 
 Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal.
 
@@ -37,8 +37,9 @@ a hint to pin a shorter one. `agent-events --version` (or `-V`) prints the insta
 
 ## A first rule: Gmail into the dry-run log
 
-The dry-run target keeps what matched in an encrypted local log that only a person at a terminal can read. It is the
-safe way to see what a rule would send before you point it at a webhook.
+The dry-run target keeps what matched in an encrypted local log that only you can read, at your terminal or in the
+desktop app. It keeps each entry 24 hours at most, and then deletes it. It is the safe way to see what a rule would send
+before you point it at a webhook.
 
 ```bash
 # 1. a target: the local dry-run log, keeping records for a day
@@ -57,7 +58,12 @@ agent-events approve <approval-id> # offers to test the target first; answering 
 # 4. read what matched: the list gives each record's id, and show prints that record
 agent-events dryrun list
 agent-events dryrun show <record-id>
+agent-events delivery show <record-id>   # the delivery itself: its decision, the message it came from, its target
 ```
+
+`dryrun list` and `dryrun show` take `--json` too, which is how the desktop app reads the log: `show` then gives the
+record as data (the exact event it would have sent, whose `agentcommsuntrusted` names the fields its sender wrote).
+Inside the event service's MCP server both refuse, so no agent reads the log through MCP.
 
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
 cannot run, the approval says why and still asks for its challenge.
@@ -194,6 +200,16 @@ agent-events lane unbind david       # at once; the window's watches end
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window
     ([A lane](#a-lane)).
   - **The dry-run log.**
+- **Rules and deliveries you can read (0.32.0):**
+  - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words
+    (its `summary`, as parts; a part of kind `untrusted` is the rule author's own text), and what it did in the last 7
+    days (`counts7d`). The approval preview prints the same words above the JSON you approve.
+  - `deliveries list` gives each delivery's target kind, its last try's answer, the decision and event it came from,
+    and when it was delivered where a log keeps that. A delivered row has no next try.
+  - `agent-events delivery show <delivery-id>` gives one delivery's details: its decision and the judge's answer, the
+    event with its source's own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
+    host only). It is yours, at your terminal or in the app: it refuses inside the event service's MCP server.
+    Earlier tries are counted, not kept one by one.
 - **Control:**
   - `pause` / `resume`;
   - `disable-all`, which stops collection and purges pending work at once;
@@ -221,13 +237,13 @@ channel servers applies, and the result tells you to restart the client. The
 - **An agent can never:**
   - approve anything;
   - bind a lane, or read a lane another window is bound to;
-  - read what the dry-run log kept, or what a queue item says outside its own lane;
+  - read what the dry-run log kept, one delivery's details, or what a queue item says outside its own lane;
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - resume a target;
   - decide a held event.
 
-  Those are human-only, at your terminal. Every event's content is marked as untrusted wherever it is shown. So a
+  Those are human-only, at your terminal or in the desktop app. Every event's content is marked as untrusted wherever it is shown. So a
   message that tries to instruct an agent reaches it as quoted data, never as an instruction.
 
 ## Judges

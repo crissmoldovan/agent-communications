@@ -15,7 +15,7 @@ import {
 
 const GMAIL = 'ibx_DESCRIBERULE0001';
 const SLACK = 'acc_DESCRIBERULESLK1';
-const aliases = { accounts: { [GMAIL]: 'cue/gmail', [SLACK]: 'cue/slack' } };
+const aliases = { accountNames: { [GMAIL]: 'cue/gmail', [SLACK]: 'cue/slack' } };
 
 const text = (parts: readonly RulePart[]) => parts.map((part) => part.text).join('');
 const ofKind = (parts: readonly RulePart[], kind: RulePart['kind']) =>

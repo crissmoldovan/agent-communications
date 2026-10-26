@@ -28,7 +28,7 @@ export interface RulePart {
 export interface FieldLabels {
   readonly fields?: Readonly<Record<string, string>> | undefined;
   /** The alias the Accounts screen shows for an account id, for example `cue/gmail`; the id is shown where none is. */
-  readonly accounts?: Readonly<Record<string, string>> | undefined;
+  readonly accountNames?: Readonly<Record<string, string>> | undefined;
 }
 
 /** The part of a target document a sentence names. */
@@ -371,7 +371,7 @@ function target(entry: DescribableTarget): readonly RulePart[] {
 
 /** The rule's sentence, as parts whose texts joined are the sentence a person reads. */
 export function describeRule(rule: DescribableRuleDocument, labels?: FieldLabels): RulePart[] {
-  const accounts = rule.source.accountIds.map((id) => [value(labels?.accounts?.[id] ?? id)]);
+  const accounts = rule.source.accountIds.map((id) => [value(labels?.accountNames?.[id] ?? id)]);
   const opening = OPENINGS[rule.event.type];
   const parts: RulePart[] = [
     ...(opening === undefined
