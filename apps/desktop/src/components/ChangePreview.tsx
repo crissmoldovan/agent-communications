@@ -45,6 +45,11 @@ export function ChangePreview({
         failed: (message: string) => string;
         /** Applied: core's answer. */
         onApproved: (result: Extract<CliResult, { status: 'ok' }>) => void;
+        /**
+         * Core voided the approval rather than apply it (`APPROVAL_VOID`, 0.34.0: it was prepared for another change):
+         * the screen prepares the change again and shows its new preview. Without it, the refusal is said here.
+         */
+        onVoid?: (() => void) | undefined;
       }
     | undefined;
 }) {
@@ -106,6 +111,11 @@ export function ChangePreview({
       const result = await bridge.cli(here.call);
       if (result.status === 'ok') {
         here.onApproved(result);
+        return;
+      }
+      // Voided by core: there is nothing left to revoke, and the screen prepares the change afresh.
+      if (result.status === 'failed' && result.code === 'APPROVAL_VOID' && here.onVoid !== undefined) {
+        here.onVoid();
         return;
       }
       // Not applied: the approval is still this preview's to cancel, or to leave behind.

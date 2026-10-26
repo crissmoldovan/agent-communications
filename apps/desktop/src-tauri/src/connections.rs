@@ -37,6 +37,42 @@ impl Call {
             // A rule's activation the app prepared with `eventsRuleEnable`, for this very digest (0.33.0): what
             // `Prepared::record` keeps for it is the approval that may answer it.
             Call::EventsRuleApprove { approval_id, .. } => Some((approval_id, self.clone())),
+            // An account page's loosenings (0.34.0): each the very change the app prepared, word for word.
+            Call::BehaviourAllowApproved {
+                account,
+                acts,
+                conversation,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::BehaviourAllow {
+                    account: account.clone(),
+                    acts: acts.clone(),
+                    conversation: conversation.clone(),
+                },
+            )),
+            Call::BehaviourClearApproved {
+                account,
+                conversation,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::BehaviourClear {
+                    account: account.clone(),
+                    conversation: conversation.clone(),
+                },
+            )),
+            Call::LabelStyleApproved {
+                account,
+                style,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::LabelStyle {
+                    account: account.clone(),
+                    style: *style,
+                },
+            )),
             _ => None,
         }
     }
@@ -718,5 +754,206 @@ mod tests {
         assert!(code.contains(
             "connections::refuse_terminal_in_test_build(&command, &app.config().identifier)?;"
         ));
+    }
+
+    /// A recorded account change (0.34.0), as `cli` records it when core answers it waiting for approval `ID`.
+    fn prepared_change(value: serde_json::Value) -> crate::terminal::Prepared {
+        let prepared = crate::terminal::Prepared::default();
+        prepared.record(
+            &call(value),
+            &crate::ipc::CliResult::ApprovalPending {
+                approval_id: crate::allowlist::ID.into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        prepared
+    }
+
+    #[test]
+    fn an_account_change_approved_in_the_app_builds_cores_words_with_the_app_approval() {
+        let id = crate::allowlist::ID;
+        for (value, expected) in [
+            (
+                json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "allow",
+                    "example/slack",
+                    "post,reply",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "behaviourAllowApproved", "account": "example/gmail", "acts": "reply", "conversation": "@example.com", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "allow",
+                    "example/gmail",
+                    "reply",
+                    "--conversation",
+                    "@example.com",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": id }),
+                vec!["behaviour", "clear", "example/slack", "--app-approval", id],
+            ),
+            (
+                json!({ "kind": "behaviourClearApproved", "account": "example/slack", "conversation": "C0123ABCD", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "clear",
+                    "example/slack",
+                    "--conversation",
+                    "C0123ABCD",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+                vec![
+                    "label",
+                    "style",
+                    "example/slack",
+                    "labelled",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+        ] {
+            let approved = call(value.clone());
+            let words = approved.words().expect("words");
+            assert_eq!(words.product, Product::Core, "{value}");
+            assert_eq!(words.words, expected, "{value}");
+            assert_eq!(words.shape, Shape::Envelope, "{value}");
+            assert!(words.pins, "{value}");
+            // It answers an approval the app prepared, prepares none, opens no terminal, and needs core 0.34.0.
+            assert!(!approved.prepares_change(), "{value}");
+            assert_eq!(approved.needs(), Some("0.34.0"), "{value}");
+            assert!(approved.answers_app_approval().is_some(), "{value}");
+            assert!(command_words(&TerminalCommand::Change {
+                call: approved.clone(),
+                revoke: crate::allowlist::ApprovalId::try_from(id.to_string()).expect("an id"),
+            })
+            .is_err());
+            assert_eq!(serde_json::to_value(&approved).expect("json"), value);
+        }
+        // The app's style applies at once: never approved.
+        let refusal = call(
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "app", "approvalId": id }),
+        )
+        .words()
+        .expect_err("a tightening takes no approval");
+        assert_eq!(refusal.code, "APP_REFUSED");
+        // No approval, a bad one, a style that is none, or a field more: refused before anything runs.
+        refused(
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post" }),
+        );
+        refused(
+            json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": "ap_" }),
+        );
+        refused(json!({ "kind": "labelStyle", "account": "example/slack", "style": "bot" }));
+        refused(
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id, "force": true }),
+        );
+    }
+
+    #[test]
+    fn a_slack_style_prepares_only_labelled_and_only_it_opens_in_the_terminal() {
+        let labelled =
+            call(json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }));
+        let app = call(json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }));
+        assert!(labelled.prepares_change());
+        assert!(!app.prepares_change());
+        assert_eq!(labelled.needs(), None);
+        let revoke = crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+            .expect("an id");
+        assert_eq!(
+            command_words(&TerminalCommand::Change {
+                call: labelled,
+                revoke: revoke.clone(),
+            })
+            .expect("words"),
+            (
+                Product::Core,
+                ["label", "style", "example/slack", "labelled"]
+                    .iter()
+                    .map(|word| word.to_string())
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert!(command_words(&TerminalCommand::Change { call: app, revoke }).is_err());
+    }
+
+    #[test]
+    fn the_app_approves_only_the_account_change_it_prepared_word_for_word() {
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "changed": true }),
+            }
+        };
+        let id = crate::allowlist::ID;
+        let allow =
+            json!({ "kind": "behaviourAllow", "account": "example/slack", "acts": "post,reply" });
+        // Other acts, another account, another place, or a removal: refused, and nothing runs.
+        for other in [
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply,file", "approvalId": id }),
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack-two", "acts": "post,reply", "approvalId": id }),
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "conversation": "C0123ABCD", "approvalId": id }),
+            json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": id }),
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+        ] {
+            let refusal =
+                run_app_approval(&prepared_change(allow.clone()), &call(other.clone()), ok)
+                    .expect_err("another change");
+            assert_eq!(refusal.code, "APP_REFUSED", "{other}");
+        }
+        assert_eq!(ran.get(), 0);
+        // The very change prepared: it runs once.
+        for (prepared, approved) in [
+            (
+                allow.clone(),
+                json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": id }),
+            ),
+            (
+                json!({ "kind": "behaviourClear", "account": "example/gmail", "conversation": "@example.com" }),
+                json!({ "kind": "behaviourClearApproved", "account": "example/gmail", "conversation": "@example.com", "approvalId": id }),
+            ),
+            (
+                json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
+                json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+            ),
+        ] {
+            let before = ran.get();
+            let record = prepared_change(prepared);
+            assert!(
+                run_app_approval(&record, &call(approved.clone()), ok).is_ok(),
+                "{approved}"
+            );
+            assert!(
+                run_app_approval(&record, &call(approved.clone()), ok).is_err(),
+                "never twice"
+            );
+            assert_eq!(ran.get(), before + 1, "{approved}");
+        }
+        // The app's style is never recorded, since it applies at once: nothing answers it.
+        let app = prepared_change(
+            json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }),
+        );
+        assert!(run_app_approval(
+            &app,
+            &call(json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id })),
+            ok
+        )
+        .is_err());
     }
 }

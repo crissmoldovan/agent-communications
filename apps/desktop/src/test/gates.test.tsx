@@ -50,7 +50,11 @@ describe('what each CLI version supports', () => {
       judgeSetup: '0.32.0',
       messages: '0.32.0',
       ruleEditor: '0.33.0',
+      accountAppApproval: '0.34.0',
     });
+    // An account page's loosenings are approved in the app from core 0.34.0, a pull request's build of it included.
+    expect(supports('0.33.0', 'accountAppApproval')).toBe(false);
+    expect(supports('0.34.0-feat-0.34-soft', 'accountAppApproval')).toBe(true);
     // Judge setup and AI provider keys are the event service's from 0.32.0, a pull request's build of it included.
     expect(supports('0.31.0', 'judgeSetup')).toBe(false);
     expect(supports('0.32.0', 'judgeSetup')).toBe(true);

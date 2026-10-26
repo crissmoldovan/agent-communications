@@ -12,6 +12,8 @@
  * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
  * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`. `ruleEditor` is the events
  * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations.
+ * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
+ * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -26,6 +28,7 @@ export const GATES = {
   judgeSetup: '0.32.0',
   messages: '0.32.0',
   ruleEditor: '0.33.0',
+  accountAppApproval: '0.34.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

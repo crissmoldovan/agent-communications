@@ -125,6 +125,9 @@ export type McpClient = (typeof MCP_CLIENTS)[number];
 export const MCP_SERVERS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
 export type McpServer = (typeof MCP_SERVERS)[number];
 
+/** How an agent's messages look in a Slack workspace (`allowlist.rs`, `SlackStyle`): as the app, or as you, tagged. */
+export type SlackStyle = 'app' | 'labelled';
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -240,6 +243,13 @@ export type Call =
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
   | { kind: 'judgeShow'; judgeId: string; version?: number }
+  // Each account's Agents here (0.34.0, spec 2026-10-26-desktop-0340 §B2): a Slack workspace's style, `labelled`
+  // prepared and `app` applied at once by core; and each loosening the account page prepared, approved by the person in
+  // the app with its `…Approved` call, only for the approval the app prepared for that very change, as mcpInstall's is.
+  | { kind: 'labelStyle'; account: string; style: SlackStyle }
+  | { kind: 'labelStyleApproved'; account: string; style: 'labelled'; approvalId: string }
+  | { kind: 'behaviourAllowApproved'; account: string; acts: string; conversation?: string; approvalId: string }
+  | { kind: 'behaviourClearApproved'; account: string; conversation?: string; approvalId: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
