@@ -1871,9 +1871,13 @@ async function handleControl(
       );
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
-    case OWNER_CONTROL_WIRES.ruleShow:
+    case OWNER_CONTROL_WIRES.ruleShow: {
       if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
-      return readers.rules.show(requiredText(request.args.ruleId, 'rule id'));
+      // An agent window's call names the window: it gets no counts of a lane it is not bound to (review 0.32.0, 8).
+      const { caller, args } = splitCaller(request.args);
+      const entries = await readers.rules.show(requiredText(args.ruleId, 'rule id'));
+      return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);
+    }
     case OWNER_CONTROL_WIRES.createRule:
     case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);

@@ -122,6 +122,18 @@
       "loadedMarker": "agent-stops-only-its-own-lane-delivery"
     },
     {
+      "case": "rule-show-hides-a-foreign-lane-counts",
+      "operation": "ruleShow",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);\n",
+        "to": "      return entries;\n"
+      },
+      "mutationTest": "0.32 R8: events_rule_show leaves out counts7d of a lane rule for a window not bound to its lane",
+      "loadedMarker": "rule-show-hides-a-foreign-lane-counts"
+    },
+    {
       "case": "retry-delegates-account-identity-fence",
       "operation": "retryDelivery",
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",

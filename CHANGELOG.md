@@ -130,8 +130,8 @@ subject version 1 state active and approval and activation", and a next try "alw
 - **A rule in plain words.** `agent-events rule show <rule-id>` (and `events_rule_show`) gives each version with when
   it was switched on, replaced or revoked, a one-sentence `summary` such as "When mail arrives in cue/gmail with
   'invoice' in the subject, ask Jev '…'. If it says yes, put it in the Queue, lane billing.", and what it did in the
-  last 7 days: matched, judged yes and no, held, delivered and failed. Every word the rule's author wrote is marked as
-  theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve, the author's
+  last 7 days: matched, judged yes and no, held, delivered and failed (over MCP, not for a lane the window isn't
+  bound to). Every word the rule's author wrote is marked as theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve, the author's
   text in escaped double quotes it cannot close. These fields
   are added: nothing is renamed or removed.
 - **Deliveries say where they went.** `deliveries list` rows gain the target's kind, the last try's answer, the

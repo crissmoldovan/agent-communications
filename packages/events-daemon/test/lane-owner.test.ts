@@ -908,3 +908,37 @@ test('0.32 R4: over MCP only the bound window stops its lane’s queued delivery
     assert.doesNotMatch(resultText(finished), /for a person/u);
   });
 });
+
+// Review of 0.32.0, finding 8: what a rule did in the last 7 days tells how much reached its lane. Over MCP a window
+// not bound to that lane gets the rule without `counts7d`; the bound window, the person's CLI and the app keep it.
+test('0.32 R8: events_rule_show leaves out counts7d of a lane rule for a window not bound to its lane', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    await harness.control.request('rule-create', { document: { ...rule(1, [dryRun]), ruleId: 'dry-only' } });
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A match the lane counts');
+    type Entry = { document: { ruleId: string }; counts7d?: { matched: number }; summary?: unknown };
+    const shown = async (window: RawClient, ruleId: string) => {
+      const message = await tool(window, 'events_rule_show', { ruleId });
+      assert.notEqual(message.result?.isError, true, resultText(message));
+      return JSON.parse(resultText(message)) as Entry[];
+    };
+    const unbound = await shown(other, RULE);
+    assert.equal(unbound.length, 1);
+    assert.equal('counts7d' in (unbound[0] as object), false, 'no count of a lane the window is not bound to');
+    assert.ok(unbound[0]?.summary !== undefined, 'the rule itself is still shown');
+    assert.equal((await shown(david, RULE))[0]?.counts7d?.matched, 1, 'the bound window sees its lane’s counts');
+    const person = JSON.parse((await cli(harness.stateDir, ['rule', 'show', RULE, '--json'])).out) as Entry[];
+    assert.equal(person[0]?.counts7d?.matched, 1, 'the person sees every count');
+    // A rule with no lane keeps its counts for every window.
+    assert.ok((await shown(other, 'dry-only'))[0]?.counts7d !== undefined);
+  });
+});

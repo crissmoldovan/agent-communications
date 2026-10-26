@@ -19,6 +19,7 @@ import type { QueueChannel } from '../domain/queue-target.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
 import { recordQueueHistory } from './queue-history.ts';
+import type { RuleShowEntryV1 } from './rule-show.ts';
 
 /**
  * Routing's lanes in the owner (routing design 2026-10-25, §3 and §6): which window the person bound to each lane, who
@@ -496,6 +497,27 @@ export class LaneService {
         details: { reason: 'PERSON_ONLY_STOP' },
       },
     );
+  }
+
+  /**
+   * `rule show` for an agent window (review of 0.32.0, finding 8): a version's `counts7d` says how much reached its
+   * lane, so a version with a lane target other than the window's own is shown without it. Everything else — the
+   * document, its times and its summary — is the window's to read, as before.
+   */
+  ruleVersionsForWindow(entries: readonly RuleShowEntryV1[], caller: LaneWindowIdentity): readonly unknown[] {
+    const mine = this.#bindingFor(caller)?.lane ?? null;
+    return entries.map((entry) => {
+      const targets = (entry.document as { readonly targets?: unknown }).targets;
+      const foreign =
+        Array.isArray(targets) &&
+        targets.some((target) => {
+          const lane = (target as { readonly lane?: { readonly name?: unknown } } | null)?.lane?.name;
+          return typeof lane === 'string' && lane !== mine;
+        });
+      if (!foreign) return entry;
+      const { counts7d: _hidden, ...rest } = entry;
+      return rest;
+    });
   }
 
   /** What an MCP caller may see of the queue (B3, B4): items outside lanes, and its own lane's since it was bound. */
