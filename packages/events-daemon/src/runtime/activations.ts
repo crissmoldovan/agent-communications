@@ -187,6 +187,13 @@ export interface ActivationRuntimeOptions {
         };
       }) => Promise<unknown>)
     | undefined;
+  /**
+   * The agent-session targets' activation check (0.33.0 §3.5): each session folder inside the relay's allowed roots, and
+   * each file part under a folder it may be read from. Supplied by the owner composition; refusals name the folder.
+   */
+  readonly assertSessionTargets?:
+    | ((rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']) => Promise<void>)
+    | undefined;
   /** Tests may inject strict reviewed fixture bytes; production always reads the daemon's shipped asset bytes. */
   readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
   /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
@@ -222,6 +229,7 @@ export class ActivationRuntime {
   readonly #failpoint: CutoverFailpoint | undefined;
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
+  readonly #assertSessionTargets: ActivationRuntimeOptions['assertSessionTargets'];
   readonly #layaInputs: LayaEnablementInputs;
   readonly #onJudgeKindEnabled: ActivationRuntimeOptions['onJudgeKindEnabled'];
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
@@ -253,6 +261,7 @@ export class ActivationRuntime {
     this.#failpoint = options.failpoint;
     this.#deadlineFailpoint = options.deadlineFailpoint;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
+    this.#assertSessionTargets = options.assertSessionTargets;
     this.#layaInputs = {
       ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
       ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
@@ -267,6 +276,7 @@ export class ActivationRuntime {
     const versions = this.#versions();
     const document = versions.prepareRule(input.ruleId, input.version);
     await this.#assertDocumentSecretsReady(document.rule);
+    await this.#assertSessionTargets?.(document.rule);
     this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {

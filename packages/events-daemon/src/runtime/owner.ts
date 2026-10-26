@@ -6,6 +6,7 @@ import {
   type AuditLog,
   CommsError,
   type ConfigStore,
+  homeDirectory,
   isCommsError,
   openCore,
   resolvePaths,
@@ -68,10 +69,11 @@ import { SlackHistoryStageExpiry } from '../sources/slack.ts';
 import { SlackReplyStageExpiry } from '../sources/slack-replies.ts';
 import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worker.ts';
 import { openEventDatabase } from '../store/database.ts';
-import { openEventSecretStore } from '../store/event-secrets.ts';
+import { openEventSecretStore, providerSecretOwner } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
+import { AgentSessionService } from './agent-sessions.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
 import { projectE2Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
@@ -93,6 +95,7 @@ import {
   type FixedSyntheticTargetTransport,
   TargetResumeControl,
 } from './b3-target-test-control.ts';
+import { openRouterGenerator } from './context-generate.ts';
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { DELIVERY_ACTIVITY_INTERVAL_MS, DeliveryActivity } from './delivery-activity.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
@@ -124,10 +127,14 @@ import { QueueDispatcher } from './queue-dispatcher.ts';
 import { PERSON, type QueueActor } from './queue-history.ts';
 import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
+import type { RelayFetch } from './relay-client.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { RuleReader } from './rule-show.ts';
 import { EventScheduler } from './scheduler.ts';
+import type { ContextGenerator } from './session-context.ts';
+import { SessionDispatcher } from './session-dispatcher.ts';
+import { SessionQueue, SessionQueueFollower } from './session-queue.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
@@ -222,6 +229,20 @@ export interface EventOwnerOptions {
    * uses the daemon's shipped assets, this process's platform, no failpoint, and launches only the shipped worker
    * under the macOS sandbox.
    */
+  /**
+   * Agent sessions (0.33.0 §3.5), test seams only: the home folder the relay's default homes are found under — a test
+   * pins a temp folder, so no real relay home is read — the fetch that reaches its loopback fake relay, a fake model
+   * for generate parts, and how often the busy queue asks the relay again. Production uses the person's home, Node's
+   * fetch, OpenRouter with the person's key, and 30 seconds.
+   */
+  readonly agentSessions?:
+    | {
+        readonly homeDirectory?: string | undefined;
+        readonly fetch?: RelayFetch | undefined;
+        readonly generate?: ContextGenerator | undefined;
+        readonly reconcileMs?: number | undefined;
+      }
+    | undefined;
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -1166,12 +1187,55 @@ async function startOwnerWithLock(
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
   });
+  // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
+  // queue and its follower of the relay's event stream, and the session target's delivery boundary.
+  const agentSessions = new AgentSessionService({
+    store: database,
+    homeDirectory: options.agentSessions?.homeDirectory ?? homeDirectory(),
+    audit: core.audit,
+    ...(options.agentSessions?.fetch === undefined ? {} : { fetch: options.agentSessions.fetch }),
+    now,
+  });
+  const sessionQueue = new SessionQueue({ store: database, now });
+  let tickAfterRelease: () => void = () => undefined;
+  const sessionFollower = new SessionQueueFollower({
+    queue: sessionQueue,
+    sessions: agentSessions,
+    onReleased: () => tickAfterRelease(),
+    ...(options.agentSessions?.reconcileMs === undefined ? {} : { reconcileMs: options.agentSessions.reconcileMs }),
+  });
+  const generate =
+    options.agentSessions?.generate ??
+    openRouterGenerator({
+      key: async () => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner('openrouter'),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+    });
+  const sessionDispatcher = new SessionDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    sessions: agentSessions,
+    follower: sessionFollower,
+    generate,
+    expiry,
+    now,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    onAppended: () => notifyLaneAppend(),
+  });
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
     webhook,
     sse,
     queue: queueDispatcher,
+    session: sessionDispatcher,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
@@ -1274,6 +1338,7 @@ async function startOwnerWithLock(
     approvals: core.approvals,
     config: core.config,
     gmailSourceFor,
+    assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
@@ -1573,9 +1638,10 @@ async function startOwnerWithLock(
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
-      // A lane's watches and long-polls end with the service (routing §3.4).
+      // A lane's watches and long-polls end with the service (routing §3.4), and so does the busy queue's follow.
       lanes.close();
       try {
+        await sessionFollower.stop();
         await scheduler.stop();
         await control?.close();
         await layaWorker.close();
@@ -1641,6 +1707,7 @@ async function startOwnerWithLock(
           () => connectedEventAccounts(core.config),
           judgeSetup,
           readers,
+          { service: agentSessions, queue: sessionQueue },
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1651,6 +1718,12 @@ async function startOwnerWithLock(
     await writeInstance(paths, instance);
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
+    // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are
+    // followed again.
+    tickAfterRelease = () => {
+      if (!stopped) void owner.tick().catch(() => undefined);
+    };
+    sessionFollower.notify();
     return owner;
   } catch (error) {
     await owner.stop();
@@ -1733,6 +1806,7 @@ async function handleControl(
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
   judgeSetup?: JudgeSetupService | undefined,
   readers?: OwnerReaders,
+  sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1852,6 +1926,23 @@ async function handleControl(
       return requireJudgeSetup(judgeSetup).providerKeySet(request.args, request.origin);
     case OWNER_CONTROL_WIRES.providerKeyRemove:
       return requireJudgeSetup(judgeSetup).providerKeyRemove(request.args, request.origin);
+    // Agent sessions (0.33.0 §3.5). Where the relay is is the person's to see and set; the busy queue is theirs to see
+    // and drop from, and a bound window's call sees only its own lane's items (routing B4), as the queue's does.
+    case OWNER_CONTROL_WIRES.integrationShow:
+      integrationName(personOnly(request.args, 'integration show'));
+      return requireSessions(sessions).service.show();
+    case OWNER_CONTROL_WIRES.integrationSet: {
+      const { integration, ...settings } = personOnly(request.args, 'integration set');
+      integrationName({ integration });
+      return requireSessions(sessions).service.set(settings, request.origin);
+    }
+    case OWNER_CONTROL_WIRES.sessionQueueList: {
+      const { caller } = splitCaller(request.args);
+      if (caller === undefined) return requireSessions(sessions).queue.list();
+      return requireSessions(sessions).queue.list({ lane: callerScope(lanes, caller)?.lane ?? null });
+    }
+    case OWNER_CONTROL_WIRES.sessionQueueDrop:
+      return requireSessions(sessions).queue.drop(personOnly(request.args, 'session-queue drop').deliveryId);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1918,6 +2009,18 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requireSessions<T>(sessions: T | undefined): T {
+  if (sessions === undefined) throw new CommsError('CONFIG', 'agent sessions are not composed for this owner');
+  return sessions;
+}
+
+/** The one integration this release has (0.33.0 §3.5); Linear's key is a provider key, not an integration here. */
+function integrationName(args: Readonly<Record<string, unknown>>): 'agent-sessions' {
+  if (args.integration !== 'agent-sessions')
+    throw new CommsError('USAGE', 'the integration is agent-sessions', { details: { reason: 'UNKNOWN_INTEGRATION' } });
+  return 'agent-sessions';
 }
 
 function requireJudgeSetup(service: JudgeSetupService | undefined): JudgeSetupService {

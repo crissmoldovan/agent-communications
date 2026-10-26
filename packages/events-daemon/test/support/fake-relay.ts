@@ -77,6 +77,8 @@ export class FakeRelay {
   #port = 0;
   /** When set, the stream resends the record at the resumed cursor, as the relay's at-least-once delivery may. */
   resendBoundary = true;
+  /** When set, the next run start is made and its answer lost — the connection drops — as a crash or a blip would. */
+  dropNextRunAnswer = false;
 
   constructor(options: FakeRelayOptions = {}) {
     this.#options = options;
@@ -285,7 +287,13 @@ export class FakeRelay {
       if (session.attached === 'observer') return refuse(409, 'conflict', 'a watched session takes no prompt');
       if (session.activeRunId !== undefined)
         return refuse(409, 'conflict', `session ${session.id} already has active run ${session.activeRunId}`);
-      return send(202, { run: this.#newRun(session.id, input.prompt, input) });
+      const made = this.#newRun(session.id, input.prompt, input);
+      if (this.dropNextRunAnswer) {
+        this.dropNextRunAnswer = false;
+        response.destroy();
+        return;
+      }
+      return send(202, { run: made });
     }
     if (method === 'GET' && url.pathname === '/v1/events' && url.searchParams.get('follow') === '1') {
       const after = Number(url.searchParams.get('after') ?? '0');

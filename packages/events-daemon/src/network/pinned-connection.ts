@@ -27,6 +27,11 @@ const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
  * which serves TypeSafe's Jev. Exactly this URL — scheme, host `openrouter.ai`, port and path — and nothing else there.
  */
 const OPENROUTER_GLOBAL_ONLY_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
+/**
+ * And OpenRouter's chat completions (0.33.0 design §3.6): where a rule's `generate` context part has a model write text
+ * from the fields the rule maps, with the person's OpenRouter key. Exactly this URL, like the two above.
+ */
+export const OPENROUTER_CHAT_COMPLETIONS_ENDPOINT = 'https://openrouter.ai/api/v1/chat/completions';
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -131,8 +136,8 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   assertPinnedUrl(url);
   const globalOnly = options.addressMode === 'global-only';
   if (globalOnly) {
-    if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
-      // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
+    if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT || url.href === OPENROUTER_CHAT_COMPLETIONS_ENDPOINT) {
+      // Jev through OpenRouter, and OpenRouter's chat completions for a generate part: the last fixed hosted endpoints.
     } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
       throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');
     if (options.approvedAddressSetDigest !== undefined)
