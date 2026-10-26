@@ -22,6 +22,7 @@ import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { integrationSet, integrationShow, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
@@ -711,8 +712,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
-  const personSetupOrigin = async (what: string): Promise<PersonSetupOrigin> => {
-    assertNotMcpServer(env, 'setup');
+  const personSetupOrigin = async (
+    what: string,
+    action: 'setup' | 'integration' = 'setup',
+  ): Promise<PersonSetupOrigin> => {
+    assertNotMcpServer(env, action);
     const marker = agentMarker(env);
     if (marker !== null)
       throw new CommsError(
@@ -800,6 +804,69 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
         throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
+    });
+
+  // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
+  // their terminal, like an AI provider's key — and the items waiting for a busy session, theirs to read and drop.
+  const integration = program
+    .command('integration')
+    .description('the tools a rule can act in: agent-sessions, the person’s claude-stream relay');
+  integration
+    .command('show <integration>')
+    .description('where the relay is, whether it is ready, and what waits for a busy session (a person)')
+    .action(async (name: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'integration');
+      print(await integrationShow(requireIntegration(name), controlOptions(program)));
+    });
+  integration
+    .command('set <integration>')
+    .description(
+      'set where the relay is, or a folder a file part may be read from (a person, at a terminal or in the app)',
+    )
+    .option('--relay-home <path>', "the relay's home folder, where its control.token is; default for the defaults")
+    .option('--relay-port <port>', "the relay's port; default for the Pilot app's record, else 4318")
+    .option('--allow-folder <path>', 'a folder a session’s file parts may be read from (repeat for more)', collect, [])
+    .option('--remove-folder <path>', 'a folder to take off that list (repeat for more)', collect, [])
+    .action(async (name: string, options: Record<string, unknown>) => {
+      ran = true;
+      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', 'integration');
+      const port = options.relayPort as string | undefined;
+      print(
+        await integrationSet(
+          requireIntegration(name),
+          {
+            ...(options.relayHome === undefined ? {} : { relayHome: options.relayHome as string }),
+            ...(port === undefined ? {} : { relayPort: port === 'default' ? 'default' : parseRelayPort(port) }),
+            ...((options.allowFolder as string[]).length === 0
+              ? {}
+              : { allowFolders: options.allowFolder as string[] }),
+            ...((options.removeFolder as string[]).length === 0
+              ? {}
+              : { removeFolders: options.removeFolder as string[] }),
+          },
+          { ...controlOptions(program), origin },
+        ),
+      );
+    });
+  const sessionQueue = program
+    .command('session-queue')
+    .description('the matches waiting for a busy agent session, each passed on when the session’s run ends');
+  sessionQueue
+    .command('list')
+    .description('list every match waiting for a busy session, oldest first: ids and times (a person)')
+    .action(async () => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      print(await sessionQueueList(controlOptions(program)));
+    });
+  sessionQueue
+    .command('drop <delivery-id>')
+    .description('drop a waiting match: its delivery is cancelled and what it held purged, at once (a person)')
+    .action(async (deliveryId: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      print(await sessionQueueDrop(deliveryId, controlOptions(program)));
     });
 
   const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');
@@ -1197,6 +1264,23 @@ function isTerminalSecretReveal(
   value: unknown,
 ): value is { readonly receipt: Record<string, unknown>; readonly terminalReveal: string } {
   return isRecord(value) && isRecord(value.receipt) && typeof value.terminalReveal === 'string';
+}
+
+/** Commander's repeatable option: each value given, in order. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+/** The one integration this release has (0.33.0 §3.5). */
+function requireIntegration(name: string): string {
+  if (name !== 'agent-sessions') throw new CommsError('USAGE', 'the integration is agent-sessions');
+  return name;
+}
+
+function parseRelayPort(value: string): number {
+  if (!/^[1-9][0-9]{0,4}$/u.test(value) || Number(value) > 65_535)
+    throw new CommsError('USAGE', "the relay's port is a whole number from 1 to 65535, or default");
+  return Number(value);
 }
 
 /** The most a provider key read from the app's stdin may be. */

@@ -23,7 +23,16 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' = 'read',
+  action:
+    | 'read'
+    | 'clear'
+    | 'bind'
+    | 'delivery'
+    | 'dryrun'
+    | 'messages'
+    | 'setup'
+    | 'integration'
+    | 'sessions' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -67,6 +76,18 @@ export function assertNotMcpServer(
       message:
         "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
       hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
+    },
+    // Agent sessions (0.33.0 §3.5): where the person's claude-stream relay is, and its token's home, are the person's.
+    integration: {
+      message:
+        "where Agent Comms finds your claude-stream relay is for a person, at a terminal or in the app — the event service's MCP server cannot read or change it",
+      hint: 'An agent can ask the person to set it in the app: Settings → Integrations → Agent sessions.',
+    },
+    // The busy queue (0.33.0 §3.5): the person's to read and drop from; a bound window sees its own lane's over MCP.
+    sessions: {
+      message:
+        "the items waiting for a busy session are for a person to manage, at a terminal or in the app — the event service's MCP server cannot drop one",
+      hint: 'events_session_queue_list shows a bound window the items of its own lane.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

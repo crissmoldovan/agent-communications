@@ -48,6 +48,8 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'messages',
     'message',
     'provider',
+    'integration',
+    'session-queue',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -118,8 +120,14 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_wait',
         'events_lane_item',
         'events_provider_list',
+        'events_session_queue_list',
       ].sort(),
     );
+    for (const personal of ['events_integration_show', 'events_integration_set', 'events_session_queue_drop'])
+      assert.ok(
+        !names.includes(personal),
+        `${personal}: where the relay is, and dropping a waiting match, are the person's (0.33.0 §3.5)`,
+      );
     for (const personal of ['events_judge_setup', 'events_provider_key_set', 'events_provider_key_remove'])
       assert.ok(
         !names.includes(personal),

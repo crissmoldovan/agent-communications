@@ -2,11 +2,20 @@ import { lstat, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { inspect } from 'node:util';
 import { CommsError } from '@agentcomms/core';
+import {
+  addressSetDigest,
+  connectPinnedTcp,
+  PinnedResponseError,
+  preparePinnedConnection,
+  requestBytesForPinnedConnection,
+  streamPinnedResponseTo,
+} from '../network/pinned-connection.ts';
 
 /**
  * Agent Comms as one more client of the claude-stream relay the person already runs (0.33.0 design §3.5, §6). It speaks
  * the relay's documented HTTP API — `/v1`, events at `schemaVersion: 1` — on loopback only, with the relay's control
- * token read from its home as the same user. Nothing here starts, embeds or configures a relay.
+ * token read from its home as the same user. Nothing here starts, embeds or configures a relay. Like every network path
+ * of the event service it uses no fetch: HTTP/1.1 over the pinned path, to 127.0.0.1 alone.
  *
  * The token goes only into the `Authorization` header of a request this module makes: never into argv, a URL, a log
  * line, a result or an error. A token file others can read is refused, as the relay itself refuses one.
@@ -46,6 +55,8 @@ const MAX_RECORD_BYTES = 4_096;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_SSE_LINE = 512 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
+/** The relay answers on loopback only (claude-stream refuses a non-loopback bind): 127.0.0.1, the one approved address. */
+const LOOPBACK = '127.0.0.1';
 
 /** Why the relay could not be used, as a closed reason the person can act on. */
 export type RelayRefusal =
@@ -348,13 +359,9 @@ function run(value: unknown): RelayRunV1 {
   };
 }
 
-/** The fetch this client uses; tests give a loopback fake relay, never claude-stream. */
-export type RelayFetch = (input: string, init: RequestInit) => Promise<Response>;
-
 export interface RelayClientOptions {
   readonly url: string;
   readonly token: RelayToken;
-  readonly fetch?: RelayFetch | undefined;
   readonly timeoutMs?: number | undefined;
 }
 
@@ -372,13 +379,11 @@ export interface RelayFollowHandlers {
 export class RelayClient {
   readonly #url: URL;
   readonly #token: RelayToken;
-  readonly #fetch: RelayFetch;
   readonly #timeoutMs: number;
 
   constructor(options: RelayClientOptions) {
     this.#url = assertLoopbackRelayUrl(options.url);
     this.#token = options.token;
-    this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
   }
 
@@ -477,10 +482,10 @@ export class RelayClient {
   }
 
   /**
-   * Follows `GET /v1/events?follow=1` — read with `fetch`, since an EventSource cannot send the Authorization header —
-   * until `signal` aborts or the relay closes the stream. Resumes with `Last-Event-ID` when `lastEventId` is given,
-   * and tells `onEvent` each record once, by its `id`: delivery is at least once, so a repeat after a resume is
-   * dropped. Returns the last cursor it read, for the next resume.
+   * Follows `GET /v1/events?follow=1` until `signal` aborts or the relay ends the stream — with the Authorization header,
+   * which an EventSource cannot send — resuming with `Last-Event-ID` when `lastEventId` is given. Each record is told
+   * once, by its `id`: delivery is at least once, so a repeat after a resume is dropped. Returns the last cursor read,
+   * for the next resume. A keepalive comes every 15 seconds, so a stream silent for 45 is taken as dropped.
    */
   async follow(input: {
     readonly after: number;
@@ -491,38 +496,12 @@ export class RelayClient {
     readonly handlers: RelayFollowHandlers;
   }): Promise<number> {
     const query = new URLSearchParams({ follow: '1', after: String(input.after), types: input.types.join(',') });
-    let response: Response;
-    try {
-      response = await this.#fetch(new URL(`/v1/events?${query.toString()}`, this.#url).toString(), {
-        method: 'GET',
-        headers: {
-          authorization: this.#token.authorization(),
-          accept: 'text/event-stream',
-          ...(input.lastEventId === undefined ? {} : { 'last-event-id': String(input.lastEventId) }),
-        },
-        redirect: 'error',
-        signal: input.signal,
-      });
-    } catch (error) {
-      if (input.signal.aborted) return input.lastEventId ?? input.after;
-      throw unreachable(error);
-    }
-    if (response.status !== 200) {
-      await response.body?.cancel();
-      throw refusedBy(response.status, null);
-    }
-    input.handlers.onOpen?.(response.headers.get('x-relay-journal'));
     let cursor = input.lastEventId ?? input.after;
-    const reader = response.body?.getReader();
-    if (reader === undefined) return cursor;
-    const decoder = new TextDecoder();
-    let buffered = '';
-    let frame: { id?: string; event?: string; data: string[] } = { data: [] };
+    let frame: { event?: string; data: string[] } = { data: [] };
     const dispatch = () => {
       const current = frame;
       frame = { data: [] };
       if (current.data.length === 0) return;
-      const data = current.data.join('\n');
       if (current.event === 'relay-gap') {
         input.handlers.onGap?.();
         return;
@@ -531,7 +510,7 @@ export class RelayClient {
       if (current.event !== undefined && current.event !== 'relay') return;
       let parsed: unknown;
       try {
-        parsed = JSON.parse(data);
+        parsed = JSON.parse(current.data.join('\n'));
       } catch {
         return;
       }
@@ -550,38 +529,52 @@ export class RelayClient {
         type: parsed.type,
       });
     };
-    try {
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buffered += decoder.decode(value, { stream: true });
-        if (buffered.length > MAX_SSE_LINE && !buffered.includes('\n')) throw new StreamClosed();
-        let newline = buffered.search(/\r\n|\n|\r/u);
-        while (newline !== -1) {
-          const line = buffered.slice(0, newline);
-          const width = buffered.startsWith('\r\n', newline) ? 2 : 1;
-          buffered = buffered.slice(newline + width);
-          if (line === '') dispatch();
-          else if (!line.startsWith(':')) {
-            const colon = line.indexOf(':');
-            const field = colon === -1 ? line : line.slice(0, colon);
-            const raw = colon === -1 ? '' : line.slice(colon + 1);
-            const text = raw.startsWith(' ') ? raw.slice(1) : raw;
-            if (field === 'data') frame.data.push(text);
-            else if (field === 'event') frame.event = text;
-            else if (field === 'id') {
-              frame.id = text;
-              const id = Number(text);
-              if (Number.isSafeInteger(id) && id > cursor) cursor = id;
-            }
+    let buffered = '';
+    const decoder = new TextDecoder();
+    const lines = (text: string) => {
+      buffered += text;
+      if (buffered.length > MAX_SSE_LINE && !/[\r\n]/u.test(buffered)) throw new StreamClosed();
+      let newline = buffered.search(/\r\n|\n|\r/u);
+      while (newline !== -1) {
+        const line = buffered.slice(0, newline);
+        buffered = buffered.slice(newline + (buffered.startsWith('\r\n', newline) ? 2 : 1));
+        if (line === '') dispatch();
+        else if (!line.startsWith(':')) {
+          const colon = line.indexOf(':');
+          const field = colon === -1 ? line : line.slice(0, colon);
+          const raw = colon === -1 ? '' : line.slice(colon + 1);
+          const value = raw.startsWith(' ') ? raw.slice(1) : raw;
+          if (field === 'data') frame.data.push(value);
+          else if (field === 'event') frame.event = value;
+          else if (field === 'id') {
+            const id = Number(value);
+            if (Number.isSafeInteger(id) && id > cursor) cursor = id;
           }
-          newline = buffered.search(/\r\n|\n|\r/u);
         }
+        newline = buffered.search(/\r\n|\n|\r/u);
       }
-    } catch {
-      // A stream the relay closed, dropped or overflowed ends here; the caller resumes from the cursor it returns.
-    } finally {
-      await reader.cancel().catch(() => undefined);
+    };
+    try {
+      await exchange(this.#url, {
+        method: 'GET',
+        path: `/v1/events?${query.toString()}`,
+        headers: {
+          Authorization: this.#token.authorization(),
+          Accept: 'text/event-stream',
+          ...(input.lastEventId === undefined ? {} : { 'Last-Event-ID': String(input.lastEventId) }),
+        },
+        maxBytes: Number.MAX_SAFE_INTEGER,
+        idleTimeoutMs: SSE_IDLE_MS,
+        signal: input.signal,
+        onHead: (head) => {
+          if (head.status !== 200) throw refusedBy(head.status, null);
+          input.handlers.onOpen?.(head.headers.get('x-relay-journal') ?? null);
+        },
+        onBody: (chunk) => lines(decoder.decode(chunk, { stream: true })),
+      });
+    } catch (error) {
+      if (!(error instanceof StreamEnded)) throw error;
+      // A stream the relay closed, dropped or let go silent ends here; the caller resumes from the cursor returned.
     }
     return cursor;
   }
@@ -592,23 +585,19 @@ export class RelayClient {
     body?: unknown,
     accepted: readonly number[] = [200],
   ): Promise<{ readonly status: number; readonly value: unknown }> {
-    let response: Response;
-    try {
-      response = await this.#fetch(new URL(path, this.#url).toString(), {
-        method,
-        headers: {
-          authorization: this.#token.authorization(),
-          accept: 'application/json',
-          ...(body === undefined ? {} : { 'content-type': 'application/json' }),
-        },
-        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-        redirect: 'error',
-        signal: AbortSignal.timeout(this.#timeoutMs),
-      });
-    } catch (error) {
-      throw unreachable(error);
-    }
-    const text = await boundedText(response);
+    const response = await exchange(this.#url, {
+      method,
+      path,
+      headers: {
+        Authorization: this.#token.authorization(),
+        Accept: 'application/json',
+        ...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: Buffer.from(JSON.stringify(body)) }),
+      maxBytes: MAX_RESPONSE_BYTES,
+      totalTimeoutMs: this.#timeoutMs,
+    });
+    const text = response.body.toString('utf8');
     let value: unknown = null;
     if (text.length > 0) {
       try {
@@ -633,14 +622,169 @@ export class RelayClient {
 
 class StreamClosed extends Error {}
 
-function unreachable(error: unknown): RelayError {
-  const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError');
-  return new RelayError(
-    'RELAY_UNREACHABLE',
-    timedOut
-      ? 'the claude-stream relay did not answer in time'
-      : 'the claude-stream relay could not be reached: is it running (or is the Pilot app open)?',
-  );
+/** A follow stream that ended — closed, dropped or silent — rather than one that could not be opened. */
+class StreamEnded extends RelayError {}
+
+const SSE_IDLE_MS = 45_000;
+
+interface HttpHead {
+  readonly status: number;
+  readonly headers: ReadonlyMap<string, string>;
+}
+
+/** The status line and headers of an HTTP/1.1 response, names lower-cased; null when they are not one. */
+function parseHead(text: string): HttpHead | null {
+  const [statusLine, ...lines] = text.split('\r\n');
+  const status = /^HTTP\/1\.[01] ([0-9]{3})(?: |$)/u.exec(statusLine ?? '');
+  if (status?.[1] === undefined) return null;
+  const headers = new Map<string, string>();
+  for (const line of lines) {
+    const colon = line.indexOf(':');
+    if (colon <= 0) return null;
+    headers.set(line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim());
+  }
+  return { status: Number(status[1]), headers };
+}
+
+/** Undoes `Transfer-Encoding: chunked` as the bytes come, handing on each chunk's data. */
+class ChunkedDecoder {
+  #buffer = Buffer.alloc(0);
+  #remaining = -1;
+  #done = false;
+
+  push(bytes: Buffer, emit: (data: Buffer) => void): void {
+    this.#buffer = Buffer.concat([this.#buffer, bytes]);
+    while (!this.#done) {
+      if (this.#remaining < 0) {
+        const end = this.#buffer.indexOf('\r\n');
+        if (end === -1) {
+          if (this.#buffer.length > 64) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay sent a malformed chunk');
+          return;
+        }
+        const size = Number.parseInt(this.#buffer.subarray(0, end).toString('latin1').split(';')[0] ?? '', 16);
+        if (!Number.isSafeInteger(size) || size < 0)
+          throw new RelayError('RELAY_BAD_RESPONSE', 'the relay sent a malformed chunk');
+        this.#buffer = this.#buffer.subarray(end + 2);
+        if (size === 0) {
+          this.#done = true;
+          return;
+        }
+        this.#remaining = size;
+      }
+      if (this.#buffer.length < this.#remaining + 2) {
+        if (this.#buffer.length > 0 && this.#remaining > 0) {
+          const take = Math.min(this.#buffer.length, this.#remaining);
+          emit(this.#buffer.subarray(0, take));
+          this.#buffer = this.#buffer.subarray(take);
+          this.#remaining -= take;
+          if (this.#remaining > 0) return;
+          continue;
+        }
+        return;
+      }
+      if (this.#remaining > 0) emit(this.#buffer.subarray(0, this.#remaining));
+      this.#buffer = this.#buffer.subarray(this.#remaining + 2);
+      this.#remaining = -1;
+    }
+  }
+}
+
+/**
+ * One HTTP/1.1 exchange with the relay over the event service's pinned path: 127.0.0.1 as the one approved literal,
+ * a plain TCP connection to it, the raw request bytes, and the response read under a byte ceiling and a deadline —
+ * no fetch, no redirect, no proxy. `onHead` and `onBody` stream it; without them the whole body is returned.
+ */
+async function exchange(
+  base: URL,
+  input: {
+    readonly method: 'GET' | 'POST';
+    readonly path: string;
+    readonly headers: Readonly<Record<string, string>>;
+    readonly body?: Buffer | undefined;
+    readonly maxBytes: number;
+    readonly totalTimeoutMs?: number | undefined;
+    readonly idleTimeoutMs?: number | undefined;
+    readonly signal?: AbortSignal | undefined;
+    readonly onHead?: ((head: HttpHead) => void) | undefined;
+    readonly onBody?: ((chunk: Buffer) => void) | undefined;
+  },
+): Promise<{ readonly status: number; readonly headers: ReadonlyMap<string, string>; readonly body: Buffer }> {
+  let socket: Awaited<ReturnType<typeof connectPinnedTcp>>;
+  let connection: Awaited<ReturnType<typeof preparePinnedConnection>>;
+  try {
+    connection = await preparePinnedConnection({
+      url: new URL(input.path, base),
+      approvedAddressSet: [LOOPBACK],
+      approvedAddressSetDigest: addressSetDigest([LOOPBACK]),
+    });
+    socket = await connectPinnedTcp({
+      host: connection.address,
+      port: connection.port,
+      ...(input.signal === undefined ? {} : { signal: input.signal }),
+    });
+  } catch {
+    throw new RelayError(
+      'RELAY_UNREACHABLE',
+      'the claude-stream relay could not be reached: is it running (or is the Pilot app open)?',
+    );
+  }
+  let head: HttpHead | undefined;
+  let pending = Buffer.alloc(0);
+  let chunked: ChunkedDecoder | undefined;
+  const body: Buffer[] = [];
+  const emit = (data: Buffer) => {
+    if (input.onBody === undefined) body.push(Buffer.from(data));
+    else input.onBody(data);
+  };
+  try {
+    await streamPinnedResponseTo(
+      socket,
+      requestBytesForPinnedConnection(connection, input.method, input.body, input.headers),
+      {
+        maxBytes: input.maxBytes,
+        ...(input.signal === undefined ? {} : { signal: input.signal }),
+        ...(input.totalTimeoutMs === undefined ? {} : { totalTimeoutMs: input.totalTimeoutMs }),
+        ...(input.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: input.idleTimeoutMs }),
+        onChunk: (chunk) => {
+          if (head === undefined) {
+            pending = Buffer.concat([pending, chunk]);
+            const end = pending.indexOf('\r\n\r\n');
+            if (end === -1) {
+              if (pending.length > 16_384) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay sent an odd answer');
+              return;
+            }
+            const parsed = parseHead(pending.subarray(0, end).toString('latin1'));
+            if (parsed === null) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay sent an odd answer');
+            head = parsed;
+            if (/\bchunked\b/iu.test(parsed.headers.get('transfer-encoding') ?? '')) chunked = new ChunkedDecoder();
+            input.onHead?.(parsed);
+            chunk = pending.subarray(end + 4);
+            pending = Buffer.alloc(0);
+          }
+          if (chunk.length === 0) return;
+          if (chunked === undefined) emit(chunk);
+          else chunked.push(chunk, emit);
+        },
+      },
+    );
+  } catch (error) {
+    socket.destroy();
+    if (error instanceof RelayError) throw error;
+    if (head !== undefined && input.onBody !== undefined)
+      throw new StreamEnded('RELAY_UNREACHABLE', 'the relay ended the stream');
+    if (error instanceof PinnedResponseError && error.code === 'NETWORK_TOTAL_TIMEOUT')
+      throw new RelayError('RELAY_UNREACHABLE', 'the claude-stream relay did not answer in time');
+    throw new RelayError(
+      'RELAY_UNREACHABLE',
+      'the claude-stream relay could not be reached: is it running (or is the Pilot app open)?',
+    );
+  } finally {
+    socket.destroy();
+  }
+  // A connection closed before any answer: the request may or may not have been acted on, as with any lost answer.
+  if (head === undefined)
+    throw new RelayError('RELAY_UNREACHABLE', 'the relay closed the connection before it answered');
+  return { status: head.status, headers: head.headers, body: Buffer.concat(body) };
 }
 
 /** A refusal by status: the relay's own error code is kept (a closed word), its message is not. */
@@ -660,23 +804,4 @@ function refusedBy(status: number, relayCode: string | null): RelayError {
     status,
     ...(code === undefined ? {} : { relayCode: code }),
   });
-}
-
-async function boundedText(response: Response): Promise<string> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) return '';
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    for (;;) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_RESPONSE_BYTES) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered too much');
-      chunks.push(value);
-    }
-  } finally {
-    await reader.cancel().catch(() => undefined);
-  }
-  return Buffer.concat(chunks).toString('utf8');
 }

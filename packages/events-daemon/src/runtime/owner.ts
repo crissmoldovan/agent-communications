@@ -127,7 +127,6 @@ import { QueueDispatcher } from './queue-dispatcher.ts';
 import { PERSON, type QueueActor } from './queue-history.ts';
 import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
-import type { RelayFetch } from './relay-client.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
 import { RuleReader } from './rule-show.ts';
@@ -231,14 +230,12 @@ export interface EventOwnerOptions {
    */
   /**
    * Agent sessions (0.33.0 §3.5), test seams only: the home folder the relay's default homes are found under — a test
-   * pins a temp folder, so no real relay home is read — the fetch that reaches its loopback fake relay, a fake model
-   * for generate parts, and how often the busy queue asks the relay again. Production uses the person's home, Node's
-   * fetch, OpenRouter with the person's key, and 30 seconds.
+   * pins a temp folder, so no real relay home is read — a fake model for generate parts, and how often the busy queue
+   * asks the relay again. Production uses the person's home, OpenRouter with the person's key, and 30 seconds.
    */
   readonly agentSessions?:
     | {
         readonly homeDirectory?: string | undefined;
-        readonly fetch?: RelayFetch | undefined;
         readonly generate?: ContextGenerator | undefined;
         readonly reconcileMs?: number | undefined;
       }
@@ -1193,7 +1190,6 @@ async function startOwnerWithLock(
     store: database,
     homeDirectory: options.agentSessions?.homeDirectory ?? homeDirectory(),
     audit: core.audit,
-    ...(options.agentSessions?.fetch === undefined ? {} : { fetch: options.agentSessions.fetch }),
     now,
   });
   const sessionQueue = new SessionQueue({ store: database, now });

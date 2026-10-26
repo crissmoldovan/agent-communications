@@ -181,5 +181,26 @@
   {
     "name": "provider-key-remove-request",
     "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+  },
+  {
+    "name": "integration-show-request",
+    "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } }
+  },
+  {
+    "name": "integration-set-request",
+    "request": {
+      "operation": "integration-set",
+      "args": {
+        "integration": "agent-sessions",
+        "relayHome": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "relayPort": "default",
+        "allowFolders": ["/example/home/work"]
+      }
+    }
+  },
+  { "name": "session-queue-list-request", "request": { "operation": "session-queue-list", "args": {} } },
+  {
+    "name": "session-queue-drop-request",
+    "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } }
   }
 ]

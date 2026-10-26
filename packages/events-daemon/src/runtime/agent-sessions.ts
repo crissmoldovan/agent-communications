@@ -9,7 +9,6 @@ import {
   locateRelay,
   RelayClient,
   RelayError,
-  type RelayFetch,
   type RelayInfoV1,
   type RelayLocation,
   readRelayToken,
@@ -67,8 +66,6 @@ export interface AgentSessionServiceOptions {
   readonly store: EventDatabase;
   readonly homeDirectory: string;
   readonly audit?: Pick<AuditLog, 'append'> | undefined;
-  /** Tests give a fetch that reaches the loopback fake relay; production uses Node's. */
-  readonly fetch?: RelayFetch | undefined;
   readonly now?: (() => number) | undefined;
 }
 
@@ -83,14 +80,12 @@ export class AgentSessionService {
   readonly #store: EventDatabase;
   readonly #homeDirectory: string;
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
-  readonly #fetch: RelayFetch | undefined;
   readonly #now: () => number;
 
   constructor(options: AgentSessionServiceOptions) {
     this.#store = options.store;
     this.#homeDirectory = options.homeDirectory;
     this.#audit = options.audit;
-    this.#fetch = options.fetch;
     this.#now = options.now ?? Date.now;
   }
 
@@ -120,11 +115,7 @@ export class AgentSessionService {
     const settings = this.settings();
     const location = await locateRelay(settings, this.#homeDirectory);
     const token = await readRelayToken(location.home);
-    const client = new RelayClient({
-      url: location.url,
-      token,
-      ...(this.#fetch === undefined ? {} : { fetch: this.#fetch }),
-    });
+    const client = new RelayClient({ url: location.url, token });
     const info = await client.ready();
     return { client, location, info };
   }

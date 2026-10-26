@@ -199,7 +199,7 @@ test('RELAY-5: sessions, a snapshot, a new session, and a run whose startId make
   });
 });
 
-test('RELAY-6: the event stream is followed with fetch, resumed with Last-Event-ID, and each record told once', async () => {
+test('RELAY-6: the event stream is followed with the bearer token, resumed with Last-Event-ID, and each record told once', async () => {
   await withRelay(async (relay, root) => {
     const client = await clientFor(relay, root);
     const session = relay.addSession({ cwd: '/example/home/acme' });
