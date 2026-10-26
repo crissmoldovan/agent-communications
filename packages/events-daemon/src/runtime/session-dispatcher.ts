@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
 import { type ApprovalStore, CommsError, type ConfigStore, newBoundary, wrapUntrusted } from '@agentcomms/core';
-import { buildSessionPrompt, type JsonValue } from '@agentcomms/events';
+import { buildSessionPrompt, type JsonValue, type ResolvedContextPart } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { newQueueItemId, parseQueueItemContent } from '../domain/queue-target.ts';
 import type { SessionTargetDocument } from '../domain/session-target.ts';
@@ -26,7 +26,7 @@ import { queueItemLocation, ruleFor } from './queue-dispatcher.ts';
 import type { RelaySessionV1, RelaySnapshotV1 } from './relay-client.ts';
 import { isPromptableSession, RelayError } from './relay-client.ts';
 import type { ContextGenerator } from './session-context.ts';
-import { resolveContextParts } from './session-context.ts';
+import { fileStillAllowed, resolveContextParts } from './session-context.ts';
 import { enqueueSessionDeliveryInTransaction, type SessionQueueFollower } from './session-queue.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
@@ -268,14 +268,15 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     if (made !== undefined) return this.#delivered(delivery, made.id);
     if (snapshot.session.activeRunId !== undefined) return this.#busy(delivery, sessionId);
     await this.#refence(delivery);
-    // The prompt is written once per delivery — its model parts run once, its files are read once — and kept sealed in
-    // the delivery's own record, so a busy session's next try sends the same words (security review of 0.33.0, 3).
-    let prompt = delivery.record.prompt ?? null;
-    if (prompt === null) {
-      prompt = await this.#prompt(delivery, ready);
-      if (prompt === null) return this.#deadLetter(delivery, 'PROMPT_TOO_LARGE');
-      if (!(await this.#keepPrompt(delivery, prompt))) return { state: 'terminal', deliveryId: delivery.claim.id };
-    }
+    // The context is resolved once per delivery — its model parts run once, its files are read once — and kept sealed
+    // in the delivery's own record, so a busy session's next try sends the same words (security review of 0.33.0, 3).
+    // A kept file part is sent again only while its folder is still one it may be read from (second look, 2).
+    const kept = delivery.record.parts;
+    const parts = kept === undefined ? await this.#resolve(delivery, ready) : await this.#stillAllowed(kept, ready);
+    const prompt = await this.#prompt(delivery, parts);
+    if (prompt === null) return this.#deadLetter(delivery, 'PROMPT_TOO_LARGE');
+    if (kept === undefined && !(await this.#keepParts(delivery, parts)))
+      return { state: 'terminal', deliveryId: delivery.claim.id };
     const visible = await this.#visible(delivery);
     if (!visible) {
       this.#finish(delivery.claim, { state: 'cancelled' });
@@ -287,11 +288,11 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
   }
 
   /**
-   * Seals the written prompt into the delivery's own record, beside what it was written from, inside a transaction that
-   * proves the claim is still this attempt's. The record goes when the delivery ends, as before.
+   * Seals the resolved context into the delivery's own record, beside what it was resolved from, inside a transaction
+   * that proves the claim is still this attempt's. The record goes when the delivery ends — dead-lettered too.
    */
-  async #keepPrompt(delivery: Delivery, prompt: string): Promise<boolean> {
-    const record: SessionDeliveryRecord = { ...delivery.record, prompt };
+  async #keepParts(delivery: Delivery, parts: readonly ResolvedContextPart[]): Promise<boolean> {
+    const record: SessionDeliveryRecord = { ...delivery.record, parts };
     const sealed = await this.#cipher.encrypt(deliveryLocation(delivery.claim.id), Buffer.from(JSON.stringify(record)));
     return this.#store.immediate(
       () =>
@@ -400,15 +401,40 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     });
   }
 
-  /** The fixed frame, from the parts this delivery's target lists; null when it is longer than a session takes. */
-  async #prompt(delivery: Delivery, ready: ReadyRelay): Promise<string | null> {
-    const parts = await resolveContextParts({
+  /** The parts this delivery's target lists, resolved: each model's words, each file's text, or the note for each. */
+  async #resolve(delivery: Delivery, ready: ReadyRelay): Promise<readonly ResolvedContextPart[]> {
+    return resolveContextParts({
       parts: delivery.target.context,
       values: delivery.record.values,
       fileRoots: await this.#sessions.fileRoots(ready),
       deniedFolders: this.#sessions.deniedFolders(),
       generate: this.#generate,
     });
+  }
+
+  /**
+   * The kept parts, each file part's folder checked again against the folders a file may be read from now: one the
+   * person has since taken off the list, or one the relay no longer allows, is left out, with the note that says so.
+   */
+  async #stillAllowed(
+    parts: readonly ResolvedContextPart[],
+    ready: ReadyRelay,
+  ): Promise<readonly ResolvedContextPart[]> {
+    if (!parts.some((part) => part.kind === 'file')) return parts;
+    const roots = await this.#sessions.fileRoots(ready);
+    const denied = this.#sessions.deniedFolders();
+    const checked: ResolvedContextPart[] = [];
+    for (const part of parts)
+      checked.push(
+        part.kind === 'file' && !(await fileStillAllowed(part.path, roots, denied))
+          ? { kind: 'file-missing', path: part.path, reason: 'outside' }
+          : part,
+      );
+    return checked;
+  }
+
+  /** The fixed frame around the resolved parts, with a boundary of its own; null when it is longer than a session takes. */
+  async #prompt(delivery: Delivery, parts: readonly ResolvedContextPart[]): Promise<string | null> {
     const boundary = newBoundary();
     const built = buildSessionPrompt({
       ruleId: delivery.rule.ruleId,
@@ -629,8 +655,8 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
         isCurrentDeliveryClaim(this.#store.database, delivery.claim) &&
         this.#store.database
           .prepare(
-            `UPDATE deliveries SET state = 'dead-lettered', lease_until = NULL, next_at = NULL, last_error_code = ?,
-                    dead_lettered_at = COALESCE(dead_lettered_at, ?),
+            `UPDATE deliveries SET state = 'dead-lettered', encrypted_record = NULL, lease_until = NULL, next_at = NULL,
+                    last_error_code = ?, dead_lettered_at = COALESCE(dead_lettered_at, ?),
                     dead_letter_expires_at = COALESCE(dead_letter_expires_at, ?)
               WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
           )
@@ -742,6 +768,40 @@ function dropRetainedTargetReference(database: EventDatabase['database'], delive
 }
 
 /** Reads back a sealed session record; anything malformed is unreadable, never used in part. */
+const GENERATE_FAILURES = new Set(['no-key', 'timeout', 'refused', 'failed', 'too-long', 'empty']);
+const FILE_FAILURES = new Set(['missing', 'too-large', 'outside', 'not-a-file', 'unreadable']);
+const GENERATE_PROVIDERS = new Set(['openrouter', 'anthropic']);
+
+/** The resolved parts a record keeps, each of a shape the frame reads; null when any is not. */
+function keptParts(value: unknown): readonly ResolvedContextPart[] | null {
+  if (!Array.isArray(value)) return null;
+  const text = (entry: unknown): entry is string => typeof entry === 'string';
+  for (const part of value as unknown[]) {
+    if (typeof part !== 'object' || part === null) return null;
+    const entry = part as Record<string, unknown>;
+    const ok =
+      entry.kind === 'text'
+        ? text(entry.text)
+        : entry.kind === 'fields'
+          ? Array.isArray(entry.fields) &&
+            entry.fields.every(text) &&
+            typeof entry.values === 'object' &&
+            entry.values !== null &&
+            !Array.isArray(entry.values)
+          : entry.kind === 'generated'
+            ? GENERATE_PROVIDERS.has(entry.provider as string) && text(entry.model) && text(entry.text)
+            : entry.kind === 'generate-failed'
+              ? GENERATE_PROVIDERS.has(entry.provider as string) &&
+                text(entry.model) &&
+                GENERATE_FAILURES.has(entry.reason as string)
+              : entry.kind === 'file'
+                ? text(entry.path) && text(entry.text)
+                : entry.kind === 'file-missing' && text(entry.path) && FILE_FAILURES.has(entry.reason as string);
+    if (!ok) return null;
+  }
+  return value as readonly ResolvedContextPart[];
+}
+
 function sessionRecord(value: Buffer): SessionDeliveryRecord | null {
   try {
     const parsed = JSON.parse(value.toString('utf8')) as Partial<SessionDeliveryRecord>;
@@ -753,13 +813,18 @@ function sessionRecord(value: Buffer): SessionDeliveryRecord | null {
       if (content === null) return null;
       item = content;
     }
-    if (parsed.prompt !== undefined && (typeof parsed.prompt !== 'string' || parsed.prompt.length === 0)) return null;
+    let parts: readonly ResolvedContextPart[] | undefined;
+    if (parsed.parts !== undefined) {
+      const kept = keptParts(parsed.parts);
+      if (kept === null) return null;
+      parts = kept;
+    }
     return {
       kind: 'session-message',
       values: parsed.values as Readonly<Record<string, JsonValue>>,
       ...(item === undefined ? {} : { item }),
       released: parsed.released,
-      ...(parsed.prompt === undefined ? {} : { prompt: parsed.prompt }),
+      ...(parts === undefined ? {} : { parts }),
     };
   } catch {
     return null;

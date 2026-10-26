@@ -29,7 +29,8 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
  * The 0.33.0 security review's findings on the agent-session target, kept as regressions: a lane session target's
  * counts stay out of an unbound window (5); a 409 that is not "busy" never loops the busy queue, and a match's model
  * part runs once (3); a FIFO named by a file part never stalls the event service (4). The second look's, as REVIEW2-n: a
- * delivery starts at most one session (1).
+ * delivery starts at most one session (1); a dead letter keeps no record, and a waiting match's kept file part goes only
+ * while its folder is still allowed (2).
  */
 
 const PERSON = 'person-setup:terminal';
@@ -429,4 +430,69 @@ test('REVIEW2-1: a delivery starts at most one session; when the relay fences or
       },
       { reconcileMs: 100 },
     );
+});
+
+function sessionRecordKept(harness: LaneHarness): boolean | undefined {
+  return readDatabase(harness.stateDir, (database) => {
+    const row = database
+      .prepare("SELECT encrypted_record IS NOT NULL AS kept FROM deliveries WHERE target_kind = 'session'")
+      .get() as { kept: number } | undefined;
+    return row === undefined ? undefined : row.kept === 1;
+  });
+}
+
+test('REVIEW2-2: a dead-lettered session delivery keeps no record — no file text, no model words', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      const brief = join(folder, 'brief.md');
+      await writeFile(brief, 'the house rules\n');
+      relay.fenceNewSessions = 'fenced';
+      await approveRule(harness, [{ ...queued(folder), context: [GENERATE, { file: brief }] }]);
+      harness.mailbox.send('fenced after the parts were read');
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'dead-lettered', 'the dead letter');
+      assert.equal(sessionRecordKept(harness), false, 'the sealed parts went with the dead letter');
+    },
+    { reconcileMs: 100, generate: async () => ({ ok: true, text: 'summary' }) },
+  );
+});
+
+test('REVIEW2-2: a waiting match sends a kept file part only while its folder is still allowed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let generated = 0;
+  await withReview(
+    async ({ harness, relay, root, folder }) => {
+      const docs = join(root, 'docs');
+      await mkdir(docs);
+      const brief = join(docs, 'brief.md');
+      await writeFile(brief, 'the house rules, from a folder the person allowed\n');
+      const person = new EventControlClient({ stateDir: harness.stateDir, clientName: PERSON });
+      await person.request('integration-set', { integration: 'agent-sessions', allowFolders: [docs] });
+      relay.addSession({ cwd: folder });
+      // The parts are read, and the run start then loses the race, again and again: the match waits, its parts kept.
+      relay.refuseRunsAsBusy = 1_000;
+      await approveRule(harness, [{ ...queued(folder), context: [GENERATE, { file: brief }] }]);
+      harness.mailbox.send('waits with a file');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      assert.equal(sessionRecordKept(harness), true);
+      // While it waits, the person takes the folder off the list.
+      await person.request('integration-set', { integration: 'agent-sessions', removeFolders: [docs] });
+      relay.refuseRunsAsBusy = 0;
+      await until(harness, () => relay.runs.length === 1, 'the run');
+      const prompt = relay.runs[0]?.prompt ?? '';
+      assert.ok(!prompt.includes('the house rules'), 'the file’s text is not sent');
+      assert.match(prompt, /brief\.md: left out, because it is outside the folders it may be read from\./u);
+      assert.match(prompt, /summary/u, 'the rest of the kept context goes');
+      assert.equal(generated, 1, 'and its model part was not run again');
+    },
+    {
+      reconcileMs: 100,
+      generate: async () => {
+        generated += 1;
+        return { ok: true, text: 'summary' };
+      },
+    },
+  );
 });

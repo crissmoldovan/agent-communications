@@ -444,8 +444,11 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
   OpenRouter or Anthropic key, at most 400 tokens, once for each match. A file is read only under the relay's allowed
   roots or a folder you add (`--allow-folder`), at most 64 KB, and only when it is a plain file of yours with no other
   name (no link, hard link or FIFO), never in Agent Comms' own folders; a relay root of `/` or your home folder itself
-  confines nothing, so it is ignored, and `--allow-folder` refuses them. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose `acceptEdits`
-  or `plan`; a rule can never fix `bypassPermissions`.
+  confines nothing, so it is ignored, and `--allow-folder` refuses them. What a match's parts resolved to is kept,
+  sealed with the match, only while it may still be sent: a match that fails keeps none of it, and one that waited
+  sends a file's text only if its folder is still allowed — a folder you have since removed (`--remove-folder`) leaves
+  a note in its place. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose
+  `acceptEdits` or `plan`; a rule can never fix `bypassPermissions`.
 - **claude-stream keeps what it is sent.** The relay journals each prompt, the sender's words included, under its own
   retention: Agent Comms' retention settings do not reach it, and the approval preview says so.
 - **A busy session queues the match** until its run ends (or leaves it in the Queue, with `if busy leave it in the

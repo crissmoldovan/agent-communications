@@ -4,6 +4,7 @@ import {
   contextFieldValues,
   type JsonValue,
   type MappedClassification,
+  type ResolvedContextPart,
   targetQueues,
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument, TargetDocument } from '../domain/activation-documents.ts';
@@ -58,8 +59,11 @@ export interface SessionDeliveryRecord {
   readonly values: Readonly<Record<string, JsonValue>>;
   readonly item?: QueueItemContent | undefined;
   readonly released: boolean;
-  /** The prompt, once written: kept so a later try sends the same words, and no model part runs twice. */
-  readonly prompt?: string | undefined;
+  /**
+   * The context parts, once resolved — each model's words, each file's text — kept so a later try sends the same words
+   * and no model part runs twice. The prompt is framed from them on each try, after each file's folder is checked again.
+   */
+  readonly parts?: readonly ResolvedContextPart[] | undefined;
 }
 
 /**

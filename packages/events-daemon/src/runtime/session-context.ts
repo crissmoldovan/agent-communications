@@ -1,5 +1,6 @@
 import { constants } from 'node:fs';
 import { lstat, open, realpath } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import {
   CONTEXT_LIMITS,
   type ContextGenerate,
@@ -123,6 +124,32 @@ export async function readContextFile(
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/**
+ * Whether a file part read earlier may still be sent: its folder is still under one of `roots` and under none of
+ * `denied`, as its path and as its realpath — a file since gone is judged by its folder's (security review of 0.33.0,
+ * second look, 2). Its text is not read again.
+ */
+export async function fileStillAllowed(
+  path: string,
+  roots: readonly string[],
+  denied: readonly string[] = [],
+): Promise<boolean> {
+  if (!roots.some((root) => isInside(path, root))) return false;
+  if (denied.some((folder) => isInside(path, folder))) return false;
+  let real: string;
+  try {
+    real = await realpath(path);
+  } catch {
+    try {
+      real = join(await realpath(dirname(path)), basename(path));
+    } catch {
+      return false;
+    }
+  }
+  if (!(await realpaths(roots)).some((root) => isInside(real, root))) return false;
+  return !(await realpaths(denied)).some((folder) => isInside(real, folder));
 }
 
 /** Resolves each part in order: its text, its mapped values, its model's words, its file — or the note for each. */
