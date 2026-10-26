@@ -25,7 +25,8 @@ export type ContextView =
   | { kind: 'generate'; provider: string; model: string; instruction: string; from: string[] }
   | { kind: 'file'; path: string };
 
-function contextPart(part: unknown): ContextView | null {
+/** One context part as the editor reads it; null for a part it has no control for. */
+export function contextPart(part: unknown): ContextView | null {
   if (!isObject(part)) return null;
   const keys = Object.keys(part);
   if (keys.length !== 1) return null;
@@ -83,6 +84,11 @@ export interface SessionView {
   mode: SessionMode;
   /** Its context, part by part; null when a part has no control here (edited as text). */
   context: ContextView[] | null;
+  /**
+   * What the session is told last, as its author wrote it; null when the target tells it nothing. The card has no
+   * control for it: it is shown, marked "Edited as text", and kept as it was.
+   */
+  instruction: string | null;
 }
 
 export function sessionView(target: JsonObject): SessionView | null {
@@ -102,6 +108,12 @@ export function sessionView(target: JsonObject): SessionView | null {
     ifBusy: target.ifBusy === 'queue-only' ? 'queue-only' : 'queue',
     mode: SESSION_MODES.find((mode) => mode === target.mode) ?? 'manual',
     context: context.every((part): part is ContextView => part !== null) ? context : null,
+    instruction:
+      target.instruction === undefined
+        ? null
+        : typeof target.instruction === 'string'
+          ? target.instruction
+          : JSON.stringify(target.instruction),
   };
 }
 
@@ -126,7 +138,8 @@ export type TemplateView =
   | { kind: 'text'; text: string }
   | { kind: 'generate'; provider: string; model: string; instruction: string; from: string[] };
 
-function templateOf(value: unknown): TemplateView | null {
+/** A Linear title or description as the editor reads it; null for one it has no control for. */
+export function templateOf(value: unknown): TemplateView | null {
   if (typeof value === 'string') return { kind: 'text', text: value };
   const part = contextPart(value);
   return part?.kind === 'generate' || part?.kind === 'text' ? part : null;

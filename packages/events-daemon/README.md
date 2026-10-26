@@ -279,8 +279,11 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   - the queue items you marked done or dismissed, against the judge's number for each.
 
   It reads no subject, body, snippet or address. A domain is counted only when a judged decision kept it: from 0.33.0
-  a judged decision keeps its sender's domain (never the address) in its encrypted judge metadata, when the rule tests
-  or keeps `from.address` and the domain is a plain ASCII hostname. Decisions made before 0.33.0 have none.
+  a judged decision keeps its sender's domain (never the address), when the rule tests or keeps `from.address` and the
+  domain is a plain ASCII hostname. It is kept apart from the decision's metadata, encrypted, and only as long as the
+  rule keeps the message's content — its projection's deadline, the ingest retention (7 days by default) — not the 90
+  days of the decision's content-free metadata; it goes sooner with that metadata, and a tightening shortens it. So
+  Analyse's per-domain counts cover the last week or so, the rest of its counts the last 30 days.
 - **What it suggests from the counts alone:**
   - a sending domain the judge said no to three times or more, and never yes: the condition, with that domain left out
     before the judge is asked;
@@ -295,16 +298,19 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   (`anthropic/claude-sonnet-5.5`, the key Jev may already use), then Anthropic's own API (`claude-sonnet-5-5`, with
   `agent-events provider key set anthropic`). The result's `model` names the provider and the model, or why it did not
   run — `NO_KEY`, with `noKey` listing the providers that have none. The suggestions from the counts come either way.
-- **What it sends.** The rule's own text around each part, and the counts without any domain: never a message, a
-  sender, a subject, a body or an address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
+- **What it sends.** The rule's own text around each part — its question, a session's text and a Linear title as you
+  wrote them, and its condition with each address and domain it names (a person it watches for, a domain an applied
+  exclusion left out) replaced by `<address>` or `<domain>` — and the counts without any domain: never a message or
+  anything from one, no sender, subject, body or address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
   `https://api.anthropic.com/v1/messages`, through the same pinned path as the judges, with a 64 KiB request, a 256 KiB
   answer and a 60-second deadline.
 - **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
   refused with a closed reason (`MODEL_OUTPUT_NOT_JSON`, `MODEL_OUTPUT_SLOTS`, …), and the provider's own words are
   never kept. A suggestion you apply is your rule's text from then on, and you approve it with the rule.
-- **Who can run it: you.** It runs when you press Analyse in the app or run it at your terminal. `rule analyse`
-  refuses inside the event service's MCP server and in an agent's shell (an agent's marker, as for `judge setup`), and
-  no MCP tool runs it, so an agent never reads a rule's counts and never spends your key.
+- **Who can run it: you.** It runs when you press Analyse in the app or run it at an interactive terminal, as
+  `provider key set` does. `rule analyse` refuses inside the event service's MCP server, in an agent's shell (an
+  agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
+  a boundary against code running as you — and no MCP tool runs it.
 
 ## What you can do with it
 

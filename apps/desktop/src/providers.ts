@@ -84,3 +84,24 @@ export function jevModelName(model: string): string {
   const version = /jev-(\d+\.\d+)/u.exec(model)?.[1];
   return version === undefined ? model : `Jev ${version}`;
 }
+
+/**
+ * `judge show <judgeId> --version <n>` (0.33.0), read for the rule editor: the judge version's exact canonical
+ * document, which a rule embeds as the event service will approve it — or `null` when the answer is not exactly the
+ * live version asked for, with a document of its own id and version and a digest. Its fields are configuration only (a
+ * judge's key is a separate secret, never in it); the editor shows none of them as markup.
+ */
+export function readJudgeShow(
+  value: unknown,
+  asked: { readonly judgeId: string; readonly version: number },
+): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const { judgeId, version, document, digest, state } = value as Record<string, unknown>;
+  if (judgeId !== asked.judgeId || version !== asked.version || state !== 'live') return null;
+  if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/u.test(digest)) return null;
+  if (typeof document !== 'object' || document === null || Array.isArray(document)) return null;
+  const shown = document as Record<string, unknown>;
+  if (shown.judgeId !== asked.judgeId || shown.version !== asked.version) return null;
+  if (typeof shown.kind !== 'string' || typeof shown.provider !== 'string') return null;
+  return shown;
+}

@@ -53,7 +53,8 @@ export const EDITOR_COPY = {
   unsure: { 'no-match': "Don't pass it on", hold: 'Hold it for me' },
   judgeLimits: (calls: number) => `It is asked at most ${calls} times an hour, as before.`,
   noJudgeKnown: 'Set up a judge in Events → Judges first.',
-  judgeUnknown: 'Comes in a later release: the app cannot read this judge’s details yet.',
+  judgeReading: 'Reading the judge’s details…',
+  judgeUnreadable: 'That judge’s details could not be read.',
   actions: {
     queue: 'Put it in the Queue',
     session: 'Send it to an agent session',
@@ -90,6 +91,7 @@ export const EDITOR_COPY = {
   modes: { manual: 'Asks first', acceptEdits: 'May edit files', plan: 'Only plans' },
   windowOnly: 'An agent window you opened, bound to this lane: it is woken through the lane, and given the item there.',
   giveIt: 'Give it',
+  toldLast: 'Told last',
   context: {
     fields: 'From the message',
     text: 'Fixed text',
@@ -152,6 +154,12 @@ export const REVIEW_COPY = {
   approved: (id: string, version: number) => `${id} version ${version} is on.`,
   notApproved: 'It was not switched on',
   revoked: 'Not approved: the new version was not switched on.',
+  approveInTerminal: 'Approve in Terminal',
+  atTerminal:
+    'On this computer the app cannot be sure it is you who presses Approve, so you approve it in a terminal: it shows this preview again and asks you to type its challenge.',
+  inTerminal: (version: number) =>
+    `Finish in the terminal: type the challenge it shows. Version ${version} switches on once you approve there.`,
+  done: 'Done',
 } as const;
 
 /** Analyse's words (the prototype's RuleAnalyse). */

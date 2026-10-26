@@ -31,6 +31,7 @@ import {
 import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { AnalyseTransport } from './analyse-transport.ts';
+import { senderDomainLocation } from './sender-domains.ts';
 
 /**
  * `rule analyse <ruleId> [--draft -]` in the event service (0.33.0 design §3.3): the person's view, reached only from
@@ -78,7 +79,6 @@ interface JudgeMetadata {
   readonly value: number;
   readonly threshold: number;
   readonly judgeId: string | null;
-  readonly senderDomain: string | null;
 }
 
 function usage(message: string): never {
@@ -169,7 +169,7 @@ export class RuleAnalyseService {
     return chosen === undefined ? null : { version: chosen.version, document: JSON.parse(chosen.document) };
   }
 
-  /** The decision's judge metadata: its number, bar, judge and domain; null when there is none, or none kept. */
+  /** The decision's judge metadata: its number, bar and judge; null when there is none, or none kept. */
   async #metadata(row: Pick<DecisionRow, 'id' | 'metadata_state' | 'encrypted_record'>): Promise<JudgeMetadata | null> {
     if (row.metadata_state === 'purged' || row.encrypted_record === null) return null;
     let metadata: Readonly<Record<string, unknown>> | null;
@@ -188,7 +188,7 @@ export class RuleAnalyseService {
       if (error instanceof RecordStorageError || error instanceof SyntaxError) return null;
       throw error;
     }
-    // Only these four fields are read from it; nothing else in it could reach a result or a model.
+    // Only these three fields are read from it; nothing else in it could reach a result or a model.
     const value = metadata?.value;
     const threshold = metadata?.threshold;
     if (typeof value !== 'number' || !Number.isFinite(value) || typeof threshold !== 'number') return null;
@@ -196,8 +196,36 @@ export class RuleAnalyseService {
       value,
       threshold,
       judgeId: typeof metadata?.judgeId === 'string' ? metadata.judgeId : null,
-      senderDomain: typeof metadata?.senderDomain === 'string' ? metadata.senderDomain : null,
     };
+  }
+
+  /**
+   * The sending domains this rule's decisions still keep — each only until its projection's deadline (security review
+   * of 0.33.0, finding 9) — by decision id. A domain that cannot be opened is left out.
+   */
+  async #senderDomains(ruleId: string): Promise<ReadonlyMap<string, string>> {
+    const rows = this.#store.database
+      .prepare(
+        `SELECT decision_id, encrypted_domain FROM decision_sender_domains
+          WHERE rule_id = ? AND expires_at > ?
+          LIMIT ?`,
+      )
+      .all(ruleId, this.#now(), ANALYSE_MAX_DECISIONS_READ) as unknown as {
+      decision_id: string;
+      encrypted_domain: Uint8Array;
+    }[];
+    const domains = new Map<string, string>();
+    for (const row of rows) {
+      try {
+        domains.set(
+          row.decision_id,
+          (await this.#cipher.decrypt(senderDomainLocation(row.decision_id), row.encrypted_domain)).toString('utf8'),
+        );
+      } catch (error) {
+        if (!(error instanceof RecordStorageError)) throw error;
+      }
+    }
+    return domains;
   }
 
   async #facts(ruleId: string, document: Readonly<Record<string, unknown>>): Promise<RuleAnalyseFacts> {
@@ -225,6 +253,7 @@ export class RuleAnalyseService {
       if (!read.has(row.id)) read.set(row.id, await this.#metadata(row));
       return read.get(row.id) ?? null;
     };
+    const domains = await this.#senderDomains(ruleId);
     const judged: JudgedFact[] = [];
     for (const row of decisions.slice(0, ANALYSE_MAX_DECISIONS_READ)) {
       const metadata = await metadataOf(row);
@@ -233,7 +262,7 @@ export class RuleAnalyseService {
         value: metadata.value,
         yes: metadata.value >= metadata.threshold,
         held: row.outcome === 'hold' || row.hold_created_at !== null,
-        senderDomain: metadata.senderDomain,
+        senderDomain: domains.get(row.id) ?? null,
       });
     }
     // The judge's number for each item the person kept or dismissed — only this judge's, so the numbers compare.

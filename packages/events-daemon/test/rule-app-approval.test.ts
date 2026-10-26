@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
 import { run } from '../src/cli/program.ts';
+import { EventControlClient } from '../src/control/client.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT } from '../src/domain/lifecycle.ts';
 import { DAY, dryRun, RULE, rule, withLaneOwner } from './support/lane-harness.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -73,7 +74,7 @@ async function cli(
   return { code, stdout: out, stderr: err };
 }
 
-test('rule approve refuses an agent, the MCP server, a pipe the app did not start and a terminal, before the owner', async () => {
+test('rule approve refuses an agent, the MCP server and a pipe the app did not start, before the owner', async () => {
   const stateDir = await shortTempDir('aev-rule-approve-refuse-');
   const args = ['rule', 'approve', PLACEHOLDER, '--digest', ZEROES];
   try {
@@ -91,13 +92,6 @@ test('rule approve refuses an agent, the MCP server, a pipe the app did not star
       assert.equal(ran.code, APPROVAL_EXIT, `${reason}: ${ran.stderr}`);
       assert.match(ran.stderr, /in the Agent Comms app, or at an interactive terminal/u);
     }
-    // At a terminal the person types the challenge, with approve: this path is the app's only.
-    const never = async (): Promise<DesktopOrigin> => {
-      throw new Error('a terminal asks no attestation');
-    };
-    const typed = await cli(stateDir, args, { tty: true, desktopOrigin: never });
-    assert.equal(typed.code, USAGE_EXIT, typed.stderr);
-    assert.match(typed.stderr, /approve a rule with approve <approval-id>, which asks for its challenge/u);
     // Words that are not an approval id or a digest never reach the owner.
     for (const [id, digest] of [
       ['ap_short', ZEROES],
@@ -184,6 +178,11 @@ test('the app approves only the rule activation it was shown, for its digest, an
     assert.equal(disclosure?.state, 'used');
     assert.equal((disclosure as { approvedVia?: string } | undefined)?.approvedVia, 'app');
 
+    // The owner's audit line says where the person was, and never holds a challenge.
+    const approvals = (await core.audit.tail({ limit: 50 })).filter((line) => line.operation === 'events.ruleApprove');
+    assert.equal(approvals.at(-1)?.outcome, 'ok');
+    assert.deepEqual(approvals.at(-1)?.ids, { approvalId, ruleId: RULE, ruleVersion: '1', approvedBy: 'desktop-app' });
+
     // Used once: the same press again approves nothing.
     const again = await cli(stateDir, ['rule', 'approve', approvalId, '--digest', digest]);
     assert.equal(again.code, VOID_EXIT, again.stderr);
@@ -200,6 +199,32 @@ test('the app approves only the rule activation it was shown, for its digest, an
     for (let index = 0; index < 10 && (await states()).join() !== '1:superseded,2:active'; index += 1)
       await harness.tick();
     assert.deepEqual(await states(), ['1:superseded', '2:active']);
+
+    // The owner's wire is the person's from the app only: any other client, or a terminal's origin, is refused.
+    for (const [clientName, code] of [
+      ['events-cli', 'APPROVAL_REQUIRED'],
+      ['app-approval-screen', 'APPROVAL_REQUIRED'],
+      ['person-setup:terminal', 'APPROVAL_REQUIRED'],
+    ] as const) {
+      await assert.rejects(
+        new EventControlClient({ stateDir, clientName }).request('rule-approve', {
+          approvalId: next.approvalId,
+          digest: ZEROES,
+        }),
+        (error: unknown) => (error as { code?: string }).code === code,
+        clientName,
+      );
+    }
+
+    // At a terminal the person types the challenge, with approve: this path is the app's only, and the owner says so.
+    const typed = await cli(stateDir, ['rule', 'approve', next.approvalId as string, '--digest', ZEROES], {
+      tty: true,
+      desktopOrigin: async () => {
+        throw new Error('a terminal asks no attestation');
+      },
+    });
+    assert.equal(typed.code, APPROVAL_EXIT, typed.stderr);
+    assert.match(typed.stderr, /approve a rule with approve <approval-id>, which asks for its challenge/u);
 
     // Anything but a rule's activation is approved elsewhere.
     const kind = await json(['judge', 'kind', 'enable', JUDGE_KIND_LOCAL_ENDPOINT]);

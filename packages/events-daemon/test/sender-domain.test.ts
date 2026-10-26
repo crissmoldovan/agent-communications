@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { isKeptSenderDomain, senderDomainOf, withSenderDomain } from '../src/domain/sender-domain.ts';
+import { isKeptSenderDomain, senderDomainOf } from '../src/domain/sender-domain.ts';
 
 /*
  * 0.33.0 design §3.3: Analyse counts a judge's answers per sending domain. The domain is kept only when it is already a
@@ -36,14 +36,4 @@ test('SENDER-DOMAIN: only a plain ASCII hostname from the From address is kept',
   );
   assert.equal(senderDomainOf('unknown.event', 1, { from: { address: 'someone@example.test' } }), null);
   assert.equal(isKeptSenderDomain(`${'a.'.repeat(126)}ab`), false, 'longer than 253');
-});
-
-test('SENDER-DOMAIN: the domain rides beside the judge’s answer, and nothing else is added', () => {
-  const metadata = { judgeId: 'judge', value: 0.4, threshold: 0.7, valueLabel: 'probability' };
-  const rule = { event: { type: RECEIVED[0], version: RECEIVED[1] } };
-  assert.deepEqual(withSenderDomain(metadata, rule, { from: { address: 'a@shop.example', name: 'A' } }), {
-    ...metadata,
-    senderDomain: 'shop.example',
-  });
-  assert.equal(withSenderDomain(metadata, rule, { subject: 'no sender here' }), metadata);
 });

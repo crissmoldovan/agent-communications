@@ -2005,6 +2005,8 @@ async function handleControl(
     // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
     case OWNER_CONTROL_WIRES.judgeSetup:
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.approveRuleFromApp:
+      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
     case OWNER_CONTROL_WIRES.providerList:
       return requireJudgeSetup(judgeSetup).providerList();
     case OWNER_CONTROL_WIRES.providerKeySet:
