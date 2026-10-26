@@ -2097,6 +2097,11 @@ export interface B3ApprovalPreviewTerminalView {
  */
 export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
+  /**
+   * Whether a Linear key is kept now (second look of 0.33.0). False says the Linear targets' team and labels were not
+   * checked against Linear when the rule was prepared; undefined says nothing.
+   */
+  readonly linearConnected?: boolean | undefined;
 }
 
 /** Every character a reader could take for a quote mark, other than the double quote JSON escapes itself. */
@@ -2208,11 +2213,17 @@ function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
  * What each Linear target of a rule does (0.33.0 design §3.4): the team, its labels and who it is assigned to, and which
  * mapped fields fill the title and the description. Every value is the approved document's, through `neutralise`.
  */
-function linearTargetLines(document: ActivationDocumentV1): readonly string[] {
+function linearTargetLines(document: ActivationDocumentV1, linearConnected?: boolean): readonly string[] {
   if (document.kind !== 'rule') return [];
-  return document.rule.targets.flatMap((target) =>
+  const lines = document.rule.targets.flatMap((target) =>
     target.kind === 'linear' ? [neutralise(linearTargetDisclosure(target)).text] : [],
   );
+  // With no Linear key, activation could not ask Linear whether each team key and label name match their ids.
+  if (lines.length > 0 && linearConnected === false)
+    lines.push(
+      'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the rule again.',
+    );
+  return lines;
 }
 
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
@@ -2289,7 +2300,7 @@ export function renderB3ApprovalPreviewV1(
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
       ...sessionDisclosure(document),
-      ...linearTargetLines(document),
+      ...linearTargetLines(document, context.linearConnected),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,

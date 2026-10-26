@@ -153,7 +153,9 @@ labels (`[{ id, name }]`), who it is assigned to (`"me"`, `{ id }` or `null`), a
   and labels the issue should have, or to choose them in the app. Never invent a team, label or user id.
 - **Slots name mapped fields only.** Each `{{field}}` names a field the rule's mapping keeps, such as `{{subject}}` or
   `{{from.address}}`; the rule is refused at activation otherwise. A model-written title or description is not
-  available yet. What a sender wrote reaches the issue as quoted text, never as Markdown.
+  available yet. Every slot's value — what a sender wrote, or a constant the mapping sets — reaches the issue as quoted
+  text, never as Markdown. Use the team's and labels' ids and names exactly as the person gives them: with a Linear key
+  kept, activation refuses a team key or label name that is not the one its id names in Linear.
 - **Propose, then hand over.** `events_target_add` makes the target version and `events_rule_create` the rule naming it;
   activation is the person's approval, as for every rule. An issue exists only once `events_deliveries_list` shows the
   delivery with its `linear` identifier.

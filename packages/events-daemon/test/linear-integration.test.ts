@@ -7,9 +7,12 @@ import { CommsError, type DesktopOrigin } from '@agentcomms/core';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { type EventsCliStreams, run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
+import { canonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
+import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { LINEAR_GRAPHQL_ENDPOINT } from '../src/domain/linear-target.ts';
 import { preparePinnedConnection } from '../src/network/pinned-connection.ts';
 import { classifyLinearResponse, LinearClient, parseHttpResponse } from '../src/runtime/linear-client.ts';
+import { LinearIntegration } from '../src/runtime/linear-integration.ts';
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
@@ -312,5 +315,95 @@ test('E3: integration show linear is the person’s read of what their Linear ke
     }
   } finally {
     await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+const DAY = 86_400_000;
+
+/** A rule whose one target is a Linear target with this team and these labels. */
+function linearRule(team: { id: string; key: string }, labels: readonly { id: string; name: string }[]) {
+  return canonicalFullRuleDocument({
+    ruleId: 'invoices',
+    version: 1,
+    source: {
+      channel: 'gmail',
+      accountIds: ['ibx_LINEARACTIVATION'],
+      options: { channel: 'gmail', labels: 'inbox', includeSpamTrash: false },
+    },
+    event: { type: 'gmail.message.received', version: 1 },
+    condition: { path: '/subject', op: 'exists' },
+    mapping: { subject: { $path: '/subject' } },
+    targets: [
+      {
+        targetId: 'billing-issues',
+        version: 1,
+        kind: 'linear',
+        team,
+        title: { text: '{{subject}}' },
+        description: { text: '' },
+        labels,
+        assignee: null,
+      },
+    ],
+    subscribers: [],
+    judges: [],
+    deliveryRateCap: 60,
+    retention: {
+      ingestMs: 7 * DAY,
+      holdMs: 7 * DAY,
+      deliveryMs: 7 * DAY,
+      dryrunMs: DAY,
+      sseReplayMs: 7 * DAY,
+      deadLetterMs: 7 * DAY,
+      decisionMetadataMs: 90 * DAY,
+    },
+  });
+}
+
+test('E3 second look: activation checks each team key and label name against Linear’s ids, and says when it could not', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fake = await startFakeLinear();
+  try {
+    let key: string | null = FAKE_LINEAR_KEY;
+    const integration = new LinearIntegration({
+      secrets: {
+        readLiveGenerations: async () =>
+          key === null ? [] : [{ generation: 1, lifecycle: 'current', secretDigest: 'd', material: key }],
+      } as never,
+      cipher: {} as never,
+      client: new LinearClient(fake.clientOptions()),
+    });
+    const team = { id: FAKE_TEAM.id, key: FAKE_TEAM.key };
+    // The ids Linear knows the team and labels by, with their names: the team's label and the workspace's.
+    assert.equal(await integration.assertActivation(linearRule(team, [FAKE_LABELS[0], FAKE_LABELS[1]])), 'checked');
+    const refused = (code: string, message: RegExp) => (error: unknown) =>
+      error instanceof EventDomainError && error.code === code && message.test(error.message);
+    await assert.rejects(
+      integration.assertActivation(linearRule({ id: FAKE_TEAM.id, key: 'SECRET' }, [])),
+      refused('LINEAR_TEAM_MISMATCH', /names team SECRET, but its team id is Linear's team CUE/u),
+    );
+    await assert.rejects(
+      integration.assertActivation(linearRule({ id: '00000000-0000-4000-8000-000000000000', key: 'CUE' }, [])),
+      refused('LINEAR_TEAM_MISMATCH', /by an id the Linear key cannot see/u),
+    );
+    await assert.rejects(
+      integration.assertActivation(linearRule(team, [{ id: FAKE_LABELS[0].id, name: 'Urgent' }])),
+      refused('LINEAR_LABEL_MISMATCH', /names label "Urgent", but its id is Linear's label "Billing"/u),
+    );
+    await assert.rejects(
+      integration.assertActivation(linearRule(team, [{ id: '00000000-0000-4000-8000-000000000001', name: 'Billing' }])),
+      refused('LINEAR_LABEL_MISMATCH', /by an id team CUE has no label for/u),
+    );
+    // Linear refusing the key refuses the activation rather than skip the check.
+    key = 'fake-revoked-key';
+    await assert.rejects(integration.assertActivation(linearRule(team, [])), /Linear refused the key/u);
+    // With no key kept nothing is asked of Linear: the check is skipped, and says so.
+    key = null;
+    const before = fake.requests.length;
+    assert.equal(await integration.assertActivation(linearRule({ id: FAKE_TEAM.id, key: 'SECRET' }, [])), 'skipped');
+    assert.equal(fake.requests.length, before);
+  } finally {
+    await fake.close();
   }
 });
