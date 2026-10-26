@@ -129,7 +129,7 @@ days. It holds ids, subjects, senders and file names, and never a message body, 
 
 ## Search on this machine
 
-`agentcomms search …` keeps the words of the messages agents read, for the accounts the person chose, so they can find
+`agentcomms search status`, `search query` and the other `search` commands keep the words of the messages agents read, for the accounts the person chose, so they can find
 what each person asked (design 2026-10-26-local-search). Off by default; `search on`, `search accounts add` and
 `search model set` are loosenings, approved at a terminal or in the attested app with `--app-approval`; `search off`,
 `accounts remove`, `model none` and `delete --all --confirm` apply at once.

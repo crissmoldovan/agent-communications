@@ -1,4 +1,4 @@
-import { captureForSearch, type SearchCapture, UNTRUSTED_TAG } from '@agentcomms/core';
+import { captureForSearch, lookupName, type SearchCapture, UNTRUSTED_TAG } from '@agentcomms/core';
 import type { GmailContext } from './context.ts';
 import type { FollowUpsResult } from './operations/contacts.ts';
 import type { ReadMessageResult, ReadThreadResult } from './operations/read.ts';
@@ -148,7 +148,7 @@ export async function captureGmail(context: GmailContext, operation: string, res
       byAlias.set(alias, list);
     }
     for (const [alias, captures] of byAlias) {
-      const inbox = Object.hasOwn(config.inboxes, alias) ? config.inboxes[alias] : undefined;
+      const inbox = lookupName(config, 'inbox', alias);
       if (inbox === undefined) continue;
       await captureForSearch(context.core, { id: inbox.id }, captures);
     }

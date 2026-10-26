@@ -12,6 +12,7 @@ import { CommsError } from '../errors.ts';
 import { remedy } from '../handoffs.ts';
 import { withFileLock } from '../lock.ts';
 import { MCP_SERVER_MARKER, mcpServerOf } from '../mcp-marker.ts';
+import { lookupName } from '../names.ts';
 import { homeDirectory } from '../paths.ts';
 import {
   CAPTURE_FAILURE_FILE,
@@ -1121,14 +1122,14 @@ export function searchRequestTightens(request: SearchSettingsRequest): boolean {
 
 /** The account an alias names, Gmail or Slack, or a refusal saying what can be kept. */
 function searchableAccount(config: Config, alias: string): { id: string; alias: string } {
-  const inbox = Object.hasOwn(config.inboxes, alias) ? config.inboxes[alias] : undefined;
+  const inbox = lookupName(config, 'inbox', alias);
   if (inbox !== undefined) {
     if (inbox.provider !== 'gmail') {
       throw new CommsError('USAGE', `${alias} is not a Gmail mailbox: Search keeps Gmail and Slack only`);
     }
     return { id: inbox.id, alias };
   }
-  const account = Object.hasOwn(config.accounts, alias) ? config.accounts[alias] : undefined;
+  const account = lookupName(config, 'account', alias);
   if (account !== undefined) {
     if (account.platform !== 'slack') {
       throw new CommsError('USAGE', `${alias} is not a Slack workspace: Search keeps Gmail and Slack only`, {
@@ -1138,7 +1139,7 @@ function searchableAccount(config: Config, alias: string): { id: string; alias: 
     return { id: account.id, alias };
   }
   throw new CommsError('NOT_FOUND', `no Gmail mailbox or Slack workspace is called "${alias.slice(0, 60)}"`, {
-    hint: 'search status lists the accounts Search keeps; agentcomms paths and the channels list the connected ones.',
+    hint: 'The search status command lists the accounts Search keeps; Search keeps Gmail mailboxes and Slack workspaces.',
   });
 }
 
