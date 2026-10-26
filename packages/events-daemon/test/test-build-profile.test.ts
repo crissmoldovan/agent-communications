@@ -54,7 +54,9 @@ async function mark(folder: string): Promise<void> {
   await writeFile(join(folder, TEST_PROFILE_MARKER), '');
 }
 
-test('the CLI takes the test build only when the config and state folders are both in the test profile', async () => {
+test('the CLI takes the test build only when the config and state folders are both in the test profile', {
+  skip: WINDOWS_SKIP,
+}, async () => {
   const profile = await shortTempDir('aev-test-profile-');
   const elsewhere = await shortTempDir('aev-real-state-');
   try {

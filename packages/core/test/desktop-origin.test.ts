@@ -240,7 +240,7 @@ test("the person's real folders are found from the account itself, whatever the 
   }
 });
 
-test("the local test release marks its test profile's config folder with this marker, and nothing else", () => {
+test("the local test release marks its test profile's config and state folders with this marker, and nothing else", () => {
   const script = readFileSync(
     fileURLToPath(new URL('../../../scripts/local-test-release.sh', import.meta.url)),
     'utf8',
@@ -248,7 +248,11 @@ test("the local test release marks its test profile's config folder with this ma
   const writes = script
     .split('\n')
     .filter((line) => line.includes(TEST_PROFILE_MARKER) && !line.trim().startsWith('#'));
-  assert.deepEqual(writes, [`: > "$profile/config/${TEST_PROFILE_MARKER}"`]);
+  // The state folder too (0.34.0): the event service takes the test build only on a state folder that holds the mark.
+  assert.deepEqual(writes, [
+    `: > "$profile/config/${TEST_PROFILE_MARKER}"`,
+    `: > "$profile/state/${TEST_PROFILE_MARKER}"`,
+  ]);
 });
 
 test('any other parent is refused: a shell, a terminal, node, another app', async () => {
