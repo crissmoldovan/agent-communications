@@ -1,0 +1,552 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agent Comms — the new look</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.t-light{--bg:#F7F7F8;--side:#F0F0F2;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#6B6B74;--accent:#5157E0;--accentSoft:rgba(81,87,224,.1);--accentText:#FFFFFF;--ok:#15803D;--warn:#A15C07;--warnSoft:rgba(161,92,7,.1);--danger:#C2410C;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(81,87,224,.45)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-feature-settings:"cv11","ss01"}
+.app button{font:inherit;color:inherit}
+.nav-btn{transition:color 160ms ease}
+.nav-btn:hover{color:var(--text)}
+.press{transition:transform 120ms ease,background-color 160ms ease,opacity 160ms ease}
+.press:active{transform:scale(.97)}
+.row{transition:background-color 160ms ease}
+.row:hover{background:var(--s2)}
+.ghost:hover{background:var(--s3)}
+.primary:hover{filter:brightness(1.08)}
+.glide{transition:transform 240ms cubic-bezier(.2,.8,.2,1),width 240ms cubic-bezier(.2,.8,.2,1)}
+.knob{transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.track{transition:background-color 200ms ease}
+.in-r{animation:inR 260ms cubic-bezier(.2,.8,.2,1) both}
+.in-l{animation:inL 260ms cubic-bezier(.2,.8,.2,1) both}
+.fade{animation:fadeUp 300ms cubic-bezier(.2,.8,.2,1) both}
+.out{animation:out 220ms ease forwards}
+.reveal{animation:reveal 240ms cubic-bezier(.2,.8,.2,1) both}
+.bar{animation:fill 1.6s cubic-bezier(.4,0,.2,1) forwards}
+.pulse{animation:pulse 2.4s ease-in-out infinite}
+@keyframes inR{from{opacity:0;transform:translateX(18px)}to{opacity:1;transform:none}}
+@keyframes inL{from{opacity:0;transform:translateX(-18px)}to{opacity:1;transform:none}}
+@keyframes fadeUp{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes out{to{opacity:0;transform:translateX(24px);height:0;margin:0;padding-top:0;padding-bottom:0}}
+@keyframes reveal{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
+@keyframes fill{from{width:4%}to{width:100%}}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important;animation:none !important}}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 800px; height: 100vh; display: flex; flex-wrap: wrap; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.45">
+
+<nav aria-label="Sections" style="flex: 1 1 220px; max-width: 232px; min-width: 200px; background: var(--side); padding: 14px 10px; box-sizing: border-box; display: flex; flex-direction: column; gap: 14px">
+  <div style="display: flex; align-items: center; gap: 8px; padding: 4px 8px 6px">
+    <span aria-hidden="true" style="display: flex; gap: 6px; margin-right: 6px"><span style="width: 11px; height: 11px; border-radius: 50%; background: #FF5F57"></span><span style="width: 11px; height: 11px; border-radius: 50%; background: #FEBC2E"></span><span style="width: 11px; height: 11px; border-radius: 50%; background: #28C840"></span></span>
+  </div>
+  <div style="display: flex; align-items: center; gap: 10px; padding: 0 8px">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="position: relative; display: flex; flex-direction: column; gap: 2px">
+    <div aria-hidden="true" class="glide" style="position: absolute; left: 0; right: 0; top: 0; height: 32px; border-radius: 8px; background: var(--s3); transform: translateY({{navY}}px)"></div>
+    <button type="button" class="nav-btn press" onClick="{{goOverview}}" aria-current="{{curOverview}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colOverview}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goAccounts}}" aria-current="{{curAccounts}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colAccounts}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span><span style="margin-left: auto; color: var(--warn); font-size: 11px">1</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goApprovals}}" aria-current="{{curApprovals}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colApprovals}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span><span style="margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--accent); color: var(--accentText); font-size: 11px; font-weight: 600; display: flex; align-items: center; justify-content: center">{{waitingCount}}</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goAgent}}" aria-current="{{curAgent}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colAgent}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Agent</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goUpdates}}" aria-current="{{curUpdates}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colUpdates}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goEvents}}" aria-current="{{curEvents}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colEvents}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span><span aria-hidden="true" class="pulse" style="margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: {{serviceDot}}"></span></button>
+    <button type="button" class="nav-btn press" onClick="{{goDoctor}}" aria-current="{{curDoctor}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colDoctor}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></button>
+    <button type="button" class="nav-btn press" onClick="{{goSettings}}" aria-current="{{curSettings}}" style="position: relative; height: 32px; display: flex; align-items: center; gap: 10px; padding: 0 10px; border: 0; background: transparent; border-radius: 8px; cursor: pointer; text-align: left; color: {{colSettings}}"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-2.7 1.1V21a2 2 0 0 1-4 0v-.1a1.6 1.6 0 0 0-2.7-1.1l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0-1.1-2.7H3a2 2 0 0 1 0-4h.1a1.6 1.6 0 0 0 1.1-2.7l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 2.7-1.1V3a2 2 0 0 1 4 0v.1a1.6 1.6 0 0 0 2.7 1.1l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8"></path></svg><span>Settings</span><sc-if value="{{updateDot}}" hint-placeholder-val="{{ true }}"><span aria-label="Update available" style="margin-left: auto; width: 7px; height: 7px; border-radius: 50%; background: var(--accent)"></span></sc-if></button>
+  </div>
+  <div style="margin-top: auto; padding: 0 8px; color: var(--text3); font-size: 11.5px">agentcomms 0.27.0</div>
+</nav>
+
+<main style="flex: 999 1 560px; min-width: 0; overflow-y: auto; box-sizing: border-box; padding: 28px 40px 48px">
+<div style="max-width: 760px; margin: 0 auto">
+
+<sc-if value="{{isOverview}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Overview</h1>
+  <p style="margin: 0 0 22px; color: var(--text2)">Everything is running.</p>
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 28px">
+    <a href="#" onClick="{{goApprovals}}" class="press row" style="text-decoration: none; background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px">
+      <span style="color: var(--text3); font-size: 12px">Waiting for you</span>
+      <span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">{{waitingCount}}</span>
+      <span style="color: var(--text2); font-size: 12px">approvals</span>
+    </a>
+    <a href="#" onClick="{{goEvents}}" class="press row" style="text-decoration: none; background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px">
+      <span style="color: var(--text3); font-size: 12px">Event service</span>
+      <span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">{{serviceWord}}</span>
+      <span style="color: var(--text2); font-size: 12px">2 rules on</span>
+    </a>
+    <a href="#" onClick="{{goSettings}}" class="press row" style="text-decoration: none; background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 6px">
+      <span style="color: var(--text3); font-size: 12px">This app</span>
+      <span style="font-size: 24px; font-weight: 600; letter-spacing: -0.02em">0.27.0</span>
+      <span style="color: var(--accent); font-size: 12px">{{updateLine}}</span>
+    </a>
+  </div>
+  <h2 style="margin: 0 0 10px; font-size: 13px; font-weight: 500; color: var(--text2)">Recent</h2>
+  <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+    <sc-for list="{{recent}}" as="item" hint-placeholder-count="5">
+      <div class="row fade" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px; animation-delay: {{item.delay}}">
+        <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: {{item.dot}}; flex: none"></span>
+        <span style="flex: 1; min-width: 0">{{item.text}}</span>
+        <span style="color: var(--text3); font-size: 12px">{{item.account}}</span>
+        <span style="color: var(--text3); font-size: 12px; width: 44px; text-align: right">{{item.when}}</span>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isAccounts}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Accounts</h1>
+  <div role="tablist" aria-label="Channels" style="position: relative; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: var(--s2); border-radius: 10px; padding: 3px; margin-bottom: 18px">
+    <div aria-hidden="true" class="glide" style="position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 4); border-radius: 8px; background: var(--s1); box-shadow: var(--shadow); transform: translateX({{accTabX}}%)"></div>
+    <button type="button" role="tab" aria-selected="{{accSel0}}" onClick="{{accTab0}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{accCol0}}">Gmail <span style="color: var(--text3); font-weight: 400">4</span></button>
+    <button type="button" role="tab" aria-selected="{{accSel1}}" onClick="{{accTab1}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{accCol1}}">Slack <span style="color: var(--text3); font-weight: 400">2</span></button>
+    <button type="button" role="tab" aria-selected="{{accSel2}}" onClick="{{accTab2}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{accCol2}}">Resend <span style="color: var(--text3); font-weight: 400">1</span></button>
+    <button type="button" role="tab" aria-selected="{{accSel3}}" onClick="{{accTab3}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{accCol3}}">WhatsApp <span style="color: var(--warn); font-weight: 600">1</span></button>
+  </div>
+  <div onWheel="{{swipeAccounts}}" style="min-height: 320px">
+    <sc-for list="{{accountPanes}}" as="pane" hint-placeholder-count="1">
+      <div class="{{pane.enter}}">
+        <sc-if value="{{pane.hasWarning}}" hint-placeholder-val="{{ false }}">
+          <div style="display: flex; align-items: center; gap: 12px; background: var(--warnSoft); color: var(--text); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px">
+            <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none"></span>
+            <span style="flex: 1">Events from WhatsApp need Full Disk Access for Agent Comms.</span>
+            <button type="button" class="press ghost" style="border: 0; background: var(--s1); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 500">Open System Settings</button>
+          </div>
+        </sc-if>
+        <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+          <sc-for list="{{pane.rows}}" as="acc" hint-placeholder-count="3">
+            <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px">
+              <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 9px; background: var(--s3); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: var(--text2); flex: none">{{acc.initial}}</span>
+              <div style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+                <span style="font-weight: 500">{{acc.name}}</span>
+                <span style="color: var(--text3); font-size: 12px">{{acc.policy}}</span>
+              </div>
+              <span style="display: flex; align-items: center; gap: 6px; color: var(--text2); font-size: 12px"><span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: {{acc.dot}}"></span>{{acc.state}}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+  <p style="margin: 14px 0 0; color: var(--text3); font-size: 12px">Swipe sideways with two fingers to move between channels.</p>
+</div>
+</sc-if>
+
+<sc-if value="{{isApprovals}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Approvals</h1>
+  <div role="tablist" aria-label="Approvals" style="position: relative; display: inline-grid; grid-template-columns: repeat(2, 120px); background: var(--s2); border-radius: 10px; padding: 3px; margin-bottom: 18px">
+    <div aria-hidden="true" class="glide" style="position: absolute; top: 3px; bottom: 3px; left: 3px; width: 120px; border-radius: 8px; background: var(--s1); box-shadow: var(--shadow); transform: translateX({{apTabX}}px)"></div>
+    <button type="button" role="tab" aria-selected="{{apSel0}}" onClick="{{apTab0}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{apCol0}}">Waiting <span style="color: var(--text3); font-weight: 400">{{waitingCount}}</span></button>
+    <button type="button" role="tab" aria-selected="{{apSel1}}" onClick="{{apTab1}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{apCol1}}">Recent</button>
+  </div>
+  <div onWheel="{{swipeApprovals}}" style="min-height: 320px">
+    <sc-if value="{{apWaiting}}" hint-placeholder-val="{{ true }}">
+      <div class="{{apEnter}}" style="display: flex; flex-direction: column; gap: 10px">
+        <sc-for list="{{waiting}}" as="ap" hint-placeholder-count="2">
+          <div class="{{ap.cls}}" style="background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 10px; overflow: hidden">
+            <div style="display: flex; align-items: baseline; gap: 10px">
+              <span style="font-weight: 600">{{ap.title}}</span>
+              <span style="color: var(--text3); font-size: 12px">{{ap.account}} · {{ap.when}}</span>
+            </div>
+            <div style="background: var(--s2); border-radius: 10px; padding: 10px 12px; display: flex; flex-direction: column; gap: 4px">
+              <span style="color: var(--text3); font-size: 11px">From outside</span>
+              <span style="color: var(--text2); white-space: pre-line">{{ap.preview}}</span>
+            </div>
+            <div style="display: flex; gap: 8px; justify-content: flex-end">
+              <button type="button" onClick="{{ap.revoke}}" class="press ghost" style="border: 0; background: var(--s2); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Revoke</button>
+              <button type="button" class="press primary" style="border: 0; background: var(--accent); color: var(--accentText); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Approve in Terminal</button>
+            </div>
+          </div>
+        </sc-for>
+        <sc-if value="{{noneWaiting}}" hint-placeholder-val="{{ false }}">
+          <div class="fade" style="background: var(--s1); border-radius: 14px; padding: 36px; text-align: center; color: var(--text2)">Nothing is waiting for you.</div>
+        </sc-if>
+      </div>
+    </sc-if>
+    <sc-if value="{{apRecent}}" hint-placeholder-val="{{ false }}">
+      <div class="{{apEnter}}" style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+        <sc-for list="{{recentApprovals}}" as="r" hint-placeholder-count="4">
+          <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px">
+            <span style="flex: 1; min-width: 0">{{r.title}}</span>
+            <span style="color: {{r.color}}; font-size: 12px">{{r.outcome}}</span>
+            <span style="color: var(--text3); font-size: 12px; width: 52px; text-align: right">{{r.when}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isAgent}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 18px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Agent</h1>
+  <div style="display: flex; flex-direction: column; gap: 14px">
+    <div style="background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 12px">
+      <div style="flex: 1; display: flex; flex-direction: column; gap: 2px"><span style="font-weight: 500">Messages say they come from an agent</span><span style="color: var(--text3); font-size: 12px">“Sent by [your name]'s agent” on every email and post</span></div>
+      <span style="color: var(--text2); font-size: 12px">On</span>
+    </div>
+    <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+      <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">Writing style</span><span style="color: var(--text3); font-size: 12px">3 profiles</span></div>
+      <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">Behaviour rules</span><span style="color: var(--text3); font-size: 12px">React and reply only</span></div>
+      <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">Standing approvals</span><span style="color: var(--text3); font-size: 12px">2 active</span></div>
+    </div>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isUpdates}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Updates</h1>
+  <p style="margin: 0 0 18px; color: var(--text2)">agentcomms 0.26.2 is installed and up to date.</p>
+  <div style="background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px">
+    <span style="font-weight: 500">Install updates</span>
+    <div role="radiogroup" aria-label="Install updates" style="position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); background: var(--s2); border-radius: 10px; padding: 3px; max-width: 420px">
+      <div aria-hidden="true" class="glide" style="position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc((100% - 6px) / 3); border-radius: 8px; background: var(--s1); box-shadow: var(--shadow); transform: translateX({{levelX}}%)"></div>
+      <button type="button" role="radio" aria-checked="{{lvSel0}}" onClick="{{lv0}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{lvCol0}}">Automatically</button>
+      <button type="button" role="radio" aria-checked="{{lvSel1}}" onClick="{{lv1}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{lvCol1}}">Every 14 days</button>
+      <button type="button" role="radio" aria-checked="{{lvSel2}}" onClick="{{lv2}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{lvCol2}}">Never</button>
+    </div>
+    <span style="color: var(--text3); font-size: 12px">{{levelNote}}</span>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isEvents}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 16px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Events</h1>
+  <div role="tablist" aria-label="Events" style="position: relative; display: inline-grid; grid-template-columns: repeat(3, 110px); background: var(--s2); border-radius: 10px; padding: 3px; margin-bottom: 18px">
+    <div aria-hidden="true" class="glide" style="position: absolute; top: 3px; bottom: 3px; left: 3px; width: 110px; border-radius: 8px; background: var(--s1); box-shadow: var(--shadow); transform: translateX({{evTabX}}px)"></div>
+    <button type="button" role="tab" aria-selected="{{evSel0}}" onClick="{{evTab0}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{evCol0}}">Status</button>
+    <button type="button" role="tab" aria-selected="{{evSel1}}" onClick="{{evTab1}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{evCol1}}">Rules <span style="color: var(--text3); font-weight: 400">2</span></button>
+    <button type="button" role="tab" aria-selected="{{evSel2}}" onClick="{{evTab2}}" class="press" style="position: relative; height: 30px; border: 0; background: transparent; cursor: pointer; font-weight: 500; color: {{evCol2}}">Deliveries</button>
+  </div>
+  <div onWheel="{{swipeEvents}}" style="min-height: 320px">
+    <sc-if value="{{evStatus}}" hint-placeholder-val="{{ true }}">
+      <div class="{{evEnter}}" style="display: flex; flex-direction: column; gap: 12px">
+        <div style="background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; align-items: center; gap: 14px">
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+            <span style="font-weight: 500">Run the event service</span>
+            <span style="color: var(--text3); font-size: 12px">{{serviceDetail}}</span>
+          </div>
+          <button type="button" role="switch" aria-checked="{{serviceOn}}" aria-label="Run the event service" onClick="{{toggleService}}" class="track press" style="width: 38px; height: 22px; border-radius: 11px; border: 0; padding: 2px; cursor: pointer; background: {{serviceTrack}}; display: flex"><span class="knob" style="width: 18px; height: 18px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,.3); transform: translateX({{serviceKnob}}px)"></span></button>
+        </div>
+        <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+          <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">Collecting</span><span style="color: var(--text2); font-size: 12px">On · Gmail and Slack</span></div>
+          <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">Judges</span><span style="color: var(--text2); font-size: 12px">Hosted · Laya off</span></div>
+          <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><span style="flex: 1">When you quit Agent Comms</span><span style="color: var(--text2); font-size: 12px">Keep running</span></div>
+        </div>
+      </div>
+    </sc-if>
+    <sc-if value="{{evRules}}" hint-placeholder-val="{{ false }}">
+      <div class="{{evEnter}}" style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+        <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><div style="flex: 1; display: flex; flex-direction: column"><span style="font-weight: 500">Mail subjects</span><span style="color: var(--text3); font-size: 12px">cue/gmail · new mail → dry-run log</span></div><span style="color: var(--ok); font-size: 12px">On</span></div>
+        <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 11px 12px; border-radius: 10px"><div style="flex: 1; display: flex; flex-direction: column"><span style="font-weight: 500">Messages from David</span><span style="color: var(--text3); font-size: 12px">cue/slack · direct messages · judge: what is it about? → webhook</span></div><span style="color: var(--ok); font-size: 12px">On</span></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{evDeliveries}}" hint-placeholder-val="{{ false }}">
+      <div class="{{evEnter}}" style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+        <sc-for list="{{deliveries}}" as="d" hint-placeholder-count="4">
+          <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 10px 12px; border-radius: 10px">
+            <span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: {{d.dot}}; flex: none"></span>
+            <span style="flex: 1; min-width: 0">{{d.text}}</span>
+            <span style="color: var(--text3); font-size: 12px">{{d.when}}</span>
+          </div>
+        </sc-for>
+      </div>
+    </sc-if>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isDoctor}}" hint-placeholder-val="{{ true }}">
+<div class="fade">
+  <h1 style="margin: 0 0 4px; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Doctor</h1>
+  <p style="margin: 0 0 18px; color: var(--text2)">16 checks passed · 1 to look at</p>
+  <div style="display: flex; align-items: center; gap: 12px; background: var(--warnSoft); border-radius: 12px; padding: 12px 14px; margin-bottom: 12px">
+    <span aria-hidden="true" style="width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none"></span>
+    <span style="flex: 1">No client starts the WhatsApp server for personal/whatsapp.</span>
+    <button type="button" class="press ghost" style="border: 0; background: var(--s1); border-radius: 8px; padding: 6px 12px; cursor: pointer; font-weight: 500">Copy the fix</button>
+  </div>
+  <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+    <sc-for list="{{checks}}" as="c" hint-placeholder-count="5">
+      <div class="row" style="display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 10px">
+        <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--ok)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg>
+        <span style="flex: 1">{{c.name}}</span>
+        <span style="color: var(--text3); font-size: 12px">{{c.detail}}</span>
+      </div>
+    </sc-for>
+  </div>
+</div>
+</sc-if>
+
+<sc-if value="{{isSettings}}" hint-placeholder-val="{{ true }}">
+<div class="fade" style="display: flex; flex-direction: column; gap: 22px">
+  <h1 style="margin: 0; font-size: 20px; font-weight: 600; letter-spacing: -0.015em">Settings</h1>
+
+  <section aria-label="This app" style="display: flex; flex-direction: column; gap: 8px">
+    <h2 style="margin: 0 0 2px; font-size: 13px; font-weight: 500; color: var(--text2)">This app</h2>
+    <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+      <div style="display: flex; align-items: center; gap: 14px; padding: 12px">
+        <div style="flex: 1; display: flex; flex-direction: column; gap: 2px">
+          <span style="font-weight: 500">Agent Comms 0.27.0</span>
+          <span style="color: var(--text3); font-size: 12px">{{updDetail}}</span>
+        </div>
+        <sc-if value="{{updAvailable}}" hint-placeholder-val="{{ true }}">
+          <button type="button" onClick="{{startUpdate}}" class="press primary" style="border: 0; background: var(--accent); color: var(--accentText); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Update to 0.27.1</button>
+        </sc-if>
+        <sc-if value="{{updReady}}" hint-placeholder-val="{{ false }}">
+          <button type="button" onClick="{{restartUpdate}}" class="press primary fade" style="border: 0; background: var(--accent); color: var(--accentText); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Restart to finish</button>
+        </sc-if>
+        <sc-if value="{{updIdle}}" hint-placeholder-val="{{ false }}">
+          <button type="button" onClick="{{checkAgain}}" class="press ghost" style="border: 0; background: var(--s2); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Check for updates</button>
+        </sc-if>
+      </div>
+      <sc-if value="{{updDownloading}}" hint-placeholder-val="{{ false }}">
+        <div class="reveal" style="padding: 0 12px 12px">
+          <div style="height: 4px; border-radius: 2px; background: var(--s3); overflow: hidden"><div class="bar" style="height: 100%; background: var(--accent); border-radius: 2px"></div></div>
+        </div>
+      </sc-if>
+      <div class="row" style="display: flex; align-items: center; gap: 14px; padding: 12px; border-radius: 10px">
+        <span style="flex: 1; font-weight: 500">Start at login</span>
+        <button type="button" role="switch" aria-checked="{{loginOn}}" aria-label="Start at login" onClick="{{toggleLogin}}" class="track press" style="width: 38px; height: 22px; border-radius: 11px; border: 0; padding: 2px; cursor: pointer; background: {{loginTrack}}; display: flex"><span class="knob" style="width: 18px; height: 18px; border-radius: 50%; background: #FFFFFF; box-shadow: 0 1px 2px rgba(0,0,0,.3); transform: translateX({{loginKnob}}px)"></span></button>
+      </div>
+      <div style="display: flex; align-items: center; gap: 14px; padding: 12px; flex-wrap: wrap">
+        <span style="flex: 1; font-weight: 500">Appearance</span>
+        <div role="radiogroup" aria-label="Appearance" style="position: relative; display: grid; grid-template-columns: repeat(3, 76px); background: var(--s2); border-radius: 10px; padding: 3px">
+          <div aria-hidden="true" class="glide" style="position: absolute; top: 3px; bottom: 3px; left: 3px; width: 76px; border-radius: 8px; background: var(--s1); box-shadow: var(--shadow); transform: translateX({{themeX}}px)"></div>
+          <button type="button" role="radio" aria-checked="{{thSel0}}" onClick="{{th0}}" class="press" style="position: relative; height: 28px; border: 0; background: transparent; cursor: pointer; font-weight: 500; font-size: 12px; color: {{thCol0}}">System</button>
+          <button type="button" role="radio" aria-checked="{{thSel1}}" onClick="{{th1}}" class="press" style="position: relative; height: 28px; border: 0; background: transparent; cursor: pointer; font-weight: 500; font-size: 12px; color: {{thCol1}}">Light</button>
+          <button type="button" role="radio" aria-checked="{{thSel2}}" onClick="{{th2}}" class="press" style="position: relative; height: 28px; border: 0; background: transparent; cursor: pointer; font-weight: 500; font-size: 12px; color: {{thCol2}}">Dark</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section aria-label="Folders" style="display: flex; flex-direction: column; gap: 8px">
+    <div style="display: flex; align-items: baseline; gap: 10px">
+      <h2 style="margin: 0; font-size: 13px; font-weight: 500; color: var(--text2); flex: 1">Folders in use</h2>
+      <button type="button" onClick="{{toggleFolders}}" class="press" style="border: 0; background: transparent; color: var(--accent); cursor: pointer; font-weight: 500; padding: 4px 6px; border-radius: 6px">{{foldersLink}}</button>
+    </div>
+    <div style="background: var(--s1); border-radius: 14px; padding: 6px; box-shadow: var(--shadow)">
+      <sc-for list="{{folders}}" as="f" hint-placeholder-count="4">
+        <div class="row" style="display: flex; align-items: center; gap: 14px; padding: 10px 12px; border-radius: 10px">
+          <span style="width: 70px; color: var(--text3); font-size: 12px">{{f.label}}</span>
+          <span style="flex: 1; min-width: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; color: var(--text2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap">{{f.path}}</span>
+        </div>
+      </sc-for>
+    </div>
+    <sc-if value="{{showFolders}}" hint-placeholder-val="{{ false }}">
+      <div class="reveal" style="background: var(--s1); border-radius: 14px; padding: 16px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 12px">
+        <span style="color: var(--text2)">Only if you keep agentcomms' folders somewhere else.</span>
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: var(--text2)">Config folder</span><input type="text" placeholder="Default" style="height: 32px; border: 0; border-radius: 8px; background: var(--s2); color: var(--text); padding: 0 10px; font: inherit"></label>
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: var(--text2)">State folder</span><input type="text" placeholder="Default" style="height: 32px; border: 0; border-radius: 8px; background: var(--s2); color: var(--text); padding: 0 10px; font: inherit"></label>
+        <label style="display: flex; flex-direction: column; gap: 6px"><span style="font-size: 12px; color: var(--text2)">Data folder</span><input type="text" placeholder="Default" style="height: 32px; border: 0; border-radius: 8px; background: var(--s2); color: var(--text); padding: 0 10px; font: inherit"></label>
+        <div style="display: flex; justify-content: flex-end"><button type="button" onClick="{{toggleFolders}}" class="press primary" style="border: 0; background: var(--accent); color: var(--accentText); border-radius: 8px; padding: 7px 14px; cursor: pointer; font-weight: 500">Save</button></div>
+      </div>
+    </sc-if>
+  </section>
+</div>
+</sc-if>
+
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"startDark":{"editor":"boolean","default":true,"section":"Look"},"$preview":{"width":1280,"height":800}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = {
+      screen: 'overview', theme: 'system', acc: 0, accDir: 'r', ap: 0, apDir: 'r', ev: 0, evDir: 'r',
+      level: 0, serviceOn: true, loginOn: true, upd: 'available', showFolders: false,
+      waiting: [
+        { id: 1, title: 'Reply to Ana about the venue', account: 'cue/gmail', when: '4 min ago', preview: 'Thanks Ana, Thursday works. We will be there from 9.\n— sent by Criss’s agent' },
+        { id: 2, title: 'Post in #production', account: 'cue/slack', when: '12 min ago', preview: 'The rig for Saturday is confirmed: 24 movers, 2 hazers.\n— sent by Criss’s agent' }
+      ],
+      leaving: {}
+    };
+    this.swipeAcc = 0;
+    this.swipeLock = 0;
+  }
+  dark() {
+    if (this.state.theme === 'dark') return true;
+    if (this.state.theme === 'light') return false;
+    return this.props.startDark ?? true;
+  }
+  go(screen) { return (e) => { if (e && e.preventDefault) e.preventDefault(); this.setState({ screen }); }; }
+  tab(key, dirKey, i) { return () => this.setState({ [key]: i, [dirKey]: i >= this.state[key] ? 'r' : 'l' }); }
+  swipe(key, dirKey, count) {
+    return (e) => {
+      if (Math.abs(e.deltaX) <= Math.abs(e.deltaY)) return;
+      const now = Date.now();
+      if (now < this.swipeLock) return;
+      this.swipeAcc += e.deltaX;
+      if (Math.abs(this.swipeAcc) < 60) return;
+      const step = this.swipeAcc > 0 ? 1 : -1;
+      this.swipeAcc = 0;
+      this.swipeLock = now + 450;
+      const next = Math.min(count - 1, Math.max(0, this.state[key] + step));
+      if (next !== this.state[key]) this.setState({ [key]: next, [dirKey]: step > 0 ? 'r' : 'l' });
+    };
+  }
+  revoke(id) {
+    return () => {
+      this.setState({ leaving: { ...this.state.leaving, [id]: true } });
+      setTimeout(() => this.setState({ waiting: this.state.waiting.filter((w) => w.id !== id) }), 220);
+    };
+  }
+  renderVals() {
+    const s = this.state;
+    const dark = this.dark();
+    const screens = ['overview', 'accounts', 'approvals', 'agent', 'updates', 'events', 'doctor', 'settings'];
+    const idx = screens.indexOf(s.screen);
+    const on = 'var(--text)';
+    const off = 'var(--text2)';
+    const nav = {};
+    screens.forEach((name, i) => {
+      const cap = name.charAt(0).toUpperCase() + name.slice(1);
+      nav['go' + cap] = this.go(name);
+      nav['cur' + cap] = i === idx ? 'page' : 'false';
+      nav['col' + cap] = i === idx ? on : off;
+      nav['is' + cap] = i === idx;
+    });
+    const seg = (prefix, value, n, handler) => {
+      const out = {};
+      for (let i = 0; i < n; i += 1) {
+        out[prefix + 'Sel' + i] = value === i ? 'true' : 'false';
+        out[prefix + 'Col' + i] = value === i ? on : off;
+        out[prefix + 'Tab' + i] = handler(i);
+      }
+      return out;
+    };
+    const accounts = [
+      { rows: [
+        { initial: 'C', name: 'cue/gmail', policy: 'Sends after your OK', dot: 'var(--ok)', state: 'Healthy' },
+        { initial: 'P', name: 'personal/gmail', policy: 'Sends after your OK', dot: 'var(--ok)', state: 'Healthy' },
+        { initial: 'R', name: 'rgc/gmail', policy: 'Read only', dot: 'var(--ok)', state: 'Healthy' },
+        { initial: 'W', name: 'wf/gmail', policy: 'Sends after your OK at the terminal', dot: 'var(--ok)', state: 'Healthy' }
+      ] },
+      { rows: [
+        { initial: 'C', name: 'cue/slack', policy: 'Posts after your OK · labelled as agent', dot: 'var(--ok)', state: 'Healthy' },
+        { initial: 'R', name: 'rgc/slack', policy: 'Posts after your OK', dot: 'var(--ok)', state: 'Healthy' }
+      ] },
+      { rows: [ { initial: 'C', name: 'cue/resend', policy: 'Sends after your OK', dot: 'var(--ok)', state: 'Healthy' } ] },
+      { hasWarning: true, rows: [ { initial: 'P', name: 'personal/whatsapp', policy: 'Read only', dot: 'var(--warn)', state: 'Needs access' } ] }
+    ];
+    const pane = { ...accounts[s.acc], hasWarning: !!accounts[s.acc].hasWarning, enter: s.accDir === 'r' ? 'in-r' : 'in-l', key: s.acc };
+    const waiting = s.waiting.map((w) => ({ ...w, cls: s.leaving[w.id] ? 'out' : 'fade', revoke: this.revoke(w.id) }));
+    const themeIndex = s.theme === 'system' ? 0 : s.theme === 'light' ? 1 : 2;
+    const levelNotes = ['Installs in the background, never while you are using it.', 'Checks once every 14 days and asks first.', 'Only when you run agentcomms update.'];
+    const upd = s.upd;
+    return {
+      ...nav,
+      themeClass: dark ? 't-dark' : 't-light',
+      navY: idx * 34,
+      waitingCount: s.waiting.length,
+      noneWaiting: s.waiting.length === 0,
+      serviceDot: s.serviceOn ? 'var(--ok)' : 'var(--text3)',
+      serviceWord: s.serviceOn ? 'Running' : 'Stopped',
+      serviceOn: s.serviceOn ? 'true' : 'false',
+      serviceTrack: s.serviceOn ? 'var(--accent)' : 'var(--s3)',
+      serviceKnob: s.serviceOn ? 16 : 0,
+      serviceDetail: s.serviceOn ? 'Running since 09:12 · started by Agent Comms' : 'Stopped · switch it on to start collecting again',
+      toggleService: () => this.setState({ serviceOn: !s.serviceOn }),
+      updateDot: upd === 'available',
+      updateLine: upd === 'available' ? 'Update available' : upd === 'ready' ? 'Restart to finish' : 'Up to date',
+      updAvailable: upd === 'available',
+      updDownloading: upd === 'downloading',
+      updReady: upd === 'ready',
+      updIdle: upd === 'idle',
+      updDetail: upd === 'available' ? '0.27.1 is ready to install' : upd === 'downloading' ? 'Downloading 0.27.1…' : upd === 'ready' ? '0.27.1 is downloaded and verified' : 'Up to date · checked just now',
+      startUpdate: () => { this.setState({ upd: 'downloading' }); setTimeout(() => this.setState({ upd: 'ready' }), 1700); },
+      restartUpdate: () => this.setState({ upd: 'idle' }),
+      checkAgain: () => this.setState({ upd: 'available' }),
+      loginOn: s.loginOn ? 'true' : 'false',
+      loginTrack: s.loginOn ? 'var(--accent)' : 'var(--s3)',
+      loginKnob: s.loginOn ? 16 : 0,
+      toggleLogin: () => this.setState({ loginOn: !s.loginOn }),
+      themeX: themeIndex * 76,
+      thSel0: themeIndex === 0 ? 'true' : 'false', thSel1: themeIndex === 1 ? 'true' : 'false', thSel2: themeIndex === 2 ? 'true' : 'false',
+      thCol0: themeIndex === 0 ? on : off, thCol1: themeIndex === 1 ? on : off, thCol2: themeIndex === 2 ? on : off,
+      th0: () => this.setState({ theme: 'system' }), th1: () => this.setState({ theme: 'light' }), th2: () => this.setState({ theme: 'dark' }),
+      showFolders: s.showFolders,
+      foldersLink: s.showFolders ? 'Done' : 'Change folders…',
+      toggleFolders: () => this.setState({ showFolders: !s.showFolders }),
+      folders: [
+        { label: 'Config', path: '~/.config/agent-communications' },
+        { label: 'State', path: '~/.config/agent-communications/state' },
+        { label: 'Data', path: '~/.local/share/agent-communications' },
+        { label: 'Secrets', path: '~/.config/agent-communications/secrets' }
+      ],
+      accTabX: s.acc * 100,
+      ...seg('acc', s.acc, 4, (i) => this.tab('acc', 'accDir', i)),
+      accountPanes: [pane],
+      swipeAccounts: this.swipe('acc', 'accDir', 4),
+      apTabX: s.ap * 120,
+      ...seg('ap', s.ap, 2, (i) => this.tab('ap', 'apDir', i)),
+      apWaiting: s.ap === 0,
+      apRecent: s.ap === 1,
+      apEnter: s.apDir === 'r' ? 'in-r' : 'in-l',
+      swipeApprovals: this.swipe('ap', 'apDir', 2),
+      waiting,
+      recentApprovals: [
+        { title: 'Email to the venue about load-in', outcome: 'Sent', color: 'var(--ok)', when: '9:40' },
+        { title: 'Post in #crew-chat', outcome: 'Sent', color: 'var(--ok)', when: 'Yesterday' },
+        { title: 'Reply to a supplier quote', outcome: 'Revoked', color: 'var(--text3)', when: 'Yesterday' },
+        { title: 'Email to accounts', outcome: 'Expired', color: 'var(--text3)', when: 'Mon' }
+      ],
+      evTabX: s.ev * 110,
+      ...seg('ev', s.ev, 3, (i) => this.tab('ev', 'evDir', i)),
+      evStatus: s.ev === 0,
+      evRules: s.ev === 1,
+      evDeliveries: s.ev === 2,
+      evEnter: s.evDir === 'r' ? 'in-r' : 'in-l',
+      swipeEvents: this.swipe('ev', 'evDir', 3),
+      deliveries: [
+        { text: 'Messages from David → webhook', when: '2 min ago', dot: 'var(--ok)' },
+        { text: 'Mail subjects → dry-run log', when: '18 min ago', dot: 'var(--ok)' },
+        { text: 'Messages from David → webhook · retried once', when: '1 h ago', dot: 'var(--warn)' },
+        { text: 'Mail subjects → dry-run log', when: '3 h ago', dot: 'var(--ok)' }
+      ],
+      levelX: s.level * 100,
+      lvSel0: s.level === 0 ? 'true' : 'false', lvSel1: s.level === 1 ? 'true' : 'false', lvSel2: s.level === 2 ? 'true' : 'false',
+      lvCol0: s.level === 0 ? on : off, lvCol1: s.level === 1 ? on : off, lvCol2: s.level === 2 ? on : off,
+      lv0: () => this.setState({ level: 0 }), lv1: () => this.setState({ level: 1 }), lv2: () => this.setState({ level: 2 }),
+      levelNote: levelNotes[s.level],
+      recent: [
+        { text: 'Draft reply prepared for your OK', account: 'cue/gmail', when: '4m', dot: 'var(--accent)', delay: '0ms' },
+        { text: 'Post prepared for #production', account: 'cue/slack', when: '12m', dot: 'var(--accent)', delay: '40ms' },
+        { text: 'Email sent to the venue', account: 'cue/gmail', when: '9:40', dot: 'var(--ok)', delay: '80ms' },
+        { text: 'Rule “Messages from David” delivered 3 events', account: 'events', when: '9:15', dot: 'var(--ok)', delay: '120ms' },
+        { text: 'agentcomms updated to 0.26.2', account: 'core', when: 'Fri', dot: 'var(--text3)', delay: '160ms' }
+      ],
+      checks: [
+        { name: 'Node', detail: '22.22.3' },
+        { name: 'Folders', detail: 'All four in place' },
+        { name: 'Keychain', detail: 'Unlocked' },
+        { name: 'Account names', detail: 'organisation/platform' },
+        { name: 'Updates', detail: 'Background job runs daily' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
