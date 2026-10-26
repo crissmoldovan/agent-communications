@@ -706,5 +706,48 @@
       "hasKey": false,
       "judges": 1
     }
+  },
+  {
+    "name": "integration-show-result",
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "linear",
+        "team": "CUE"
+      }
+    },
+    "result": {
+      "integration": "linear",
+      "connected": true,
+      "workspace": "Example Workspace",
+      "teams": [
+        {
+          "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+          "key": "CUE",
+          "name": "Example Team"
+        }
+      ],
+      "labels": [
+        {
+          "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+          "name": "Billing"
+        }
+      ]
+    }
+  },
+  {
+    "name": "integration-show-unconnected-result",
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "linear"
+      }
+    },
+    "result": {
+      "integration": "linear",
+      "connected": false,
+      "workspace": null,
+      "teams": []
+    }
   }
 ]

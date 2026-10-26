@@ -32,7 +32,7 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
-import { linearTargetDisclosure } from '../domain/linear-target.ts';
+import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -61,6 +61,7 @@ import {
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
 import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
+import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -572,6 +573,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
+  readonly 'integration-show': IntegrationShowResultV1;
 };
 
 /**
@@ -738,6 +740,8 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+  /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, and one team's labels. */
+  readonly 'integration-show': { readonly integration: 'linear'; readonly team?: string | undefined };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -1055,6 +1059,38 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   }
 }
 
+/**
+ * `integration show linear` (0.33.0 design §3.4): whether a Linear key is kept, the workspace and teams it sees, and one
+ * team's labels when asked. Ids are Linear's; names are the workspace's own, one line each.
+ */
+function assertIntegrationShow(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(
+    value,
+    ['integration', 'connected', 'workspace', 'teams', ...(Object.hasOwn(value, 'labels') ? ['labels'] : [])],
+    'an integration show result',
+  );
+  if (value.integration !== 'linear') throw new TypeError('an integration show result names Linear');
+  if (typeof value.connected !== 'boolean')
+    throw new TypeError('an integration show result says whether it is connected');
+  if (value.connected) assertText(value.workspace, 'a Linear workspace');
+  else if (value.workspace !== null) throw new TypeError('an unconnected integration has no workspace');
+  if (!Array.isArray(value.teams)) throw new TypeError('an integration show result lists its teams');
+  if (!value.connected && (value.teams.length > 0 || Object.hasOwn(value, 'labels')))
+    throw new TypeError('an unconnected integration lists nothing');
+  for (const team of value.teams) {
+    assertClosedRecord(team, ['id', 'key', 'name'], 'a Linear team');
+    if (!isLinearId(team.id)) throw new TypeError('a Linear team id is a Linear id');
+    for (const field of ['key', 'name']) assertText(team[field], `a Linear team ${field}`);
+  }
+  if (!Object.hasOwn(value, 'labels')) return;
+  if (!Array.isArray(value.labels)) throw new TypeError('an integration show result lists its labels');
+  for (const label of value.labels) {
+    assertClosedRecord(label, ['id', 'name'], 'a Linear label');
+    if (!isLinearId(label.id)) throw new TypeError('a Linear label id is a Linear id');
+    assertText(label.name, 'a Linear label name');
+  }
+}
+
 /** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
 function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
   if (value.kind !== JUDGE_KIND_TYPESAFE && value.kind !== JUDGE_KIND_LOCAL_ENDPOINT)
@@ -1271,6 +1307,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
+  'integration-show': ['integration', 'connected', 'workspace', 'teams'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1389,6 +1426,10 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     const { tightening, ...version } = value;
     assertTighteningPreview(tightening);
     assertB3OrdinaryControlResultV1(operation, version);
+    return;
+  }
+  if (operation === 'integration-show' && isRecord(value)) {
+    assertIntegrationShow(value);
     return;
   }
   assertClosedRecord(value, fields, `a ${operation} result`);

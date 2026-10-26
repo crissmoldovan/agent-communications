@@ -146,6 +146,8 @@ const EXPECTED_SETUP_ROWS = [
   ['events-daemon.provider.list', 'provider list', 'events_provider_list', 'both', 'providerList'],
   ['events-daemon.provider-key.set', 'provider key set', null, 'exception', 'providerKeySet'],
   ['events-daemon.provider-key.remove', 'provider key remove', null, 'exception', 'providerKeyRemove'],
+  // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read.
+  ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
 ] as const;
 
 const rowShape = (row: Capability) => ({
@@ -303,6 +305,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.judge.setup',
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
+    'events-daemon.integration.show',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

@@ -125,6 +125,8 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
     desktopCallable: true,
     family: 'owner',
   },
+  // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see. The person's read, CLI and app.
+  { capabilityOperation: 'integrationShow', wireOperation: 'integration-show', desktopCallable: true, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

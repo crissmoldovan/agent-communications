@@ -52,6 +52,7 @@ import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
 import { enableAll } from '../operations/enable-all.ts';
+import { integrationShow } from '../operations/integrations.ts';
 import {
   addJudge,
   budgetShow,
@@ -803,6 +804,22 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       if (!isEventSecretProvider(provider))
         throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
+    });
+
+  // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, the person's read only.
+  const integration = program
+    .command('integration')
+    .description('the services a rule can act in — Linear — and what your key there can see (a person only)');
+  integration
+    .command('show <integration>')
+    .description('show whether a Linear key is kept, its workspace and teams, and with --team that team’s labels')
+    .option('--team <key>', 'a team, by its key (such as CUE) or its id, whose labels to list')
+    .action(async (name: string, options: { readonly team?: string }) => {
+      ran = true;
+      // The person's view, at a terminal or in the app: never inside an MCP server's process.
+      assertNotMcpServer(env, 'integration');
+      if (name !== 'linear') throw new CommsError('USAGE', 'the integration is linear');
+      print(await integrationShow(name, { ...controlOptions(program), team: options.team }));
     });
 
   const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');

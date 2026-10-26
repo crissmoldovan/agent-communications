@@ -2828,6 +2828,17 @@
       "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
     },
     {
+      "id": "events-daemon.integration.show",
+      "package": "events-daemon",
+      "cli": "integration show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "integrationShow",
+      "argv": ["linear"],
+      "expect": { "integration": "linear" },
+      "reason": "What the person's Linear key can see — their workspace, its teams and a team's labels — is read with their own key for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reads it; events_provider_list tells an agent whether a Linear key is kept."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

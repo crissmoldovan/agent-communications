@@ -27,6 +27,11 @@ const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
  * which serves TypeSafe's Jev. Exactly this URL — scheme, host `openrouter.ai`, port and path — and nothing else there.
  */
 const OPENROUTER_GLOBAL_ONLY_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
+/**
+ * The third (0.33.0 design §3.4): Linear's GraphQL endpoint, where a Linear target adds its issues and `integration show
+ * linear` reads the workspace. Exactly this URL — scheme, host `api.linear.app`, port and path — and nothing else there.
+ */
+const LINEAR_GLOBAL_ONLY_ENDPOINT = 'https://api.linear.app/graphql';
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -132,7 +137,9 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   const globalOnly = options.addressMode === 'global-only';
   if (globalOnly) {
     if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
-      // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
+      // Jev through OpenRouter: the second fixed hosted endpoint.
+    } else if (url.href === LINEAR_GLOBAL_ONLY_ENDPOINT) {
+      // A Linear target's issues and the Linear integration's read: the third, and last, fixed hosted endpoint.
     } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
       throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');
     if (options.approvedAddressSetDigest !== undefined)

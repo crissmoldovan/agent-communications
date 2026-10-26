@@ -203,5 +203,9 @@
   {
     "name": "provider-key-set-linear-request",
     "request": { "operation": "provider-key-set", "args": { "provider": "linear" } }
+  },
+  {
+    "name": "integration-show-request",
+    "request": { "operation": "integration-show", "args": { "integration": "linear", "team": "CUE" } }
   }
 ]

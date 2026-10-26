@@ -110,6 +110,8 @@ import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
+import { LinearClient, type LinearClientOptions } from './linear-client.ts';
+import { LinearIntegration } from './linear-integration.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { MessagesStore } from './messages.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -188,6 +190,11 @@ export interface EventOwnerOptions {
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<ResendEventReader>)
     | undefined;
   readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
+  /**
+   * Linear's GraphQL client (0.33.0 design §3.4): its resolver and pinned connections. Production leaves it unset and
+   * reaches only api.linear.app; a test gives a loopback fake, and never the real Linear.
+   */
+  readonly linearClient?: LinearClientOptions | undefined;
   /** Test seam only: replaces D's composition so the missing-seam refusal can be proven on the real start path. */
   readonly phaseDComposition?: typeof createPhaseDWhatsAppOwnerComposition | undefined;
   readonly tickMs?: number | undefined;
@@ -1127,9 +1134,12 @@ async function startOwnerWithLock(
   const lanes = new LaneService({ store: database, queue, now });
   // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
   // and each rule version with its times, its plain-words summary and its last 7 days.
+  // The Linear target's one client (0.33.0 design §3.4): the integration's read and the Linear dispatcher share it.
+  const linearClient = new LinearClient(options.linearClient);
   const readers: OwnerReaders = {
     deliveries: new DeliveryReader({ store: database, cipher, now }),
     rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+    linear: new LinearIntegration({ secrets: eventSecrets, cipher, client: linearClient }),
   };
   notifyLaneAppend = () => lanes.notifyAppended();
   // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
@@ -1714,6 +1724,8 @@ async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise
 interface OwnerReaders {
   readonly deliveries: DeliveryReader;
   readonly rules: RuleReader;
+  /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
+  readonly linear?: LinearIntegration | undefined;
 }
 
 async function handleControl(
@@ -1783,6 +1795,9 @@ async function handleControl(
       return dispatcher.list();
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
+    case OWNER_CONTROL_WIRES.integrationShow:
+      if (readers?.linear === undefined) throw new CommsError('USAGE', 'integration show is not available');
+      return readers.linear.show(personOnly(request.args, 'integration show'));
     case OWNER_CONTROL_WIRES.deliveryShow:
       if (readers === undefined) throw new CommsError('USAGE', 'delivery show is not available');
       return readers.deliveries.show(requiredText(personOnly(request.args, 'delivery show').deliveryId, 'delivery id'));
