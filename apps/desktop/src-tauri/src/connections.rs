@@ -5,7 +5,8 @@
 //! core's arguments but those words.
 
 use crate::allowlist::{ApprovalId, Call};
-use crate::ipc::{AppError, CliResult};
+use crate::build_info;
+use crate::ipc::{AppError, CliResult, TerminalCommand};
 use crate::terminal::Prepared;
 use serde::{Deserialize, Serialize};
 
@@ -34,6 +35,43 @@ impl Call {
             )),
             _ => None,
         }
+    }
+}
+
+/// Why the test build edits no app's settings: its core is the test profile's, but the client configs `mcp install` and
+/// `mcp uninstall` write are the person's real ones (`~/.claude.json` and the rest), so a test could register an
+/// unverified local build into their real apps, or take their real servers away.
+const TEST_BUILD_REFUSAL: &str =
+    "the test build does not change which apps have which servers: Connections only shows \
+there, because changing it would edit your real apps' settings. Use your own Agent Comms for that";
+
+impl Call {
+    /// Whether the call writes a client's own config: adding a server to an app, or taking one away.
+    pub fn edits_client_configs(&self) -> bool {
+        matches!(
+            self,
+            Call::McpInstall { .. } | Call::McpInstallApproved { .. } | Call::McpUninstall { .. }
+        )
+    }
+}
+
+/// Refuses, in the test build (an identifier ending in `.test`), every call that edits a client's config (0.32.0):
+/// Connections only shows there, and a stray call cannot change the person's real apps either.
+pub fn refuse_in_test_build(call: &Call, identifier: &str) -> Result<(), AppError> {
+    if build_info::is_test(identifier) && call.edits_client_configs() {
+        return Err(AppError::refused(TEST_BUILD_REFUSAL));
+    }
+    Ok(())
+}
+
+/// The same for a change opened in the terminal, which runs the same words there.
+pub fn refuse_terminal_in_test_build(
+    command: &TerminalCommand,
+    identifier: &str,
+) -> Result<(), AppError> {
+    match command {
+        TerminalCommand::Change { call, .. } => refuse_in_test_build(call, identifier),
+        _ => Ok(()),
     }
 }
 
@@ -519,5 +557,78 @@ mod tests {
         )
         .expect("a read");
         assert!(matches!(other, crate::ipc::CliResult::Ok { .. }));
+    }
+
+    /// In the test build, Connections only shows (0.32.0): the test profile's core would edit the person's real client
+    /// configs, so no call that does, and no change opened in a terminal that does, runs there.
+    #[test]
+    fn the_test_build_never_edits_the_real_apps_settings() {
+        const TEST: &str = "com.cueplusplus.agentcomms.test";
+        const RELEASE: &str = "com.cueplusplus.agentcomms";
+        let id = || {
+            crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string()).expect("an id")
+        };
+        for value in [
+            json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+            json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
+            json!({
+                "kind": "mcpInstallApproved",
+                "client": "claude-code",
+                "server": "gmail",
+                "approvalId": crate::allowlist::ID
+            }),
+        ] {
+            let edits = call(value.clone());
+            let refusal =
+                refuse_in_test_build(&edits, TEST).expect_err("refused in the test build");
+            assert_eq!(refusal.code, "APP_REFUSED", "{value}");
+            assert!(
+                refusal.message.contains("test build"),
+                "{}",
+                refusal.message
+            );
+            assert!(refusal.message.contains("real apps"), "{}", refusal.message);
+            assert!(refuse_in_test_build(&edits, RELEASE).is_ok(), "{value}");
+            // Nor as a change opened in the terminal, which runs the same words.
+            let change = TerminalCommand::Change {
+                call: edits,
+                revoke: id(),
+            };
+            assert_eq!(
+                refuse_terminal_in_test_build(&change, TEST)
+                    .expect_err("refused in the test build")
+                    .code,
+                "APP_REFUSED"
+            );
+            assert!(refuse_terminal_in_test_build(&change, RELEASE).is_ok());
+        }
+        // Reads, and every other call and command, are the test build's as they are a release's.
+        for value in [
+            json!({ "kind": "channels" }),
+            json!({ "kind": "approvalsPending" }),
+            json!({ "kind": "updateRollback" }),
+        ] {
+            assert!(
+                refuse_in_test_build(&call(value.clone()), TEST).is_ok(),
+                "{value}"
+            );
+        }
+        assert!(refuse_terminal_in_test_build(
+            &TerminalCommand::Change {
+                call: call(json!({ "kind": "updateRollback" })),
+                revoke: id(),
+            },
+            TEST
+        )
+        .is_ok());
+        // Both doors are guarded: the call, and the terminal.
+        let source = include_str!("commands.rs");
+        let code = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        assert!(
+            code.contains("connections::refuse_in_test_build(&call, &app.config().identifier)?;")
+        );
+        assert!(code.contains(
+            "connections::refuse_terminal_in_test_build(&command, &app.config().identifier)?;"
+        ));
     }
 }

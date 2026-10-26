@@ -1,6 +1,7 @@
 import { Button, Checkbox, CheckboxGroup, Chip, Table } from '@cueplusplus/ui';
 import { useId, useMemo, useState } from 'react';
 import { readSessions, type SessionView } from '../activity.ts';
+import { useAppBuild } from '../app-build.ts';
 import { useBridge } from '../bridge-context.tsx';
 import { ChangePreview } from '../components/ChangePreview.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
@@ -67,6 +68,8 @@ export const CONNECTIONS_COPY = {
   seeActivity: 'See Activity ›',
   noRecent: 'No agent window has used an account here in the last 30 days.',
   notRead: "Core's answer about its servers could not be read.",
+  /** The test build's line: its core is the test profile's, but the configs it would write are the person's real ones. */
+  testBuildOnly: "In the test build, Connections only shows. Changing it would edit your real apps' settings.",
 } as const;
 
 const whichParts = (app: string) => `${app}: which parts?`;
@@ -128,6 +131,9 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
       : { state: 'ready', value: read.sessions };
   }, [sessions.result]);
   const lastUsed = activity && windows.state === 'ready' ? lastUsedByApp(windows.value) : {};
+  // The test build changes no app's settings (0.32.0): its core would write the person's real client configs. Rust
+  // refuses the calls there too; here there is nothing to press.
+  const readOnly = useAppBuild()?.isTest === true;
 
   return (
     <ScreenFrame title={CONNECTIONS_COPY.title}>
@@ -140,6 +146,7 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
               lastUsed={lastUsed}
               canRemove={atLeast(version, MCP_UNINSTALL_VERSION)}
               approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION)}
+              readOnly={readOnly}
               installed={version}
               reload={channels.reload}
             />
@@ -186,6 +193,7 @@ function Apps({
   lastUsed,
   canRemove,
   approveHere,
+  readOnly,
   installed,
   reload,
 }: {
@@ -194,6 +202,8 @@ function Apps({
   canRemove: boolean;
   /** Whether core takes the app's own approval of an install (0.32.0); before it, Approve in Terminal. */
   approveHere: boolean;
+  /** The test build: the table only, with nothing to change (0.32.0). */
+  readOnly: boolean;
   installed: string | null;
   reload: () => Promise<void>;
 }) {
@@ -299,9 +309,11 @@ function Apps({
                 {SERVER_LABELS[server]}
               </Table.Head>
             ))}
-            <Table.Head>
-              <span className="sr-only">Actions</span>
-            </Table.Head>
+            {readOnly ? null : (
+              <Table.Head>
+                <span className="sr-only">Actions</span>
+              </Table.Head>
+            )}
           </Table.Row>
         </Table.Header>
         <Table.Body>
@@ -315,23 +327,26 @@ function Apps({
                   <CellMark cell={app.cells[server]} />
                 </Table.Cell>
               ))}
-              <Table.Cell className="text-right">
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  disabled={busy}
-                  aria-expanded={editing === app.client}
-                  onClick={() => setEditing(app.client)}
-                >
-                  {app.servers.length === 0 ? CONNECTIONS_COPY.add : CONNECTIONS_COPY.change}
-                </Button>
-              </Table.Cell>
+              {readOnly ? null : (
+                <Table.Cell className="text-right">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    disabled={busy}
+                    aria-expanded={editing === app.client}
+                    onClick={() => setEditing(app.client)}
+                  >
+                    {app.servers.length === 0 ? CONNECTIONS_COPY.add : CONNECTIONS_COPY.change}
+                  </Button>
+                </Table.Cell>
+              )}
             </Table.Row>
           ))}
         </Table.Body>
       </Table.Root>
       <p className="text-(length:--cue-text-ui) text-fg-subtle">{CONNECTIONS_COPY.lastUsedNote}</p>
-      {row === null ? null : (
+      {readOnly ? <p className="text-warn">{CONNECTIONS_COPY.testBuildOnly}</p> : null}
+      {row === null || readOnly ? null : (
         <Editor
           key={row.client}
           app={row}
