@@ -1328,7 +1328,7 @@ test('REL-B2: the released daemon keeps its human-only boundary, and the release
   assert.match(text, /decide a held event/i, 'held decisions stay human-only');
   assert.match(
     text,
-    /Every judge kind is off until you enable it, at your terminal/i,
+    /Every judge kind is off until you turn it on: in the desktop app, or at your terminal/i,
     'judges stay off until a person enables them',
   );
   assert.match(text, /see, set or rotate a hosted judge's API key/i, "a judge's key stays human-only");

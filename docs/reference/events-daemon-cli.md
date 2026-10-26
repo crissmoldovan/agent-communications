@@ -55,6 +55,7 @@ Scripts should read these rather than parse output.
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
+| [`provider`](#agent-events-provider) | the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
@@ -580,6 +581,20 @@ agent-events judge key rotate [options] <judge-id>
 |---|---|---|
 | `--version <version>` |  | — |
 
+### `agent-events judge setup`
+
+set up and turn on Jev (typesafe) or a model server on this machine (local-endpoint) in one step, as the person
+
+```
+agent-events judge setup [options] <kind>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--provider <provider>` | Jev's provider: typesafe (the default) or openrouter | — |
+| `--url <url>` | the local model server's URL: http://127.0.0.1:<port> or http://[::1]:<port> | — |
+| `--model <name>` | the local model server's model (default nimble) | — |
+
 ### `agent-events budget`
 
 inspect or prepare the immutable global judge budget
@@ -598,6 +613,46 @@ agent-events budget show [options]
 
 ```
 agent-events budget update [options] <document>
+```
+
+### `agent-events provider`
+
+the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key
+
+```
+agent-events provider [options] [command]
+```
+
+### `agent-events provider list`
+
+list each AI provider and whether it has a key; never a key
+
+```
+agent-events provider list [options]
+```
+
+### `agent-events provider key`
+
+set or remove an AI provider's key, as the person
+
+```
+agent-events provider key [options] [command]
+```
+
+### `agent-events provider key set`
+
+store a provider key, read from your hidden input or the app’s stdin, never from argv
+
+```
+agent-events provider key set [options] <provider>
+```
+
+### `agent-events provider key remove`
+
+remove a provider key, and the copy its Jev judges hold
+
+```
+agent-events provider key remove [options] <provider>
 ```
 
 ### `agent-events deliveries`

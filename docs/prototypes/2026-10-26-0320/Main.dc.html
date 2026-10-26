@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Events, Judges</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45);--scrim:rgba(24,24,27,.32)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55);--scrim:rgba(0,0,0,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:820px;position:relative}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.sub{margin:0 0 18px;color:var(--text2)}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;margin-bottom:18px}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s2)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:12px}
+.icon{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--accentSoft);color:var(--accent)}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Messages.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span><span class="new">New</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Connections.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>Connections</span><span class="new">New</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="AgentSessions.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Agents</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni on" href="Main.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="#"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Providers.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span style="padding: 0 10px; color: var(--text3); font-size: 11.5px">agentcomms 0.32.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Events</h1>
+  <p class="sub">Rules watch your accounts and pass on what matters. Everything here works without the Terminal.</p>
+  <nav aria-label="Event service" class="tabs">
+    <a class="tab" href="#">Service <span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: var(--ok)"></span></a>
+    <a class="tab on" href="Main.dc.html" aria-current="page">Judges</a>
+    <a class="tab" href="Rules.dc.html">Rules <span class="n">4</span></a>
+    <a class="tab" href="Deliveries.dc.html">Deliveries <span class="n">5</span></a>
+  </nav>
+  <p class="muted" style="margin: 0 0 14px">A judge reads a message a rule has matched, and answers the rule's question, such as “Is this asking me for something?”. A rule can use a judge once you turn it on here.</p>
+
+  <div style="display: flex; flex-direction: column; gap: 12px">
+
+    <section class="card" aria-labelledby="jev">
+      <div class="row" style="align-items: flex-start; gap: 14px">
+        <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l2.2 5.3L20 9l-4.4 3.8L17 18.5 12 15.6 7 18.5l1.4-5.7L4 9l5.8-.7z"></path></svg></span>
+        <div style="flex: 1; min-width: 0">
+          <div class="row" style="gap: 8px; flex-wrap: wrap">
+            <h2 id="jev" class="h2">Jev, by TypeSafe</h2>
+            <sc-if value="{{jevOn}}" hint-placeholder-val="{{ false }}"><span class="chip c-ok">On</span></sc-if>
+            <sc-if value="{{jevOff}}" hint-placeholder-val="{{ true }}"><span class="chip c-n">Not set up</span></sc-if>
+          </div>
+          <p class="muted" style="margin: 4px 0 0">A hosted model made for yes-or-no questions. It sees only the parts of a message a rule keeps, such as the sender and the subject.</p>
+          <sc-if value="{{jevOff}}" hint-placeholder-val="{{ true }}">
+            <p class="faint" style="margin: 10px 0 0">Needs a key from TypeSafe or OpenRouter. You have an OpenRouter key already.</p>
+          </sc-if>
+          <sc-if value="{{jevOn}}" hint-placeholder-val="{{ false }}">
+            <div style="margin-top: 12px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px">
+              <div class="stat"><span class="faint">Through</span><span style="font-weight: 500">OpenRouter</span></div>
+              <div class="stat"><span class="faint">Model</span><span style="font-weight: 500">Jev 1.14</span></div>
+              <div class="stat"><span class="faint">Answers today</span><span style="font-weight: 500">12 · 0 failed</span></div>
+            </div>
+          </sc-if>
+        </div>
+        <div class="row" style="gap: 6px; flex: none">
+          <sc-if value="{{jevOff}}" hint-placeholder-val="{{ true }}"><a class="btn p" href="JevSetup.dc.html">Set up…</a></sc-if>
+          <sc-if value="{{jevOn}}" hint-placeholder-val="{{ false }}"><button type="button" class="btn q">Try it</button><a class="btn" href="JevSetup.dc.html">Change…</a><button type="button" class="btn q">Turn off</button></sc-if>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="local">
+      <div class="row" style="align-items: flex-start; gap: 14px">
+        <span class="icon" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"></rect><path d="M8 20h8M12 16v4"></path></svg></span>
+        <div style="flex: 1; min-width: 0">
+          <div class="row" style="gap: 8px"><h2 id="local" class="h2">A local model server</h2><span class="chip c-n">Not set up</span></div>
+          <p class="muted" style="margin: 4px 0 0">A model you run yourself on this Mac, such as Ollama or LM Studio. Nothing leaves the Mac. Its answers are less sure than Jev's, so they're marked “uncalibrated”.</p>
+        </div>
+        <a class="btn" href="LocalModel.dc.html" style="flex: none">Set up…</a>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="laya">
+      <div class="row" style="align-items: flex-start; gap: 14px">
+        <span class="icon" aria-hidden="true" style="background: var(--s2); color: var(--text3)"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"></circle><path d="M12 7.5V12l3 2"></path></svg></span>
+        <div style="flex: 1; min-width: 0">
+          <div class="row" style="gap: 8px"><h2 id="laya" class="h2" style="color: var(--text2)">Laya</h2><span class="chip c-n">Not available yet</span></div>
+          <p class="muted" style="margin: 4px 0 0">Laya will run inside this app, with no account and nothing leaving this Mac. It comes in a later release; there's nothing to set up today.</p>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  <p class="faint" style="margin: 16px 0 0">Keys are kept in Settings → <a href="Providers.dc.html">AI providers</a>. Turning a judge off applies at once.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"jevState":{"editor":"enum","options":["not set up","on"],"default":"not set up"},"$preview":{"width":1280,"height":820}}'>
+class Component extends DCLogic {
+renderVals() {
+const on = (this.props.jevState ?? 'not set up') === 'on';
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light', jevOn: on, jevOff: !on };
+}
+}
+</script>
+</body>
+</html>

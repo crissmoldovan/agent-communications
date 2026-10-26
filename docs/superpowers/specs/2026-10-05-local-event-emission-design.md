@@ -528,6 +528,39 @@ and, under "What the safety model does not claim":
 >   protect against another process of the same user, and the daemon's one-time downloads of the Laya runtime and
 >   model are ordinary network traffic.
 
+**Note, 2026-10-26 (0.32.0; owner decision of 2026-10-26: judge setup from the app, refused to agents).** Using
+0.30.0, the owner asked for judges to be turned on in the desktop app rather than at a terminal, with the key kept in
+the app's settings, and chose "in the app". For judges only, this loosens the approval rule, the human-only secret table
+above and D13/DA10's "the app never approves" and "the app never handles a token":
+
+- **`judge setup <kind>`** (`typesafe` or `local-endpoint`) does in one step what the README's five did. It makes the
+  judge version — `jev` from the chosen provider (D11's note), or `local-model` at a loopback URL the person gives, which
+  must be `http://127.0.0.1:<port>` or `http://[::1]:<port>` — gives Jev its provider's stored key, then turns on what it
+  needs: the daemon-wide budget when there is none for the judge's provider (60 calls per rolling hour, 1,000,000 input
+  tokens per rolling 30 days and two at a time, overall and for that provider), and, last, the kind. Each enablement is
+  still this section's disclosure approval, prepared, approved and claimed by the protocol above, so its intent, core
+  record and recovery are a typed approval's. The command itself is the person's approval: the owner issues that
+  approval's challenge and answers it at once through the app channel, core records `approvedVia: "app"`, and the
+  audit line `events.judgeSetup` records `approvedBy: "desktop-app"`. Running it again approves nothing new, or makes the
+  next judge version when the provider, URL or model changed; a rule keeps the judge version it embeds until a new rule
+  version naming the new one is approved. `judge kind disable <kind>` stays the off switch, a tightening.
+- **AI provider keys.** One key slot per provider the person has an account with — TypeSafe and OpenRouter — is the
+  generation ledger's fourth owner kind, `provider`, with purpose `provider-key` (migration 26). Every live Jev judge
+  version of that provider gets a copy in its own `judge-key` slot, which stays the only key the hosted boundary and its
+  fences read. `provider key set` stores or replaces the key and the copies at once; `provider key remove` retires them
+  all, after which those judges' calls are refused before any I/O; `provider list` says only whether each provider has a
+  key. No output, result, audit line, log or vector holds a key or any part of one: the list keeps no hint.
+- **Hidden input may come from the app's stdin.** `provider key set` reads the person's hidden input at a terminal, or,
+  when stdin is not a TTY, the app's stdin — one line, at most 4 KiB — and never argv. The desktop app holds the key
+  only for that one call (DA10's note).
+- **Refused to agents.** `judge setup`, `provider key set` and `provider key remove` refuse every agent marker core
+  knows (`CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CODEX_SANDBOX`, `CURSOR_AGENT` and the rest, as `lane bind` does) and
+  the event service's MCP-server mark before they read anything or reach the owner, which accepts them only from the
+  person's setup origin. No MCP tool performs them, and each has its own CLI-only `exception` row in
+  `capabilities.json` with that reason; `events_provider_list` is the one tool, and says only whether a key exists. As
+  for every control client, the origin is a caller's label, not a capability: a same-user process holding the control
+  token stays inside the owner's trust boundary, exactly as before.
+
 ### D3. The event catalogue: typed, versioned, and explicit about trust
 
 Every event type is a definition in `@agentcomms/events`:
@@ -1425,6 +1458,12 @@ addresses are refused for this judge kind. The hosted TypeSafe judge remains its
 the explicit webhook vectors: HTTPS public in its set accepts; HTTPS private in its set accepts; HTTP literal
 loopback in its set accepts; HTTP hostname resolving to loopback refuses; and HTTP private literal/address refuses.
 
+**Note, 2026-10-26 (0.32.0; owner decision).** The hosted Jev judge has a second fixed HTTPS endpoint,
+`https://openrouter.ai/api/v1/systemone`, for a Jev judge whose provider is OpenRouter (D11's note). Global-only pinned
+resolution admits exactly these two URLs — for OpenRouter, host `openrouter.ai`, port 443 and that path — and nothing
+else at either host: every other hostname, subdomain, port, path or scheme is refused before DNS, as before, and the
+resolved addresses must still all be globally reachable.
+
 `target test` runs only for a target version referenced by an active rule, or from the terminal/app against a pending
 version from the approval screen of a rule activation that references it. It sends exactly the catalogue's fixed
 `io.agentcomms.test.v1` synthetic CloudEvent defined in D3, accepts no caller-supplied
@@ -2199,6 +2238,17 @@ below with `files` sorted by raw UTF-8 path bytes, plus `runtimeLock`: the runti
 with name, version, tarball URL and `sha512` integrity, and the platform and SHA-256 digest of that platform's
 canonical file list (below). A `local-endpoint` enablement carries nothing more, because each of
 its judge versions binds its own URL and address set (D7).
+
+**Note, 2026-10-26 (0.32.0; owner decision; https://openrouter.ai/docs/guides/community/jev, read 2026-10-26).** A
+`typesafe` judge document's `provider` is `typesafe` or `openrouter`, and the provider fixes its endpoint and model:
+TypeSafe's own `https://api.typesafe.ai/v1/systemone` with `jev-1.13.0`, or OpenRouter's
+`https://openrouter.ai/api/v1/systemone` with `typesafe/jev-1.14`. The `~typesafe/jev-latest` alias is refused, as
+`jev-latest` is: it could change under an approval. Both take the same System One request, with the provider's key as
+a Bearer token. The provider is part of the canonical judge document, so changing it is a new judge version, and the
+rule that names it a new rule approval, whose preview says where the fields go: "sent to OpenRouter (openrouter.ai),
+which passes them to TypeSafe's Jev". The kind's enablement document is unchanged and still names TypeSafe's endpoint:
+it enables Jev, whichever provider serves it, and authorises no disclosure by itself. A budget needs a ceiling for the
+`openrouter` provider before an OpenRouter judge is called; `judge setup` adds one (D2's note).
 
 Every judge is immutable and versioned. No hosted or local judge may first acquire work until its kind is enabled and
 an active rule activation references that exact judge version, except for one terminal/app call made inside that

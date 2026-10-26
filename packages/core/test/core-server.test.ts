@@ -264,10 +264,11 @@ const CHANGING = [
   'comms_update',
 ];
 /**
- * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, and narrowing or
- * ending standing approvals (design 2026-10-19-standing-approvals, S8).
+ * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, narrowing or
+ * ending standing approvals (design 2026-10-19-standing-approvals, S8), and taking a server out of a client (design
+ * 2026-10-26-owner-feedback-0320 §3.3).
  */
-const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing'];
+const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall'];
 
 test('the server offers the core tools, and no tool that approves or claims a change it did not plan', async () => {
   /*

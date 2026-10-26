@@ -20,7 +20,8 @@ import {
   type TargetDocument,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import type { CanonicalJudgeDocument } from '../domain/judges.ts';
+import type { SetupJudgeKind } from '../domain/judge-setup.ts';
+import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
   isActivityKey,
   isClaudeCodeSessionId,
@@ -56,6 +57,7 @@ import {
   isB3ControlWireOperation,
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
+import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -66,6 +68,7 @@ import type {
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
+import type { EventSecretProvider } from '../store/event-secrets.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -561,6 +564,10 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'lane-unbind': LaneUnbindResultV1;
   readonly 'messages-list': MessagesListResultV1;
   readonly 'message-show': MessageShowResultV1;
+  readonly 'judge-setup': JudgeSetupResultV1;
+  readonly 'provider-list': ProviderListResultV1;
+  readonly 'provider-key-set': ProviderKeyResultV1;
+  readonly 'provider-key-remove': ProviderKeyResultV1;
 };
 
 /**
@@ -712,6 +719,19 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   /** A story per message (0.32.0): the person's read, at a terminal or in the app. */
   readonly 'messages-list': B3MessagesListArgumentsV1;
   readonly 'message-show': { readonly eventId: string };
+  /**
+   * The person's own setup (owner decision 2026-10-26). A provider key travels on the wire beside these arguments,
+   * from the person's hidden input, and is no part of the contract: no vector, result or audit line holds it.
+   */
+  readonly 'judge-setup': {
+    readonly kind: SetupJudgeKind;
+    readonly provider?: JevProvider | undefined;
+    readonly url?: string | undefined;
+    readonly model?: string | undefined;
+  };
+  readonly 'provider-list': Record<string, never>;
+  readonly 'provider-key-set': { readonly provider: EventSecretProvider };
+  readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -921,6 +941,38 @@ function assertQueueStateChange(value: Readonly<Record<string, unknown>>, name: 
   assertIsoTime(value.item.stateAt, `${name} stateAt`);
 }
 
+/** `judge setup`'s result (owner decision 2026-10-26): what it set up and approved, and never a key. */
+function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void {
+  if (value.kind !== 'typesafe' && value.kind !== 'local-endpoint')
+    throw new TypeError('a judge setup kind is unknown');
+  if (value.enabled !== true || typeof value.enabledNow !== 'boolean')
+    throw new TypeError('a judge setup result says the kind is on');
+  assertClosedRecord(value.judge, ['judgeId', 'version', 'provider', 'model', 'endpoint', 'created'], 'a set-up judge');
+  for (const field of ['judgeId', 'provider', 'model', 'endpoint']) assertText(value.judge[field], field);
+  assertPositiveInteger(value.judge.version, 'a set-up judge version');
+  if (typeof value.judge.created !== 'boolean') throw new TypeError('a set-up judge says whether it is new');
+  assertClosedRecord(value.budget, ['version', 'approvedNow', 'global', 'provider'], 'a set-up budget');
+  assertPositiveInteger(value.budget.version, 'a set-up budget version');
+  if (typeof value.budget.approvedNow !== 'boolean') throw new TypeError('a set-up budget says whether it is new');
+  assertClosedRecord(
+    value.budget.global,
+    ['callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'],
+    'a set-up global budget',
+  );
+  assertClosedRecord(
+    value.budget.provider,
+    ['provider', 'callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'],
+    'a set-up provider budget',
+  );
+  for (const limits of [value.budget.global, value.budget.provider])
+    for (const field of ['callsPerRollingHour', 'inputTokensPerRolling30Days', 'concurrency'])
+      assertPositiveInteger(limits[field], field);
+  if (value.key !== 'stored' && value.key !== 'unchanged' && value.key !== 'none')
+    throw new TypeError('a judge setup key state is unknown');
+  assertText(value.destination, 'a judge setup destination');
+  if (value.approvedBy !== 'desktop-app') throw new TypeError('a judge setup is approved by the person, in the app');
+}
+
 /** A lane's binding, as `lane list` and `lane bind` give it (routing design §6's JSON contract). */
 function assertLaneBinding(value: unknown, name: string): void {
   assertClosedRecord(value, ['window', 'since'], name);
@@ -1097,6 +1149,10 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'lane-unbind': ['lane', 'unbound'],
   'messages-list': ['messages', 'next'],
   'message-show': ['message'],
+  'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
+  'provider-list': ['providers'],
+  'provider-key-set': ['provider', 'hasKey', 'judges'],
+  'provider-key-remove': ['provider', 'hasKey', 'judges'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1352,6 +1408,26 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'message-show':
       assertMessageEntry(value.message, 'a shown message');
       return;
+    case 'judge-setup':
+      assertJudgeSetupResult(value);
+      return;
+    case 'provider-list':
+      if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
+      for (const entry of value.providers) {
+        assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
+        if (entry.id !== 'typesafe' && entry.id !== 'openrouter') throw new TypeError('a listed provider is unknown');
+        assertText(entry.name, 'a listed provider name');
+        if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
+      }
+      return;
+    case 'provider-key-set':
+    case 'provider-key-remove':
+      if (value.provider !== 'typesafe' && value.provider !== 'openrouter')
+        throw new TypeError('a provider key result names a known provider');
+      if (value.hasKey !== (operation === 'provider-key-set'))
+        throw new TypeError('a provider key result says whether the provider has a key now');
+      assertNonNegativeInteger(value.judges, 'a provider key judge count');
+      return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);
       for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(value[field], field);
@@ -1601,6 +1677,22 @@ export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
 }
 
+/**
+ * Where a rule's hosted judge sends the fields the rule names (owner decision 2026-10-26): to TypeSafe's Jev itself, or
+ * to OpenRouter, which passes them on to TypeSafe's Jev. A local or Laya judge sends nothing off this machine.
+ */
+function hostedJudgeDestination(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule' || document.rule.agentic === undefined) return [];
+  const judge = document.rule.agentic.judge;
+  if (judge.kind !== 'typesafe') return [];
+  const named = `Judge ${judge.judgeId}@${judge.version}`;
+  return [
+    judge.provider === 'openrouter'
+      ? `${named}: the fields it is given are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev.`
+      : `${named}: the fields it is given are sent to TypeSafe's Jev (api.typesafe.ai).`,
+  ];
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -1671,6 +1763,7 @@ export function renderB3ApprovalPreviewV1(
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
+      ...hostedJudgeDestination(document),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,

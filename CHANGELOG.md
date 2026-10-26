@@ -5,6 +5,35 @@ together under one version.
 
 ## 0.32.0
 
+**Activity ties a reply to the message it answers** (Task E of the owner's 2026-10-26 feedback, for the app's Messages
+screen).
+
+- **New ids on existing activity lines.** Every field is new, and none was removed or renamed.
+  - Gmail: a reply draft (`gmail.draft.reply`) names the message it answers and its thread (`replyTo`), and the draft
+    it made (`draftId`). A forward answers nothing, so it has no `replyTo`.
+  - Gmail: preparing a send (`gmail.send.prepare`) names its `draftId`. When the draft answers a message in this
+    mailbox, it also names that message (`replyTo`). The prepare already proves this, so Gmail is asked nothing more.
+  - Gmail: a send (`gmail.send.execute`) names the draft it sent (`draftId`) and the thread Gmail filed it in
+    (`threadId`).
+  - Slack: a post (`slack.post.send`) names its conversation by id (`channelId`) and the thread it went into
+    (`thread`: the parent's ts, or null for a new message).
+  - Slack: a history read (`slack.read`) names its conversation by id (`channelId`), beside the name it already kept.
+- **`agentcomms activity items [--since <ms>] [--ids <id,…>] --json`** lists every call that names an item, grouped
+  by the item. A Gmail message keeps its id, and a Slack message is `<channelId>/<ts>`. Each line names the window
+  (key, folder, client), the operation, when it ran and how it ended, with `replyTo`, `thread` and `draftId` where it
+  has them. A line appears under each item it names and each item it links to, so a message leads to its reply draft,
+  and that draft to its send. Subjects and senders are the sender's words, returned in the untrusted-content
+  envelope. It is the person's view: refused inside an MCP server's process (exit 10), with no MCP tool, like
+  `agentcomms activity show`.
+- **`agentcomms mcp uninstall --client <c> --server <s>`**, and `comms_server_uninstall` from a chat, take one server
+  out of one client. They remove every user-scope entry that starts it, whatever it is called. This is a tightening:
+  it applies at once and asks nobody. Each removed entry is saved first, owner-only, and the change is audited.
+  - A project's own entry is left in place, and the result says where it is.
+  - A config file with comments is left as it was, and so is an entry whose client command can't be found. The result
+    names each.
+  - The client keeps the server running until it restarts. `agentcomms mcp prune` is unchanged: it removes
+    runtimes, never a registration.
+
 **What happened to a message, in the event service.** The owner asked: "something has come in. Did we acknowledge it?
 Did we reply to it? Is it something that has been passed over to a session, or was it proactively read by a session?"
 The event service now keeps and gives the part it sees; the app's Messages screen comes after the owner's feedback on

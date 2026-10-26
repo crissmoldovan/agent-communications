@@ -202,6 +202,21 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "endpoint", "promptTemplate", "protocol"],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "typesafe" },
+            "provider": { "const": "openrouter" },
+            "model": { "const": "typesafe/jev-1.14" },
+            "endpoint": { "const": "https://openrouter.ai/api/v1/systemone" },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "noul" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": [
             "judgeId",
             "version",
@@ -921,6 +936,51 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "judge-setup" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": { "enum": ["typesafe", "local-endpoint"] },
+                "provider": { "$ref": "#/$defs/aiProvider" },
+                "url": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "provider-list" },
+            "args": { "type": "object", "additionalProperties": false, "properties": {} },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["provider-key-set", "provider-key-remove"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provider"],
+              "properties": { "provider": { "$ref": "#/$defs/aiProvider" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -1191,6 +1251,27 @@
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+    "aiProvider": { "enum": ["typesafe", "openrouter"] },
+    "judgeLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callsPerRollingHour", "inputTokensPerRolling30Days", "concurrency"],
+      "properties": {
+        "callsPerRollingHour": { "$ref": "#/$defs/positive" },
+        "inputTokensPerRolling30Days": { "$ref": "#/$defs/positive" },
+        "concurrency": { "$ref": "#/$defs/positive" }
+      }
+    },
+    "providerKeyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "hasKey", "judges"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/aiProvider" },
+        "hasKey": { "type": "boolean" },
+        "judges": { "type": "integer", "minimum": 0 }
+      }
+    },
     "laneSessionId": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -2039,6 +2120,75 @@
             "next": { "anyOf": [{ "$ref": "#/$defs/messagesCursor" }, { "type": "null" }] }
           }
         },
+        "judge-setup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "enabled", "enabledNow", "judge", "budget", "key", "destination", "approvedBy"],
+          "properties": {
+            "kind": { "enum": ["typesafe", "local-endpoint"] },
+            "enabled": { "const": true },
+            "enabledNow": { "type": "boolean" },
+            "judge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId", "version", "provider", "model", "endpoint", "created"],
+              "properties": {
+                "judgeId": { "$ref": "#/$defs/id" },
+                "version": { "$ref": "#/$defs/positive" },
+                "provider": { "$ref": "#/$defs/id" },
+                "model": { "$ref": "#/$defs/id" },
+                "endpoint": { "type": "string", "minLength": 1 },
+                "created": { "type": "boolean" }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "approvedNow", "global", "provider"],
+              "properties": {
+                "version": { "$ref": "#/$defs/positive" },
+                "approvedNow": { "type": "boolean" },
+                "global": { "$ref": "#/$defs/judgeLimits" },
+                "provider": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["provider", "callsPerRollingHour", "inputTokensPerRolling30Days", "concurrency"],
+                  "properties": {
+                    "provider": { "$ref": "#/$defs/id" },
+                    "callsPerRollingHour": { "$ref": "#/$defs/positive" },
+                    "inputTokensPerRolling30Days": { "$ref": "#/$defs/positive" },
+                    "concurrency": { "$ref": "#/$defs/positive" }
+                  }
+                }
+              }
+            },
+            "key": { "enum": ["stored", "unchanged", "none"] },
+            "destination": { "type": "string", "minLength": 1 },
+            "approvedBy": { "const": "desktop-app" }
+          }
+        },
+        "provider-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["providers"],
+          "properties": {
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "name", "hasKey"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/aiProvider" },
+                  "name": { "type": "string", "minLength": 1 },
+                  "hasKey": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "provider-key-set": { "$ref": "#/$defs/providerKeyResult" },
+        "provider-key-remove": { "$ref": "#/$defs/providerKeyResult" },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -2142,7 +2292,11 @@
                     "lane-bind",
                     "lane-unbind",
                     "messages-list",
-                    "message-show"
+                    "message-show",
+                    "judge-setup",
+                    "provider-list",
+                    "provider-key-set",
+                    "provider-key-remove"
                   ]
                 }
               }
@@ -2340,6 +2494,24 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "message-show" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/message-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "judge-setup" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/judge-setup" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "provider-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "provider-key-set" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-key-set" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "provider-key-remove" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-key-remove" } } }
             }
           ]
         },

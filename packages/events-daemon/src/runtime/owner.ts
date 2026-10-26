@@ -103,6 +103,7 @@ import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
+import { JudgeSetupService } from './judge-setup.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
@@ -1530,6 +1531,17 @@ async function startOwnerWithLock(
       now,
     });
   };
+  // The person's own setup (owner decision 2026-10-26): it prepares and approves through the same B3 service and
+  // activation runtime as the terminal, and keeps provider keys through the one secret control.
+  const judgeSetup = new JudgeSetupService({
+    store: database,
+    b3: ownerB3Service,
+    activations,
+    secrets: b3Ports.secrets,
+    quiescer: writerQuiescer,
+    audit: core.audit,
+    now,
+  });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
   let control: RunningControlServer | undefined;
@@ -1619,6 +1631,7 @@ async function startOwnerWithLock(
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
+          judgeSetup,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1703,6 +1716,7 @@ async function handleControl(
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
+  judgeSetup?: JudgeSetupService | undefined,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1802,6 +1816,15 @@ async function handleControl(
       return messages.list(personOnly(request.args, 'messages list'));
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
+    // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
+    case OWNER_CONTROL_WIRES.judgeSetup:
+      return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.providerList:
+      return requireJudgeSetup(judgeSetup).providerList();
+    case OWNER_CONTROL_WIRES.providerKeySet:
+      return requireJudgeSetup(judgeSetup).providerKeySet(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.providerKeyRemove:
+      return requireJudgeSetup(judgeSetup).providerKeyRemove(request.args, request.origin);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1863,6 +1886,11 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requireJudgeSetup(service: JudgeSetupService | undefined): JudgeSetupService {
+  if (service === undefined) throw new CommsError('CONFIG', 'judge setup is not composed for this owner');
+  return service;
 }
 
 /** A control request's calling window, when it is an agent window's, and its other arguments. */

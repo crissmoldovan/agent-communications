@@ -10,6 +10,7 @@ pub mod launchers;
 pub mod links;
 pub mod login_item;
 pub mod paths;
+pub mod provider_keys;
 pub mod runner;
 pub mod settings;
 pub mod terminal;
@@ -29,7 +30,7 @@ pub struct AppState {
     pub prepared: Arc<terminal::Prepared>,
 }
 
-/// Starts the app: its plugins, its state, its twenty-one commands, the main window (`window::build_main`), the tray,
+/// Starts the app: its plugins, its state, its twenty-two commands, the main window (`window::build_main`), the tray,
 /// the deep links, the updater and the event service's supervisor (`event_service`).
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -89,6 +90,7 @@ pub fn run() {
             commands::answer_first_start,
             commands::open_full_disk_access,
             commands::answer_quit,
+            commands::provider_key_set,
         ])
         .on_window_event(window::on_window_event)
         .setup(|app| {

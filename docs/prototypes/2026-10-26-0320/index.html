@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Comms 0.32 prototype</title>
+<style>
+:root{--bg:#F7F7F8;--s1:#FFFFFF;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3}
+@media (prefers-color-scheme: dark){:root{--bg:#0E0E10;--s1:#18181B;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8}}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:15px;margin:28px 0 8px}
+p{color:var(--text2);margin:0 0 8px}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+li a{display:block;background:var(--s1);border-radius:10px;padding:10px 14px;text-decoration:none;color:var(--text)}
+li a:hover{color:var(--accent)}
+.later{color:var(--text3);font-weight:400;font-size:12px}
+code{font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Comms 0.32 prototype</h1>
+<p>The screens the owner reviewed on 2026-10-26, before they were built. Each one is clickable: the sidebar, the tabs and the rows link to each other. Add <code>?theme=dark</code> to a screen's address for its dark look.</p>
+<p>The spec is <code>docs/superpowers/specs/2026-10-26-owner-feedback-0320-design.md</code>.</p>
+
+<h2>1 · Judges and keys, all in the app</h2>
+<ul>
+<li><a href="Main.dc.html">Events → Judges: set up in the app</a></li>
+<li><a href="Main.dc.html?jevState=on">Events → Judges, with Jev on</a></li>
+<li><a href="JevSetup.dc.html">Set up Jev: TypeSafe or OpenRouter</a></li>
+<li><a href="LocalModel.dc.html">Set up a local model server</a></li>
+<li><a href="Providers.dc.html">Settings → AI providers</a></li>
+</ul>
+
+<h2>2 · Rules you can read, edit and analyse</h2>
+<ul>
+<li><a href="Rules.dc.html">Events → Rules, in plain words</a></li>
+<li><a href="RuleDetail.dc.html">A rule, opened</a></li>
+<li><a href="RuleEdit.dc.html">Edit a rule, visually <span class="later">prototype only, a later release</span></a></li>
+<li><a href="RuleEditText.dc.html">Edit a rule as text <span class="later">prototype only</span></a></li>
+<li><a href="RuleAnalyse.dc.html">Analyse: an enriched rule <span class="later">prototype only</span></a></li>
+</ul>
+
+<h2>3 · Deliveries and the dry-run log</h2>
+<ul>
+<li><a href="Deliveries.dc.html">Events → Deliveries, in plain words</a></li>
+<li><a href="DeliveryDetail.dc.html">A dry run, opened</a></li>
+<li><a href="DeliveryDetail.dc.html?kind=webhook%2C%20will%20try%20again">A webhook delivery that will try again</a></li>
+</ul>
+
+<h2>4 · What happened to each message</h2>
+<ul>
+<li><a href="Messages.dc.html">Messages</a></li>
+<li><a href="MessageTimeline.dc.html">One message's story</a></li>
+</ul>
+
+<h2>5 · Connections, and the test build</h2>
+<ul>
+<li><a href="Connections.dc.html">Connections: which apps have which servers</a></li>
+<li><a href="TestBuild.dc.html">The test build, marked</a></li>
+</ul>
+
+<h2>6 · Agents <span class="later">prototype only</span></h2>
+<ul>
+<li><a href="AgentSessions.dc.html">Agents → Sessions</a></li>
+<li><a href="SessionDetail.dc.html">One session</a></li>
+<li><a href="AgentProviders.dc.html">Agents → Providers</a></li>
+<li><a href="Integrations.dc.html">Settings → Integrations: Linear</a></li>
+</ul>
+
+<h2>7 · Your agent, a digital twin <span class="later">prototype only</span></h2>
+<ul>
+<li><a href="Twin.dc.html">Your agent</a></li>
+<li><a href="TwinRules.dc.html">Its rules: messages to you, and to your agent</a></li>
+<li><a href="TwinConversations.dc.html">What it was asked</a></li>
+<li><a href="Playground.dc.html">The agents' playground</a></li>
+</ul>
+</main>
+</body>
+</html>

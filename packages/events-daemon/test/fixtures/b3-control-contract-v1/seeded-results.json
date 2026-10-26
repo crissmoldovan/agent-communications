@@ -548,5 +548,95 @@
         }
       }
     }
+  },
+  {
+    "name": "judge-setup-result",
+    "request": {
+      "operation": "judge-setup",
+      "args": {
+        "kind": "typesafe",
+        "provider": "openrouter"
+      }
+    },
+    "result": {
+      "kind": "typesafe",
+      "enabled": true,
+      "enabledNow": true,
+      "judge": {
+        "judgeId": "jev",
+        "version": 1,
+        "provider": "openrouter",
+        "model": "typesafe/jev-1.14",
+        "endpoint": "https://openrouter.ai/api/v1/systemone",
+        "created": true
+      },
+      "budget": {
+        "version": 1,
+        "approvedNow": true,
+        "global": {
+          "callsPerRollingHour": 60,
+          "inputTokensPerRolling30Days": 1000000,
+          "concurrency": 2
+        },
+        "provider": {
+          "provider": "openrouter",
+          "callsPerRollingHour": 60,
+          "inputTokensPerRolling30Days": 1000000,
+          "concurrency": 2
+        }
+      },
+      "key": "stored",
+      "destination": "Messages your rules choose are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev to be judged.",
+      "approvedBy": "desktop-app"
+    }
+  },
+  {
+    "name": "provider-list-result",
+    "request": {
+      "operation": "provider-list",
+      "args": {}
+    },
+    "result": {
+      "providers": [
+        {
+          "id": "typesafe",
+          "name": "TypeSafe",
+          "hasKey": false
+        },
+        {
+          "id": "openrouter",
+          "name": "OpenRouter",
+          "hasKey": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "provider-key-set-result",
+    "request": {
+      "operation": "provider-key-set",
+      "args": {
+        "provider": "openrouter"
+      }
+    },
+    "result": {
+      "provider": "openrouter",
+      "hasKey": true,
+      "judges": 1
+    }
+  },
+  {
+    "name": "provider-key-remove-result",
+    "request": {
+      "operation": "provider-key-remove",
+      "args": {
+        "provider": "openrouter"
+      }
+    },
+    "result": {
+      "provider": "openrouter",
+      "hasKey": false,
+      "judges": 1
+    }
   }
 ]

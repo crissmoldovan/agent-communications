@@ -21,7 +21,7 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'messages' = 'read',
+  action: 'read' | 'clear' | 'bind' | 'messages' | 'setup' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -47,6 +47,12 @@ export function assertNotMcpServer(
       message:
         "what happened to each message is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
       hint: 'queue items gives an agent what is waiting, without what it says.',
+    },
+    // Judge setup and AI provider keys (owner decision 2026-10-26): the person's, from the app or their terminal.
+    setup: {
+      message:
+        "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

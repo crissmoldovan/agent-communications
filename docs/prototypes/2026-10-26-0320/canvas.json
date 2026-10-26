@@ -1,0 +1,298 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-26T02:55:00Z"
+  },
+  "title": "Agent Comms 0.32 prototype",
+  "launch": {
+    "view": "canvas"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 820,
+      "title": "Events → Judges: set up in the app",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "JevSetup.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 820,
+      "title": "Set up Jev: TypeSafe or OpenRouter",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "LocalModel.dc.html": {
+      "x": 2720,
+      "y": 0,
+      "w": 1280,
+      "h": 820,
+      "title": "Set up a local model server",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Providers.dc.html": {
+      "x": 4080,
+      "y": 0,
+      "w": 1280,
+      "h": 820,
+      "title": "Settings → AI providers (keys)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Rules.dc.html": {
+      "x": 0,
+      "y": 1200,
+      "w": 1280,
+      "h": 980,
+      "title": "Events → Rules, in plain words",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "RuleDetail.dc.html": {
+      "x": 1360,
+      "y": 1200,
+      "w": 1280,
+      "h": 1300,
+      "title": "A rule, opened",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "RuleEdit.dc.html": {
+      "x": 2720,
+      "y": 1200,
+      "w": 1280,
+      "h": 1900,
+      "title": "Edit a rule: visual (prototype only, later release)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "RuleEditText.dc.html": {
+      "x": 4080,
+      "y": 1200,
+      "w": 1280,
+      "h": 1100,
+      "title": "Edit a rule: as text (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "RuleAnalyse.dc.html": {
+      "x": 5440,
+      "y": 1200,
+      "w": 1280,
+      "h": 1500,
+      "title": "Analyse: an enriched rule (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Deliveries.dc.html": {
+      "x": 0,
+      "y": 3480,
+      "w": 1280,
+      "h": 980,
+      "title": "Events → Deliveries, in plain words",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "DeliveryDetail.dc.html": {
+      "x": 1360,
+      "y": 3480,
+      "w": 1280,
+      "h": 1180,
+      "title": "A delivery, opened (dry run or webhook)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Messages.dc.html": {
+      "x": 0,
+      "y": 5040,
+      "w": 1280,
+      "h": 980,
+      "title": "Messages: what happened to each one",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "MessageTimeline.dc.html": {
+      "x": 1360,
+      "y": 5040,
+      "w": 1280,
+      "h": 1180,
+      "title": "One message's story",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Connections.dc.html": {
+      "x": 0,
+      "y": 6600,
+      "w": 1280,
+      "h": 980,
+      "title": "Connections: which apps have which servers",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "TestBuild.dc.html": {
+      "x": 1360,
+      "y": 6600,
+      "w": 1280,
+      "h": 820,
+      "title": "The test build, marked",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AgentSessions.dc.html": {
+      "x": 0,
+      "y": 7960,
+      "w": 1280,
+      "h": 980,
+      "title": "Agents → Sessions, with what each is doing (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "SessionDetail.dc.html": {
+      "x": 1360,
+      "y": 7960,
+      "w": 1280,
+      "h": 1100,
+      "title": "One session: its conversation and its queue (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AgentProviders.dc.html": {
+      "x": 2720,
+      "y": 7960,
+      "w": 1280,
+      "h": 980,
+      "title": "Agents → Providers: installed or custom (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Integrations.dc.html": {
+      "x": 4080,
+      "y": 7960,
+      "w": 1280,
+      "h": 820,
+      "title": "Settings → Integrations: Linear (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Twin.dc.html": {
+      "x": 0,
+      "y": 9440,
+      "w": 1280,
+      "h": 1100,
+      "title": "Your agent: a digital twin others can ask (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "TwinRules.dc.html": {
+      "x": 1360,
+      "y": 9440,
+      "w": 1280,
+      "h": 1200,
+      "title": "Rules: messages to you vs messages to your agent (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "TwinConversations.dc.html": {
+      "x": 2720,
+      "y": 9440,
+      "w": 1280,
+      "h": 1000,
+      "title": "What your agent was asked, and what it said (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Playground.dc.html": {
+      "x": 4080,
+      "y": 9440,
+      "w": 1280,
+      "h": 1000,
+      "title": "The agents' playground: twins asking each other (prototype only)",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "JevSetup.dc.html",
+    "LocalModel.dc.html",
+    "Providers.dc.html",
+    "Rules.dc.html",
+    "RuleDetail.dc.html",
+    "RuleEdit.dc.html",
+    "RuleEditText.dc.html",
+    "RuleAnalyse.dc.html",
+    "Deliveries.dc.html",
+    "DeliveryDetail.dc.html",
+    "Messages.dc.html",
+    "MessageTimeline.dc.html",
+    "Connections.dc.html",
+    "TestBuild.dc.html",
+    "AgentSessions.dc.html",
+    "SessionDetail.dc.html",
+    "AgentProviders.dc.html",
+    "Integrations.dc.html",
+    "Twin.dc.html",
+    "TwinRules.dc.html",
+    "TwinConversations.dc.html",
+    "Playground.dc.html"
+  ],
+  "notes": {
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · Judges and keys, all in the app",
+      "kind": "title1",
+      "maxW": 5360
+    },
+    "row2": {
+      "x": 0,
+      "y": 940,
+      "text": "2 · Rules you can read, edit and analyse",
+      "kind": "title1",
+      "maxW": 6720
+    },
+    "row3": {
+      "x": 0,
+      "y": 3220,
+      "text": "3 · Deliveries and the dry-run log",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row4": {
+      "x": 0,
+      "y": 4780,
+      "text": "4 · What happened to each message",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row5": {
+      "x": 0,
+      "y": 6340,
+      "text": "5 · Connections, and telling the test build apart",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row6": {
+      "x": 0,
+      "y": 7700,
+      "text": "6 · Agents: sessions, providers and integrations",
+      "kind": "title1",
+      "maxW": 5360
+    },
+    "row7": {
+      "x": 0,
+      "y": 9190,
+      "text": "7 · Your agent: a digital twin colleagues can ask",
+      "kind": "title1",
+      "maxW": 5360
+    }
+  },
+  "designSystems": []
+}

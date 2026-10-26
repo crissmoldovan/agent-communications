@@ -123,11 +123,18 @@ export function describeChannels(result: ChannelsResult): ActivityDetail {
   };
 }
 
-/** A channel's history: the conversation by the name `conversations.info` gave, or the id that was asked for. */
+/**
+ * A channel's history: the conversation by the name `conversations.info` gave, or the id that was asked for — and, on
+ * the line, by its id (0.32.0 §3.6), which is what an event names a message by: `<channelId>/<ts>`.
+ */
 export function describeHistory(channelId: string): (result: HistoryResult) => ActivityDetail {
   return (result) => {
     const conversation = result.channel?.name?.text ?? channelId;
-    return { count: result.rows.length, items: result.rows.map((row) => messageItem(row, conversation)) };
+    return {
+      count: result.rows.length,
+      items: result.rows.map((row) => messageItem(row, conversation)),
+      channelId: result.channel?.id ?? channelId,
+    };
   };
 }
 
@@ -254,8 +261,15 @@ export function describePrepared(prepared: PreparedPost): ActivityDetail {
   };
 }
 
-/** A post made: the message Slack made — the draft, when Slack named none — where, and the files now in Slack. */
-export function describePosted(draftId: string): (posted: PostedMessage | PostedFiles) => ActivityDetail {
+/**
+ * A post made: the message Slack made — the draft, when Slack named none — where, and the files now in Slack; and
+ * (0.32.0 §3.6) the conversation by its id, and the thread it went into — the parent's ts, or null for a new message —
+ * so a reply is tied to the message it answers.
+ */
+export function describePosted(
+  draftId: string,
+  thread: string | null,
+): (posted: PostedMessage | PostedFiles) => ActivityDetail {
   return (posted) => {
     const files = 'files' in posted ? posted.files : [];
     return {
@@ -264,6 +278,8 @@ export function describePosted(draftId: string): (posted: PostedMessage | Posted
         { id: posted.ts ?? draftId, conversation: posted.channel },
         ...files.map((file) => ({ id: file.id, name: file.name, size: file.size })),
       ],
+      channelId: posted.channel,
+      thread,
     };
   };
 }
