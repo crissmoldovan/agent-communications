@@ -449,12 +449,18 @@ impl Prepared {
 
     /// Records what `call` came to, when it is a change the app prepares and it came back waiting for approval; or,
     /// when it is a rule's activation the rule editor prepared (0.33.0), the approval that came back and its digest, as
-    /// the `eventsRuleApprove` that alone may answer it in the app.
+    /// the `eventsRuleApprove` that alone may answer it in the app; or, when it is switching the event service on that
+    /// Events → Service prepared (`eventsEnableAll`, 0.34.0), as the `eventsCollectionApprove` that alone may.
     pub fn record(&self, call: &Call, result: &CliResult) {
-        if let (Call::EventsRuleEnable { .. }, CliResult::Ok { data, .. }) = (call, result) {
+        let answered_by = match call {
+            Call::EventsRuleEnable { .. } => Some("eventsRuleApprove"),
+            Call::EventsEnableAll {} => Some("eventsCollectionApprove"),
+            _ => None,
+        };
+        if let (Some(kind), CliResult::Ok { data, .. }) = (answered_by, result) {
             let approve = crate::rule_editor::prepared_activation(data).and_then(|(id, digest)| {
                 serde_json::from_value::<Call>(serde_json::json!({
-                    "kind": "eventsRuleApprove",
+                    "kind": kind,
                     "approvalId": id,
                     "digest": digest,
                 }))
@@ -486,13 +492,17 @@ impl Prepared {
         ))
     }
 
-    /// Whether `id` is a rule's activation the rule editor prepared (`record`, for `eventsRuleEnable`): only that one
-    /// opens in the terminal for its approval. The record is kept.
+    /// Whether `id` is an activation the app prepared (`record`): a rule's, for `eventsRuleEnable`, or switching the
+    /// event service on, for `eventsEnableAll` (0.34.0). Only those open in the terminal for their approval, the events
+    /// service's `approve <approval-id>`. The record is kept.
     pub fn rule_activation(&self, id: &ApprovalId) -> Result<(), AppError> {
         match self.map().get(id.as_str()) {
-            Some(Call::EventsRuleApprove { approval_id, .. }) if approval_id == id => Ok(()),
+            Some(
+                Call::EventsRuleApprove { approval_id, .. }
+                | Call::EventsCollectionApprove { approval_id, .. },
+            ) if approval_id == id => Ok(()),
             _ => Err(AppError::refused(
-                "that approval is not a rule activation the app prepared: review the rule again",
+                "that approval is not an activation the app prepared: review it again",
             )),
         }
     }
@@ -2720,6 +2730,55 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    /// Do it in Terminal for switching the event service on (0.34.0 design B4), where the app cannot attest the person:
+    /// the same `approve <approval-id>` a rule's activation opens, for an approval `eventsEnableAll` recorded, and only
+    /// that one. Nothing is revoked, and the record stays for the preview's Cancel.
+    #[test]
+    fn switching_on_opens_approve_in_the_terminal_only_for_an_enable_all_the_app_prepared() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let command: TerminalCommand =
+            serde_json::from_value(serde_json::json!({ "kind": "ruleApprove", "approvalId": ID }))
+                .expect("Do it in Terminal's shape");
+        assert_eq!(
+            argv_for(&command, &ctx).expect("words"),
+            located(&ctx, Product::EventsDaemon, &["approve", ID])
+        );
+        let effects = Fake::new(true);
+        // An `enable-all` answer the app cannot read as a prepared activation records nothing: nothing opens.
+        let unread = Prepared::default();
+        unread.record(
+            &serde_json::from_value::<Call>(serde_json::json!({ "kind": "eventsEnableAll" }))
+                .expect("enable-all"),
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::json!({ "approvalId": ID, "binding": {} }),
+            },
+        );
+        assert!(open_with(command.clone(), &ctx, &effects, &unread).is_err());
+        assert!(effects.log.borrow().is_empty(), "nothing ran");
+        let prepared = Prepared::default();
+        prepared.record(
+            &serde_json::from_value::<Call>(serde_json::json!({ "kind": "eventsEnableAll" }))
+                .expect("enable-all"),
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::json!({
+                    "approvalId": ID,
+                    "binding": { "digest": "0f".repeat(32), "activationKind": "enable-all" },
+                    "kind": "enable-all",
+                    "status": "pending"
+                }),
+            },
+        );
+        let outcome = open_with(command, &ctx, &effects, &prepared).expect("an outcome");
+        assert!(
+            matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+        assert_eq!(prepared.map().len(), 1, "kept for Cancel's revoke");
     }
 
     /// No free text reaches the bind line: the lane is 1 to 40 of `[a-z0-9-]`, the window a lowercase UUID or an

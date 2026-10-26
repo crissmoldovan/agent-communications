@@ -19,8 +19,9 @@ pub const MCP_APP_APPROVAL_VERSION: &str = "0.32.0";
 
 impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
-    /// `mcpInstall` of the same app and server, and `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
-    /// with, for the same digest (0.33.0). None for every other call.
+    /// `mcpInstall` of the same app and server, `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
+    /// with, for the same digest (0.33.0), and `eventsCollectionApprove` the switching on `eventsEnableAll` came back
+    /// with (0.34.0). None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -37,6 +38,9 @@ impl Call {
             // A rule's activation the app prepared with `eventsRuleEnable`, for this very digest (0.33.0): what
             // `Prepared::record` keeps for it is the approval that may answer it.
             Call::EventsRuleApprove { approval_id, .. } => Some((approval_id, self.clone())),
+            // Switching the event service on that Events → Service prepared with `eventsEnableAll`, for this very digest
+            // (0.34.0): kept the same way.
+            Call::EventsCollectionApprove { approval_id, .. } => Some((approval_id, self.clone())),
             _ => None,
         }
     }
@@ -645,6 +649,91 @@ mod tests {
         // A rule activation is never opened in the terminal as a change, and never approves an install.
         assert!(!enable.prepares_change());
         assert!(run_app_approval(&prepared_rule(), &approved("claude-code", "gmail"), ok).is_err());
+    }
+
+    /// Switching the event service on that Events → Service prepared (0.34.0 design B4): `enable-all`'s answer is
+    /// recorded, with its digest, as the one `eventsCollectionApprove` that may answer it; another digest, nothing
+    /// prepared, a rule's activation, or the same press twice is refused before anything runs. A run that did not apply
+    /// keeps it for the preview's Cancel.
+    #[test]
+    fn the_app_switches_on_only_the_enable_all_it_prepared_for_that_digest() {
+        use crate::allowlist::{DIGEST, ID};
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approved": true, "approvedBy": "desktop-app" }),
+            }
+        };
+        let prepared_switch = || {
+            let prepared = crate::terminal::Prepared::default();
+            prepared.record(
+                &call(json!({ "kind": "eventsEnableAll" })),
+                &crate::ipc::CliResult::Ok {
+                    exit: 0,
+                    data: json!({
+                        "intentId": "intent-1",
+                        "approvalId": ID,
+                        "binding": { "digest": DIGEST, "activationKind": "enable-all" },
+                        "kind": "enable-all",
+                        "status": "pending"
+                    }),
+                },
+            );
+            prepared
+        };
+        let approve = |digest: &str| {
+            call(json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": digest }))
+        };
+        // Nothing prepared: an enable-all an agent prepared is one the app never recorded.
+        assert_eq!(
+            run_app_approval(&crate::terminal::Prepared::default(), &approve(DIGEST), ok)
+                .expect_err("not prepared")
+                .code,
+            "APP_REFUSED"
+        );
+        // Another digest than the one `enable-all` bound.
+        assert!(run_app_approval(&prepared_switch(), &approve(&"a".repeat(64)), ok).is_err());
+        // A rule's activation is not switching on, and switching on is not a rule's activation.
+        let rule = crate::terminal::Prepared::default();
+        rule.record(
+            &call(json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 })),
+            &crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approvalId": ID, "binding": { "digest": DIGEST } }),
+            },
+        );
+        assert!(run_app_approval(&rule, &approve(DIGEST), ok).is_err());
+        let rule_approve =
+            call(json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }));
+        assert!(run_app_approval(&prepared_switch(), &rule_approve, ok).is_err());
+        assert_eq!(ran.get(), 0);
+        // The one it prepared: it runs once.
+        let prepared = prepared_switch();
+        assert!(matches!(
+            run_app_approval(&prepared, &approve(DIGEST), ok).expect("it runs"),
+            crate::ipc::CliResult::Ok { exit: 0, .. }
+        ));
+        assert_eq!(ran.get(), 1);
+        assert!(run_app_approval(&prepared, &approve(DIGEST), ok).is_err());
+        assert_eq!(ran.get(), 1, "never twice");
+        // Not applied: kept, so the preview's Cancel can revoke it.
+        let prepared = prepared_switch();
+        let failed = run_app_approval(&prepared, &approve(DIGEST), || {
+            crate::ipc::CliResult::Failed {
+                exit: 10,
+                code: "CLI_FAILED".into(),
+                message: "nothing on this platform attests that the Agent Comms app started this"
+                    .into(),
+                hint: None,
+            }
+        })
+        .expect("it ran");
+        assert!(matches!(failed, crate::ipc::CliResult::Failed { .. }));
+        let id = crate::allowlist::ApprovalId::try_from(ID.to_string()).expect("an id");
+        assert!(prepared.take(&id).is_ok(), "kept for Cancel");
     }
 
     /// In the test build, Connections only shows (0.32.0): the test profile's core would edit the person's real client

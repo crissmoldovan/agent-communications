@@ -174,10 +174,11 @@ pub enum TerminalCommand {
     /// B1, DA10): the events service's `lane bind <lane> --window <id>`. The app never runs it and records nothing; the
     /// lane and the window are each a closed grammar, so no free text reaches the line.
     LaneBind { lane: LaneName, window: WindowId },
-    /// Approving, at a terminal, a rule's activation the rule editor prepared (0.33.0), where the app cannot attest the
-    /// person (Windows and Linux): the events service's `approve <approval-id>`, which shows the activation's preview and
-    /// asks for its challenge there. Only an approval `eventsRuleEnable` recorded opens; nothing is revoked first, and
-    /// the record is kept, so the review's Back can still revoke it. The app never answers the challenge.
+    /// Approving, at a terminal, a rule's activation the rule editor prepared (0.33.0), or switching the event service
+    /// on that Events → Service prepared (0.34.0), where the app cannot attest the person (Windows and Linux): the events
+    /// service's `approve <approval-id>`, which shows the activation's preview and asks for its challenge there. Only an
+    /// approval `eventsRuleEnable` or `eventsEnableAll` recorded opens; nothing is revoked first, and the record is kept,
+    /// so the review's Back or the preview's Cancel can still revoke it. The app never answers the challenge.
     RuleApprove { approval_id: ApprovalId },
     /// A person-only setup, done at a terminal where the app cannot attest the person (Windows and Linux; 0.33.0): the
     /// events service's `judge setup …`, `provider key remove <provider>` or `integration set agent-sessions

@@ -240,6 +240,11 @@ export type Call =
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
   | { kind: 'judgeShow'; judgeId: string; version?: number }
+  // Events → Service's switch (0.34.0, design B4): switching on prepared, then approved only by the person's press in the
+  // app, for that digest; switching off, a tightening applied at once once the person confirms.
+  | { kind: 'eventsEnableAll' }
+  | { kind: 'eventsCollectionApprove'; approvalId: string; digest: string }
+  | { kind: 'eventsDisableAll' }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -295,9 +300,10 @@ export type TerminalCommand =
    */
   | { kind: 'laneBind'; lane: string; window: string }
   /**
-   * Approving a rule's activation the editor prepared, at a terminal (0.33.0), where the app cannot attest the person in
-   * the app (Windows and Linux): the events service's `approve <approval-id>`, which shows its preview and asks for its
-   * challenge there. Rust opens only an approval it recorded for `eventsRuleEnable`; the app never answers it.
+   * Approving a rule's activation the editor prepared (0.33.0), or switching the event service on (0.34.0), at a
+   * terminal, where the app cannot attest the person in the app (Windows and Linux): the events service's `approve
+   * <approval-id>`, which shows its preview and asks for its challenge there. Rust opens only an approval it recorded
+   * for `eventsRuleEnable` or `eventsEnableAll`; the app never answers it.
    */
   | { kind: 'ruleApprove'; approvalId: string }
   /**
