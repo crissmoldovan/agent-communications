@@ -1,0 +1,50 @@
+{
+  "core": "0.32.0",
+  "latest": {
+    "@agentcomms/core": "0.32.0",
+    "@agentcomms/gmail": "0.32.0",
+    "@agentcomms/slack": "0.32.0",
+    "@agentcomms/events-daemon": "0.32.0"
+  },
+  "behind": [
+    {
+      "kind": "registration",
+      "channel": "gmail",
+      "package": "@agentcomms/gmail",
+      "client": "claude-code",
+      "name": "gmail",
+      "scope": "user",
+      "path": "/example/home/.claude.json",
+      "launcher": "managed",
+      "version": "0.31.0",
+      "latest": "0.32.0",
+      "narrowing": ["--inbox", "example/gmail"],
+      "updatable": true
+    },
+    {
+      "kind": "runtime",
+      "channel": "gmail",
+      "package": "@agentcomms/gmail",
+      "version": "0.31.0",
+      "latest": "0.32.0",
+      "path": "/example/home/.local/share/agent-communications/runtime/gmail/0.32.0"
+    }
+  ],
+  "upToDate": [
+    {
+      "kind": "registration",
+      "channel": "core",
+      "package": "@agentcomms/core",
+      "client": "claude-code",
+      "name": "agentcomms",
+      "scope": "user",
+      "path": "/example/home/.claude.json",
+      "launcher": "managed",
+      "version": "0.32.0",
+      "latest": "0.32.0",
+      "narrowing": []
+    }
+  ],
+  "unpinned": [],
+  "unreadable": []
+}

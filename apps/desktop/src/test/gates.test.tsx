@@ -51,6 +51,8 @@ describe('what each CLI version supports', () => {
       messages: '0.32.0',
       ruleEditor: '0.33.0',
       labelChanges: '0.34.0',
+      severalServers: '0.34.0',
+      bringUpToDate: '0.34.0',
     });
     // Judge setup and AI provider keys are the event service's from 0.32.0, a pull request's build of it included.
     expect(supports('0.31.0', 'judgeSetup')).toBe(false);
