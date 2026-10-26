@@ -80,7 +80,7 @@ export interface SenderView {
 }
 
 /** Where a message came from, by the source's own ids. */
-export interface EventSource {
+export interface MessageSource {
   messageId: string | null;
   channelId: string | null;
   ts: string | null;
@@ -98,7 +98,7 @@ export interface MessageEvent {
   accountAlias: string | null;
   occurredAt: Millis | null;
   observedAt: Millis | null;
-  source: EventSource;
+  source: MessageSource;
   /** The id the activity log names the same message by: a Gmail message id, or Slack's `<channelId>/<ts>`. */
   sourceId: string | null;
   decisions: DecisionView[];
@@ -283,13 +283,13 @@ function keptOf(value: unknown): SenderView | null {
   return { name: from?.name ?? null, address: from?.address ?? null, subject };
 }
 
-function sourceOf(value: unknown): EventSource {
+function sourceOf(value: unknown): MessageSource {
   const given = isRecord(value) ? value : {};
   return { messageId: word(given.messageId), channelId: word(given.channelId), ts: word(given.ts) };
 }
 
 /** The id the activity log knows the message by: Gmail's message id, or Slack's `<channelId>/<ts>`. */
-function sourceIdOf(channel: string, source: EventSource): string | null {
+function sourceIdOf(channel: string, source: MessageSource): string | null {
   if (channel === 'gmail') return source.messageId;
   if (channel === 'slack')
     return source.channelId !== null && source.ts !== null ? `${source.channelId}/${source.ts}` : null;
