@@ -91,7 +91,9 @@ pub fn set(provider: KeyProvider, key: ProviderKey, ctx: &RunContext) -> CliResu
 mod tests {
     use super::*;
     use crate::launchers::Program;
-    use crate::paths::{Folders, Platform};
+    use crate::paths::Folders;
+    #[cfg(unix)]
+    use crate::paths::Platform;
     use crate::runner::{argv, command_for};
 
     /// A synthetic key, never a real one.
