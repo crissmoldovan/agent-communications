@@ -2839,6 +2839,17 @@
       "reason": "Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, at a terminal or in the app, on the model provider they picked with their own key. No tool runs it: an agent never reads those counts and never spends the person's key, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
     },
     {
+      "id": "events-daemon.integration.show",
+      "package": "events-daemon",
+      "cli": "integration show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "integrationShow",
+      "argv": ["linear"],
+      "expect": { "integration": "linear" },
+      "reason": "What Linear shows the person — their workspace, its teams and a team's labels, fetched with their own Linear key — is for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reaches it; events_provider_list tells an agent whether a Linear key is kept."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

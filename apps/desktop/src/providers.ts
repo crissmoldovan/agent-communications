@@ -2,7 +2,8 @@ import { AI_PROVIDERS, type AiProvider } from './ipc.ts';
 
 /*
  * The AI providers whose keys Jev uses (0.32.0), as the events service's `provider list` answers: TypeSafe and
- * OpenRouter, each with whether it has a key — never a key, nor any part of one.
+ * OpenRouter, each with whether it has a key — never a key, nor any part of one. From 0.33.0 the list also names
+ * providers that are not AI providers (Linear, whose key a Linear target uses); this reads past them.
  */
 
 /** `provider list`, read as the event service gives it, or `null` when it is not exactly that. */
@@ -15,8 +16,8 @@ export function readProviders(value: unknown): Record<AiProvider, boolean> | nul
     if (typeof entry !== 'object' || entry === null) return null;
     const { id, hasKey } = entry as { id?: unknown; hasKey?: unknown };
     if (typeof id !== 'string' || typeof hasKey !== 'boolean') return null;
-    // A provider this screen has no row for — Anthropic's key, which Analyse uses (0.33.0) — is passed over, so a newer
-    // event service still reads; the two Jev providers must each be there.
+    // A provider this screen has no row for — Anthropic's key, which Analyse uses, or Linear's, a Linear target's
+    // (0.33.0) — is passed over, so a newer event service still reads; the two Jev providers must each be there.
     if (!(AI_PROVIDERS as readonly string[]).includes(id)) continue;
     found[id as AiProvider] = hasKey;
   }

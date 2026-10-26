@@ -73,10 +73,19 @@ test('PROVIDER-SLOT: migration 29 gives Anthropic a key slot and keeps every slo
       /UNIQUE constraint failed/u,
       'one current generation per slot, as before',
     );
-    for (const provider of EVENT_SECRET_PROVIDERS)
+    for (const provider of ['typesafe', 'openrouter', 'anthropic'])
       assert.ok(
         migration?.statements.some((statement) => statement.includes(`'${provider}'`)),
-        `migration 29 admits ${provider}, a provider this release keeps keys for`,
+        `migration 29 admits ${provider}`,
+      );
+    // Every provider this release keeps keys for has a slot by the last migration that widens the list (30, Linear's).
+    const latest = [...EVENT_MIGRATIONS]
+      .reverse()
+      .find((candidate) => candidate.statements.some((statement) => statement.includes("owner_kind = 'provider' AND")));
+    for (const provider of EVENT_SECRET_PROVIDERS)
+      assert.ok(
+        latest?.statements.some((statement) => statement.includes(`'${provider}'`)),
+        `migration ${latest?.version} admits ${provider}, a provider this release keeps keys for`,
       );
   } finally {
     database.close();

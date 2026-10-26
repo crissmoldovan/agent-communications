@@ -182,6 +182,48 @@ agent-events lane unbind david       # at once; the window's watches end
 - **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
   2025-era client connects as before.
 
+## A Linear issue
+
+From 0.33.0 a rule can add an issue to your Linear workspace. Connect Linear once with a personal API key from your
+Linear account's settings, in the app's Settings → Integrations or at your terminal:
+
+```bash
+# 1. your Linear key: typed at this terminal, hidden — never piped in, never an argument
+agent-events provider key set linear
+
+# 2. what the key can see: the workspace and its teams, and a team's labels
+agent-events --json integration show linear --team CUE
+
+# 3. a target: the team, its labels, who it is assigned to, and the title and description, whose {{field}} slots
+#    name fields the rule keeps
+agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear","team":{"id":"<team id>","key":"CUE"},"title":{"text":"Invoice from {{sender}}"},"description":{"text":"{{subject}}"},"labels":[{"id":"<label id>","name":"Billing"}],"assignee":"me"}'
+```
+
+- **The key is yours.** It is kept with the AI provider keys, set and removed only where you are — at an interactive
+  terminal, or in the Agent Comms app — never by an agent, and never shown again. `provider list` and
+  `events_provider_list` say whether a Linear key is kept. `integration show linear` is your read too: it refuses
+  inside an MCP server's process, and no MCP tool reaches it.
+- **Only what the rule keeps.** Each `{{field}}` in the title and description names one of the rule's mapped fields
+  (`{{subject}}`, `{{sender}}`, or `{{from.address}}` within a mapped `from`); a rule naming any other is refused when
+  you activate it. A model-written title or description comes later. The approval says which team, labels and
+  assignee, and which fields fill the title and the description.
+- **What a sender wrote stays text.** Linear makes a mention from a person's or an issue's plain address, links bare
+  addresses and issue ids, and reads the description as Markdown. So in the description each value from the message is
+  a block quote labelled "From outside: written by the sender, not checked", its text inside a code block, where
+  Linear makes no link, mention or formatting; in the title, which is plain text, it is one line. Your own words in the
+  templates are written as they are, and the description ends with the rule and delivery that added the issue.
+- **One issue per match.** The issue is sent to `https://api.linear.app/graphql` — the one Linear address the event
+  service may reach — through the same pinned, checked connection as a hosted judge. A rate limit, a 5xx or no answer
+  is tried again, as a webhook's failure is, up to ten times; Linear refusing the issue fails it at once with Linear's
+  code (`LINEAR_INVALID_INPUT`, `LINEAR_AUTHENTICATION_ERROR`, …). The issue's id is chosen from the delivery's, and each
+  try first looks for it, so a retry after a lost answer never adds a second issue. With no key, a delivery waits
+  (`LINEAR_KEY_MISSING`) and sends nothing.
+- **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
+  added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
+  is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the
+  rule's delivery retention: `deliveries list` and `delivery show` give them as `linear: { identifier, url }`, the
+  address without the title's words. Nothing the issue says is kept.
+
 ## What happened to a message
 
 From 0.32.0 the event service tells you what became of each message it observed: whether each rule matched it and what
@@ -287,6 +329,7 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
     token, and its origin is checked.
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window
     ([A lane](#a-lane)).
+  - **A Linear issue** in your workspace, with your Linear key (0.33.0, [A Linear issue](#a-linear-issue)).
   - **The dry-run log.**
 - **Rules and deliveries you can read (0.32.0):**
   - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words

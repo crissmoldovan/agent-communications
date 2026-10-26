@@ -55,7 +55,8 @@ Scripts should read these rather than parse output.
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
-| [`provider`](#agent-events-provider) | the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key |
+| [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
+| [`integration`](#agent-events-integration) | the services a rule can act in — Linear — and what your key there can see (a person only) |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
@@ -630,7 +631,7 @@ agent-events budget update [options] <document>
 
 ### `agent-events provider`
 
-the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key
+the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key
 
 ```
 agent-events provider [options] [command]
@@ -638,7 +639,7 @@ agent-events provider [options] [command]
 
 ### `agent-events provider list`
 
-list each AI provider and whether it has a key; never a key
+list each provider and whether it has a key; never a key
 
 ```
 agent-events provider list [options]
@@ -646,7 +647,7 @@ agent-events provider list [options]
 
 ### `agent-events provider key`
 
-set or remove an AI provider's key, as the person
+set or remove a provider's key, as the person
 
 ```
 agent-events provider key [options] [command]
@@ -662,11 +663,31 @@ agent-events provider key set [options] <provider>
 
 ### `agent-events provider key remove`
 
-remove a provider key, and the copy its Jev judges hold
+remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue
 
 ```
 agent-events provider key remove [options] <provider>
 ```
+
+### `agent-events integration`
+
+the services a rule can act in — Linear — and what your key there can see (a person only)
+
+```
+agent-events integration [options] [command]
+```
+
+### `agent-events integration show`
+
+show whether a Linear key is kept, its workspace and teams, and with --team that team’s labels
+
+```
+agent-events integration show [options] <integration>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--team <key>` | a team, by its key (such as CUE) or its id, whose labels to list | — |
 
 ### `agent-events deliveries`
 

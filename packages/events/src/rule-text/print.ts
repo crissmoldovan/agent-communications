@@ -345,9 +345,70 @@ function targetLines(target: JsonValue): string[] {
         subscriberId === undefined ? '' : `, to subscriber ${formatName(subscriberId)} version ${subscriberVersion}`;
       return [`  stream ${head}${to}${representation === undefined ? '' : `, ${representation}`}`];
     }
+    case 'linear':
+      return linearLines(target, head) ?? raw;
     default:
       return raw;
   }
+}
+
+/** A title or description template's text, null when the document has none, or undefined when it cannot be said. */
+function templateText(value: JsonValue | undefined): string | null | undefined {
+  if (value === undefined) return null;
+  return isRecord(value) && hasKeys(value, ['text']) && typeof value.text === 'string' ? value.text : undefined;
+}
+
+/**
+ * A Linear issue target (0.33.0 design §3.4): its line names the team by key, the labels by name and who it is
+ * assigned to; its indented lines give the team's and the labels' ids, and the title and description templates. No
+ * labels and nobody, which the parser fills, are not written.
+ */
+function linearLines(target: Doc, head: string): string[] | undefined {
+  if (!hasKeys(target, ['targetId', 'version', 'kind', 'labels', 'assignee'], ['team', 'title', 'description']))
+    return undefined;
+  const { team, labels, assignee } = target;
+  if (team !== undefined) {
+    if (!isRecord(team) || Object.keys(team).length === 0 || !hasKeys(team, [], ['id', 'key'])) return undefined;
+    if (
+      (team.id !== undefined && typeof team.id !== 'string') ||
+      (team.key !== undefined && typeof team.key !== 'string')
+    )
+      return undefined;
+  }
+  const title = templateText(target.title);
+  const description = templateText(target.description);
+  if (title === undefined || description === undefined) return undefined;
+  if (!Array.isArray(labels)) return undefined;
+  const named = labels.filter(
+    (label): label is Doc =>
+      isRecord(label) &&
+      hasKeys(label, ['name'], ['id']) &&
+      typeof label.name === 'string' &&
+      (label.id === undefined || typeof label.id === 'string'),
+  );
+  const withIds = named.filter((label) => label.id !== undefined).length;
+  if (named.length !== labels.length || (withIds !== 0 && withIds !== named.length)) return undefined;
+  let assigned: string;
+  if (assignee === null) assigned = '';
+  else if (assignee === 'me') assigned = ', assigned to me';
+  else if (isRecord(assignee) && hasKeys(assignee, ['id']) && typeof assignee.id === 'string')
+    assigned = `, assigned to user ${formatName(assignee.id)}`;
+  else return undefined;
+  const key = isRecord(team) && typeof team.key === 'string' ? team.key : undefined;
+  const id = isRecord(team) && typeof team.id === 'string' ? team.id : undefined;
+  const names = named.map((label) => label.name as string);
+  const one = named.length === 1;
+  return [
+    `  linear issue ${head}${key === undefined ? '' : `, in team ${formatName(key)}`}${
+      named.length === 0 ? '' : `, ${one ? 'label' : 'labels'} ${formatNames(names)}`
+    }${assigned}`,
+    ...(id === undefined ? [] : [`    team id ${formatName(id)}`]),
+    ...(withIds === 0
+      ? []
+      : [`    ${one ? 'label id' : 'label ids'} ${formatNames(named.map((label) => label.id as string))}`]),
+    ...(title === null ? [] : [`    title ${JSON.stringify(title)}`]),
+    ...(description === null ? [] : [`    description ${JSON.stringify(description)}`]),
+  ];
 }
 
 /** Each subscriber's lines, `[]` for none, or undefined when one of them has a shape the readable form cannot say. */

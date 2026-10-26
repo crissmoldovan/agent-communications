@@ -153,6 +153,11 @@ const EXPECTED_ANALYSE_ROWS = [
   ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
 ] as const;
 
+/** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
+const EXPECTED_INTEGRATION_ROWS = [
+  ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -180,6 +185,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_MESSAGE_ROWS),
   ...shapedRows(EXPECTED_SETUP_ROWS),
   ...shapedRows(EXPECTED_ANALYSE_ROWS),
+  ...shapedRows(EXPECTED_INTEGRATION_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
@@ -310,6 +316,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
     'events-daemon.rule.analyse',
+    'events-daemon.integration.show',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

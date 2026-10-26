@@ -27,6 +27,7 @@ import {
   type LayaEnablementInputs,
 } from './judges.ts';
 import { EventDomainError } from './lifecycle.ts';
+import { assertLinearSlotsMapped, canonicalLinearTarget, type LinearTargetDocument } from './linear-target.ts';
 import {
   assertQueueMapping,
   canonicalQueueTarget,
@@ -49,8 +50,14 @@ export interface DryRunTargetDocument {
   readonly retentionMs: number;
 }
 
-export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument | QueueTargetDocument;
+export type TargetDocument =
+  | DryRunTargetDocument
+  | WebhookTargetDocument
+  | SseTargetDocument
+  | QueueTargetDocument
+  | LinearTargetDocument;
 
+export type { LinearTargetDocument } from './linear-target.ts';
 export type { QueueTargetDocument } from './queue-target.ts';
 
 export type JudgeDocument = CanonicalJudgeDocument;
@@ -202,6 +209,8 @@ export function canonicalTarget(value: unknown): TargetDocument {
       return canonicalSseTarget(target);
     case 'queue':
       return canonicalQueueTarget(target);
+    case 'linear':
+      return canonicalLinearTarget(target);
     default:
       return fail('a target document has a known kind');
   }
@@ -326,6 +335,8 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   if (!queued && retention.queueMs !== undefined)
     return fail('retention.queueMs applies only to a rule with a queue target');
   if (queued) assertQueueMapping(eventType, mapping);
+  // A Linear target's slots name the rule's mapped fields only (0.33.0 design §3.4): nothing else reaches Linear.
+  for (const target of targets) if (target.kind === 'linear') assertLinearSlotsMapped(target, compiledMapping.value);
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);

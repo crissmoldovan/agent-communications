@@ -93,6 +93,9 @@ const FIXTURES: readonly Fixture[] = [
  * `caseSensitive`, no targets, or a queue rule whose retention has no `queueMs`. A canonical rule never needs one.
  */
 const ESCAPED: Readonly<Record<string, readonly string[]>> = {
+  // The app's 0.32 rule-show fixture carries its judge in the legacy `judges` list, which the event service refuses.
+  'apps/desktop/src/test/fixtures/events-rule-show.v032.json#/invoices/0/document': ['raw /judges ='],
+  'apps/desktop/src/test/fixtures/events-rule-show.v032.json#/invoices/1/document': ['raw /judges ='],
   // `event: { version: 1 }` with no type, and no source: the test adds them per channel.
   'packages/events-daemon/test/activation-documents.test.ts': ['raw /event =', 'raw /source absent'],
   // An empty condition, refused by the consumer contract.
@@ -113,6 +116,10 @@ const ESCAPED: Readonly<Record<string, readonly string[]>> = {
   // A rule with no targets yet.
   'packages/events-daemon/test/phase-d-owner-e2e.test.ts': ['raw /targets ='],
   // Partial rules written straight into the store.
+  // Analyse's rules (0.33.0 §3.3): a source and event per test, a short retention, and session and Linear targets in
+  // the shapes Analyse reads, some of which the event service refuses (a bare-string title, a model-written one).
+  'packages/events-daemon/test/rule-analyse-domain.test.ts': ['raw /event =', 'raw /source =', 'raw item'],
+  'packages/events-daemon/test/rule-analyse.test.ts': ['raw /retention =', 'raw /targets =', 'raw item'],
   'packages/events-daemon/test/sse-persistence-auth.test.ts': [
     'raw /condition absent',
     'raw /event absent',
