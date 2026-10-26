@@ -584,6 +584,23 @@ export function shortenRuleRetentionDeadlines(input: {
        WHERE rule_id = ?`,
     )
     .run(child.retention.ingestMs, ruleId);
+  // A judged decision's sending domain keeps its projection's retention, and shortens with it (security review of
+  // 0.33.0, finding 9).
+  database
+    .prepare(
+      `UPDATE decision_sender_domains
+       SET expires_at = MIN(
+         expires_at,
+         COALESCE(
+           (SELECT ingest.staged_at + ?
+              FROM decisions JOIN ingest ON ingest.event_id = decisions.event_id
+             WHERE decisions.id = decision_sender_domains.decision_id),
+           expires_at
+         )
+       )
+       WHERE rule_id = ?`,
+    )
+    .run(child.retention.ingestMs, ruleId);
   // Pre-E held rows lack a creation instant. Their only durable deadline proxy is the projection's staged time, so
   // every tightening recomputes both retained bounds from there while only ever shortening the current deadline.
   const legacyHeld = database

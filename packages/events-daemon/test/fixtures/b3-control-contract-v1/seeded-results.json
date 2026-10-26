@@ -856,7 +856,7 @@
         "name": "OpenRouter",
         "model": "anthropic/claude-sonnet-5.5",
         "noKey": ["anthropic"],
-        "sent": "The rule's own text and content-free counts of its last 30 days: never a message, a sender, a subject, a body or an address.",
+        "sent": "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
         "ran": true,
         "reason": null,
         "parts": [

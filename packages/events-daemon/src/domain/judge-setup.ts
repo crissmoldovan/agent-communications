@@ -65,6 +65,28 @@ export function personSetupApprover(origin: string | undefined): PersonSetupAppr
   }
 }
 
+const APPROVAL_ID_WORD = /^ap_[0-9A-HJKMNP-TV-Z]{26}$/u;
+
+/**
+ * Why `rule approve` sends the person to their terminal (security review of 0.33.0, finding 2): on Windows and Linux
+ * nothing attests that the Agent Comms app started the command, so a process without an agent's marker is not enough
+ * to approve a standing disclosure. The refusal is `APPROVAL_REQUIRED` — the app reads it as "use the terminal" — with
+ * its own reason, and names the event service's own words to type there, `approve <approval-id>`, which show the
+ * preview and ask for the challenge. (The suite never spells its binary in a runtime message: the app opens the located
+ * command itself, as Bind in Terminal does.)
+ */
+export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
+  const id = typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>';
+  return new CommsError(
+    'APPROVAL_REQUIRED',
+    `nothing on this platform attests that the Agent Comms app started this, so approve the rule at your terminal, with the event service's approve ${id}, which shows its preview and asks for its challenge`,
+    {
+      details: { reason: 'ORIGIN_UNATTESTED', approvalId: id },
+      hint: 'In the app, press Approve in Terminal; or run the event service’s approve command at your own terminal.',
+    },
+  );
+}
+
 /** The two kinds `judge setup` sets up. Laya is not one: no release offers it yet. */
 export type SetupJudgeKind = typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
 export const SETUP_JUDGE_KINDS: readonly SetupJudgeKind[] = Object.freeze([

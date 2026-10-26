@@ -1,6 +1,6 @@
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { withSenderDomain } from '../domain/sender-domain.ts';
+import { senderDomainOf } from '../domain/sender-domain.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
@@ -14,6 +14,7 @@ import { recoverJudgeReservation } from './judge-recovery.ts';
 import type { HostedJudgeCredential } from './judge-transport.ts';
 import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
+import { keepSenderDomain, senderDomainLocation } from './sender-domains.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
@@ -366,12 +367,18 @@ export class EventEvaluator {
               channel: rule.source.channel,
               classification: evaluated.classification,
             });
-          // Analyse (0.33.0 §3.3) counts the judge's answers per sending domain: the domain, never the address, rides
-          // in the same encrypted, content-free metadata and goes with it.
           const encryptedMetadata = await this.#cipher.encrypt(
             { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decisionId }] },
-            Buffer.from(JSON.stringify(withSenderDomain(judged.metadata, rule, projection.event))),
+            Buffer.from(JSON.stringify(judged.metadata)),
           );
+          // Analyse (0.33.0 §3.3) counts the judge's answers per sending domain: the domain, never the address, is kept
+          // on its own, encrypted, until the projection's own deadline — the rule's content retention — and no longer
+          // (security review of 0.33.0, finding 9).
+          const senderDomain = senderDomainOf(rule.event.type, rule.event.version, projection.event);
+          const sealedDomain =
+            senderDomain === null
+              ? null
+              : await this.#cipher.encrypt(senderDomainLocation(decisionId), Buffer.from(senderDomain));
           if (!(await this.#accountStillLive(rule.source.channel, ingest.account_id))) return 'terminal';
           const terminal = this.#commit(() => {
             commitDecisionOutbox(
@@ -418,6 +425,14 @@ export class EventEvaluator {
               this.#failpoint,
             );
             committed = true;
+            if (sealedDomain !== null)
+              keepSenderDomain(this.#store.database, {
+                decisionId,
+                ruleId: input.ruleId,
+                ruleVersion: input.ruleVersion,
+                expiresAt: row.decisionDeadline,
+                sealed: sealedDomain,
+              });
           });
           return terminal;
         } finally {

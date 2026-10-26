@@ -377,6 +377,13 @@ export const RECORD_LAYOUTS: readonly RecordLayout[] = [
     keyColumns: ['id'],
   },
   { table: 'queue_items', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['id'] },
+  // A judged decision's sending domain, for Analyse (security review of 0.33.0, finding 9).
+  {
+    table: 'decision_sender_domains',
+    column: 'encryptedDomain',
+    sqlColumn: 'encrypted_domain',
+    keyColumns: ['decision_id'],
+  },
 ];
 
 type SqlValue = string | number | bigint | Uint8Array | null;

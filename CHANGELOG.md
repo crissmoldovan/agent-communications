@@ -14,8 +14,9 @@ together under one version.
   judge always refused, a bar between kept and dismissed scores, a rule that never matched), and from a model on your
   own OpenRouter or Anthropic key for the judge's question, a session's text and a Linear title — and never applies
   one. It reads and sends no message content, and runs only at your terminal or in the app. `provider key set` takes
-  `anthropic`; a judged decision now keeps its sender's domain, never the address, in its encrypted metadata (one
-  automatic migration, 29, gives Anthropic a key slot).
+  `anthropic`; a judged decision now keeps its sender's domain, never the address, encrypted and apart from its
+  metadata, only as long as the rule keeps the message's content. Two automatic migrations: 29 gives Anthropic a key
+  slot, and 33 keeps the sending domains.
 - **A rule can add a Linear issue** (`@agentcomms/events-daemon`, `@agentcomms/events`):
   - **The key:** your Linear personal API key is kept beside the AI provider keys: `agent-events provider key set
     linear`, from the app or your own terminal, never from an agent. `provider list` names Linear too.

@@ -1,5 +1,5 @@
 import { isDangerous } from '@agentcomms/core';
-import { type JsonValue, printRuleText } from '@agentcomms/events';
+import { catalogueEntry, type JsonValue, matchesPattern, printRuleText } from '@agentcomms/events';
 import { MESSAGE_DECISION_OUTCOMES, type MessageDecisionOutcome } from './messages.ts';
 import { hasSenderAddress, isKeptSenderDomain } from './sender-domain.ts';
 
@@ -543,12 +543,74 @@ export function readModelAnswer(
   return { after, why };
 }
 
+/** The typed placeholders an address and a domain in a condition are sent as. */
+export const ANALYSE_ADDRESS_PLACEHOLDER = '<address>';
+export const ANALYSE_DOMAIN_PLACEHOLDER = '<domain>';
+
+const DOMAIN_LIKE =
+  /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*\.[A-Za-z]{2,63}$/u;
+
+/** A condition's literal as it is sent: an address, a value of an address field, or a domain, as its placeholder. */
+function redactedLiteral(value: unknown, addressField: boolean): unknown {
+  if (typeof value !== 'string') return value;
+  if (addressField || value.includes('@')) return ANALYSE_ADDRESS_PLACEHOLDER;
+  if (DOMAIN_LIKE.test(value)) return ANALYSE_DOMAIN_PLACEHOLDER;
+  return value;
+}
+
 /**
- * The user turn of one model call: the rule's own text around the part, the part as it is now, and the counts without
- * any domain. Nothing a sender wrote is in it, and no account: only what the person wrote and numbers.
+ * The rule's condition with every address and domain it names replaced by `<address>` or `<domain>` (security review
+ * of 0.33.0, finding 7): a `domainIs` value; any value on one of the event's address fields (`from.address`, `to`,
+ * `cc`…); and any other literal holding an `@` or shaped like a domain. Everything else — the fields, the operators,
+ * the words the person wrote — stays as it is. What the person sees, and what they approve, is never changed.
+ */
+export function redactConditionLiterals(doc: Doc): unknown {
+  const event = record(doc.event);
+  const definition =
+    event !== null && typeof event.type === 'string' && typeof event.version === 'number'
+      ? catalogueEntry(event.type, event.version)
+      : null;
+  const addressPatterns = definition?.ok === true ? definition.value.addresses : [];
+  const isAddressField = (path: unknown) => {
+    if (typeof path !== 'string') return false;
+    return addressPatterns.some((pattern) => {
+      try {
+        return matchesPattern(pattern, path);
+      } catch {
+        return false;
+      }
+    });
+  };
+  const visit = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(visit);
+    const object = record(node);
+    if (object === null) return node;
+    if (Array.isArray(object.all)) return { ...object, all: object.all.map(visit) };
+    if (Array.isArray(object.any)) return { ...object, any: object.any.map(visit) };
+    if (object.not !== undefined) return { ...object, not: visit(object.not) };
+    if (object.op === 'domainIs') return { ...object, value: ANALYSE_DOMAIN_PLACEHOLDER };
+    const addressField = isAddressField(object.path);
+    return {
+      ...object,
+      ...(object.value === undefined ? {} : { value: redactedLiteral(object.value, addressField) }),
+      ...(Array.isArray(object.values)
+        ? { values: object.values.map((value) => redactedLiteral(value, addressField)) }
+        : {}),
+    };
+  };
+  return visit(doc.condition);
+}
+
+/**
+ * The user turn of one model call: the rule's own text around the part — its condition with each address and domain as
+ * a placeholder — the part as it is now, and the counts without any domain. Nothing a sender wrote is in it, and no
+ * account: only what the person wrote and numbers.
  */
 export function modelInput(doc: Doc, request: ModelPartRequest, counts: RuleAnalyseCountsV1): string {
   const event = record(doc.event);
+  // The condition's addresses and domains — a person the rule watches for, a domain an applied suggestion left out —
+  // go as typed placeholders: the model learns the condition's shape, never who or which domain it names.
+  const condition = section(printRuleText({ ...doc, condition: redactConditionLiterals(doc) }), 'match');
   const agentic = record(doc.agentic);
   const unsure = agentic?.onUncertain === 'hold' ? 'hold for the person' : 'leave it out';
   return JSON.stringify({
@@ -559,7 +621,7 @@ export function modelInput(doc: Doc, request: ModelPartRequest, counts: RuleAnal
         event !== null && typeof event.type === 'string' && typeof event.version === 'number'
           ? `${event.type}@${event.version}`
           : null,
-      condition: section(printRuleText(doc), 'match'),
+      condition,
       judge:
         agentic === null
           ? null
@@ -609,4 +671,4 @@ export interface RuleAnalyseResultV1 {
 
 /** The plain words for what a model is sent, as the result and the screen give them. */
 export const ANALYSE_SENT =
-  "The rule's own text and content-free counts of its last 30 days: never a message, a sender, a subject, a body or an address.";
+  "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.";
