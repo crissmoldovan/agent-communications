@@ -294,19 +294,45 @@ test('the local test build approves only as itself: its audit line says desktop-
   assert.equal(approve?.approvedBy, 'desktop-app (test build)');
 });
 
-test('on Windows and Linux, where nothing attests the app, the audit says the approval was unattested', async () => {
+/*
+ * The second look at 0.33.0 (2026-10-26): on Windows and Linux nothing attests that the app started this, and any
+ * process without an agent's marker — an agent's shell that strips it, say — was taken for the app: it approved adding
+ * a server to a client, which widens what agents can do, recorded `approvedVia: app`. Now that origin goes to the
+ * terminal, as the event service's person-only changes do.
+ */
+test('on Windows and Linux, where nothing attests the app, an approval in the app is refused and sent to the terminal', async () => {
   const { core } = coreWith('never');
   const change = setSendPolicy(core, 'chat');
   const approvalId = await prepared(core, change);
-  const applied = await gatedChangeAtTerminal(core, change, {
-    ...APP,
-    appOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
-    appApproval: approvalId,
-  });
-  assert.equal(applied, 'chat');
-  const approve = (await auditLines(core)).find((line) => line.operation === 'change.approve' && line.outcome === 'ok');
-  assert.equal(approve?.approvedBy, 'desktop-app (unattested)');
-  // Even there, an agent's marker is refused.
+  await assert.rejects(
+    gatedChangeAtTerminal(core, change, {
+      ...APP,
+      appOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+      appApproval: approvalId,
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof CommsError);
+      assert.equal(error.code, 'APPROVAL_REQUIRED');
+      assert.equal(error.exitCode, 10);
+      assert.equal((error.details as { reason?: string }).reason, 'ORIGIN_UNATTESTED');
+      assert.match(error.message, /nothing on this platform attests that the Agent Comms app started this/u);
+      assert.match(error.message, /at your terminal/u);
+      return true;
+    },
+  );
+  // Nothing changed and nothing was approved: the approval still waits, for the terminal or to be revoked.
+  assert.equal(await policyNow(core), 'never');
+  const [record] = await core.approvals.list();
+  assert.equal(record?.form === 'v2' ? record.record.state : undefined, 'pending');
+  assert.equal(record?.form === 'v2' ? record.record.approvedVia : undefined, undefined);
+  const lines = (await auditLines(core)).filter((line) => line.operation === 'change.approve');
+  assert.deepEqual(
+    lines.map((line) => [line.outcome, line.approvedBy]),
+    [['refused', 'desktop-app (unattested)']],
+    'the refusal is audited, naming the origin it refused',
+  );
+  assert.match(String(lines[0]?.reason ?? ''), /nothing on this platform attests/u);
+  // The refusal is the same with an agent's marker, which is refused first.
   const { core: other } = coreWith('never');
   const again = await prepared(other, setSendPolicy(other, 'chat'));
   await assert.rejects(
@@ -462,16 +488,19 @@ test(
       const [record] = await m.core().approvals.list();
       assert.equal(record?.form === 'v2' ? record.record.state : undefined, 'pending');
     } else {
-      // Linux attests nothing: the marker checks hold, and the approval is said to be the app's, unattested.
-      assert.equal(done.status, 0, done.stdout + done.stderr);
-      assert.equal(done.json().data.applied, true);
-      assert.equal(m.asked().length, 1, 'registered once');
+      // Linux attests nothing: the approval goes to the terminal (0.33.0, the second look), and nothing is approved.
+      assert.equal(done.status, 10, done.stdout + done.stderr);
+      assert.equal(done.json().error.details.reason, 'ORIGIN_UNATTESTED');
+      assert.deepEqual(m.asked(), []);
       const [record] = await m.core().approvals.list();
-      assert.equal(record?.form === 'v2' ? record.record.approvedVia : undefined, 'app');
-      const approve = (await m.core().audit.tail({ limit: 100 })).find(
-        (line) => line.operation === 'change.approve' && line.outcome === 'ok',
+      assert.equal(record?.form === 'v2' ? record.record.state : undefined, 'pending');
+      const refused = (await m.core().audit.tail({ limit: 100 })).filter(
+        (line) => line.operation === 'change.approve' && line.approvedBy === 'desktop-app (unattested)',
       );
-      assert.equal(approve?.approvedBy, 'desktop-app (unattested)');
+      assert.deepEqual(
+        refused.map((line) => line.outcome),
+        ['refused'],
+      );
     }
 
     // Never alongside --approval.
