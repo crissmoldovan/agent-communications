@@ -3708,8 +3708,10 @@ mod tests {
     }
 
     /// Nothing the window sends reaches a rule's or a delivery's words unchecked: each id is a word of the grammar's,
-    /// never an option or two words; each call names exactly its one field; and nothing enables, creates, updates or
-    /// tests a rule, or lists the dry-run log: switching a rule on is the person's approval, at a terminal.
+    /// never an option or two words; and each call names exactly its fields. Since 0.33.0 the rule editor creates and
+    /// updates a rule, but only from one document on stdin, at most `RULE_DOCUMENT_LIMIT` bytes, with no field beside
+    /// it; it prepares an activation, and switching it on stays the person's approval. Nothing tests a rule or lists
+    /// the dry-run log.
     #[test]
     fn rule_and_delivery_calls_refuse_bad_ids_and_extra_fields() {
         let rule_kinds = ["eventsRuleShow", "eventsRuleDisable", "eventsRuleRemove"];
@@ -3811,9 +3813,39 @@ mod tests {
         refused(
             json!({ "kind": "eventsRuleEnable", "ruleId": "mail-subject", "version": 2, "deliveryId": DELIVERY }),
         );
+        // Creating and updating a rule take its one document, and nothing beside it: a document within the cap is taken,
+        // one past it is refused, as is any other field — an id, a version or an argument — next to it.
+        let limit = crate::rule_editor::RULE_DOCUMENT_LIMIT;
+        let padded = |padding: usize| {
+            let mut document = RULE_DOCUMENT.clone();
+            document["padding"] = json!("");
+            let base = serde_json::to_vec(&document).expect("json").len();
+            document["padding"] = json!("x".repeat(padding.saturating_sub(base)));
+            document
+        };
+        for kind in ["eventsRuleCreate", "eventsRuleUpdate"] {
+            let at_cap = padded(limit);
+            assert_eq!(serde_json::to_vec(&at_cap).expect("json").len(), limit);
+            assert!(
+                serde_json::from_value::<Call>(json!({ "kind": kind, "document": at_cap })).is_ok(),
+                "{kind} takes a document of exactly the cap"
+            );
+            refused(json!({ "kind": kind, "document": padded(limit + 1) }));
+            refused(json!({ "kind": kind, "document": padded(limit * 4) }));
+            for (field, value) in [
+                ("ruleId", json!("mail-subject")),
+                ("version", json!(2)),
+                ("approvalId", json!(ID)),
+                ("args", json!(["--force"])),
+                ("json", json!(false)),
+                ("deliveryId", json!(DELIVERY)),
+            ] {
+                let mut given = json!({ "kind": kind, "document": RULE_DOCUMENT.clone() });
+                given[field] = value;
+                refused(given);
+            }
+        }
         for kind in [
-            "eventsRuleCreate",
-            "eventsRuleUpdate",
             "eventsRuleTest",
             "eventsRuleTestRetained",
             "eventsDryrunList",
