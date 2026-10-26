@@ -20,7 +20,7 @@ import {
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
   ruleApprovalWords,
-  testBuildFoldersApart,
+  testBuildOutsideProfile,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
@@ -861,19 +861,29 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         : readsOutput(env, streams)
     )
       return PERSON_SETUP_ORIGINS.terminal;
-    // The config folder this run is for, found only when the app's origin is checked: a test build speaks only for a
-    // marked test profile's.
+    // The folders this run is for, found only when the app's origin is checked: a test build speaks only for a marked
+    // test profile's config folder, and only when every other folder the act touches is in that profile too — here
+    // the state folder, whose event service the act goes to (security review of 0.34.0, finding 1). Core's
+    // `desktopAppOrigin` takes them as `folders` (core 0.34.0); the same check runs here as well, so a core without it,
+    // and a test's injected origin, are held to it too. The event service checks its own state folder as well.
     const configDir = () => program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir: configDir() })))();
-    if (origin.ok && origin.build === 'test') {
-      // The act goes to the event service of the state folder this run names: the test build speaks for it only when
-      // it is in the same test profile as the marked config folder (security review of 0.34.0, finding 1). The event
-      // service checks its own state folder too.
-      const stateDir = program.opts<EventsCliOptions>().stateDir ?? resolvePaths({ env }).stateDir;
-      if (!withinTestProfile(configDir(), stateDir)) throw testBuildFoldersApart();
-      return PERSON_SETUP_ORIGINS.desktopAppTestBuild;
+    const stateDir = () => program.opts<EventsCliOptions>().stateDir ?? resolvePaths({ env }).stateDir;
+    const attest = () => {
+      // A variable, not a literal: a core from before `folders` takes the config folder alone.
+      const check = { configDir: configDir(), folders: [{ what: 'state folder', path: stateDir() }] };
+      return desktopAppOrigin(check);
+    };
+    const found = await (deps.desktopOrigin ?? attest)();
+    const origin =
+      found.ok && found.build === 'test' && !withinTestProfile(configDir(), stateDir())
+        ? ({ ok: false, reason: 'outside-test-profile', outside: 'state folder' } as const)
+        : found;
+    if (origin.ok)
+      return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
+    if (origin.reason === 'outside-test-profile') {
+      const outside = (origin as { readonly outside?: unknown }).outside;
+      throw testBuildOutsideProfile(typeof outside === 'string' ? outside : 'a folder it touches');
     }
-    if (origin.ok) return PERSON_SETUP_ORIGINS.desktopApp;
     if (origin.reason === 'unattested-platform') {
       if (options.unattested === 'accept') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
       throw changeAtTerminal(what, options.unattested?.words ?? 'command, with the same words');

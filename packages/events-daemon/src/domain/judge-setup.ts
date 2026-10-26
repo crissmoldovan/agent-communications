@@ -148,14 +148,15 @@ export function testBuildElsewhere(): CommsError {
 }
 
 /**
- * The CLI's refusal of a test build's command whose config and state folders are not both in one test profile (security
- * review of 0.34.0, finding 1): the act would reach another event service than the profile's.
+ * The CLI's refusal of a test build's command that touches a folder outside its test profile (security review of 0.34.0,
+ * finding 1) — here the state folder, whose event service the act would reach — with core's reason for it,
+ * `outside-test-profile`, and which folder in `details.outside`.
  */
-export function testBuildFoldersApart(): CommsError {
+export function testBuildOutsideProfile(outside: string): CommsError {
   return new CommsError(
     'APPROVAL_REQUIRED',
-    "the Agent Comms test build changes only its own test profile, and this command's config and state folders are not both in one: run it with the test profile's folders, or use Agent Comms itself",
-    { details: { reason: 'TEST_PROFILE_FOLDERS' } },
+    `the Agent Comms test build changes only its own test profile, and this command's ${outside} is not in it: run it with the test profile's folders, or use Agent Comms itself`,
+    { details: { reason: 'outside-test-profile', outside } },
   );
 }
 

@@ -71,7 +71,7 @@ test('the CLI takes the test build only when the config and state folders are bo
       assert.equal(ran.code, APPROVAL_EXIT, `${args.join(' ')}: ${ran.err}`);
       assert.match(
         ran.err,
-        /^the Agent Comms test build changes only its own test profile, and this command's config and state folders are not both in one/u,
+        /^the Agent Comms test build changes only its own test profile, and this command's state folder is not in it/u,
       );
       assert.equal(ran.out, '');
     }
@@ -88,6 +88,16 @@ test('the CLI takes the test build only when the config and state folders are bo
       assert.notEqual(ran.code, APPROVAL_EXIT, `${args.join(' ')}: ${ran.err}`);
       assert.match(ran.err, /not running/iu, args.join(' '));
     }
+    // Core's own check (0.34.0, `folders`) gives the same refusal, naming the folder outside the profile.
+    const fromCore = await cli(
+      ['--config-dir', join(profile, 'config'), '--state-dir', elsewhere, '--json', ...(person[0] ?? [])],
+      async () => ({ ok: false, reason: 'outside-test-profile', outside: 'state folder' }) as DesktopOrigin,
+    );
+    assert.equal(fromCore.code, APPROVAL_EXIT, fromCore.err);
+    assert.match(
+      fromCore.err,
+      /^the Agent Comms test build changes only its own test profile, and this command's state folder is not in it/u,
+    );
     // The release app is not a test build: its folders are not checked here.
     const release = await cli(
       ['--config-dir', join(profile, 'config'), '--state-dir', elsewhere, '--json', ...(person[0] ?? [])],

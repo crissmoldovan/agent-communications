@@ -486,11 +486,12 @@ refuse their calls until you add one. `judge kind disable <kind>` turns a kind o
 where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
 key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a
 boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its
-pid). The local test build counts only for its own marked test profile: the command's config and state folders must
-both be in that profile (`TEST_PROFILE_FOLDERS` otherwise), and the event service takes it only when its own state
-folder holds the profile's mark and is not your real, default one (`NOT_A_TEST_PROFILE` otherwise; from 0.34.0,
-`scripts/local-test-release.sh` marks both folders). Windows and Linux check nothing, so there these changes go
-through a terminal: a command that is neither at an interactive terminal nor attested as the app's is refused with
+pid). The local test build counts only for its own marked test profile: the command's state folder must be in that
+profile with its config folder (`outside-test-profile` otherwise, naming the folder), and the event service takes it
+only when its own state folder holds the profile's mark and is not your real, default one (`NOT_A_TEST_PROFILE`
+otherwise; from 0.34.0, `scripts/local-test-release.sh` marks both folders). Windows and Linux check nothing, so there
+these changes go through a terminal: a command that is neither at an interactive terminal nor attested as the app's is
+refused with
 `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
 says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
 `integration set agent-sessions`, `rule approve` and `collection approve`. `rule analyse` changes nothing and still
