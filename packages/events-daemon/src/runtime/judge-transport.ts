@@ -1,6 +1,10 @@
 import type net from 'node:net';
 import type tls from 'node:tls';
-import { APPROVED_TYPESAFE_MODELS } from '../domain/judges.ts';
+import {
+  APPROVED_OPENROUTER_JEV_MODELS,
+  APPROVED_TYPESAFE_MODELS,
+  OPENROUTER_SYSTEM_ONE_ENDPOINT,
+} from '../domain/judges.ts';
 import { type JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { validateLocalEndpoint } from '../network/local-endpoint.ts';
 import {
@@ -51,6 +55,17 @@ export type TransportJudge =
       readonly provider: typeof JUDGE_KIND_TYPESAFE;
       readonly model: string;
       readonly endpoint: typeof TYPESAFE_ENDPOINT;
+      readonly promptTemplate: string;
+      readonly protocol: 'noul';
+    }
+  | {
+      /** Jev through OpenRouter (2026-10-26): the same hosted adapter and request, at OpenRouter's fixed endpoint. */
+      readonly judgeId: string;
+      readonly version: number;
+      readonly kind: typeof JUDGE_KIND_TYPESAFE;
+      readonly provider: 'openrouter';
+      readonly model: string;
+      readonly endpoint: typeof OPENROUTER_SYSTEM_ONE_ENDPOINT;
       readonly promptTemplate: string;
       readonly protocol: 'noul';
     }
@@ -138,6 +153,16 @@ function requestWithinLimit(request: Uint8Array): boolean {
 }
 
 function adapterFor(call: JudgeTransportCall): typeof JUDGE_KIND_TYPESAFE | 'ollama' | null {
+  if (call.judge.kind === JUDGE_KIND_TYPESAFE && call.judge.provider === 'openrouter') {
+    // OpenRouter serves Jev through the same System One request; only its fixed endpoint and concrete model pass.
+    if (
+      call.judge.endpoint !== OPENROUTER_SYSTEM_ONE_ENDPOINT ||
+      call.judge.protocol !== 'noul' ||
+      !(APPROVED_OPENROUTER_JEV_MODELS as readonly string[]).includes(call.judge.model)
+    )
+      return null;
+    return JUDGE_KIND_TYPESAFE;
+  }
   if (call.judge.kind === JUDGE_KIND_TYPESAFE) {
     if (
       call.judge.endpoint !== TYPESAFE_ENDPOINT ||
@@ -223,7 +248,7 @@ export function prepareJudgeTransportRequest(
   try {
     endpoint =
       call.judge.kind === JUDGE_KIND_TYPESAFE
-        ? new URL(TYPESAFE_ENDPOINT)
+        ? new URL(call.judge.provider === 'openrouter' ? OPENROUTER_SYSTEM_ONE_ENDPOINT : TYPESAFE_ENDPOINT)
         : validateLocalEndpoint(call.judge.endpoint, call.judge.approvedAddressSet).url;
   } catch {
     return refused('ADAPTER_REFERENCE_BLOCKED', true);
