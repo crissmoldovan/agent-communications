@@ -1,14 +1,21 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { agentLabelOf } from '../src/agent-label.ts';
 import { stateOf } from '../src/approval-stored.ts';
 import type { Config } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
-import { DESKTOP_RELEASE_IDENTIFIER, type DesktopOrigin } from '../src/desktop-origin.ts';
+import {
+  DESKTOP_RELEASE_IDENTIFIER,
+  DESKTOP_TEST_REQUIREMENT,
+  type DesktopOrigin,
+  desktopAppOrigin,
+  type ExecFn,
+  TEST_PROFILE_MARKER,
+} from '../src/desktop-origin.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
-import { type MainRun, runMain } from './helpers/main-in-process.ts';
+import { type MainDeps, type MainRun, runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -372,4 +379,84 @@ test('--app-approval is refused on every command the app does not approve with i
     assert.equal(envelope(run).error?.code, 'USAGE', words.join(' '));
   }
   assert.deepEqual(await m.core.approvals.list(), []);
+});
+
+// ── The local test build: only for a command whose every folder is in its test profile ─────────────────────────────
+
+/*
+ * The security review of 0.34.0 (finding 1, low): a test-build origin held only the config folder to the marked test
+ * profile, while `update` and `mcp install` change the data folder and the apps' configs too. Each command now hands the
+ * origin check every folder it touches — its state, data and secrets folders, and for `mcp install` and `update` the home
+ * folder the apps' configs are in (and npm's global folder for `update`) — and the test build speaks only when all of
+ * them are inside the marked profile. Run through the real check, with `ps` and `codesign` stood in for: the parent
+ * verifies as the test app, and nothing real is asked.
+ */
+test('the test build approves in the app only a command whose every folder is inside its marked test profile', async () => {
+  const account = tempDir('comms-account-');
+  const root = tempDir('comms-agentcomms-test-');
+  const configDir = join(root, 'config');
+  mkdirSync(configDir);
+  writeFileSync(join(configDir, TEST_PROFILE_MARKER), '');
+  writeFileSync(
+    join(configDir, 'config.json'),
+    `${JSON.stringify({ version: 2, accounts: { 'acme/slack': slack } }, null, 2)}\n`,
+  );
+  // As the test app runs a command: the profile's folders pinned, and the person's own HOME, which the app passes on.
+  const env = {
+    HOME: account,
+    USERPROFILE: account,
+    PATH: join(account, 'bin'),
+    AGENT_COMMS_CONFIG_DIR: configDir,
+    AGENT_COMMS_STATE_DIR: join(root, 'state'),
+    AGENT_COMMS_DATA_DIR: join(root, 'data'),
+    NO_COLOR: '1',
+    AGENT_COMMS_CLIENT_CLI_DIRS: '',
+    AGENT_COMMS_UPDATE_CHECK: 'off',
+  };
+  // `ps` names the test app, and codesign finds the running parent satisfies the test build's requirement only.
+  const testApp: ExecFn = async (file, args) => {
+    if (file === '/bin/ps') return 'Agent Comms Test\n';
+    if (file === '/usr/bin/codesign' && args.includes(DESKTOP_TEST_REQUIREMENT)) return '';
+    throw new Error('codesign: code failed to satisfy specified code requirement(s)');
+  };
+  const origin: MainDeps['appOrigin'] = (check) =>
+    desktopAppOrigin({ ...check, ppid: 4242, platform: 'darwin', exec: testApp, realHome: account });
+  const run = (words: string[], extra: Record<string, string> = {}, withOrigin = true) =>
+    runMain([...words, '--json'], { ...env, ...extra }, process.platform, withOrigin ? { appOrigin: origin } : {});
+  const core = openCore({ env, caller: CORE_CALLER });
+
+  // label word touches the profile's own folders only: approved there, as the test build.
+  const asked = await run(['label', 'word', 'twin'], {}, false);
+  const approvalId = String(envelope(asked).error?.details?.approvalId);
+  const done = await run(['label', 'word', 'twin', '--app-approval', approvalId]);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  const approved = (await auditOf(core, 'change.approve')).find((line) => line.outcome === 'ok');
+  assert.equal(approved?.approvedBy, 'desktop-app (test build)');
+
+  // The same, with the data folder the person's real one: refused, naming it.
+  const again = await run(['label', 'word', 'bot'], {}, false);
+  const second = String(envelope(again).error?.details?.approvalId);
+  const realData = join(account, '.local', 'share', 'agent-communications');
+  const outside = await run(['label', 'word', 'bot', '--app-approval', second], { AGENT_COMMS_DATA_DIR: realData });
+  assert.equal(outside.code, 10, outside.stdout);
+  assert.deepEqual(envelope(outside).error?.details, { reason: 'outside-test-profile', outside: 'data folder' });
+
+  // mcp install writes the apps' configs, under the person's own HOME: refused, naming it.
+  const words = ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--no-verify'];
+  const install = await run(words, {}, false);
+  assert.equal(install.code, 10, install.stdout);
+  const third = String(envelope(install).error?.details?.approvalId);
+  const refused = await run([...words, '--app-approval', third]);
+  assert.equal(refused.code, 10, refused.stdout);
+  assert.equal(envelope(refused).error?.details?.reason, 'outside-test-profile');
+  assert.match(String(envelope(refused).error?.details?.outside), /^home folder/u);
+  assert.equal(existsSync(join(account, '.cursor', 'mcp.json')), false, "nothing was written to the person's apps");
+  // With a HOME of the profile's own, it is the test profile's to change.
+  const home = join(root, 'home');
+  mkdirSync(home);
+  const inside = await run(words, { HOME: home, USERPROFILE: home }, false);
+  const fourth = String(envelope(inside).error?.details?.approvalId);
+  const registered = await run([...words, '--app-approval', fourth], { HOME: home, USERPROFILE: home });
+  assert.equal(registered.code, 0, registered.stdout + registered.stderr);
+  assert.ok(existsSync(join(home, '.cursor', 'mcp.json')));
 });

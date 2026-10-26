@@ -6,7 +6,12 @@ import type { PublicApprovalView } from './approval-outcome.ts';
 import { kindOf } from './approval-stored.ts';
 import { renderApprovalWait } from './approval-wait-surface.ts';
 import type { BehaviourAct } from './behaviour.ts';
-import { approveChangeAtTerminal, gatedChangeAtTerminal, refuseUnclaimedApproval } from './change-flow.ts';
+import {
+  type AppOriginCheck,
+  approveChangeAtTerminal,
+  gatedChangeAtTerminal,
+  refuseUnclaimedApproval,
+} from './change-flow.ts';
 import type { PreparedChange } from './changes.ts';
 import {
   colorEnabled,
@@ -19,7 +24,6 @@ import {
   writeResult,
 } from './cli-runtime.ts';
 import { openCore } from './core.ts';
-import type { DesktopOrigin } from './desktop-origin.ts';
 import { CommsError, EXIT_CODES } from './errors.ts';
 import {
   type CliHandoffs,
@@ -709,7 +713,7 @@ export async function main(
      * Where an `--app-approval` came from (`desktopAppOrigin`): injected by tests only, which cannot be the signed app.
      * The program itself never passes it, so a real run always asks codesign.
      */
-    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+    appOrigin?: AppOriginCheck | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -1436,7 +1440,7 @@ export async function main(
                 },
                 installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
               ),
-              { ...approval, rerun: words, appApproval },
+              { ...approval, rerun: words, appApproval, appReach: { clients: true } },
             );
             writeResult(result, output, (r) => renderInstalls(r, output.color));
             return;
@@ -1463,7 +1467,7 @@ export async function main(
               installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
             ),
             // The desktop app's own approval, when it passes one: approved in the app, and claimed here.
-            { ...approval, rerun: words, appApproval },
+            { ...approval, rerun: words, appApproval, appReach: { clients: true } },
           );
           // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
           // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.
@@ -1658,8 +1662,9 @@ export async function main(
         const result = await gatedChangeAtTerminal(
           core,
           updateChange(core, env, { noVerify: values['no-verify'] }, deps.update ?? coreUpdateDeps(core)),
-          // The desktop app's own approval, when it passes one (0.34.0): approved in the app, and claimed here.
-          { ...approval, rerun: words, appApproval },
+          // The desktop app's own approval, when it passes one (0.34.0): approved in the app, and claimed here. It
+          // registers servers again and updates global packages, so the test build is held to those folders too.
+          { ...approval, rerun: words, appApproval, appReach: { clients: true, npmGlobal: true } },
         );
         // Printed either way, but a step that did not work is not a success to a script, as for `mcp install`.
         softExit = result.ok ? EXIT_CODES.OK : EXIT_CODES.UNAVAILABLE;

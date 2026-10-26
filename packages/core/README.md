@@ -78,8 +78,11 @@ either kind: given one, it is refused (exit 64) and nothing is applied. On macOS
 process: a speed bump against agents, not a boundary against code running as you, which can approve in-process anyway.
 `desktopAppOrigin` has codesign verify the running parent, by its pid: the release, signed by the owner's team,
 audited `approvedBy: desktop-app`; or the local test build, ad-hoc signed, only for a test profile — a config folder
-holding `.agentcomms-test-profile`, which `scripts/local-test-release.sh` writes, and not your real, default one —
-audited `desktop-app (test build)`. Windows and Linux check nothing, so there the change is approved at your terminal:
+holding `.agentcomms-test-profile`, which `scripts/local-test-release.sh` writes, and not your real, default one, found
+from your account's own home whatever `HOME` or `XDG_CONFIG_HOME` say — and only when every other folder the command
+touches is inside that profile: its state, data and secrets folders, and for `mcp install` and `update` the home folder
+the apps' configs are in (and for `update`, npm's global folder). Its approvals are audited `desktop-app (test build)`.
+Windows and Linux check nothing, so there the change is approved at your terminal:
 `--app-approval` from an origin nothing attests is refused with `APPROVAL_REQUIRED` (exit 10, reason
 `ORIGIN_UNATTESTED`) and a hint naming the command to run there, the refusal is audited as `desktop-app
 (unattested)`, the approval still waits, and the app offers Approve in Terminal instead. `approvedVia: app` therefore

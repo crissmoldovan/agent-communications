@@ -24,9 +24,10 @@ import {
 } from './cli-runtime.ts';
 import { type Config, classifyChange, type LooseningConsent } from './config.ts';
 import type { Core } from './core.ts';
-import { type DesktopOrigin, desktopAppOrigin } from './desktop-origin.ts';
+import { type DesktopOrigin, desktopAppOrigin, type TouchedFolder } from './desktop-origin.ts';
 import { CommsError } from './errors.ts';
 import { type CliHandoffs, type Handoff, handoffSentence, isCommand, requireHandoffs } from './handoffs.ts';
+import { homeDirectory } from './paths.ts';
 
 /**
  * One changing operation, run the same way from the CLI and from MCP.
@@ -222,8 +223,13 @@ export async function gatedChangeAtTerminal<T>(
      * process; never with `approvalId`.
      */
     appApproval?: string | undefined;
-    /** Where an app approval came from (`desktopAppOrigin`); injected by tests only. */
-    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+    /**
+     * What the command reaches outside Agent Comms' own folders, for the test build's origin check: the apps' MCP configs
+     * (`mcp install`, `update`) and npm's global packages (`update`).
+     */
+    appReach?: AppReach | undefined;
+    /** Where an app approval came from (`desktopAppOrigin`, handed the folders it is for); injected by tests only. */
+    appOrigin?: AppOriginCheck | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
@@ -413,7 +419,8 @@ async function appliedFromApp<T>(
     output: { platform?: NodeJS.Platform | undefined };
     rerun: readonly string[];
     rerunOn?: 'own' | 'core' | undefined;
-    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+    appReach?: AppReach | undefined;
+    appOrigin?: AppOriginCheck | undefined;
   },
   approvalId: string,
 ): Promise<T> {
@@ -443,7 +450,9 @@ async function appliedFromApp<T>(
     }
     // On macOS the process that started this one must be Agent Comms itself, its running code verified by its pid;
     // Windows and Linux attest nothing, so there the change is approved at the person's terminal instead.
-    origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
+    // Every folder the command will touch goes with it: the test build speaks only when its profile holds them all.
+    const check = { configDir: core.paths.configDir, folders: touchedFolders(core, options.env, options.appReach) };
+    origin = await (options.appOrigin ?? desktopAppOrigin)(check);
     if (!origin.ok && origin.reason === 'unattested-platform') {
       refusedAs = 'desktop-app (unattested)';
       throw new CommsError(
@@ -458,7 +467,7 @@ async function appliedFromApp<T>(
         'only the Agent Comms app can approve a change in the app, and this was not started by it',
         {
           hint: 'Approve it in the Agent Comms app, or at your own terminal.',
-          details: { reason: origin.reason },
+          details: { reason: origin.reason, ...(origin.outside === undefined ? {} : { outside: origin.outside }) },
         },
       );
     }
@@ -487,6 +496,44 @@ async function appliedFromApp<T>(
     }).catch(() => undefined);
     throw error;
   }
+}
+
+/** What a command run from the app reaches outside Agent Comms' own folders (`gatedChangeAtTerminal`'s `appReach`). */
+export interface AppReach {
+  /** The apps' MCP configs, which are under the home folder (and `CLAUDE_CONFIG_DIR`, `CODEX_HOME` when set). */
+  readonly clients?: boolean | undefined;
+  /** npm's global packages, in its global folder (`npm_config_prefix`). */
+  readonly npmGlobal?: boolean | undefined;
+}
+
+/** The app-origin check, handed the config folder and every other folder the command touches (`desktopAppOrigin`). */
+export type AppOriginCheck = (check: {
+  configDir: string;
+  folders: readonly TouchedFolder[];
+}) => Promise<DesktopOrigin>;
+
+/**
+ * Every folder a change made from the app touches besides its config folder (the security review of 0.34.0, finding
+ * 1): its state, data and secrets folders, and what `reach` adds — the home folder and the apps' own config folders for
+ * a command that registers servers, and npm's global folder, which only `npm_config_prefix` names here, for one that
+ * updates global packages.
+ */
+function touchedFolders(core: Core, env: NodeJS.ProcessEnv, reach: AppReach | undefined): TouchedFolder[] {
+  const { stateDir, dataDir, secretsDir } = core.paths;
+  const folders: TouchedFolder[] = [
+    { what: 'state folder', path: stateDir },
+    { what: 'data folder', path: dataDir },
+    { what: 'secrets folder', path: secretsDir },
+  ];
+  if (reach?.clients === true) {
+    folders.push({ what: 'home folder, where the apps keep their MCP configs', path: homeDirectory(env) });
+    if (env.CLAUDE_CONFIG_DIR) folders.push({ what: "Claude Code's config folder", path: env.CLAUDE_CONFIG_DIR });
+    if (env.CODEX_HOME) folders.push({ what: "Codex's config folder", path: env.CODEX_HOME });
+  }
+  if (reach?.npmGlobal === true) {
+    folders.push({ what: "npm's global folder", path: env.npm_config_prefix || env.NPM_CONFIG_PREFIX || undefined });
+  }
+  return folders;
 }
 
 /**
