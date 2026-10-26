@@ -57,7 +57,9 @@ start from that rather than from nothing.
 ## 2. Register the servers
 
 `comms_server_install` for each channel chosen, with their client — skipping a channel whose server
-`comms_channels_available` already shows registered with that client. It is a change: show the
+`comms_channels_available` already shows registered with that client. Two or more for one client go in
+one call, as `servers` in place of `channel`: one preview naming every one, one approval, each registered
+in order; if one fails the rest are not, and the error says which went in. It is a change: show the
 preview, get their yes, call again with `approvalId`. Under `confirm`, `comms_approval_wait` tells you
 when they have approved it at their terminal. When the person says no, revoke it at once with
 `comms_approval_revoke`: the server never hears a "no".
