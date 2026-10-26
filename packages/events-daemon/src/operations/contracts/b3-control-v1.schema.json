@@ -971,7 +971,7 @@
               "type": "object",
               "additionalProperties": false,
               "required": ["provider"],
-              "properties": { "provider": { "$ref": "#/$defs/aiProvider" } }
+              "properties": { "provider": { "$ref": "#/$defs/keyedProvider" } }
             },
             "origin": { "$ref": "#/$defs/id" }
           }
@@ -1252,6 +1252,7 @@
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
     "aiProvider": { "enum": ["typesafe", "openrouter"] },
+    "keyedProvider": { "enum": ["typesafe", "openrouter", "linear"] },
     "judgeLimits": {
       "type": "object",
       "additionalProperties": false,
@@ -1267,7 +1268,7 @@
       "additionalProperties": false,
       "required": ["provider", "hasKey", "judges"],
       "properties": {
-        "provider": { "$ref": "#/$defs/aiProvider" },
+        "provider": { "$ref": "#/$defs/keyedProvider" },
         "hasKey": { "type": "boolean" },
         "judges": { "type": "integer", "minimum": 0 }
       }
@@ -2314,7 +2315,7 @@
                 "additionalProperties": false,
                 "required": ["id", "name", "hasKey"],
                 "properties": {
-                  "id": { "$ref": "#/$defs/aiProvider" },
+                  "id": { "$ref": "#/$defs/keyedProvider" },
                   "name": { "type": "string", "minLength": 1 },
                   "hasKey": { "type": "boolean" }
                 }

@@ -22,17 +22,25 @@ import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerService } from '../operations/b3-contract.ts';
 import type { EventDatabase } from '../store/database.ts';
-import { EVENT_SECRET_PROVIDERS, type EventSecretProvider } from '../store/event-secrets.ts';
+import {
+  EVENT_SECRET_PROVIDER_WORDS,
+  type EventSecretProvider,
+  isEventSecretProvider,
+} from '../store/event-secrets.ts';
 import type { ActivationRuntime, PreparedActivation } from './activations.ts';
 import type { B3SecretControl } from './b3-secret-control.ts';
 import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
 
-/** The AI providers a person keeps keys for, as Settings → AI providers names them. */
+/**
+ * The providers a person keeps keys for, as the app names them: TypeSafe and OpenRouter in Settings → AI providers,
+ * and Linear in Settings → Integrations (0.33.0 design §3.4).
+ */
 export const PROVIDER_NAMES: Readonly<Record<EventSecretProvider, string>> = Object.freeze({
   typesafe: 'TypeSafe',
   openrouter: 'OpenRouter',
+  linear: 'Linear',
 });
 
 export interface ProviderListResultV1 {
@@ -42,7 +50,7 @@ export interface ProviderListResultV1 {
 export interface ProviderKeyResultV1 {
   readonly provider: EventSecretProvider;
   readonly hasKey: boolean;
-  /** Live Jev judge versions of this provider that now hold the key, or, after a removal, hold none. */
+  /** Live Jev judge versions of this provider that now hold the key, or, after a removal, hold none; 0 for Linear. */
   readonly judges: number;
 }
 
@@ -88,9 +96,8 @@ export function judgeDestination(kind: SetupJudgeKind, provider: string): string
 }
 
 function provider(value: unknown): EventSecretProvider {
-  if (typeof value !== 'string' || !(EVENT_SECRET_PROVIDERS as readonly string[]).includes(value))
-    throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
-  return value as EventSecretProvider;
+  if (!isEventSecretProvider(value)) throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
+  return value;
 }
 
 /**

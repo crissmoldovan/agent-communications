@@ -4,6 +4,8 @@ import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schem
 
 const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
 const PROVIDER_KEY_SQL_VALUES = [JUDGE_KIND_TYPESAFE, 'openrouter'].map((id) => `'${id}'`).join(', ');
+/** Migration 29's provider slots (0.33.0 design §3.4): migration 26's two, and Linear. */
+const PROVIDER_KEY_SQL_VALUES_V29 = [JUDGE_KIND_TYPESAFE, 'openrouter', 'linear'].map((id) => `'${id}'`).join(', ');
 
 export interface EventMigration {
   readonly version: number;
@@ -988,6 +990,48 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     statements: [
       "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
       "UPDATE meta SET value = '28' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // A Linear key (0.33.0 design §3.4): the person's Linear API key is kept beside the AI provider keys, in a slot whose
+    // owner is Linear itself, so a rule's Linear target can add issues with it. The provider check is a closed set, so
+    // the ledger is rebuilt with its exact columns, in order, as migration 26 rebuilt it.
+    version: 29,
+    name: 'event-secret-linear-slot-v1',
+    statements: [
+      'DROP INDEX event_secret_generations_current',
+      `CREATE TABLE event_secret_generations_v29 (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${PROVIDER_KEY_SQL_VALUES_V29}))
+        )
+      ) STRICT`,
+      `INSERT INTO event_secret_generations_v29
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+      'DROP TABLE event_secret_generations',
+      'ALTER TABLE event_secret_generations_v29 RENAME TO event_secret_generations',
+      `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+      "UPDATE meta SET value = '29' WHERE key = 'schema_version'",
     ],
   },
 ];

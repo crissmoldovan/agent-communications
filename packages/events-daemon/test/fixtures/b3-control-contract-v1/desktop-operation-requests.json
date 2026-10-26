@@ -181,5 +181,9 @@
   {
     "name": "provider-key-remove-request",
     "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+  },
+  {
+    "name": "provider-key-set-linear-request",
+    "request": { "operation": "provider-key-set", "args": { "provider": "linear" } }
   }
 ]

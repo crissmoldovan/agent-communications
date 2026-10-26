@@ -461,12 +461,12 @@ function buildEventsMcpServer(
     {},
     () => judgeKindsList(options),
   );
-  // Whether each AI provider has a key (owner decision 2026-10-26): never a key. Setting one, removing one and judge
-  // setup are the person's, in the app or at their terminal; no tool here performs them.
+  // Whether each provider has a key (owner decision 2026-10-26; Linear from 0.33.0): never a key. Setting one, removing
+  // one and judge setup are the person's, in the app or at their terminal; no tool here performs them.
   strictControlTool(
     'events_provider_list',
-    'List AI providers',
-    'Lists TypeSafe and OpenRouter, the providers Jev can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
+    'List providers',
+    'Lists TypeSafe and OpenRouter, the providers Jev can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.',
     {},
     () => providerList(options),
   );

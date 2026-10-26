@@ -27,10 +27,13 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.32.0's second security look (2026-10-26) widens one value of a branch 0.32.0 itself added: `judge-setup`'s result
  * `approvedBy`, which was always `desktop-app`, names where the person was — `desktop-app`, `desktop-app (test build)`,
  * `desktop-app (unattested)` or `terminal` — as the CLI established it. No branch an earlier release shipped changed.
+ *
+ * 0.33.0 (the Linear target, design §3.4) is another. The provider key wires' provider is `keyedProvider`, which adds
+ * `linear` to TypeSafe and OpenRouter; judge setup keeps `aiProvider`, since Linear serves no judge.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'e027b9c2822201eda15c00c3bd93b433a7a476f1f944522d5b7fbfa4fbf9d6ff',
+    '96154ebbaee46cc00ed9b5abea1395d1020321b8b88379a291131f748374b93e',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -42,7 +45,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '4a302b44e5557b427248f684cfbdc544aa2c0e19c35f4a6d0845e184beb6cb6b',
+    '25bc8418ba484f6725e925ceb10602e3452aaf96446130c11b761423cd961f91',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -60,7 +63,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '73d17360225a91a6279a5284141625c2af7c53e3e575b5d2465e547a03ecdc3f',
+    '138f415e0d58137e42dfbfe66fad0e58d1f99f5f6a07aa6d802de8f5b0225403',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

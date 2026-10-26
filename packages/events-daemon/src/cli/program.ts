@@ -113,6 +113,7 @@ import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-ju
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../store/event-secrets.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -771,34 +772,36 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
 
   const providers = program
     .command('provider')
-    .description('the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key');
+    .description(
+      'the providers whose keys the event service keeps — TypeSafe and OpenRouter for Jev, Linear for a Linear target — and whether each has a key',
+    );
   providers
     .command('list')
-    .description('list each AI provider and whether it has a key; never a key')
+    .description('list each provider and whether it has a key; never a key')
     .action(async () => {
       ran = true;
       print(await providerList(controlOptions(program)));
     });
-  const providerKey = providers.command('key').description("set or remove an AI provider's key, as the person");
+  const providerKey = providers.command('key').description("set or remove a provider's key, as the person");
   providerKey
     .command('set <provider>')
     .description('store a provider key, read from your hidden input or the app’s stdin, never from argv')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("set an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      const origin = await personSetupOrigin("set a provider's key");
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
       print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
     });
   providerKey
     .command('remove <provider>')
-    .description('remove a provider key, and the copy its Jev judges hold')
+    .description('remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("remove an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      const origin = await personSetupOrigin("remove a provider's key");
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });
 
