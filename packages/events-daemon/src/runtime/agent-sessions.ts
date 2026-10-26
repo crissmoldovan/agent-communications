@@ -1,7 +1,12 @@
 import { isAbsolute, normalize, posix, relative, sep, win32 } from 'node:path';
 import { type AuditLog, CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { changeAtTerminal, personSetupApprover, testBuildElsewhere } from '../domain/judge-setup.ts';
+import {
+  changeAtTerminal,
+  personSetupApprover,
+  personSetupSurface,
+  testBuildElsewhere,
+} from '../domain/judge-setup.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { isSessionFolder, sessionTargetFiles } from '../domain/session-target.ts';
 import type { EventDatabase } from '../store/database.ts';
@@ -309,14 +314,14 @@ export class AgentSessionService {
    */
   async set(args: Readonly<Record<string, unknown>>, origin: string | undefined): Promise<AgentSessionsIntegrationV1> {
     const approver = personSetupApprover(origin);
-    const surface = approver === 'terminal' ? ('cli' as const) : ('app' as const);
+    // `app` only for an attested app, `cli` for a terminal, and none for anyone else (0.34.0 review, finding 2).
+    const surface = personSetupSurface(approver, this.#testProfile);
     const audit = async (outcome: 'ok' | 'refused' | 'failed', reason?: string) =>
       this.#audit?.append({
         inboxId: '',
         operation: 'events.integrationSet',
         outcome,
-        surface,
-        origin: surface,
+        ...(surface === undefined ? {} : { surface, origin: surface }),
         ids: { integration: 'agent-sessions', ...(approver === null ? {} : { approvedBy: approver }) },
         ...(reason === undefined ? {} : { reason }),
       });

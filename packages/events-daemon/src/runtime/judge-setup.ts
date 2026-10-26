@@ -8,6 +8,7 @@ import {
   localSetupModel,
   type PersonSetupApprover,
   personSetupApprover,
+  personSetupSurface,
   ruleApprovalAtTerminal,
   type SetupJudgeKind,
   setupBudgetDocument,
@@ -486,7 +487,8 @@ export class JudgeSetupService {
 
   /**
    * The person's origins only, and an audit line of its outcome: ids, the outcome, and where the person was — the
-   * attested app, the app unattested (Windows, Linux), or a terminal — never a key.
+   * attested app, the app unattested (Windows, Linux), or a terminal — never a key. Its surface is `app` only for an
+   * attested app and `cli` for a terminal; any other caller's line names none (`personSetupSurface`).
    */
   async #audited<T>(
     operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
@@ -495,14 +497,13 @@ export class JudgeSetupService {
     work: () => Promise<T>,
   ): Promise<T> {
     const approver = personSetupApprover(origin);
-    const surface = approver === 'terminal' ? ('cli' as const) : ('app' as const);
+    const surface = personSetupSurface(approver, this.#testProfile);
     const record = async (outcome: 'ok' | 'refused' | 'failed', reason?: string) =>
       this.#audit?.append({
         inboxId: '',
         operation: `events.${operation}`,
         outcome,
-        surface,
-        origin: surface,
+        ...(surface === undefined ? {} : { surface, origin: surface }),
         ids: { ...ids, ...(approver === null ? {} : { approvedBy: approver }) },
         ...(reason === undefined ? {} : { reason }),
       });

@@ -67,6 +67,27 @@ export function personSetupApprover(origin: string | undefined): PersonSetupAppr
   }
 }
 
+/**
+ * The surface a person-only change's audit line names (security review of 0.34.0, finding 2): `app` only for an attested
+ * app — the release, or the test build in its own test profile — and `cli` for a terminal. Any other caller (a control
+ * client of no known origin, the app unattested, a test build elsewhere) names none, and the line's reason says why.
+ */
+export function personSetupSurface(
+  approver: PersonSetupApprover | null,
+  testProfile: () => boolean,
+): 'app' | 'cli' | undefined {
+  switch (approver) {
+    case 'terminal':
+      return 'cli';
+    case 'desktop-app':
+      return 'app';
+    case 'desktop-app (test build)':
+      return testProfile() ? 'app' : undefined;
+    default:
+      return undefined;
+  }
+}
+
 const APPROVAL_ID_WORD = /^ap_[0-9A-HJKMNP-TV-Z]{26}$/u;
 
 /**
