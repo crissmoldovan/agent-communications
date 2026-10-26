@@ -748,3 +748,26 @@ parts and fake transports. None talks to Gmail, Slack or Resend (AGENTS.md).
 10. **The entry's name in each app:** `agentcomms` (tools shown as `mcp__agentcomms__gmail_search`), or something
     shorter such as `comms`? Default: `agentcomms`, which is core's name today, so a migration replaces core's own
     entry.
+
+## Spike findings (2026-10-27) — they amend the decisions above
+
+The spike (`spikes/single-server/`, 44 tests, SDK `@modelcontextprotocol/server`/`client` 2.3.1, real child processes)
+proved tool passthrough, approval forms, tasks, `tools/list_changed` and crash/hang isolation in both protocol eras,
+with these changes to this design:
+1. **§5.5:** the router's link to each part is raw JSON-RPC over the SDK's stdio transport (~140 lines), not the SDK
+   `Client`, which rejects task answers.
+2. **§4:** `serveStdio` gives the factory only `{ era }`, not the opening request. The router wraps its transport to
+   record the client's `initialize` and each request's raw envelope, and forwards the raw params (the SDK strips them).
+3. **P0 grows:** on the 2026-07-28 era `serveStdio` never sets `getClientVersion()`, which core, Gmail, Slack, Resend
+   and WhatsApp all read (`core mcp/server.ts:372`, `gmail :253/:1113/:2679/:2782`, `slack :241`, `resend :140`,
+   `whatsapp :94`). Each must read `ctx.mcpReq.envelope['io.modelcontextprotocol/clientInfo']` first, as Events does,
+   or Gmail's approval form would vanish for modern clients.
+4. **§5.3:** no `tasks/list` merge — the SDK answers `tasks/list` and `tasks/result` with "Method not found" on
+   2026-07-28.
+5. **Capabilities:** advertise the tasks extension from the connection's configured parts, not the parts ready at the
+   handshake (a slow Events part would otherwise leave it out).
+6. **Timeouts:** lift the SDK's 60 s timeout on forwarded calls and on a part's 2025-era form relayed to the client.
+
+Still open after the spike: behaviour in real apps (Claude Code, Codex, Cursor, VS Code) with `list_changed` and ~190
+tools; Windows process handling; restart backoff, the status file, the key check and the instructions budget (not built
+in the spike); a part that logs needs the router to declare logging.
