@@ -591,6 +591,31 @@ test('LANE-E: a lane target’s deliveries are listed over MCP only to the windo
       ['dry-david'],
       'a window not bound to the lane sees none of its target’s deliveries',
     );
+    // 0.32.0 (§3.5): the rows gain their target's kind, last answer, decision and event, additively; a delivered row
+    // has no next try; and the new fields reveal no lane delivery to a window that is not bound to it.
+    const shaped = (rows: unknown) =>
+      (rows as Array<Record<string, unknown>>)
+        .map((row) => ({
+          targetId: row.targetId,
+          targetKind: row.targetKind,
+          state: row.state,
+          nextAt: row.nextAt,
+          lastErrorCode: row.lastErrorCode,
+          lastStatus: row.lastStatus,
+          decision: typeof row.decisionId,
+          event: typeof row.eventId,
+          delivered: typeof row.deliveredAt,
+        }))
+        .sort((left, right) => String(left.targetId).localeCompare(String(right.targetId)));
+    const common = { state: 'delivered', nextAt: null, lastErrorCode: null, lastStatus: null };
+    const kinds = { decision: 'string', event: 'string', delivered: 'number' };
+    assert.deepEqual(shaped(person), [
+      { targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds },
+      { targetId: 'lane-david', targetKind: 'queue', ...common, ...kinds },
+    ]);
+    const others = listed(await tool(other, 'events_deliveries_list'));
+    assert.deepEqual(shaped(others), [{ targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds }]);
+    assert.doesNotMatch(JSON.stringify(others), /lane-david|"queue"/u, 'no lane delivery is named to the other window');
   });
 });
 

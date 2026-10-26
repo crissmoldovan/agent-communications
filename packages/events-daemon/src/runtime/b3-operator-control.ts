@@ -15,6 +15,7 @@ import type { EventDatabase } from '../store/database.ts';
 import type { ActivationRuntime } from './activations.ts';
 import type { B3ControlPorts } from './b3-control-ports.ts';
 import { judgeUnavailable } from './b3-judge-unavailable.ts';
+import { type DeliveryListRowV1, listDeliveryRows } from './delivery-rows.ts';
 import type { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
@@ -431,31 +432,9 @@ export class B3OperatorControl implements B3OwnerService {
     }));
   }
 
-  deliveriesList(): readonly Record<string, unknown>[] {
-    return this.#store.database
-      .prepare(
-        `SELECT id, account_id, rule_id, rule_version, target_id, target_version, subscriber_id, subscriber_version,
-                attempts, next_at, expires_at, state, switch_generation, dead_letter_expires_at
-           FROM deliveries
-          ORDER BY id`,
-      )
-      .all()
-      .map((row) => ({
-        deliveryId: (row as { id: string }).id,
-        accountId: (row as { account_id: string }).account_id,
-        ruleId: (row as { rule_id: string }).rule_id,
-        ruleVersion: (row as { rule_version: number }).rule_version,
-        targetId: (row as { target_id: string }).target_id,
-        targetVersion: (row as { target_version: number }).target_version,
-        subscriberId: (row as { subscriber_id: string | null }).subscriber_id,
-        subscriberVersion: (row as { subscriber_version: number | null }).subscriber_version,
-        attempts: (row as { attempts: number }).attempts,
-        nextAt: (row as { next_at: number | null }).next_at,
-        expiresAt: (row as { expires_at: number }).expires_at,
-        state: (row as { state: string }).state,
-        switchGeneration: (row as { switch_generation: number }).switch_generation,
-        deadLetterExpiresAt: (row as { dead_letter_expires_at: number | null }).dead_letter_expires_at,
-      }));
+  /** Content-free delivery metadata; 0.32.0's additive fields are described with the row (delivery-rows.ts). */
+  deliveriesList(): readonly DeliveryListRowV1[] {
+    return listDeliveryRows(this.#store.database);
   }
 
   async retryDelivery(deliveryId: string): Promise<{
