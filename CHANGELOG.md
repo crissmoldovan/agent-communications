@@ -5,6 +5,66 @@ together under one version.
 
 ## 0.32.0
 
+**What.** The app answers the owner's feedback of 2026-10-26, item by item:
+- **Judges and keys in the app:** Jev and a local model server are set up in Events → Judges, and Settings → AI providers
+  keeps the TypeSafe and OpenRouter keys.
+- **Readable rules and deliveries:** Rules and Deliveries read in plain words, and each one opens to show its details.
+- **The 1970 date is gone.**
+- **Messages:** a new screen shows what happened to each message that came in.
+- **Connections:** a new screen shows which apps have which servers.
+- **The test build tells you it is one.**
+
+The command line and the MCP servers gain the reads and fields these screens need.
+
+**Why.** The owner installed 0.30.0, opened the app and found it hard to use:
+- turning a judge on meant the Terminal;
+- a key had no home;
+- rules and deliveries were raw database rows ("mail subject version 1 state active and approval and activation", "the
+  next try is always 1970");
+- nothing answered the question they care about most: "something has come in. Did we acknowledge it? Did we reply to
+  it? Is it something that has been passed over to a session, or was it proactively read by a session?"
+
+The screens were drawn first, as a prototype the owner approved ("perfect"), kept in the repository at
+`docs/prototypes/2026-10-26-0320/`.
+
+**Impact.** A minor release. Everything is added; nothing is renamed or removed.
+- **Migrations:** three database migrations in the event service run on their own: provider keys, a queue item's
+  history, and clearing `next_at`.
+- **Behaviour changes to know about:**
+  - **The dry-run log** (`dryrun list` and `dryrun show`) is now readable with `--json` outside an MCP server, so the
+    app can show it, like the queue's content since 0.30.0.
+  - **`delivery drop`** also stops a delivery that is waiting or will be tried again.
+  - **Every MCP server marks its own process,** so commands only the person may run refuse inside any of them.
+  - **Approvals from the app:** a change can now be approved in the desktop app. That covers turning a judge on, and
+    adding a server to an app from Connections. The audit records it as approved in the app. Everything else stays at
+    the terminal, as before.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients.
+
+**In the desktop app**
+- **Events → Judges:**
+  - **Set up…** for Jev, choosing OpenRouter or TypeSafe directly (a provider without a key is greyed out), and for a
+    local model server (Ollama's System One, on this Mac).
+  - Turn off applies at once.
+  - Laya reads "Not available yet".
+- **Settings → AI providers:** add, replace or remove the TypeSafe and OpenRouter keys. A key is never shown again
+  once saved, and removing one a judge uses names that judge first.
+- **Events → Rules:**
+  - one card per rule, with the rule as a sentence, its state and its week;
+  - opening it shows what it watches, which messages, the judge, where they go, what's kept, the limit, its versions
+    and, folded away, the technical ids explained.
+- **Events → Deliveries:**
+  - "rule → where it went", with the state in plain words, and no 1970;
+  - a delivery's page shows the message, why it was passed on, a dry run's record (the sender's words marked as
+    outside text) and its tries, with Try now and Stop trying.
+- **Messages** (new): each message that came in, how far it got, and the steps on the way. Opening one shows its story,
+  built from what Agent Comms saw.
+- **Connections** (new):
+  - Claude Code, Claude Desktop, Codex and Cursor against the six servers, and when each was last used;
+  - who can reach the servers: local windows yes, cloud sessions no;
+  - Change… adds a server once you approve it in the app, and removes one at once.
+- **The test build:** an orange "TEST BUILD" band naming its branch and commit, the name "Agent Comms Test" and the
+  test profile's folder, and its tray says so too. A released app looks as before.
+
 **Activity ties a reply to the message it answers** (Task E of the owner's 2026-10-26 feedback, for the app's Messages
 screen).
 
