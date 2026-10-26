@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LOOKS, prepaintSource, STORAGE_KEY } from '../theme.ts';
 import { createFakeBridge } from './fake-bridge.ts';
@@ -92,5 +92,38 @@ describe('the look the app opens in', () => {
     await waitFor(() => expect(document.querySelector('[data-cue-root]')?.getAttribute('data-style')).toBe('soft'));
     expect(stamped()).toEqual(SOFT);
     expect(html.getAttribute('data-density')).toBe('normal');
+  });
+});
+
+describe('the typeface under the soft look', () => {
+  /** Opens the appearance menu, unless a choice left it open, and returns its checkbox items. */
+  async function openMenu() {
+    if (screen.queryAllByRole('menuitemcheckbox').length === 0) {
+      fireEvent.click(await screen.findByRole('button', { name: 'Appearance' }));
+    }
+    return screen.findAllByRole('menuitemcheckbox');
+  }
+
+  it('offers Inter and SF Pro, keeps the one chosen, and keeps it when soft is picked again', async () => {
+    localStorage.clear();
+    renderApp(createFakeBridge());
+    const items = await openMenu();
+    const names = items.map((item) => item.textContent);
+    expect(names).toEqual(expect.arrayContaining(['Inter', 'SF Pro']));
+    expect(screen.getByText('Typeface')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'SF Pro' }));
+    await waitFor(() => expect(html.getAttribute('data-font')).toBe('apple'));
+
+    // cue has no typeface choice: its own system pairing comes back, and the group is gone.
+    await openMenu();
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'cue' }));
+    await waitFor(() => expect(html.getAttribute('data-font')).toBe(LOOKS.cue.font));
+    await openMenu();
+    expect(screen.queryByText('Typeface')).toBeNull();
+
+    // Picking soft again brings back the face chosen for it.
+    fireEvent.click(screen.getByRole('menuitemcheckbox', { name: 'soft' }));
+    await waitFor(() => expect(html.getAttribute('data-font')).toBe('apple'));
   });
 });

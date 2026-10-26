@@ -40,6 +40,38 @@ export const LOOKS = {
 } as const satisfies Record<AppTheme, Look>;
 
 /**
+ * The two typefaces the soft look offers in the appearance menu (the owner, 2026-10-26: "configurable… I like both"):
+ * Inter, which the soft look opens on and the app bundles, and SF Pro, macOS's own face (cue-ui's `apple` pairing; on
+ * Windows and Linux it falls back to the system's face).
+ */
+export const SOFT_FACES: readonly { readonly font: FontName; readonly label: string }[] = [
+  { font: 'inter', label: 'Inter' },
+  { font: 'apple', label: 'SF Pro' },
+];
+
+/** Where the soft look's typeface is remembered while another theme is worn: the provider keeps only the current one. */
+const SOFT_FACE_KEY = 'agent-comms.look.soft-face';
+
+/** The typeface soft is worn with: the one last chosen, or Inter. Storage may be missing or refuse; Inter then. */
+export function softFace(): FontName {
+  try {
+    const stored = localStorage.getItem(SOFT_FACE_KEY);
+    return SOFT_FACES.find((face) => face.font === stored)?.font ?? LOOKS.soft.font;
+  } catch {
+    return LOOKS.soft.font;
+  }
+}
+
+/** Remembers the typeface chosen for soft; nothing is lost but the memory if storage refuses. */
+export function rememberSoftFace(font: FontName): void {
+  try {
+    localStorage.setItem(SOFT_FACE_KEY, font);
+  } catch {
+    // Storage refused: the choice still applies now, through the provider.
+  }
+}
+
+/**
  * What the app opens on before the person picks anything: the soft look at the `normal` rung, whose type is the
  * redesign's 13px body and 12px secondary text (§9; DA3 chose `cue` and `compact` before it).
  */

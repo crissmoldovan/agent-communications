@@ -1,25 +1,31 @@
 import { DENSITIES } from '@cueplusplus/tokens';
 import { DropdownMenu, IconButton } from '@cueplusplus/ui';
-import { useTheme } from '@cueplusplus/ui/system';
+import { type FontName, useTheme } from '@cueplusplus/ui/system';
 import { Palette } from 'lucide-react';
 import { COPY } from '../copy.ts';
-import { type AppTheme, LOOKS, THEME_NAMES } from '../theme.ts';
+import { type AppTheme, LOOKS, rememberSoftFace, SOFT_FACES, softFace, THEME_NAMES } from '../theme.ts';
 
 const MODES = ['dark', 'light', 'system'] as const;
 
 /**
  * The appearance menu (DA3): the theme, the density and the mode, each kept in local storage by the provider. A theme
  * is picked with its look (`theme.ts`, `LOOKS`), so soft brings its set, pairing and pack, and cue and terminal put
- * theirs back.
+ * theirs back. Under soft, the typeface is the person's to choose (the owner, 2026-10-26: "I would have it
+ * configurable… I like both"): Inter or SF Pro, remembered apart from the theme, so picking soft again
+ * brings back the one chosen.
  */
 export function AppearanceMenu() {
-  const { theme, setTheme, setStyleSet, setFont, setPaint, density, setDensity, mode, setMode } = useTheme();
+  const { theme, setTheme, setStyleSet, font, setFont, setPaint, density, setDensity, mode, setMode } = useTheme();
   const pick = (name: AppTheme) => {
     const look = LOOKS[name];
     setTheme(name);
     setStyleSet(look.styleSet);
-    setFont(look.font);
+    setFont(name === 'soft' ? softFace() : look.font);
     setPaint(look.paint);
+  };
+  const pickFace = (face: FontName) => {
+    rememberSoftFace(face);
+    setFont(face);
   };
   return (
     <DropdownMenu.Root>
@@ -33,6 +39,23 @@ export function AppearanceMenu() {
             </DropdownMenu.CheckboxItem>
           ))}
         </DropdownMenu.Group>
+        {theme === 'soft' ? (
+          <>
+            <DropdownMenu.Separator />
+            <DropdownMenu.Group>
+              <DropdownMenu.Label>Typeface</DropdownMenu.Label>
+              {SOFT_FACES.map((face) => (
+                <DropdownMenu.CheckboxItem
+                  key={face.font}
+                  checked={font === face.font}
+                  onCheckedChange={() => pickFace(face.font)}
+                >
+                  {face.label}
+                </DropdownMenu.CheckboxItem>
+              ))}
+            </DropdownMenu.Group>
+          </>
+        ) : null}
         <DropdownMenu.Separator />
         <DropdownMenu.Group>
           <DropdownMenu.Label>Density</DropdownMenu.Label>
