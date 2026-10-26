@@ -256,12 +256,7 @@ test('on macOS a process the app did not start cannot approve in the app: refuse
   const { core } = coreWith('never');
   const change = setSendPolicy(core, 'chat');
   const approvalId = await prepared(core, change);
-  for (const reason of [
-    'parent-not-an-app',
-    'not-agent-comms',
-    'signature-not-verified',
-    'test-app-with-release-runtime',
-  ]) {
+  for (const reason of ['not-agent-comms', 'test-app-with-release-runtime']) {
     await assert.rejects(
       gatedChangeAtTerminal(core, change, {
         ...APP,
@@ -381,7 +376,7 @@ test(
     if (process.platform === 'darwin') {
       // Here the command's parent is this test, not Agent Comms: on macOS that is refused, and nothing is approved.
       assert.equal(done.status, 10, done.stdout + done.stderr);
-      assert.equal(done.json().error.details.reason, 'parent-not-an-app');
+      assert.equal(done.json().error.details.reason, 'not-agent-comms');
       assert.deepEqual(m.asked(), []);
       const [record] = await m.core().approvals.list();
       assert.equal(record?.form === 'v2' ? record.record.state : undefined, 'pending');

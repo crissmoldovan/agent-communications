@@ -1,24 +1,28 @@
 /**
- * Where the desktop app's own approvals come from (0.32.0, after the release's security review of 2026-10-26).
+ * Where the desktop app's own approvals come from (0.32.0, after the release's security reviews of 2026-10-26).
  *
  * The app answers two kinds of approval as the person's act — adding a server to an app (core's `mcp install
- * --app-approval`) and judge setup and AI provider keys (the event service) — by running a CLI with no terminal. An
- * agent's marker is only a speed bump against a shell pretending to be the app, so on macOS the CLI checks that the
- * process that started it is Agent Comms itself: its executable inside an app bundle that codesign verifies.
+ * --app-approval`) and judge setup and AI provider keys (the event service) — by running a CLI with no terminal. On
+ * macOS the CLI checks that the app started this process: codesign verifies the running parent, by its pid, against
+ * Agent Comms' requirement. That is a speed bump against agents, not a boundary against code running as you: code
+ * running as the person can approve in-process anyway.
  *
- * - **The release** passes the owner's requirement: identifier `com.cueplusplus.agentcomms`, Apple's anchor, and the
+ * - **The release** satisfies the owner's requirement: identifier `com.cueplusplus.agentcomms`, Apple's anchor, and the
  *   owner's team (`75K3LTUM8A`, read from the installed app's public signature; not a secret).
- * - **The local test build** (`scripts/local-test-release.sh`) is ad-hoc signed, with no team. It is accepted only when
- *   its bundle says `com.cueplusplus.agentcomms.test`, its signature verifies, and this CLI is not a managed release
- *   runtime (`<data>/runtime/<version>-<product>/`): a test app speaks only for a local build of the CLI.
+ * - **The local test build** (`scripts/local-test-release.sh`) is ad-hoc signed, with no team: its running code must say
+ *   `com.cueplusplus.agentcomms.test`.
  *
- * The launchers `exec` Node, so the app is this process's parent. Windows and Linux are not attested (known limit):
- * there the caller keeps the marker checks, and says the approval was the app's, unattested.
+ * The parent's path (`ps -o comm=`) is argv[0], which a process sets itself (`exec -a`): it is read only for the
+ * refusal's message, and never decides anything. The launchers `exec` Node, so the app is this process's parent.
+ * Windows and Linux are not checked (a known limit): there the caller keeps the marker checks, and says the approval
+ * was the app's, unattested.
  */
 import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
-export type DesktopOrigin = { ok: true; build: 'release' | 'test'; identifier: string } | { ok: false; reason: string };
+export type DesktopOrigin =
+  | { ok: true; build: 'release' | 'test'; identifier: string }
+  | { ok: false; reason: string; parent?: string };
 
 /** Runs a program, by its full path and never through a shell, and gives back what it printed; rejects on failure. */
 export type ExecFn = (file: string, args: readonly string[]) => Promise<string>;
@@ -38,8 +42,8 @@ export const DESKTOP_RELEASE_REQUIREMENT: string = `=identifier "${DESKTOP_RELEA
 /** A managed release runtime's folder: `runtime/<version>-<product>/`, as `launcher.ts` lays them out. */
 const RELEASE_RUNTIME = /[\\/]runtime[\\/]\d[^\\/]*-[a-z][a-z0-9-]*[\\/]/;
 
-/** An executable inside an app bundle: `<…>.app/Contents/MacOS/<name>`, and the bundle. */
-const IN_BUNDLE = /^(\/.+\.app)\/Contents\/MacOS\/[^/]+$/;
+/** The code requirement the local test build's running code satisfies: its identifier, ad-hoc signed. */
+export const DESKTOP_TEST_REQUIREMENT: string = `=identifier "${DESKTOP_TEST_IDENTIFIER}"`;
 
 const defaultExec: ExecFn = (file, args) =>
   new Promise((resolve, reject) => {
@@ -63,46 +67,30 @@ export async function desktopAppOrigin(
   const platform = deps.platform ?? process.platform;
   if (platform !== 'darwin') return { ok: false, reason: 'unattested-platform' };
   const exec = deps.exec ?? defaultExec;
-  const ppid = deps.ppid ?? process.ppid;
-  let parent: string;
+  const pid = String(deps.ppid ?? process.ppid);
+  // What the parent calls itself, for the message only: argv[0], which a process sets itself.
+  let parent: string | undefined;
   try {
-    parent = (await exec('/bin/ps', ['-p', String(ppid), '-o', 'comm='])).trim();
+    parent = (await exec('/bin/ps', ['-p', pid, '-o', 'comm='])).trim() || undefined;
   } catch {
-    return { ok: false, reason: 'parent-unknown' };
+    parent = undefined;
   }
-  const bundle = IN_BUNDLE.exec(parent)?.[1];
-  if (bundle === undefined) return { ok: false, reason: 'parent-not-an-app' };
-  const verifies = async (args: readonly string[]): Promise<boolean> => {
+  // The running parent, by its pid: codesign checks the process's own code, not a path anything can name.
+  const satisfies = async (requirement: string): Promise<boolean> => {
     try {
-      await exec('/usr/bin/codesign', ['--verify', '--strict', ...args, bundle]);
+      await exec('/usr/bin/codesign', ['--verify', '--strict', '--test-requirement', requirement, pid]);
       return true;
     } catch {
       return false;
     }
   };
-  // The release: the owner's team signed it, and it says so.
-  if (await verifies(['--test-requirement', DESKTOP_RELEASE_REQUIREMENT])) {
+  if (await satisfies(DESKTOP_RELEASE_REQUIREMENT)) {
     return { ok: true, build: 'release', identifier: DESKTOP_RELEASE_IDENTIFIER };
   }
-  // The local test build: its own identifier, an ad-hoc signature that verifies, and only beside a local build.
-  let identifier: string;
-  try {
-    identifier = (
-      await exec('/usr/bin/plutil', [
-        '-extract',
-        'CFBundleIdentifier',
-        'raw',
-        '-o',
-        '-',
-        `${bundle}/Contents/Info.plist`,
-      ])
-    ).trim();
-  } catch {
-    return { ok: false, reason: 'not-agent-comms' };
+  if (await satisfies(DESKTOP_TEST_REQUIREMENT)) {
+    const self = deps.selfPath ?? fileURLToPath(import.meta.url);
+    if (RELEASE_RUNTIME.test(self)) return { ok: false, reason: 'test-app-with-release-runtime' };
+    return { ok: true, build: 'test', identifier: DESKTOP_TEST_IDENTIFIER };
   }
-  if (identifier !== DESKTOP_TEST_IDENTIFIER) return { ok: false, reason: 'not-agent-comms' };
-  const self = deps.selfPath ?? fileURLToPath(import.meta.url);
-  if (RELEASE_RUNTIME.test(self)) return { ok: false, reason: 'test-app-with-release-runtime' };
-  if (!(await verifies([]))) return { ok: false, reason: 'signature-not-verified' };
-  return { ok: true, build: 'test', identifier };
+  return { ok: false, reason: 'not-agent-comms', ...(parent === undefined ? {} : { parent }) };
 }

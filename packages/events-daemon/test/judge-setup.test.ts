@@ -115,12 +115,7 @@ test('judge setup and provider keys refuse every agent marker and the MCP server
 });
 
 test('from a pipe, the person’s setup is refused unless Agent Comms started it: a key is read from the app or a terminal only', async () => {
-  for (const reason of [
-    'parent-not-an-app',
-    'not-agent-comms',
-    'signature-not-verified',
-    'test-app-with-release-runtime',
-  ]) {
+  for (const reason of ['not-agent-comms', 'test-app-with-release-runtime']) {
     for (const args of PERSON_COMMANDS) {
       const ran = await cli(args, { stdin: `${OPENROUTER_KEY}\n`, desktopOrigin: async () => ({ ok: false, reason }) });
       assert.equal(ran.code, APPROVAL_EXIT, `${args.join(' ')} ${reason}: ${ran.stderr}`);
