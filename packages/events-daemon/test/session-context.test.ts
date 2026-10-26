@@ -7,7 +7,7 @@ import { CONTEXT_LIMITS } from '@agentcomms/events';
 import { ANALYSE_GLOBAL_ONLY_ENDPOINTS, preparePinnedConnection } from '../src/network/pinned-connection.ts';
 import { isTooWideRoot, settingsFrom } from '../src/runtime/agent-sessions.ts';
 import { contextGenerator, generateFailure, generateRequest } from '../src/runtime/context-generate.ts';
-import { readContextFile, resolveContextParts } from '../src/runtime/session-context.ts';
+import { fileStillAllowed, readContextFile, resolveContextParts } from '../src/runtime/session-context.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /**
@@ -265,4 +265,29 @@ test('REVIEW-4d: `/` and the home folder itself confine nothing, so they are nev
       ),
     /never \/ or your home folder itself/u,
   );
+});
+
+test('REVIEW2-2: a kept file part may still be sent only while its folder is still allowed, even once it is gone', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withFolder(async (root) => {
+    const docs = join(root, 'docs');
+    const state = join(root, 'agent-comms-state');
+    await mkdir(docs);
+    await mkdir(state);
+    await writeFile(join(docs, 'brief.md'), 'brief');
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [docs]), true);
+    assert.equal(
+      await fileStillAllowed(join(docs, 'brief.md'), [join(root, 'other')]),
+      false,
+      'its folder was removed',
+    );
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [root], [docs]), false, 'one of Agent Comms’ own');
+    await rm(join(docs, 'brief.md'));
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [docs]), true, 'a file gone is judged by its folder');
+    // A folder swapped for a link out of the allowed one is judged by where it leads.
+    await rm(docs, { recursive: true });
+    await symlink(state, docs);
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [root], [state]), false);
+  });
 });

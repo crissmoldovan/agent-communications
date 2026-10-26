@@ -140,8 +140,8 @@ export class SessionQueue {
 
   /**
    * Lets the session's next item go, if one waits and none already let go is still on its way: its delivery is due
-   * after a backoff that grows with its tries, so a session that is busy again at once cannot spin it (security review
-   * of 0.33.0, finding 3). Returns the delivery let go, or null.
+   * after a backoff that grows with how long it has waited, so a session that is busy again at once cannot spin it
+   * (security review of 0.33.0, finding 3, and its second look, 3). Returns the delivery let go, or null.
    */
   release(relaySessionId: string): string | null {
     return this.#store.immediate(() => {
@@ -152,25 +152,29 @@ export class SessionQueue {
       if (inFlight !== undefined) return null;
       const head = database
         .prepare(
-          `SELECT q.delivery_id, d.attempts FROM session_queue q JOIN deliveries d ON d.id = q.delivery_id
-            WHERE q.relay_session_id = ? AND q.released_at IS NULL
-            ORDER BY q.queued_at, q.delivery_id LIMIT 1`,
+          `SELECT delivery_id, queued_at FROM session_queue
+            WHERE relay_session_id = ? AND released_at IS NULL
+            ORDER BY queued_at, delivery_id LIMIT 1`,
         )
-        .get(relaySessionId) as { delivery_id: string; attempts: number } | undefined;
+        .get(relaySessionId) as { delivery_id: string; queued_at: number } | undefined;
       if (head === undefined) return null;
       const now = this.#now();
       database.prepare('UPDATE session_queue SET released_at = ? WHERE delivery_id = ?').run(now, head.delivery_id);
       database
         .prepare("UPDATE deliveries SET next_at = ? WHERE id = ? AND state IN ('queued', 'retryable')")
-        .run(now + releaseBackoffMs(head.attempts), head.delivery_id);
+        .run(now + busyBackoffMs(now - head.queued_at), head.delivery_id);
       return head.delivery_id;
     });
   }
 }
 
-/** How long a let-go item waits before it is tried: none after its first try, then doubling, up to five minutes. */
-export function releaseBackoffMs(attempts: number): number {
-  return attempts <= 1 ? 0 : Math.min(1_000 * 2 ** (attempts - 2), 5 * 60_000);
+/**
+ * How long a let-go item waits before it is tried again: an eighth of how long it has waited so far, at most five
+ * minutes. A busy session is not a failure, so this is the only pace of a match waiting for a session someone keeps
+ * busy, until its own expiry: within a minute of queueing it is tried at once, after forty minutes every five.
+ */
+export function busyBackoffMs(waitedMs: number): number {
+  return Math.min(Math.max(0, Math.floor(waitedMs / 8)), 5 * 60_000);
 }
 
 /**

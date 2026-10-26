@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdir, realpath, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,7 +10,7 @@ import { EventControlClient } from '../src/control/client.ts';
 import { eventPaths } from '../src/runtime/paths.ts';
 import type { ContextGenerator } from '../src/runtime/session-context.ts';
 import { SESSION_RETRY_LIMIT } from '../src/runtime/session-dispatcher.ts';
-import { releaseBackoffMs } from '../src/runtime/session-queue.ts';
+import { busyBackoffMs } from '../src/runtime/session-queue.ts';
 import { FakeRelay, type FakeRelayOptions } from './support/fake-relay.ts';
 import {
   ACCOUNT,
@@ -28,7 +29,10 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 /**
  * The 0.33.0 security review's findings on the agent-session target, kept as regressions: a lane session target's
  * counts stay out of an unbound window (5); a 409 that is not "busy" never loops the busy queue, and a match's model
- * part runs once (3); a FIFO named by a file part never stalls the event service (4).
+ * part runs once (3); a FIFO named by a file part never stalls the event service (4). The second look's, as REVIEW2-n: a
+ * delivery starts at most one session (1); a dead letter keeps no record, and a waiting match's kept file part goes only
+ * while its folder is still allowed (2); a busy session never fails a match, and other failures still count (3); a
+ * record that does not open ends its delivery (4).
  */
 
 const PERSON = 'person-setup:terminal';
@@ -270,14 +274,6 @@ function writeDatabase(harness: LaneHarness, sql: string): void {
   }
 }
 
-const released = (harness: LaneHarness): boolean =>
-  readDatabase(
-    harness.stateDir,
-    (database) =>
-      (database.prepare('SELECT COUNT(*) AS n FROM session_queue WHERE released_at IS NOT NULL').get() as { n: number })
-        .n > 0,
-  );
-
 async function settle(harness: LaneHarness, ms: number): Promise<void> {
   const deadline = Date.now() + ms;
   while (Date.now() < deadline) {
@@ -371,31 +367,190 @@ test('REVIEW-3: a relay that repeats run ends cannot drive the busy queue faster
   });
 });
 
-test('REVIEW-3: a session never free fails its delivery after SESSION_RETRY_LIMIT tries, each further apart', {
+test('REVIEW2-3: a session someone keeps busy never fails the match: its busy tries are given back, further apart', {
   skip: WINDOWS_SKIP,
 }, async () => {
-  assert.deepEqual([1, 2, 3, 4, 12, 30].map(releaseBackoffMs), [0, 1_000, 2_000, 4_000, 300_000, 300_000]);
+  // An eighth of the time waited, at most five minutes.
+  assert.deepEqual(
+    [0, 8_000, 60_000, 40 * 60_000, 7 * 24 * 60 * 60_000].map(busyBackoffMs),
+    [0, 1_000, 7_500, 300_000, 300_000],
+  );
+  let generated = 0;
   await withReview(
     async ({ harness, relay, folder }) => {
-      const session = relay.addSession({ cwd: folder });
-      relay.startRunElsewhere(session.id);
-      await approveRule(harness, [queued(folder, false)]);
-      harness.mailbox.send('never free');
+      relay.addSession({ cwd: folder });
+      // Every run start loses the race to the person's own, until they stop.
+      relay.refuseRunsAsBusy = 1_000;
+      await approveRule(harness, [queued(folder)]);
+      harness.mailbox.send('the person keeps the session busy');
       await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
-      // Its tries so far, as if it had been let go and found busy again many times.
+      // As if it had already failed in other ways SESSION_RETRY_LIMIT - 1 times: one more failure would end it.
       writeDatabase(
         harness,
         `UPDATE deliveries SET attempts = ${SESSION_RETRY_LIMIT - 1} WHERE target_kind = 'session'`,
       );
-      await until(harness, () => relay.streamCount > 0, 'the follower');
-      relay.publishRunEnd(session.id);
-      // Let go after a backoff that grows with its tries; the backoff passes.
-      await until(harness, () => released(harness), 'the release');
-      writeDatabase(harness, "UPDATE deliveries SET next_at = 0 WHERE target_kind = 'session'");
+      const before = runPosts(relay);
+      await until(harness, () => runPosts(relay) >= before + 3, 'three more busy tries', 15_000);
+      const [waiting] = sessionDeliveries(harness);
+      assert.equal(waiting?.state, 'retryable', 'still waiting, never dead-lettered for being busy');
+      assert.equal(waiting?.last_error_code, 'SESSION_BUSY');
+      assert.equal(waiting?.attempts, SESSION_RETRY_LIMIT - 1, 'no busy try counted');
+      relay.refuseRunsAsBusy = 0;
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'delivered', 'the delivery', 15_000);
+      assert.equal(generated, 1, 'its model part ran once for all those tries');
+    },
+    {
+      reconcileMs: 100,
+      generate: async () => {
+        generated += 1;
+        return { ok: true, text: 'summary' };
+      },
+    },
+  );
+});
+
+test('REVIEW2-3: other failures still count: the try after SESSION_RETRY_LIMIT - 1 of them fails the match', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      relay.addSession({ cwd: folder });
+      relay.refuseNextRunAsBusy = true;
+      await approveRule(harness, [queued(folder, false)]);
+      harness.mailbox.send('busy, then a relay failure');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      writeDatabase(
+        harness,
+        `UPDATE deliveries SET attempts = ${SESSION_RETRY_LIMIT - 1} WHERE target_kind = 'session'`,
+      );
+      relay.failNextRunWith = 500;
       await until(harness, () => sessionDeliveries(harness)[0]?.state === 'dead-lettered', 'the dead letter');
-      assert.equal(sessionDeliveries(harness)[0]?.last_error_code, 'SESSION_BUSY');
+      assert.equal(sessionDeliveries(harness)[0]?.last_error_code, 'RELAY_FAILED');
       assert.equal(sessionDeliveries(harness)[0]?.attempts, SESSION_RETRY_LIMIT);
-      assert.equal(runPosts(relay), 0);
+      assert.equal(relay.runs.length, 0);
+    },
+    { reconcileMs: 100 },
+  );
+});
+
+const sessionPosts = (relay: FakeRelay): number =>
+  relay.requests.filter((request) => request.method === 'POST' && request.path === '/v1/sessions').length;
+
+test('REVIEW2-1: a delivery starts at most one session; when the relay fences or moves it, the delivery fails saying so', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const [state, code] of [
+    ['fenced', 'SESSION_FENCED'],
+    ['moved', 'SESSION_MOVED'],
+  ] as const)
+    await withReview(
+      async ({ harness, relay, folder }) => {
+        // No session works in the folder, and the relay fences (or moves) every session it starts.
+        relay.fenceNewSessions = state;
+        await approveRule(harness, [{ ...queued(folder, false), ifBusy: 'queue' }]);
+        harness.mailbox.send(`every new session ${state}`);
+        await until(
+          harness,
+          () => sessionDeliveries(harness)[0]?.state === 'dead-lettered',
+          `the ${state} dead letter`,
+        );
+        assert.equal(sessionDeliveries(harness)[0]?.last_error_code, code);
+        assert.equal(sessionPosts(relay), 1, 'one session started, never a second');
+        assert.equal(relay.runs.length, 0);
+      },
+      { reconcileMs: 100 },
+    );
+});
+
+function sessionRecordKept(harness: LaneHarness): boolean | undefined {
+  return readDatabase(harness.stateDir, (database) => {
+    const row = database
+      .prepare("SELECT encrypted_record IS NOT NULL AS kept FROM deliveries WHERE target_kind = 'session'")
+      .get() as { kept: number } | undefined;
+    return row === undefined ? undefined : row.kept === 1;
+  });
+}
+
+test('REVIEW2-2: a dead-lettered session delivery keeps no record — no file text, no model words', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      const brief = join(folder, 'brief.md');
+      await writeFile(brief, 'the house rules\n');
+      relay.fenceNewSessions = 'fenced';
+      await approveRule(harness, [{ ...queued(folder), context: [GENERATE, { file: brief }] }]);
+      harness.mailbox.send('fenced after the parts were read');
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'dead-lettered', 'the dead letter');
+      assert.equal(sessionRecordKept(harness), false, 'the sealed parts went with the dead letter');
+    },
+    { reconcileMs: 100, generate: async () => ({ ok: true, text: 'summary' }) },
+  );
+});
+
+test('REVIEW2-2: a waiting match sends a kept file part only while its folder is still allowed', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  let generated = 0;
+  await withReview(
+    async ({ harness, relay, root, folder }) => {
+      const docs = join(root, 'docs');
+      await mkdir(docs);
+      const brief = join(docs, 'brief.md');
+      await writeFile(brief, 'the house rules, from a folder the person allowed\n');
+      const person = new EventControlClient({ stateDir: harness.stateDir, clientName: PERSON });
+      await person.request('integration-set', { integration: 'agent-sessions', allowFolders: [docs] });
+      relay.addSession({ cwd: folder });
+      // The parts are read, and the run start then loses the race, again and again: the match waits, its parts kept.
+      relay.refuseRunsAsBusy = 1_000;
+      await approveRule(harness, [{ ...queued(folder), context: [GENERATE, { file: brief }] }]);
+      harness.mailbox.send('waits with a file');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      assert.equal(sessionRecordKept(harness), true);
+      // While it waits, the person takes the folder off the list.
+      await person.request('integration-set', { integration: 'agent-sessions', removeFolders: [docs] });
+      relay.refuseRunsAsBusy = 0;
+      await until(harness, () => relay.runs.length === 1, 'the run');
+      const prompt = relay.runs[0]?.prompt ?? '';
+      assert.ok(!prompt.includes('the house rules'), 'the file’s text is not sent');
+      assert.match(prompt, /brief\.md: left out, because it is outside the folders it may be read from\./u);
+      assert.match(prompt, /summary/u, 'the rest of the kept context goes');
+      assert.equal(generated, 1, 'and its model part was not run again');
+    },
+    {
+      reconcileMs: 100,
+      generate: async () => {
+        generated += 1;
+        return { ok: true, text: 'summary' };
+      },
+    },
+  );
+});
+
+test('REVIEW2-4: a waiting record replaced with bytes that are no record ends as content-unreadable, not claimed again', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      relay.addSession({ cwd: folder });
+      relay.refuseNextRunAsBusy = true;
+      await approveRule(harness, [queued(folder, false)]);
+      harness.mailbox.send('waits, then its record is replaced');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      const database = new DatabaseSync(eventPaths(harness.stateDir).database);
+      try {
+        database.exec('PRAGMA busy_timeout = 5000');
+        // Not the packed record format at all (its first byte is the format's version).
+        const bytes = Buffer.concat([Buffer.from([0xff]), randomBytes(95)]);
+        database
+          .prepare("UPDATE deliveries SET encrypted_record = ?, next_at = 0 WHERE target_kind = 'session'")
+          .run(bytes);
+      } finally {
+        database.close();
+      }
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'content-unreadable', 'content-unreadable');
+      assert.equal(sessionRecordKept(harness), false);
+      assert.equal(runPosts(relay), 1, 'only the first, refused, start');
     },
     { reconcileMs: 100 },
   );

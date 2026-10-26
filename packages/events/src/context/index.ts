@@ -80,7 +80,7 @@ export type ContextPart =
 const MODEL = /^[a-z0-9][a-z0-9._:/-]{0,127}$/u;
 /** Line breaks are allowed in text; other C0 and C1 controls, and the bidirectional overrides, are not. */
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the controls are what the check refuses.
-const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-⁩]/u;
+const CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/u;
 
 const issue = (pointer: string, message: string): Issue => ({ code: 'CONTEXT_INVALID', pointer, message });
 

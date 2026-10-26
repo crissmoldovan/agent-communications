@@ -82,6 +82,12 @@ export class FakeRelay {
   dropNextRunAnswer = false;
   /** When set, the next run start is refused as busy — another client's run won the race — and nothing is started. */
   refuseNextRunAsBusy = false;
+  /** How many run starts in a row to refuse as busy, after `refuseNextRunAsBusy`: a session someone keeps busy. */
+  refuseRunsAsBusy = 0;
+  /** When set, the next run start fails with this status, and nothing is started. */
+  failNextRunWith: number | undefined;
+  /** When set, every session made from now on is fenced or moved to another executor as soon as it is made. */
+  fenceNewSessions: 'fenced' | 'moved' | undefined;
 
   constructor(options: FakeRelayOptions = {}) {
     this.#options = options;
@@ -286,7 +292,9 @@ export class FakeRelay {
       };
       this.sessions.push(session);
       this.#publish({ sessionId: session.id, type: 'session.created' });
-      return send(201, { session });
+      const answer = send(201, { session: { ...session } });
+      if (this.fenceNewSessions !== undefined) session.executor = { generation: 2, state: this.fenceNewSessions };
+      return answer;
     }
     if (method === 'POST' && sessionMatch?.[2] === '/runs') {
       const session = this.sessions.find((candidate) => candidate.id === sessionMatch[1]);
@@ -300,8 +308,14 @@ export class FakeRelay {
       if (session.attached === 'observer') return refuse(409, 'conflict', 'a watched session takes no prompt');
       if (session.executor !== undefined && session.executor.state !== 'active')
         return refuse(409, `session_${session.executor.state}`, `session ${session.id} is ${session.executor.state}`);
-      if (this.refuseNextRunAsBusy) {
-        this.refuseNextRunAsBusy = false;
+      if (this.failNextRunWith !== undefined) {
+        const status = this.failNextRunWith;
+        this.failNextRunWith = undefined;
+        return refuse(status, 'internal', 'the relay failed');
+      }
+      if (this.refuseNextRunAsBusy || this.refuseRunsAsBusy > 0) {
+        if (this.refuseNextRunAsBusy) this.refuseNextRunAsBusy = false;
+        else this.refuseRunsAsBusy -= 1;
         return refuse(409, 'conflict', `session ${session.id} already has active run run_${uuid()}`);
       }
       if (session.activeRunId !== undefined)
