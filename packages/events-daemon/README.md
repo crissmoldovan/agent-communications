@@ -229,7 +229,9 @@ agent-events message show <event-id> --json          # one message, with every l
   ([Judges](#judges)).
 - **Targets:**
   - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
-    is signed (Standard Webhooks). Each delivery can be retried or dropped (`delivery retry`, `delivery drop`).
+    is signed (Standard Webhooks). A delivery that will be tried again can be tried now (`delivery retry`) or
+    stopped at once (`delivery drop`, from 0.32.0), and a dead letter's kept payload dropped (`delivery drop`). One
+    being sent right now can't be stopped mid-try: the refusal says so (`DELIVERY_IN_FLIGHT`).
   - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
     token, and its origin is checked.
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window

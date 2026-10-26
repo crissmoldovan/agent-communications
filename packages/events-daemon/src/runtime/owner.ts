@@ -1738,11 +1738,14 @@ async function handleControl(
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
-    // Routing B4 (review of 0.31.0): an agent window's delivery list leaves out every lane it is not bound to.
-    const { caller, args } =
-      request.operation === OWNER_CONTROL_WIRES.deliveriesList
-        ? splitCaller(request.args)
-        : { caller: undefined, args: request.args };
+    // Routing B4 (review of 0.31.0): an agent window's delivery list leaves out every lane it is not bound to; and from
+    // 0.32.0, when `delivery drop` can stop a delivery, such a window cannot drop one either: it is not there for it.
+    const windowScoped =
+      request.operation === OWNER_CONTROL_WIRES.deliveriesList ||
+      request.operation === OWNER_CONTROL_WIRES.dropDelivery;
+    const { caller, args } = windowScoped ? splitCaller(request.args) : { caller: undefined, args: request.args };
+    if (caller !== undefined && request.operation === OWNER_CONTROL_WIRES.dropDelivery)
+      assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
@@ -1914,6 +1917,22 @@ function requireJudgeSetup(service: JudgeSetupService | undefined): JudgeSetupSe
 }
 
 /** A control request's calling window, when it is an agent window's, and its other arguments. */
+/** A lane target's delivery is not there for a window not bound to the lane (routing B4): the same answer as none. */
+function assertDeliveryVisibleTo(
+  database: Awaited<ReturnType<typeof openEventDatabase>>,
+  lanes: LaneService,
+  deliveryId: unknown,
+  caller: LaneWindowIdentity,
+): void {
+  if (typeof deliveryId !== 'string') return;
+  const row = database.database
+    .prepare('SELECT target_id AS targetId, target_version AS targetVersion FROM deliveries WHERE id = ?')
+    .get(deliveryId);
+  if (row === undefined) return;
+  const visible = lanes.visibleDeliveries([{ ...row }], caller) as readonly unknown[];
+  if (visible.length === 0) throw new CommsError('NOT_FOUND', 'the delivery does not exist');
+}
+
 function splitCaller(args: Readonly<Record<string, unknown>>): {
   readonly caller: LaneWindowIdentity | undefined;
   readonly args: Record<string, unknown>;
