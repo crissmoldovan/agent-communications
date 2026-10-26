@@ -1,5 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import {
+  isEventId,
   isMessagesCursor,
   MESSAGES_LIST_DEFAULT_LIMIT,
   MESSAGES_LIST_DEFAULT_SPAN_MS,
@@ -12,6 +13,7 @@ import {
   type MessageJudgeV1,
   type MessageKeptV1,
   type MessageQueueItemV1,
+  type MessageShowResultV1,
   type MessagesListResultV1,
   type MessageTargetKind,
   messagesCursor,
@@ -68,6 +70,12 @@ export function parseMessagesQuery(args: Readonly<Record<string, unknown>>, now:
   if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > MESSAGES_LIST_MAX_LIMIT)
     usage(`--limit is a whole number from 1 to ${MESSAGES_LIST_MAX_LIMIT}`);
   return { since: since as number, ...(before === undefined ? {} : { before }), limit: limit as number };
+}
+
+/** An event id, or the contract's bad-argument refusal (64) before anything is read. */
+export function requireEventId(value: unknown): string {
+  if (!isEventId(value)) usage('an event id is 32 lowercase hexadecimal characters');
+  return value;
 }
 
 interface IngestRow {
@@ -160,6 +168,21 @@ export class MessagesStore {
       messages,
       next: rows.length > query.limit && last !== undefined ? messagesCursor(last.observed_at, last.event_id) : null,
     };
+  }
+
+  /** `message show <eventId>`: one message's entry, its queue item with every line of its history. */
+  async show(eventId: unknown): Promise<MessageShowResultV1> {
+    const id = requireEventId(eventId);
+    this.#expiry.sweep();
+    const row = this.#store.database.prepare(`SELECT ${INGEST_COLUMNS} FROM ingest WHERE event_id = ?`).get(id) as
+      | IngestRow
+      | undefined;
+    if (row === undefined)
+      throw new CommsError('NOT_FOUND', 'the event service has observed no message with that event id', {
+        hint: 'messages list gives every message it has observed, by event id.',
+      });
+    const [message] = await this.#entries([row], 'all');
+    return { message: message as MessageEntryV1 };
   }
 
   async #entries(rows: readonly IngestRow[], history: 'latest' | 'all'): Promise<MessageEntryV1[]> {

@@ -46,6 +46,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'queue',
     'lane',
     'messages',
+    'message',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }

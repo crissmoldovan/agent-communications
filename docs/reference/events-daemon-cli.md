@@ -62,6 +62,7 @@ Scripts should read these rather than parse output.
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
 | [`messages`](#agent-events-messages) | what happened to each message the event service observed: matched, judged, delivered, queued, read |
+| [`message`](#agent-events-message) | one message the event service observed, by its event id |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
@@ -817,6 +818,22 @@ agent-events messages list [options]
 | `--since <ms>` | the oldest observation time, in milliseconds since 1970 | `30 days back` |
 | `--before <ms\|next>` | only messages observed before this time, or the next an earlier page gave | — |
 | `--limit <n>` | at most this many messages (1 to 500, default 100) | — |
+
+### `agent-events message`
+
+one message the event service observed, by its event id
+
+```
+agent-events message [options] [command]
+```
+
+### `agent-events message show`
+
+show one message, with every line of its queue item’s history (a person)
+
+```
+agent-events message show [options] <event-id>
+```
 
 ### `agent-events approve`
 

@@ -49,7 +49,7 @@ import {
   updateJudge,
 } from '../operations/judges.ts';
 import { laneBind, laneList, laneUnbind } from '../operations/lanes.ts';
-import { messagesList } from '../operations/messages.ts';
+import { messageShow, messagesList } from '../operations/messages.ts';
 import { pause, resume } from '../operations/pause.ts';
 import {
   queueClear,
@@ -91,7 +91,7 @@ import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
-import { parseMessagesQuery } from '../runtime/messages.ts';
+import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { assertHumanTerminal, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
@@ -883,6 +883,16 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // The owner parses these again; checking here first gives a bad argument its exit (64) without the owner.
       parseMessagesQuery(filters, Date.now());
       print(await messagesList(filters, controlOptions(program)));
+    });
+  program
+    .command('message')
+    .description('one message the event service observed, by its event id')
+    .command('show <event-id>')
+    .description('show one message, with every line of its queue item’s history (a person)')
+    .action(async (eventId: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'messages');
+      print(await messageShow(requireEventId(eventId), controlOptions(program)));
     });
 
   program

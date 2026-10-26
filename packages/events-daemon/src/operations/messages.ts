@@ -1,5 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
-import type { MessagesListResultV1 } from '../domain/messages.ts';
+import type { MessageShowResultV1, MessagesListResultV1 } from '../domain/messages.ts';
 
 /**
  * A story per message (0.32.0 spec §3.6): what happened to each message the event service observed. The person's read,
@@ -29,4 +29,11 @@ export async function messagesList(filters: MessagesListFilters, options: Option
     'messages-list',
     defined({ ...filters }),
   )) as MessagesListResultV1;
+}
+
+/** One message, by its event id, with every line of its queue item's history. */
+export async function messageShow(eventId: string, options: Options = {}): Promise<MessageShowResultV1> {
+  return (await new EventControlClient({ stateDir: options.stateDir }).request('message-show', {
+    eventId,
+  })) as MessageShowResultV1;
 }

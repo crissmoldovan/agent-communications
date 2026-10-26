@@ -1800,6 +1800,8 @@ async function handleControl(
     // What happened to each message (0.32.0 §3.6): the person's, from the CLI and the app; a caller is refused.
     case OWNER_CONTROL_WIRES.messagesList:
       return messages.list(personOnly(request.args, 'messages list'));
+    case OWNER_CONTROL_WIRES.messageShow:
+      return messages.show(personOnly(request.args, 'message show').eventId);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {

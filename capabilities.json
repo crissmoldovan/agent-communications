@@ -2745,6 +2745,17 @@
       "reason": "What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4)."
     },
     {
+      "id": "events-daemon.message.show",
+      "package": "events-daemon",
+      "cli": "message show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "messageShow",
+      "argv": ["0123456789abcdef0123456789abcdef"],
+      "expect": { "eventId": "0123456789abcdef0123456789abcdef" },
+      "reason": "What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

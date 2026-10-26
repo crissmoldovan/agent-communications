@@ -37,6 +37,7 @@ import {
   MESSAGE_DELIVERY_STATES,
   MESSAGE_TARGET_KINDS,
   MESSAGES_LIST_MAX_LIMIT,
+  type MessageShowResultV1,
   type MessagesListResultV1,
 } from '../domain/messages.ts';
 import {
@@ -559,6 +560,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'lane-bind': LaneBindResultV1;
   readonly 'lane-unbind': LaneUnbindResultV1;
   readonly 'messages-list': MessagesListResultV1;
+  readonly 'message-show': MessageShowResultV1;
 };
 
 /**
@@ -709,6 +711,7 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'lane-unbind': { readonly lane: string };
   /** A story per message (0.32.0): the person's read, at a terminal or in the app. */
   readonly 'messages-list': B3MessagesListArgumentsV1;
+  readonly 'message-show': { readonly eventId: string };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -1093,6 +1096,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'lane-bind': ['lane', 'binding'],
   'lane-unbind': ['lane', 'unbound'],
   'messages-list': ['messages', 'next'],
+  'message-show': ['message'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1344,6 +1348,9 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       for (const entry of value.messages) assertMessageEntry(entry, 'a listed message');
       if (value.next !== null && !isMessagesCursor(value.next))
         throw new TypeError('a messages list result has a malformed next cursor');
+      return;
+    case 'message-show':
+      assertMessageEntry(value.message, 'a shown message');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);

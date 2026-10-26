@@ -110,6 +110,7 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'laneItem', wireOperation: 'lane-item', desktopCallable: false, family: 'owner' },
   // A story per message (0.32.0): the person's read of what happened to each observed event, CLI and app only.
   { capabilityOperation: 'messagesList', wireOperation: 'messages-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'messageShow', wireOperation: 'message-show', desktopCallable: true, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

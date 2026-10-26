@@ -906,6 +906,21 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "message-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["eventId"],
+              "properties": { "eventId": { "$ref": "#/$defs/eventId" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -2009,6 +2024,12 @@
           "required": ["lane", "unbound"],
           "properties": { "lane": { "$ref": "#/$defs/laneName" }, "unbound": { "const": true } }
         },
+        "message-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": { "message": { "$ref": "#/$defs/messageEntry" } }
+        },
         "messages-list": {
           "type": "object",
           "additionalProperties": false,
@@ -2120,7 +2141,8 @@
                     "lane-list",
                     "lane-bind",
                     "lane-unbind",
-                    "messages-list"
+                    "messages-list",
+                    "message-show"
                   ]
                 }
               }
@@ -2314,6 +2336,10 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "messages-list" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/messages-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "message-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/message-show" } } }
             }
           ]
         },

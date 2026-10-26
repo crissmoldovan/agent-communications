@@ -153,5 +153,9 @@
       "operation": "messages-list",
       "args": { "since": 1790000000000, "before": "1792985903635:6b8502ee16adfda7d4608c3868750e08", "limit": 50 }
     }
+  },
+  {
+    "name": "message-show-request",
+    "request": { "operation": "message-show", "args": { "eventId": "6b8502ee16adfda7d4608c3868750e08" } }
   }
 ]

@@ -129,6 +129,7 @@ const EXPECTED_LANE_ROWS = [
  */
 const EXPECTED_MESSAGE_ROWS = [
   ['events-daemon.messages.list', 'messages list', null, 'exception', 'messagesList'],
+  ['events-daemon.message.show', 'message show', null, 'exception', 'messageShow'],
 ] as const;
 
 const rowShape = (row: Capability) => ({
@@ -279,6 +280,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.queue.clear',
     'events-daemon.lane.bind',
     'events-daemon.messages.list',
+    'events-daemon.message.show',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
