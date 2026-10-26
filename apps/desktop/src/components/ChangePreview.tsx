@@ -26,7 +26,9 @@ type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
  * approval through core's app channel and applies the change. Nothing is approved until that button is pressed, and
  * Cancel and leaving revoke it as they do here otherwise. When core refuses the app's approval because nothing attests
  * that the app is the person's (`APPROVAL_REQUIRED`, reason `ORIGIN_UNATTESTED`: Windows and Linux, 0.33.0), the
- * preview offers Approve in Terminal instead, for the same change.
+ * preview offers Approve in Terminal instead, for the same change. When core says the approval is void
+ * (`APPROVAL_VOID`, 0.34.0: it was used, or handed another change) and the screen gave `onVoid`, there is nothing left
+ * to approve or revoke: the screen prepares the change again, with a preview of its own.
  */
 export function ChangePreview({
   change,
@@ -45,6 +47,10 @@ export function ChangePreview({
         failed: (message: string) => string;
         /** Applied: core's answer. */
         onApproved: (result: Extract<CliResult, { status: 'ok' }>) => void;
+        /** The approval is void (`APPROVAL_VOID`): the screen prepares the change again (0.34.0). */
+        onVoid?: () => void;
+        /** Refused for any other reason, once that is said: the screen reads again what it shows (0.34.0). */
+        onRefused?: () => void;
       }
     | undefined;
 }) {
@@ -108,6 +114,11 @@ export function ChangePreview({
         here.onApproved(result);
         return;
       }
+      // Void: core will take nothing for it again, and there is nothing to revoke. The screen prepares it afresh.
+      if (result.status === 'failed' && result.code === 'APPROVAL_VOID' && here.onVoid !== undefined) {
+        here.onVoid();
+        return;
+      }
       // Not applied: the approval is still this preview's to cancel, or to leave behind.
       handled.current = false;
       if (!mounted.current) revokeLeftBehind();
@@ -117,6 +128,7 @@ export function ChangePreview({
           ? [here.failed(result.message), result.hint].filter(Boolean).join(' ')
           : here.failed('core did not apply it'),
       );
+      here.onRefused?.();
     } catch (error) {
       handled.current = false;
       if (!mounted.current) revokeLeftBehind();
