@@ -149,7 +149,7 @@ subject version 1 state active and approval and activation", and a next try "alw
 - **The dry-run log in the app.** `dryrun list` and `dryrun show` worked only at an interactive terminal, so the app,
   which reads with `--json`, could not open the log the design gives it. They now refuse only inside the event
   service's MCP server, like the queue's own content reads; `dryrun show --json` gives the record as data, each field
-  the sender wrote inside the untrusted-content envelope, for the app to show as outside text. As with the queue, a shell an agent runs as you is not refused. The log keeps each entry 24
+  the sender controls, addresses included, inside the untrusted-content envelope, for the app to show as outside text. As with the queue, a shell an agent runs as you is not refused. The log keeps each entry 24
   hours at most.
 
 ## 0.31.0

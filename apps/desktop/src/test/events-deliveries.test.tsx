@@ -224,6 +224,9 @@ describe('Events → Deliveries', () => {
     await waitFor(() => expect(message.textContent).toContain('Jo Example <jo@example.com>'));
     const boxed = [...message.querySelectorAll('[data-slot="from-outside"]')].map((each) => each.textContent);
     expect(boxed).toEqual(['From outside: Jo Example <jo@example.com>', 'From outside: test: does the rule fire?']);
+    // Every field the sender controls comes enveloped, an address too (review of 0.32.0, finding 2): the page shows the
+    // envelope's content, boxed, never its tags.
+    expect(page.textContent).not.toContain('untrusted-content');
     expect(within(message).getByText('From outside')).toBeTruthy();
     // No address is known for this account: no link to Gmail. And the message's story is inert: `evt-03` is no event id
     // the event service makes, so there is no story to open (one with a real id opens it: below).
@@ -246,6 +249,9 @@ describe('Events → Deliveries', () => {
         each.getAttribute('data-field'),
         `${each.getAttribute('data-source')} ${each.querySelector('[data-slot="from-outside"]') === null ? 'plain' : 'boxed'}`,
       ]),
+    );
+    expect(would.querySelector('[data-field="data.from.address"] [data-slot="from-outside"]')?.textContent).toBe(
+      'From outside: jo@example.com',
     );
     expect(fields).toEqual({
       agentcommsrule: 'attribute plain',

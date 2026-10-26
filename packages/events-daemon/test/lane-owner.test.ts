@@ -777,6 +777,11 @@ test('0.32 B4: dryrun list and show --json give the app the log as data; the ter
       /^<untrusted-content boundary="[^"]+" field="event" id="[^"]+">\nDry-run subject the app shows as outside text\n<\/untrusted-content boundary="[^"]+">$/u,
     );
     assert.match(String((record.record.data.from as { name: unknown }).name), /^<untrusted-content /u);
+    assert.match(
+      String((record.record.data.from as { address: unknown }).address),
+      /^<untrusted-content [^\n]*>\ndavid\.sender@example\.test\n/u,
+      'a From address is the sender’s too, as the queue gives it',
+    );
     assert.match(String(record.record.data.snippet), /^<untrusted-content /u);
     assert.equal(record.record.data.messageId, messageId, 'an id the sender did not write is left as it is');
     assert.ok(record.record.agentcommsuntrusted !== undefined, 'the event names its sender-written fields');

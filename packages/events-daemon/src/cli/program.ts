@@ -815,6 +815,21 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // The dry-run log (0.32.0, owner feedback §3.5; events design D7: "at the terminal or in the app"): the person's, at a
   // terminal or in the app, which runs it with --json. Like the queue's content reads (Q1), it refuses inside an MCP
   // server's process. With --json a record is data, for the app to render as outside text; a terminal gets it enveloped.
+  // The rule version that made a record, for which of its fields the sender controls; null when it cannot be read.
+  const dryRunRule = async (record: { readonly ruleId: string; readonly ruleVersion: number }) => {
+    try {
+      const versions = (await ruleShow(record.ruleId, controlOptions(program))) as readonly {
+        readonly document?: { readonly version?: unknown; readonly event?: unknown; readonly mapping?: unknown };
+      }[];
+      const document = versions.find((entry) => entry.document?.version === record.ruleVersion)?.document;
+      const event = document?.event as { readonly type?: unknown; readonly version?: unknown } | undefined;
+      if (typeof event?.type !== 'string' || typeof event.version !== 'number') return null;
+      return { event: { type: event.type, version: event.version }, mapping: document?.mapping };
+    } catch (error) {
+      if (isCommsError(error)) return null;
+      throw error;
+    }
+  };
   const dryrun = program
     .command('dryrun')
     .description('read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most');
@@ -837,7 +852,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       assertNotMcpServer(env, 'dryrun');
       const record = await dryrunShow(deliveryId, controlOptions(program));
-      if (program.opts<EventsCliOptions>().json) print(dryRunRecordAsData(record));
+      if (program.opts<EventsCliOptions>().json) print(dryRunRecordAsData(record, await dryRunRule(record)));
       else streams.stdout.write(`${renderDryRunRecordForTerminal(record)}\n`);
     });
 
