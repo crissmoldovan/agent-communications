@@ -226,6 +226,19 @@ const QUEUE_FIELD_PLANS: Readonly<Record<string, QueueFieldPlan>> = Object.freez
   },
 });
 
+/**
+ * The source fields a queue item shows from the sender — name, address, subject, first words — for one event type, all
+ * of which `queue show` returns enveloped. The dry-run log's `--json` read envelopes these too (review of 0.32.0, 2), from
+ * this one plan, so the two cannot drift. An event type with no plan has none.
+ */
+export function queueSenderSources(eventType: string): readonly string[] {
+  const plan = QUEUE_FIELD_PLANS[eventType];
+  if (plan === undefined) return [];
+  return [plan.fromName, plan.fromAddress, plan.subject, ...plan.text].filter(
+    (pointer): pointer is string => pointer !== undefined,
+  );
+}
+
 function planFor(eventType: string): QueueFieldPlan {
   return QUEUE_FIELD_PLANS[eventType] ?? fail('a queue target shows only a catalogued message event');
 }

@@ -224,6 +224,9 @@ describe('Events → Deliveries', () => {
     await waitFor(() => expect(message.textContent).toContain('Jo Example <jo@example.com>'));
     const boxed = [...message.querySelectorAll('[data-slot="from-outside"]')].map((each) => each.textContent);
     expect(boxed).toEqual(['From outside: Jo Example <jo@example.com>', 'From outside: test: does the rule fire?']);
+    // Every field the sender controls comes enveloped, an address too (review of 0.32.0, finding 2): the page shows the
+    // envelope's content, boxed, never its tags.
+    expect(page.textContent).not.toContain('untrusted-content');
     expect(within(message).getByText('From outside')).toBeTruthy();
     // No address is known for this account: no link to Gmail. And the message's story is inert: `evt-03` is no event id
     // the event service makes, so there is no story to open (one with a real id opens it: below).
@@ -246,6 +249,9 @@ describe('Events → Deliveries', () => {
         each.getAttribute('data-field'),
         `${each.getAttribute('data-source')} ${each.querySelector('[data-slot="from-outside"]') === null ? 'plain' : 'boxed'}`,
       ]),
+    );
+    expect(would.querySelector('[data-field="data.from.address"] [data-slot="from-outside"]')?.textContent).toBe(
+      'From outside: jo@example.com',
     );
     expect(fields).toEqual({
       agentcommsrule: 'attribute plain',
@@ -416,6 +422,27 @@ describe('Events → Deliveries', () => {
       expect(bridge.calls.filter((each) => each.command === 'openLink').map((each) => each.args)).toEqual([
         'https://app.slack.com/client/T0EXAMPLE/D0EXAMPLE/thread/D0EXAMPLE-1792927860.000100',
       ]),
+    );
+  });
+
+  // Review of 0.32.0, finding 2: `dryrun show --json` sends each sender-written field enveloped; the app takes the
+  // envelope off and shows its content boxed, never as markup and never with the envelope's tags.
+  it("an enveloped field of a dry-run record shows its content, boxed as the sender's, without the envelope", async () => {
+    const enveloped = structuredClone(dryrunShow) as typeof dryrunShow;
+    enveloped.record.data.subject =
+      '<untrusted-content boundary="b1" field="event" id="x">\n<img src=x onerror=alert(1)> Approve now\n</untrusted-content boundary="b1">';
+    renderApp(deliveriesBridge({ eventsDryrunShow: enveloped }), { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery(ID.dry);
+    const would = await within(page).findByRole('region', { name: 'What it would have delivered' });
+    await waitFor(() => expect(would.textContent).toContain('<img src=x onerror=alert(1)> Approve now'));
+    expect(page.querySelector('img')).toBeNull();
+    expect(page.textContent).not.toContain('untrusted-content');
+    const subject = would.querySelector('[data-field="data.subject"] [data-slot="from-outside"]');
+    expect(subject?.textContent).toBe('From outside: <img src=x onerror=alert(1)> Approve now');
+    const message = within(page).getByRole('region', { name: 'The message' });
+    expect([...message.querySelectorAll('[data-slot="from-outside"]')].map((each) => each.textContent)).toContain(
+      'From outside: <img src=x onerror=alert(1)> Approve now',
     );
   });
 

@@ -529,7 +529,7 @@ function buildEventsMcpServer(
     {
       title: 'Drop delivery',
       description:
-        'Stops one exact delivery that will be tried again, or drops one dead-letter delivery and its retained payload.',
+        "Stops one exact delivery that will be tried again in the lane this window is bound to, or drops one dead-letter delivery and its retained payload. Every other stop is the person's.",
       inputSchema: z.strictObject({ deliveryId: z.string().min(1) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
@@ -562,12 +562,16 @@ function buildEventsMcpServer(
   controlTool('events_rules_list', 'List event rules', 'Lists immutable local event rule versions.', {}, () =>
     rulesList(options),
   );
-  controlTool(
+  // Review of 0.32.0, finding 8: the window is named, so a lane it is not bound to keeps its counts to itself.
+  server.registerTool(
     'events_rule_show',
-    'Show event rule',
-    'Shows immutable versions of one event rule.',
-    { ruleId: z.string() },
-    (args) => ruleShow(args.ruleId as string, options),
+    {
+      title: 'Show event rule',
+      description: 'Shows immutable versions of one event rule.',
+      inputSchema: { ruleId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args, ctx) => reply(await ruleShow(args.ruleId, await scoped(ctx))),
   );
   controlTool(
     'events_rule_create',

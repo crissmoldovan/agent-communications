@@ -19,6 +19,7 @@ import type { QueueChannel } from '../domain/queue-target.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
 import { recordQueueHistory } from './queue-history.ts';
+import type { RuleShowEntryV1 } from './rule-show.ts';
 
 /**
  * Routing's lanes in the owner (routing design 2026-10-25, §3 and §6): which window the person bound to each lane, who
@@ -464,6 +465,58 @@ export class LaneService {
       const target = row as { readonly targetId?: unknown; readonly targetVersion?: unknown };
       const lane = lanes.get(`${String(target.targetId)}@${String(target.targetVersion)}`);
       return lane === undefined || lane === mine;
+    });
+  }
+
+  /**
+   * Whether an agent may stop this delivery (review of 0.32.0, finding 4). Stopping a delivery that will be tried again
+   * is the person's, as `queue clear` is: an agent window may stop only one in the lane it is bound to, and the CLI
+   * inside an MCP server's process (no window) none. A finished delivery stays finished, so its drop — a dead letter's
+   * payload — goes on to the operation's own answer, as before; one being sent may still turn into one that will be
+   * tried again, so it is refused here too.
+   */
+  assertAgentMayStop(deliveryId: unknown, caller: LaneWindowIdentity | undefined): void {
+    if (typeof deliveryId !== 'string') return;
+    const row = this.#store.database
+      .prepare(
+        `SELECT delivery.state, json_extract(target.document, '$.lane.name') AS lane
+           FROM deliveries AS delivery
+           LEFT JOIN target_versions AS target
+             ON target.target_id = delivery.target_id AND target.version = delivery.target_version
+          WHERE delivery.id = ?`,
+      )
+      .get(deliveryId) as { state: string; lane: string | null } | undefined;
+    if (row === undefined || !['queued', 'retryable', 'disclosing'].includes(row.state)) return;
+    const mine = caller === undefined ? null : (this.#bindingFor(caller)?.lane ?? null);
+    if (row.lane !== null && row.lane === mine) return;
+    throw new CommsError(
+      'APPROVAL_REQUIRED',
+      'stopping a delivery that will be tried again is for a person, at a terminal or in the app — an agent window may stop one only in the lane it is bound to',
+      {
+        hint: 'The person stops it in the app (Events → Deliveries) or at their terminal.',
+        details: { reason: 'PERSON_ONLY_STOP' },
+      },
+    );
+  }
+
+  /**
+   * `rule show` for an agent window (review of 0.32.0, finding 8): a version's `counts7d` says how much reached its
+   * lane, so a version with a lane target other than the window's own is shown without it. Everything else — the
+   * document, its times and its summary — is the window's to read, as before.
+   */
+  ruleVersionsForWindow(entries: readonly RuleShowEntryV1[], caller: LaneWindowIdentity): readonly unknown[] {
+    const mine = this.#bindingFor(caller)?.lane ?? null;
+    return entries.map((entry) => {
+      const targets = (entry.document as { readonly targets?: unknown }).targets;
+      const foreign =
+        Array.isArray(targets) &&
+        targets.some((target) => {
+          const lane = (target as { readonly lane?: { readonly name?: unknown } } | null)?.lane?.name;
+          return typeof lane === 'string' && lane !== mine;
+        });
+      if (!foreign) return entry;
+      const { counts7d: _hidden, ...rest } = entry;
+      return rest;
     });
   }
 

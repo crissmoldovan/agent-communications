@@ -62,7 +62,9 @@ agent-events delivery show <record-id>   # the delivery itself: its decision, th
 ```
 
 `dryrun list` and `dryrun show` take `--json` too, which is how the desktop app reads the log: `show` then gives the
-record as data (the exact event it would have sent, whose `agentcommsuntrusted` names the fields its sender wrote).
+record as data (the exact event it would have sent), with every field its sender controls inside the untrusted-content
+envelope: the ones `agentcommsuntrusted` names, every address (From, Reply-To, To, Cc) and the fields the queue shows
+from a sender, as `queue show --json` gives them.
 Inside the event service's MCP server both refuse, so no agent reads the log through MCP.
 
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
@@ -231,7 +233,9 @@ agent-events message show <event-id> --json          # one message, with every l
   - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
     is signed (Standard Webhooks). A delivery that will be tried again can be tried now (`delivery retry`) or
     stopped at once (`delivery drop`, from 0.32.0), and a dead letter's kept payload dropped (`delivery drop`). One
-    being sent right now can't be stopped mid-try: the refusal says so (`DELIVERY_IN_FLIGHT`).
+    being sent right now can't be stopped mid-try: the refusal says so (`DELIVERY_IN_FLIGHT`). Stopping is yours, at
+    your terminal or in the app, like clearing the queue: over MCP a window may stop only a delivery in the lane it is
+    bound to, and `delivery drop` inside the event service's MCP server stops none.
   - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
     token, and its origin is checked.
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window
@@ -240,7 +244,8 @@ agent-events message show <event-id> --json          # one message, with every l
 - **Rules and deliveries you can read (0.32.0):**
   - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words
     (its `summary`, as parts; a part of kind `untrusted` is the rule author's own text), and what it did in the last 7
-    days (`counts7d`). The approval preview prints the same words above the JSON you approve.
+    days (`counts7d`; over MCP, a window not bound to a lane the rule sends to gets the rule without it). The approval preview prints the same words above the JSON you approve, each piece of the rule
+    author's text as one escaped string in double quotes, which nothing it holds can close.
   - `deliveries list` gives each delivery's target kind, its last try's answer, the decision and event it came from,
     when it was delivered where a log keeps that, and when it failed for good. A delivered row has no next try.
   - `agent-events delivery show <delivery-id>` gives one delivery's details: its decision and the judge's answer, the

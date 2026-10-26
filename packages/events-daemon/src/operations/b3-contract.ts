@@ -1793,17 +1793,41 @@ export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
 }
 
+/** Every character a reader could take for a quote mark, other than the double quote JSON escapes itself. */
+const QUOTE_LIKE =
+  /['`\u00b4\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f\u2032\u2033\u2035\u2036\u00ab\u00bb\u2039\u203a\u301d\u301e\u301f\uff02\uff07]/gu;
+
+/**
+ * A rule author's string as one JSON string literal in double quotes: JSON escapes every `"`, backslash and control
+ * character in it, and every other quote-like character is written as its `\uXXXX` escape, so nothing the author wrote
+ * can end the literal, or look as if it did (review of 0.32.0, finding 5).
+ */
+function authorLiteral(text: string): string {
+  return JSON.stringify(neutralise(text).text).replace(
+    QUOTE_LIKE,
+    (char) => `\\u${(char.codePointAt(0) ?? 0).toString(16).padStart(4, '0')}`,
+  );
+}
+
+const RULE_SUMMARY_PREFIX = 'In plain words (the rule author\'s own text is in "double quotes"): ';
+
 /**
  * A rule's preview in plain words (0.32.0, owner feedback §3.4), above the canonical JSON, which stays: the JSON is what
- * is approved. Rule-author text is written escaped, as in the JSON, so a line break or a quote in an operand or the
- * judge's question cannot start a line of its own and pass for part of the preview.
+ * is approved. Each rule-author part is one literal it cannot close, in place of the single quotes the sentence gives
+ * it, so an operand or the judge's question cannot read on as the app's own words or start a line of its own.
  */
 function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
   if (document.kind !== 'rule') return [];
-  const text = describeRule(document.rule)
-    .map((part) => (part.kind === 'untrusted' ? JSON.stringify(part.text).slice(1, -1) : part.text))
-    .join('');
-  return [`In plain words: ${neutralise(text).text}`];
+  const parts = describeRule(document.rule).map((part) => ({ ...part }));
+  for (const [index, part] of parts.entries()) {
+    if (part.kind !== 'untrusted') continue;
+    const before = parts[index - 1];
+    const after = parts[index + 1];
+    if (before?.kind === 'plain' && before.text.endsWith("'")) before.text = before.text.slice(0, -1);
+    if (after?.kind === 'plain' && after.text.startsWith("'")) after.text = after.text.slice(1);
+  }
+  const text = parts.map((part) => (part.kind === 'untrusted' ? authorLiteral(part.text) : part.text)).join('');
+  return [`${RULE_SUMMARY_PREFIX}${neutralise(text).text}`];
 }
 
 /**

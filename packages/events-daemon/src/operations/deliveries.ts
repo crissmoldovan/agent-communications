@@ -38,12 +38,17 @@ export async function retryDelivery(deliveryId: string, options: Options = {}): 
  */
 export async function dropDelivery(
   deliveryId: string,
-  options: Options & { readonly caller?: LaneWindowIdentity | undefined } = {},
+  options: Options & {
+    readonly caller?: LaneWindowIdentity | undefined;
+    /** The CLI runs inside an MCP server's process: like a window with no lane, it stops nothing (review 0.32.0, 4). */
+    readonly insideMcpServer?: boolean | undefined;
+  } = {},
 ): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir }).request(
-    'dropDelivery',
-    options.caller === undefined ? { deliveryId } : { deliveryId, caller: options.caller },
-  );
+  return new EventControlClient({ stateDir: options.stateDir }).request('dropDelivery', {
+    deliveryId,
+    ...(options.caller === undefined ? {} : { caller: options.caller }),
+    ...(options.insideMcpServer === true ? { insideMcpServer: true } : {}),
+  });
 }
 
 export async function heldList(options: Options = {}): Promise<unknown> {

@@ -1743,9 +1743,14 @@ async function handleControl(
     const windowScoped =
       request.operation === OWNER_CONTROL_WIRES.deliveriesList ||
       request.operation === OWNER_CONTROL_WIRES.dropDelivery;
-    const { caller, args } = windowScoped ? splitCaller(request.args) : { caller: undefined, args: request.args };
+    const split = windowScoped ? splitCaller(request.args) : { caller: undefined, args: request.args };
+    const { caller } = split;
+    // Review of 0.32.0, finding 4: the CLI says when it runs inside an MCP server's process; the flag only narrows.
+    const { insideMcpServer, ...args } = split.args;
     if (caller !== undefined && request.operation === OWNER_CONTROL_WIRES.dropDelivery)
       assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
+    if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
+      lanes.assertAgentMayStop(args.deliveryId, caller);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
@@ -1866,9 +1871,13 @@ async function handleControl(
       );
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
-    case OWNER_CONTROL_WIRES.ruleShow:
+    case OWNER_CONTROL_WIRES.ruleShow: {
       if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
-      return readers.rules.show(requiredText(request.args.ruleId, 'rule id'));
+      // An agent window's call names the window: it gets no counts of a lane it is not bound to (review 0.32.0, 8).
+      const { caller, args } = splitCaller(request.args);
+      const entries = await readers.rules.show(requiredText(args.ruleId, 'rule id'));
+      return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);
+    }
     case OWNER_CONTROL_WIRES.createRule:
     case OWNER_CONTROL_WIRES.updateRule:
       return createRule(database, request.args.document);
