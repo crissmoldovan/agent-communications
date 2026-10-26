@@ -13,11 +13,13 @@ catalog:
 # Supply-chain defaults (pnpm 11): refuse versions younger than a day, and build nothing
 # with install scripts unless it is listed here.
 minimumReleaseAge: 1440
-# Two exact versions of CUE++'s own design system, published 2026-10-25 and taken the day they shipped for the desktop
-# app's 0.28.0 (its design, §9). They are a day old from 2026-10-26T08:52Z, when this list can go.
+# Three exact versions of CUE++'s own design system, published 2026-10-26 and taken the day they shipped for the desktop
+# app's move onto cue-ui's soft preset (CUE-571): the library now ships the look the app drew locally since 0.28.0.
+# They are a day old from 2026-10-27T13:37Z, when this list can go.
 minimumReleaseAgeExclude:
-  - "@cueplusplus/ui@0.30.0"
-  - "@cueplusplus/tokens@0.30.0"
+  - "@cueplusplus/ui@0.34.0"
+  - "@cueplusplus/tokens@0.34.0"
+  - "@cueplusplus/theme-soft@1.0.0"
 # esbuild's install script only optimises how its binary is found, and pnpm installs the platform binary as an optional
 # dependency, so nothing needs it run. No other dependency, the desktop app's included, lists an install script.
 allowBuilds: { esbuild: false }
