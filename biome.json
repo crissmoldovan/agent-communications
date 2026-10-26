@@ -10,7 +10,8 @@
       "!pnpm-lock.yaml",
       "!**/test/fixtures/released-*",
       "!packages/events/vendor/*/generated",
-      "!apps/desktop/src/themes/*/generated"
+      "!apps/desktop/src/themes/*/generated",
+      "!docs/prototypes"
     ]
   },
   "formatter": {
