@@ -173,7 +173,9 @@ test('Bind a window… offers the grouped windows only, and Bind in Terminal ope
   expect(await cliCalls(page)).toContainEqual({ kind: 'activitySessions', since: '24h' });
   await picker.locator('[data-window="7c1e5b9a0d2f4e68"]').getByRole('button', { name: 'Bind in Terminal' }).click();
   await expect(picker.getByText('Opened in Terminal.')).toBeVisible();
+  // The command is the bind and nothing else: the person confirms it there by typing the lane's name.
   expect(await terminals(page)).toEqual([{ kind: 'laneBind', lane: 'billing', window: '7c1e5b9a0d2f4e68' }]);
+  await expect(picker.getByText('Type billing in Terminal to confirm, then come back here.')).toBeVisible();
   // The app never binds itself: every lane call it made was a read.
   for (const call of await laneCalls(page)) expect(call).toEqual({ kind: 'laneList' });
 });

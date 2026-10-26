@@ -15,7 +15,7 @@ import {
 } from '../lanes.ts';
 import { readQueueList } from '../queue.ts';
 import { QUEUE_LIMIT } from '../screens/Queue.tsx';
-import { LANES_COPY, unbindTitle } from '../screens/QueueLanes.tsx';
+import { LANES_COPY, pickerAfterLine, unbindTitle } from '../screens/QueueLanes.tsx';
 import {
   createFakeBridge,
   type FakeBridge,
@@ -349,7 +349,8 @@ describe('Lanes: the panel', () => {
     expect(LANES_COPY.about).toContain('Other agent windows never see its items');
   });
 
-  it('why binding is at the terminal stays reachable beside Bind a window…', SLOW, async () => {
+  it('why binding is at the terminal stays reachable beside Bind a window…, in its exact words', SLOW, async () => {
+    expect(LANES_COPY.bindHint).toBe('You bind it at the terminal, so an agent can never bind itself.');
     const view = await openLanes(bridgeAt());
     await hint(
       await laneRow(view, 'billing'),
@@ -491,7 +492,10 @@ describe('Lanes: Bind a window…', () => {
       // Bind in Terminal opens the person's terminal with the bind command for that window's activity key.
       fireEvent.click(within(free).getByRole('button', { name: LANES_COPY.bindInTerminal }));
       expect(await within(dialog).findByText('Opened in Terminal.')).toBeTruthy();
+      // The command is the bind, and nothing else: the person types the lane's name there to confirm it.
       expect(terminals(bridge)).toEqual([{ kind: 'laneBind', lane: 'billing', window: '7c1e5b9a0d2f4e68' }]);
+      expect(await within(dialog).findByText('Type billing in Terminal to confirm, then come back here.')).toBeTruthy();
+      expect(pickerAfterLine('billing')).toBe('Type billing in Terminal to confirm, then come back here.');
       // The app never binds: no call does, and nothing is approved.
       expect(cliCalls(bridge).map((call) => call.kind)).not.toContain('laneBind');
       for (const call of laneCalls(bridge)) expect(JSON.stringify(call)).not.toMatch(/approv/i);

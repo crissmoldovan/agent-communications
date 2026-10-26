@@ -44,7 +44,7 @@ export const LANES_COPY = {
   bindHint: 'You bind it at the terminal, so an agent can never bind itself.',
   pickerBody: 'Agent windows from the last 24 hours.',
   bindInTerminal: 'Bind in Terminal',
-  pickerAfter: 'Run it in Terminal, then come back: the lane shows its window.',
+  windowIdLabel: "This window's whole id",
   noWindows: 'No agent windows in the last 24 hours.',
   noWindowsHint: 'A window shows here once its agent has used agent-communications.',
   hiddenHint:
@@ -72,6 +72,14 @@ export function unboundLine(lane: string): string {
 /** `Bind a window to <lane>` */
 export function pickerTitle(lane: string): string {
   return `Bind a window to ${lane}`;
+}
+
+/**
+ * What the picker says once the terminal has the bind command: the person confirms it there by typing the lane's name
+ * (the event service's gate), then comes back.
+ */
+export function pickerAfterLine(lane: string): string {
+  return `Type ${lane} in Terminal to confirm, then come back here.`;
 }
 
 /** `<n> more not listed`: the sessions in the range the picker cannot offer. */
@@ -453,7 +461,7 @@ function Picker({ lane, lanes }: { lane: string; lanes: LaneView[] }) {
       {outcome === null ? null : (
         <div className="flex flex-col gap-(--cue-space-1) text-(length:--cue-text-ui)">
           <TerminalResult outcome={outcome} />
-          <p className="text-fg-muted">{LANES_COPY.pickerAfter}</p>
+          <p className="text-fg-muted">{pickerAfterLine(lane)}</p>
         </div>
       )}
       {problem === null ? null : <Problem message={problem} />}
