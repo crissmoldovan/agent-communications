@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { CommsError, homeDirectory, shortenHome } from '@agentcomms/core';
+import { CommsError, homeDirectory, homeForDiscovery, shortenHome } from '@agentcomms/core';
 import { type TargetDocument, targetLane } from '../domain/activation-documents.ts';
 import {
   isActivityKey,
@@ -266,7 +266,8 @@ export class LaneService {
   #stopped = false;
 
   #homeFolder(): string {
-    this.#home ??= homeDirectory();
+    // Under test the account's real home is refused (`homeForDiscovery`): a test gives the owner a temporary one.
+    this.#home ??= homeForDiscovery(homeDirectory(), "the lanes' binding folders");
     return this.#home;
   }
 

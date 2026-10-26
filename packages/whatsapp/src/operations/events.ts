@@ -21,12 +21,20 @@ export interface WhatsAppEventOperations {
   ): Promise<T>;
 }
 
-/** Opens this channel's own context from the owner's config directory and returns no write-capable local-store handle. */
+/**
+ * Opens this channel's own context from the owner's config directory and returns no write-capable local-store handle.
+ * The context is made when first used: an owner with no WhatsApp account never resolves this channel's folders (and,
+ * under test, a test that never reaches WhatsApp never looks for them in the account's real home).
+ */
 export function openWhatsAppEventOperations(input: Readonly<{ configDir: string }>): WhatsAppEventOperations {
-  const context = new WhatsAppContext({ pathOverrides: { configDir: input.configDir } });
+  let opened: WhatsAppContext | undefined;
+  const context = (): WhatsAppContext => {
+    opened ??= new WhatsAppContext({ pathOverrides: { configDir: input.configDir } });
+    return opened;
+  };
   return {
-    withCurrentEventVisibility: (visibilityInput, work) => withCurrentEventVisibility(context, visibilityInput, work),
-    withEventSnapshot: (snapshotInput, work) => withEventSnapshot(context, snapshotInput, work),
+    withCurrentEventVisibility: (visibilityInput, work) => withCurrentEventVisibility(context(), visibilityInput, work),
+    withEventSnapshot: (snapshotInput, work) => withEventSnapshot(context(), snapshotInput, work),
   };
 }
 

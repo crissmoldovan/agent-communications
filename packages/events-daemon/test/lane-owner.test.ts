@@ -14,7 +14,6 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { type RawClient, type RawMessage, rawClient, resultText } from './support/raw-mcp.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
-import { noRealHome } from './support/temp-home.ts';
 
 /**
  * Routing's first slice end to end, through a real owner (routing design 2026-10-25): a fake Gmail mailbox, a lane the
@@ -200,7 +199,6 @@ async function withOwner(work: (harness: Harness) => Promise<void>): Promise<voi
     };
   };
   const owner = await startEventOwner({
-    ...noRealHome(stateDir),
     stateDir,
     configDir,
     // A home of its own, never the real one: a binding's folder is shown as `~` under it.
