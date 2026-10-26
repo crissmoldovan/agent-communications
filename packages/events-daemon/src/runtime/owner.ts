@@ -6,6 +6,8 @@ import {
   type AuditLog,
   CommsError,
   type ConfigStore,
+  homeDirectory,
+  homeForDiscovery,
   isCommsError,
   openCore,
   resolvePaths,
@@ -68,10 +70,12 @@ import { SlackHistoryStageExpiry } from '../sources/slack.ts';
 import { SlackReplyStageExpiry } from '../sources/slack-replies.ts';
 import { GmailStageExpiry, type GmailStageRecord } from '../sources/source-worker.ts';
 import { openEventDatabase } from '../store/database.ts';
-import { openEventSecretStore } from '../store/event-secrets.ts';
+import { openEventSecretStore, providerSecretOwner } from '../store/event-secrets.ts';
 import { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
+import { AgentSessionService } from './agent-sessions.ts';
+import type { AnalyseTransport } from './analyse-transport.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
 import { projectE2Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
@@ -93,6 +97,7 @@ import {
   type FixedSyntheticTargetTransport,
   TargetResumeControl,
 } from './b3-target-test-control.ts';
+import { contextGenerator } from './context-generate.ts';
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { DELIVERY_ACTIVITY_INTERVAL_MS, DeliveryActivity } from './delivery-activity.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
@@ -105,11 +110,15 @@ import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeSetupService } from './judge-setup.ts';
+import { JudgeReader } from './judge-show.ts';
 import { JudgeTestControl } from './judge-test.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
+import { LinearClient, type LinearClientOptions } from './linear-client.ts';
+import { LinearDispatcher } from './linear-dispatcher.ts';
+import { LinearIntegration } from './linear-integration.ts';
 import { acquireEventOwnerLock, type EventOwnerLock } from './locks.ts';
 import { MessagesStore } from './messages.ts';
 import { type EventPaths, ensureEventPaths, ensureEventSocketDirectory, eventPaths } from './paths.ts';
@@ -126,8 +135,12 @@ import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
+import { RuleAnalyseService } from './rule-analyse.ts';
 import { RuleReader } from './rule-show.ts';
 import { EventScheduler } from './scheduler.ts';
+import type { ContextGenerator } from './session-context.ts';
+import { SessionDispatcher } from './session-dispatcher.ts';
+import { SessionQueue, SessionQueueFollower } from './session-queue.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
@@ -188,6 +201,11 @@ export interface EventOwnerOptions {
     | ((input: { readonly accountId: string; readonly alias: string }) => Promise<ResendEventReader>)
     | undefined;
   readonly whatsappEventOperations?: WhatsAppEventOperations | undefined;
+  /**
+   * Linear's GraphQL client (0.33.0 design §3.4): its resolver and pinned connections. Production leaves it unset and
+   * reaches only api.linear.app; a test gives a loopback fake, and never the real Linear.
+   */
+  readonly linearClient?: LinearClientOptions | undefined;
   /** Test seam only: replaces D's composition so the missing-seam refusal can be proven on the real start path. */
   readonly phaseDComposition?: typeof createPhaseDWhatsAppOwnerComposition | undefined;
   readonly tickMs?: number | undefined;
@@ -196,6 +214,11 @@ export interface EventOwnerOptions {
   readonly now?: (() => number) | undefined;
   /** Test-only deterministic identifiers for contract-vector reproduction. */
   readonly newIntentId?: (() => string) | undefined;
+  /**
+   * Analyse's model transport (0.33.0 §3.3). Production leaves it unset: the pinned, global-only path to the provider's
+   * fixed endpoint. A test supplies a loopback fake.
+   */
+  readonly analyseTransport?: Pick<AnalyseTransport, 'call'> | undefined;
   /**
    * Test-only control transport seam. It receives the production authenticated-request handler without opening a
    * Unix listener, which lets contract tests run in restricted sandboxes while exercising the real owner.
@@ -222,6 +245,24 @@ export interface EventOwnerOptions {
    * uses the daemon's shipped assets, this process's platform, no failpoint, and launches only the shipped worker
    * under the macOS sandbox.
    */
+  /**
+   * The person's home folder, a test seam: a lane binding's folder is shown under it as `~`, and agent sessions find
+   * the relay's default homes under it. A test pins a temp folder, so no real home is read; production finds the
+   * person's own, and only when one of those first needs it.
+   */
+  readonly homeDirectory?: string | undefined;
+  /**
+   * Agent sessions (0.33.0 §3.5), test seams only: the home folder the relay's default homes are found under — a test
+   * pins a temp folder, so no real relay home is read — a fake model for generate parts, and how often the busy queue
+   * asks the relay again. Production uses the person's home, OpenRouter with the person's key, and 30 seconds.
+   */
+  readonly agentSessions?:
+    | {
+        readonly homeDirectory?: string | undefined;
+        readonly generate?: ContextGenerator | undefined;
+        readonly reconcileMs?: number | undefined;
+      }
+    | undefined;
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -1124,12 +1165,39 @@ async function startOwnerWithLock(
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
   // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
-  const lanes = new LaneService({ store: database, queue, now });
+  const lanes = new LaneService({
+    store: database,
+    queue,
+    now,
+    ...(options.homeDirectory === undefined ? {} : { home: options.homeDirectory }),
+  });
   // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
   // and each rule version with its times, its plain-words summary and its last 7 days.
+  // The Linear target's one client (0.33.0 design §3.4): the integration's read and the Linear dispatcher share it.
+  const linearClient = new LinearClient(options.linearClient);
   const readers: OwnerReaders = {
     deliveries: new DeliveryReader({ store: database, cipher, now }),
     rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+    // One judge version's exact document (0.33.0), for the rule editor: configuration only, never a key.
+    judges: new JudgeReader({ store: database }),
+    linear: new LinearIntegration({ secrets: eventSecrets, cipher, client: linearClient }),
+    // Analyse (0.33.0 §3.3): the rule, its content-free counts, and a model on the person's own provider key, read at
+    // the call and never kept.
+    analyse: new RuleAnalyseService({
+      store: database,
+      cipher,
+      keyPresence: () => b3Ports.secrets.providerKeys(),
+      keyFor: async (provider) => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner(provider),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+      ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
+      now,
+    }),
   };
   notifyLaneAppend = () => lanes.notifyAppended();
   // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
@@ -1166,12 +1234,85 @@ async function startOwnerWithLock(
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
   });
+  // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
+  // queue and its follower of the relay's event stream, and the session target's delivery boundary.
+  const agentSessions = new AgentSessionService({
+    store: database,
+    // Found only when the relay or a root is first looked at: an owner that never does never reads the environment's home.
+    // Under test the account's real home is refused there (`homeForDiscovery`): a test gives the owner a temporary one.
+    homeDirectory:
+      options.agentSessions?.homeDirectory ??
+      options.homeDirectory ??
+      (() => homeForDiscovery(homeDirectory(), 'the claude-stream relay')),
+    // Agent Comms' own folders: no session works in them, and no file part is read from them (review of 0.33.0, 4).
+    deniedFolders: [
+      ...new Set([
+        core.paths.configDir,
+        core.paths.stateDir,
+        core.paths.secretsDir,
+        core.paths.dataDir,
+        stateDir,
+        ...(options.dataDir === undefined ? [] : [options.dataDir]),
+      ]),
+    ],
+    audit: core.audit,
+    now,
+  });
+  const sessionQueue = new SessionQueue({ store: database, now });
+  let tickAfterRelease: () => void = () => undefined;
+  const sessionFollower = new SessionQueueFollower({
+    queue: sessionQueue,
+    sessions: agentSessions,
+    onReleased: () => tickAfterRelease(),
+    ...(options.agentSessions?.reconcileMs === undefined ? {} : { reconcileMs: options.agentSessions.reconcileMs }),
+  });
+  // A generate part's model runs on Analyse's transport and routes, under its own hosted purpose, with the person's key
+  // for the part's provider, read at the call and never kept.
+  const generate =
+    options.agentSessions?.generate ??
+    contextGenerator({
+      key: async (provider) => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner(provider),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+    });
+  const sessionDispatcher = new SessionDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    sessions: agentSessions,
+    follower: sessionFollower,
+    generate,
+    expiry,
+    now,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    onAppended: () => notifyLaneAppend(),
+  });
+  // The Linear target's delivery (0.33.0 design §3.4): the webhook's fences, through the one Linear client.
+  const linear = new LinearDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    secrets: eventSecrets,
+    client: linearClient,
+    whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    now,
+  });
   const dispatcher = new DeliveryDispatcher({
     store: database,
     dryrun,
     webhook,
     sse,
     queue: queueDispatcher,
+    session: sessionDispatcher,
+    linear,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
@@ -1274,6 +1415,8 @@ async function startOwnerWithLock(
     approvals: core.approvals,
     config: core.config,
     gmailSourceFor,
+    assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
+    assertLinearTargets: (rule) => readers.linear?.assertActivation(rule) ?? Promise.resolve('none'),
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
@@ -1573,9 +1716,10 @@ async function startOwnerWithLock(
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
-      // A lane's watches and long-polls end with the service (routing §3.4).
+      // A lane's watches and long-polls end with the service (routing §3.4), and so does the busy queue's follow.
       lanes.close();
       try {
+        await sessionFollower.stop();
         await scheduler.stop();
         await control?.close();
         await layaWorker.close();
@@ -1641,6 +1785,7 @@ async function startOwnerWithLock(
           () => connectedEventAccounts(core.config),
           judgeSetup,
           readers,
+          { service: agentSessions, queue: sessionQueue },
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1651,6 +1796,12 @@ async function startOwnerWithLock(
     await writeInstance(paths, instance);
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
+    // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are
+    // followed again.
+    tickAfterRelease = () => {
+      if (!stopped) void owner.tick().catch(() => undefined);
+    };
+    sessionFollower.notify();
     return owner;
   } catch (error) {
     await owner.stop();
@@ -1710,10 +1861,14 @@ async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise
   }
 }
 
-/** The person's reads that need the owner's clock or cipher (0.32.0). */
+/** The person's reads that need the owner's clock or cipher (0.32.0), and Analyse (0.33.0). */
 interface OwnerReaders {
   readonly deliveries: DeliveryReader;
   readonly rules: RuleReader;
+  readonly judges: JudgeReader;
+  readonly analyse: RuleAnalyseService;
+  /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
+  readonly linear?: LinearIntegration | undefined;
 }
 
 async function handleControl(
@@ -1733,6 +1888,7 @@ async function handleControl(
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
   judgeSetup?: JudgeSetupService | undefined,
   readers?: OwnerReaders,
+  sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1783,6 +1939,19 @@ async function handleControl(
       return dispatcher.list();
     case OWNER_CONTROL_WIRES.dryrunShow:
       return dispatcher.read(requiredText(request.args.deliveryId, 'local delivery id'));
+    // Settings → Integrations: Linear's key and what it sees (0.33.0 §3.4), or where the person's claude-stream relay is
+    // (§3.5). Each is the person's read, at a terminal or in the app.
+    case OWNER_CONTROL_WIRES.integrationShow: {
+      const args = personOnly(request.args, 'integration show');
+      if (args.integration === 'agent-sessions') {
+        const { integration: _integration, ...rest } = args;
+        if (Object.keys(rest).length > 0)
+          throw new CommsError('USAGE', 'integration show agent-sessions takes no options');
+        return requireSessions(sessions).service.show();
+      }
+      if (readers?.linear === undefined) throw new CommsError('USAGE', 'integration show is not available');
+      return readers.linear.show(args);
+    }
     case OWNER_CONTROL_WIRES.deliveryShow:
       if (readers === undefined) throw new CommsError('USAGE', 'delivery show is not available');
       return readers.deliveries.show(requiredText(personOnly(request.args, 'delivery show').deliveryId, 'delivery id'));
@@ -1843,15 +2012,39 @@ async function handleControl(
       return messages.list(personOnly(request.args, 'messages list'));
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
+    // Analyse (0.33.0 §3.3): the person's, from the CLI and the app; a caller is refused. It writes nothing.
+    // One judge version's document (0.33.0): content-free, for the person and an agent alike, as judges list is.
+    case OWNER_CONTROL_WIRES.judgeShow:
+      if (readers === undefined) throw new CommsError('USAGE', 'judge show is not available');
+      return readers.judges.show(request.args);
+    case OWNER_CONTROL_WIRES.ruleAnalyse:
+      if (readers === undefined) throw new CommsError('USAGE', 'rule analyse is not available');
+      return readers.analyse.analyse(personOnly(request.args, 'rule analyse'), request.signal);
     // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
     case OWNER_CONTROL_WIRES.judgeSetup:
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
+    case OWNER_CONTROL_WIRES.approveRuleFromApp:
+      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
     case OWNER_CONTROL_WIRES.providerList:
       return requireJudgeSetup(judgeSetup).providerList();
     case OWNER_CONTROL_WIRES.providerKeySet:
       return requireJudgeSetup(judgeSetup).providerKeySet(request.args, request.origin);
     case OWNER_CONTROL_WIRES.providerKeyRemove:
       return requireJudgeSetup(judgeSetup).providerKeyRemove(request.args, request.origin);
+    // Agent sessions (0.33.0 §3.5). Where the relay is is the person's to see and set; the busy queue is theirs to see
+    // and drop from, and a bound window's call sees only its own lane's items (routing B4), as the queue's does.
+    case OWNER_CONTROL_WIRES.integrationSet: {
+      const { integration, ...settings } = personOnly(request.args, 'integration set');
+      integrationName({ integration });
+      return requireSessions(sessions).service.set(settings, request.origin);
+    }
+    case OWNER_CONTROL_WIRES.sessionQueueList: {
+      const { caller } = splitCaller(request.args);
+      if (caller === undefined) return requireSessions(sessions).queue.list();
+      return requireSessions(sessions).queue.list({ lane: callerScope(lanes, caller)?.lane ?? null });
+    }
+    case OWNER_CONTROL_WIRES.sessionQueueDrop:
+      return requireSessions(sessions).queue.drop(personOnly(request.args, 'session-queue drop').deliveryId);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1918,6 +2111,18 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requireSessions<T>(sessions: T | undefined): T {
+  if (sessions === undefined) throw new CommsError('CONFIG', 'agent sessions are not composed for this owner');
+  return sessions;
+}
+
+/** The integration `integration set` changes (0.33.0 §3.5): agent-sessions; Linear's is its key, a provider key. */
+function integrationName(args: Readonly<Record<string, unknown>>): 'agent-sessions' {
+  if (args.integration !== 'agent-sessions')
+    throw new CommsError('USAGE', 'the integration is agent-sessions', { details: { reason: 'UNKNOWN_INTEGRATION' } });
+  return 'agent-sessions';
 }
 
 function requireJudgeSetup(service: JudgeSetupService | undefined): JudgeSetupService {

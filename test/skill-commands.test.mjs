@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -58,13 +59,27 @@ function promisedCommands(text, binary) {
  * this check believed it, which made the whole audit pass for a command that does not exist. What distinguishes
  * them is the `Usage:` line: it names the command that actually ran.
  */
+/** A temporary home and Agent Comms folders for every `--help` run: none resolves the person's own. */
+const SCRATCH = mkdtempSync(join(tmpdir(), 'skill-commands-'));
+process.once('exit', () => rmSync(SCRATCH, { recursive: true, force: true }));
+const SCRATCH_ENV = {
+  ...process.env,
+  HOME: SCRATCH,
+  USERPROFILE: SCRATCH,
+  AGENT_COMMS_CONFIG_DIR: join(SCRATCH, 'config'),
+  AGENT_COMMS_STATE_DIR: join(SCRATCH, 'state'),
+  AGENT_COMMS_DATA_DIR: join(SCRATCH, 'data'),
+  NO_COLOR: '1',
+  AGENT_COMMS_UPDATE_CHECK: 'off',
+};
+
 async function exists(entry, binary, argv) {
   let output;
   try {
     const result = await run(
       process.execPath,
       ['--experimental-strip-types', '--disable-warning=ExperimentalWarning', join(ROOT, entry), ...argv, '--help'],
-      { env: { ...process.env, NO_COLOR: '1', AGENT_COMMS_UPDATE_CHECK: 'off' } },
+      { env: SCRATCH_ENV },
     );
     output = `${result.stdout}${result.stderr}`;
   } catch (error) {

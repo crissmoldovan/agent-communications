@@ -2,6 +2,7 @@ import { CommsError, isCommsError, sessionIdentity, warmSessionIdentity } from '
 import { McpServer, ProtocolError, ProtocolErrorCode, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { isClaudeCodeSessionId, type LaneClientInfo, type LaneWindowIdentity } from '../domain/lanes.ts';
+import { sessionQueueList } from '../operations/agent-sessions.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import type { B3ControlOperation, B3McpRegistrar } from '../operations/b3-contract.ts';
 import { catalogueList, catalogueShow } from '../operations/catalogue.ts';
@@ -16,6 +17,7 @@ import {
   enableJudgeKind,
   judgeKindsList,
   judgeModelStatus,
+  judgeShow,
   judgesList,
   judgeTest,
   removeJudge,
@@ -409,6 +411,17 @@ function buildEventsMcpServer(
     judgesList(options),
   );
   strictControlTool(
+    'events_judge_show',
+    'Show judge',
+    "Shows one judge version's exact canonical document — kind, provider, model, endpoint, prompt template, protocol — with its digest and state, to embed in a rule. Never a key: a judge's key is not part of its document.",
+    { judgeId: z.string().min(1), version: z.number().int().positive().optional() },
+    (args) =>
+      judgeShow(args.judgeId as string, {
+        ...options,
+        ...(args.version === undefined ? {} : { version: args.version as number }),
+      }),
+  );
+  strictControlTool(
     'events_judge_add',
     'Add judge',
     'Creates an immutable, initially inactive judge version.',
@@ -461,12 +474,12 @@ function buildEventsMcpServer(
     {},
     () => judgeKindsList(options),
   );
-  // Whether each AI provider has a key (owner decision 2026-10-26): never a key. Setting one, removing one and judge
-  // setup are the person's, in the app or at their terminal; no tool here performs them.
+  // Whether each provider has a key (owner decision 2026-10-26; Linear from 0.33.0): never a key. Setting one, removing
+  // one and judge setup are the person's, in the app or at their terminal; no tool here performs them.
   strictControlTool(
     'events_provider_list',
-    'List AI providers',
-    'Lists TypeSafe and OpenRouter, the providers Jev can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
+    'List providers',
+    'Lists TypeSafe, OpenRouter and Anthropic, the providers Jev and Analyse can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.',
     {},
     () => providerList(options),
   );
@@ -688,6 +701,19 @@ function buildEventsMcpServer(
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (_args, ctx) => reply(await queueCounts(await scoped(ctx))),
+  );
+  // The busy queue (0.33.0 §3.5): a bound window sees only its own lane's waiting matches (routing B4), content-free;
+  // dropping one, and every other lane's, is the person's.
+  server.registerTool(
+    'events_session_queue_list',
+    {
+      title: 'List matches waiting for a busy session',
+      description:
+        'Lists the matches of the lane bound to this window that wait for its agent session to finish its run: ids and times, never what they say. Each is passed on when the run ends; only the person drops one.',
+      inputSchema: z.strictObject({}),
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (_args, ctx) => reply(await sessionQueueList(await scoped(ctx))),
   );
   for (const [name, title, description, operation] of [
     ['events_queue_done', 'Mark queue item done', 'Marks one queue item done; it stays for its retention.', queueDone],

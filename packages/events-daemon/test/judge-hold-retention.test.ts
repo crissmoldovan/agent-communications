@@ -10,6 +10,7 @@ import { shortenRuleRetentionDeadlines } from '../src/runtime/replacements.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 function seedHold(
   store: Awaited<ReturnType<typeof openEventDatabase>>,
@@ -188,6 +189,7 @@ test('E8: owner startup expires a held projection before it exposes its control 
     });
     store.close();
     owner = await startEventOwner({
+      ...noRealHome(stateDir),
       stateDir,
       configDir: await emptyConfigDir(stateDir),
       // The injected process clock is deliberately stale. Only the owner startup transaction's SQLite clock may

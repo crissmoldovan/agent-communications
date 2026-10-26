@@ -21,12 +21,26 @@ export interface WhatsAppEventOperations {
   ): Promise<T>;
 }
 
-/** Opens this channel's own context from the owner's config directory and returns no write-capable local-store handle. */
-export function openWhatsAppEventOperations(input: Readonly<{ configDir: string }>): WhatsAppEventOperations {
-  const context = new WhatsAppContext({ pathOverrides: { configDir: input.configDir } });
+/**
+ * Opens this channel's own context from the owner's config directory and returns no write-capable local-store handle.
+ * The context is made when first used: an owner with no WhatsApp account never resolves this channel's folders (and,
+ * under test, a test that never reaches WhatsApp never looks for them in the account's real home).
+ */
+export function openWhatsAppEventOperations(
+  // `env` is a test seam: a test gives a temporary home, so this channel's other folders are never the person's own.
+  input: Readonly<{ configDir: string; env?: NodeJS.ProcessEnv | undefined }>,
+): WhatsAppEventOperations {
+  let opened: WhatsAppContext | undefined;
+  const context = (): WhatsAppContext => {
+    opened ??= new WhatsAppContext({
+      ...(input.env === undefined ? {} : { env: input.env }),
+      pathOverrides: { configDir: input.configDir },
+    });
+    return opened;
+  };
   return {
-    withCurrentEventVisibility: (visibilityInput, work) => withCurrentEventVisibility(context, visibilityInput, work),
-    withEventSnapshot: (snapshotInput, work) => withEventSnapshot(context, snapshotInput, work),
+    withCurrentEventVisibility: (visibilityInput, work) => withCurrentEventVisibility(context(), visibilityInput, work),
+    withEventSnapshot: (snapshotInput, work) => withEventSnapshot(context(), snapshotInput, work),
   };
 }
 

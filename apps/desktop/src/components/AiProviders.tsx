@@ -18,9 +18,10 @@ import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
 import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
-import { AI_PROVIDERS, type AiProvider, type Call, errorMessage } from '../ipc.ts';
+import { AI_PROVIDERS, type AiProvider, type Call, errorMessage, type TerminalCommand } from '../ipc.ts';
 import { takeDestination, useNavigate } from '../navigation.tsx';
-import { type ListedJudge, providerInUse, readProviders } from '../providers.ts';
+import { keyOf, providerInUse, readListedJudges, readProviders } from '../providers.ts';
+import { DoInTerminal, refusedAsUnattested, setupsAtTerminal } from './DoInTerminal.tsx';
 import { keyLabel, keyPlaceholder, PROVIDERS_COPY, removeKeyTitle } from './judges/copy.ts';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
@@ -40,18 +41,6 @@ const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 const PROVIDER_LIST: Call = { kind: 'providerList' };
 const JUDGES: Call = { kind: 'judgesList' };
 
-/** `judges list`, read leniently: only to say whether Jev uses a key. Anything else claims nothing. */
-function readListedJudges(value: unknown): ListedJudge[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.filter(
-    (entry): entry is ListedJudge =>
-      typeof entry === 'object' &&
-      entry !== null &&
-      typeof (entry as ListedJudge).kind === 'string' &&
-      typeof (entry as ListedJudge).provider === 'string',
-  );
-}
-
 /** The section, once the events service is one with provider keys; otherwise what it needs first, or nothing. */
 export function AiProviders() {
   const { installation } = useAppData();
@@ -59,7 +48,7 @@ export function AiProviders() {
   const sectionRef = useRef<HTMLElement>(null);
   // A link from Events → Judges lands here: the section is scrolled to, and focus moves to it.
   useEffect(() => {
-    if (takeDestination('settings') === null) return;
+    if (takeDestination('settings', (destination) => destination.section === 'ai-providers') === null) return;
     sectionRef.current?.scrollIntoView?.({ block: 'start' });
     sectionRef.current?.focus();
   }, []);
@@ -132,6 +121,15 @@ function Providers() {
                     reload={reload}
                   />
                 ))}
+                {/* Anthropic's key (0.33.0), for Analyse: a row once the event service keeps one. */}
+                {listsAnthropic(keys.result) ? (
+                  <ProviderRow
+                    provider="anthropic"
+                    hasKey={keys.result.state === 'ready' && keyOf(keys.result.value, 'anthropic')}
+                    used={null}
+                    reload={reload}
+                  />
+                ) : null}
               </div>
             )
           }
@@ -159,6 +157,13 @@ function Providers() {
   );
 }
 
+/** Whether `provider list` names Anthropic: an event service of 0.33.0 or later. */
+function listsAnthropic(result: { state: string; value?: unknown }): boolean {
+  if (result.state !== 'ready') return false;
+  const providers = (result.value as { providers?: unknown } | null)?.providers;
+  return Array.isArray(providers) && providers.some((entry) => (entry as { id?: unknown })?.id === 'anthropic');
+}
+
 /** One provider: its name and whether it has a key; Add key… when not, Replace… and Remove… when it has. */
 function ProviderRow({
   provider,
@@ -166,7 +171,7 @@ function ProviderRow({
   used,
   reload,
 }: {
-  provider: AiProvider;
+  provider: AiProvider | 'anthropic';
   hasKey: boolean;
   used: boolean | null;
   reload: () => Promise<void>;
@@ -179,6 +184,18 @@ function ProviderRow({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
   const field = useRef<HTMLInputElement>(null);
+  // Where the app cannot attest the person, a key is set or removed in a terminal, which asks for it there: the app
+  // never has it. On macOS too, once the event service refuses the app for that reason.
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
+  const [pending, setPending] = useState<TerminalCommand | null>(null);
+  const setAtTerminal: TerminalCommand = { kind: 'providerKeySet', provider };
+  const removeAtTerminal: TerminalCommand = { kind: 'atTerminal', call: { kind: 'providerKeyRemove', provider } };
+  const openForm = () => {
+    setProblem(null);
+    if (atTerminal) setPending(setAtTerminal);
+    else setForm(true);
+  };
 
   const empty = () => {
     if (field.current !== null) field.current.value = '';
@@ -193,8 +210,14 @@ function ProviderRow({
     setProblem(null);
     try {
       const result = await bridge.providerKeySet(provider, value);
-      if (result.status === 'failed') setProblem({ message: result.message, hint: result.hint });
-      else setForm(false);
+      if (result.status === 'failed') {
+        setProblem({ message: result.message, hint: result.hint });
+        if (refusedAsUnattested(result.code)) {
+          setRefused(true);
+          setForm(false);
+          setPending(setAtTerminal);
+        }
+      } else setForm(false);
     } catch (error) {
       setProblem({ message: errorMessage(error), hint: null });
     } finally {
@@ -204,10 +227,20 @@ function ProviderRow({
   };
 
   const remove = async () => {
-    setBusy(true);
     setProblem(null);
+    if (atTerminal) {
+      setPending(removeAtTerminal);
+      return;
+    }
+    setBusy(true);
     const outcome = await run({ kind: 'providerKeyRemove', provider });
-    if (outcome.state === 'failed') setProblem({ message: outcome.message, hint: outcome.hint });
+    if (outcome.state === 'failed') {
+      setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) {
+        setRefused(true);
+        setPending(removeAtTerminal);
+      }
+    }
     await reload();
     setBusy(false);
   };
@@ -233,11 +266,15 @@ function ProviderRow({
             </span>
             <span className="text-fg-muted">{where}</span>
           </div>
-          {hasKey ? (
+          {provider === 'anthropic' ? (
+            hasKey ? (
+              <p className="text-fg-muted">{PROVIDERS_COPY.usedByAnalyse}</p>
+            ) : null
+          ) : hasKey ? (
             used === null ? null : (
               <p className="text-fg-muted">{used ? PROVIDERS_COPY.usedByJev : PROVIDERS_COPY.notUsed}</p>
             )
-          ) : (
+          ) : keys === null ? null : (
             <p className="text-fg-muted">
               {PROVIDERS_COPY.noAccount}
               <Link
@@ -291,12 +328,23 @@ function ProviderRow({
             </form>
           ) : null}
           <SetupProblem problem={problem} />
+          {pending === null ? null : (
+            <DoInTerminal
+              command={pending}
+              asksForKey={pending.kind === 'providerKeySet'}
+              onCancel={() => setPending(null)}
+              onDone={() => {
+                setPending(null);
+                void reload();
+              }}
+            />
+          )}
         </div>
-        {form ? null : (
+        {form || pending !== null ? null : (
           <div className="flex shrink-0 items-center gap-(--cue-space-2)">
             {hasKey ? (
               <>
-                <Button size="sm" disabled={busy} onClick={() => setForm(true)}>
+                <Button size="sm" disabled={busy} onClick={openForm}>
                   {PROVIDERS_COPY.replace}
                 </Button>
                 <AlertDialog.Root>
@@ -322,7 +370,7 @@ function ProviderRow({
                 </AlertDialog.Root>
               </>
             ) : (
-              <Button size="sm" disabled={busy} onClick={() => setForm(true)}>
+              <Button size="sm" disabled={busy} onClick={openForm}>
                 {PROVIDERS_COPY.addKey}
               </Button>
             )}

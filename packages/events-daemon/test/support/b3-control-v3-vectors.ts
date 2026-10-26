@@ -6,6 +6,7 @@ import { EventControlClient } from '../../src/control/client.ts';
 import { startEventOwner } from '../../src/runtime/owner.ts';
 import { emptyConfigDir } from './config-dir.ts';
 import { shortTempDir } from './short-temp.ts';
+import { noRealHome } from './temp-home.ts';
 
 /*
  * B3 control v3's Laya judge vectors (E2 Task 10a): one fixed sequence through the production owner over the daemon's
@@ -81,6 +82,7 @@ export async function liveVectors(): Promise<Vector[]> {
   const root = await shortTempDir('events-e2-t10a-v3-');
   const stateDir = join(root, 'state');
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(root),
     dataDir: join(root, 'data'),

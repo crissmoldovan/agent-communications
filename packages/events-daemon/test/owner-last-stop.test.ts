@@ -9,6 +9,7 @@ import { runEventOwner } from '../src/runtime/owner.ts';
 import { eventPaths } from '../src/runtime/paths.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /** Waits until the owner answers its control socket, failing at once if `running` settles first. */
 async function untilAnswering(client: EventControlClient, running: Promise<void>): Promise<void> {
@@ -50,7 +51,7 @@ test('a stop by request writes last-stop.json with this pid, a time after the st
     const configDir = await emptyConfigDir(stateDir);
     const eventsDir = eventPaths(stateDir).root;
     const startedAt = Date.now();
-    const running = runEventOwner({ stateDir, configDir });
+    const running = runEventOwner({ ...noRealHome(stateDir), stateDir, configDir });
     const client = new EventControlClient({ stateDir, clientName: 'events-daemon-last-stop-test' });
     await untilAnswering(client, running);
     assert.deepEqual(await lastStopNames(eventsDir), [], 'a running owner has written no marker');
@@ -87,7 +88,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
       const eventsDir = eventPaths(stateDir).root;
       // The owner hears its signals through this seam, so the test runner's own handlers on `process` never fire.
       const signals = new EventEmitter();
-      const running = runEventOwner({ stateDir, configDir, signals });
+      const running = runEventOwner({ ...noRealHome(stateDir), stateDir, configDir, signals });
       const client = new EventControlClient({ stateDir, clientName: 'events-daemon-last-stop-signal-test' });
       let stopped = false;
       try {
@@ -122,6 +123,7 @@ test('an owner that fails to start writes no marker', { skip: WINDOWS_SKIP }, as
     // The owner exists and its stop() runs before the start rethrows, as judge-hold-retention's control seam shows.
     await assert.rejects(
       runEventOwner({
+        ...noRealHome(stateDir),
         stateDir,
         configDir,
         startControlServer: async () => {
@@ -133,6 +135,7 @@ test('an owner that fails to start writes no marker', { skip: WINDOWS_SKIP }, as
     // Refused before the owner exists, as phase-d-owner-composition's missing seam is.
     await assert.rejects(
       runEventOwner({
+        ...noRealHome(stateDir),
         stateDir,
         configDir,
         phaseDComposition: () => {

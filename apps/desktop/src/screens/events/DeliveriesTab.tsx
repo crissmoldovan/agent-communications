@@ -7,13 +7,20 @@
  * "next try 1970" on every delivered row, where the event service had left 0.
  */
 import { Button, Chip, EmptyState, InfoTip, Panel, Row, SegmentedControl, Spinner } from '@cueplusplus/ui';
-import { ChevronRight, FileText, Inbox, Link2, Radio } from 'lucide-react';
+import { Bot, ChevronRight, FileText, Inbox, Link2, ListTodo, Radio } from 'lucide-react';
 import { type ComponentType, type ReactNode, useState } from 'react';
 import { aliasOf } from '../../account-aliases.ts';
 import { productLabel } from '../../components/ApprovalCard.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY } from '../../copy.ts';
-import { type DeliveryGroup, type DeliveryRow, deliveryGroup, nextTry, stateWords } from '../../events-deliveries.ts';
+import {
+  type DeliveryGroup,
+  type DeliveryRow,
+  deliveryGroup,
+  nextTry,
+  stateWords,
+  waitingForSession,
+} from '../../events-deliveries.ts';
 import { channelOf } from '../../events-rules.ts';
 import { DeliveryDetail } from './DeliveryDetail.tsx';
 import type { EventsLists, EventsNav } from './lists.ts';
@@ -27,13 +34,14 @@ export const DELIVERIES_COPY = {
   dryRunLog:
     'The dry-run log is a private record on this Mac of what a rule would have delivered, for trying a rule out. Nothing in it is sent anywhere, and each entry is deleted after 24 hours.',
   show: 'Show',
-  filters: { all: 'All', trying: 'Will try again', failed: 'Failed', done: 'Done' },
+  filters: { all: 'All', trying: 'Will try again', waiting: 'Waiting for a session', failed: 'Failed', done: 'Done' },
   empty: 'No deliveries yet.',
   noneHere: 'No deliveries here.',
   onlyOf: (rule: string) => `Only ${rule}'s deliveries`,
   showAll: 'Show all',
   everyOne: 'The events CLI and MCP list every one.',
   everyOneLabel: 'Where every one is listed',
+  untilFree: "passed on when the session's run ends",
 } as const;
 
 /** `The <n> most recent of <all>.` */
@@ -45,13 +53,15 @@ export function mostRecentLine(shown: number, all: number): string {
 const SHOWN = 100;
 
 type Filter = 'all' | DeliveryGroup;
-const FILTERS: readonly Filter[] = ['all', 'trying', 'failed', 'done'];
+const FILTERS: readonly Filter[] = ['all', 'trying', 'waiting', 'failed', 'done'];
 
 const ICONS: Readonly<Record<string, ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' }>>> = {
   queue: Inbox,
   'dry-run': FileText,
   webhook: Link2,
   sse: Radio,
+  linear: ListTodo,
+  session: Bot,
 };
 
 /** The facts beneath a row's title: its channel and account, then what its tries came to, in a few words. */
@@ -69,6 +79,8 @@ function rowFacts(lists: EventsLists, row: DeliveryRow): ReactNode[] {
       facts.push(row.attempts === 0 ? 'not tried yet' : tries(row.attempts));
       break;
     case 'retryable':
+      facts.push(waitingForSession(row) ? DELIVERIES_COPY.untilFree : tries(row.attempts));
+      break;
     case 'disclosing':
       facts.push(tries(row.attempts));
       break;
@@ -98,7 +110,11 @@ function rowFacts(lists: EventsLists, row: DeliveryRow): ReactNode[] {
 function DeliveryLine({ row, lists, onOpen }: { row: DeliveryRow; lists: EventsLists; onOpen: () => void }) {
   const kind = row.targetKind ?? targetOf(lists, row)?.kind ?? '';
   const Icon = ICONS[kind] ?? FileText;
-  const { words, tone } = stateWords({ state: row.state, targetKind: kind === '' ? null : kind });
+  const { words, tone } = stateWords({
+    state: row.state,
+    targetKind: kind === '' ? null : kind,
+    lastErrorCode: row.lastErrorCode,
+  });
   const made = madeAtOf(lists, row);
   const body = (
     <>
@@ -196,7 +212,10 @@ function DeliveryLines({
         <SegmentedControl
           aria-label={DELIVERIES_COPY.show}
           size="sm"
-          items={FILTERS.map((each) => ({ value: each, label: `${DELIVERIES_COPY.filters[each]} ${count(each)}` }))}
+          items={FILTERS
+            // Waiting for a session shows only when a match waits for one (0.33.0), or it is the filter chosen.
+            .filter((each) => each !== 'waiting' || count(each) > 0 || filter === each)
+            .map((each) => ({ value: each, label: `${DELIVERIES_COPY.filters[each]} ${count(each)}` }))}
           value={filter}
           onValueChange={(value) => onFilter(value as Filter)}
         />

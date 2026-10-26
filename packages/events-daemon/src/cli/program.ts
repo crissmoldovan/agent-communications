@@ -11,20 +11,27 @@ import {
   resolvePaths,
 } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
+import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
+  changeAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
+  ruleApprovalWords,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { integrationSet, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
+import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
+  approveRuleFromApp,
   disclosureChallenge,
   pendingRuleJudgeTest,
   pendingTargetTest,
@@ -52,6 +59,7 @@ import { disableAll } from '../operations/disable-all.ts';
 import { doctor } from '../operations/doctor.ts';
 import { dryrunList, dryrunShow } from '../operations/dryrun.ts';
 import { enableAll } from '../operations/enable-all.ts';
+import { integrationShow } from '../operations/integrations.ts';
 import {
   addJudge,
   budgetShow,
@@ -60,6 +68,7 @@ import {
   judgeKindsList,
   judgeModelStatus,
   judgeSetup,
+  judgeShow,
   judgesList,
   judgeTest,
   removeJudge,
@@ -110,9 +119,11 @@ import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
+import { parseJudgeShowArguments } from '../runtime/judge-show.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
+import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -169,6 +180,22 @@ export function terminalSafeJson(value: unknown): string {
 /** The approval preview a person reads before deciding: the B3 terminal renderer, with every dangerous character shown. */
 export function renderApprovalViewForTerminal(result: unknown, context: B3ApprovalPreviewContext = {}): string {
   return escapeForDisplay(renderB3ApprovalPreviewV1(result, context).terminal);
+}
+
+/** Whether a ready view's rule adds a Linear issue: only then does the terminal ask whether a Linear key is kept. */
+function previewHasLinear(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null) return false;
+  const view = result as {
+    readonly kind?: unknown;
+    readonly preview?: { readonly rule?: { readonly targets?: unknown } };
+  };
+  const targets = view.kind === 'READY' ? view.preview?.rule?.targets : undefined;
+  return (
+    Array.isArray(targets) &&
+    targets.some(
+      (target) => typeof target === 'object' && target !== null && (target as { kind?: unknown }).kind === 'linear',
+    )
+  );
 }
 
 /** Whether a ready view's rule sends to a lane: only then does the terminal read which window each lane is bound to. */
@@ -363,6 +390,10 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       throw new CommsError('USAGE', `${name} must be valid JSON`);
     }
   };
+  // A document given as `-` is read from stdin (0.33.0 design §3.1): the desktop app hands the rule its editor made,
+  // and each target it needs, to `rule create|update -` and `target add|update -` there, so no document rides in argv.
+  const documentArgument = async (value: string, name: string): Promise<unknown> =>
+    value === '-' ? jsonArgument(await stdinDocument(streams, name), name) : jsonArgument(value, name);
   const catalogueArgument = (
     value: string,
   ): { readonly type: string; readonly version: number; readonly exampleIndex: number } => {
@@ -393,7 +424,19 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
             lanes = undefined;
           }
         }
-        streams.stdout.write(`${renderApprovalViewForTerminal(result, { lanes })}\n`);
+        // A Linear target's team and labels are checked against Linear only while a Linear key is kept: say when not.
+        let linearConnected: boolean | undefined;
+        if (previewHasLinear(result)) {
+          try {
+            const listed = (await providerList(controlOptions(program))) as {
+              readonly providers: readonly { readonly id: string; readonly hasKey: boolean }[];
+            };
+            linearConnected = listed.providers.some((entry) => entry.id === 'linear' && entry.hasKey);
+          } catch {
+            linearConnected = undefined;
+          }
+        }
+        streams.stdout.write(`${renderApprovalViewForTerminal(result, { lanes, linearConnected })}\n`);
       }
     });
   const catalogue = program.command('catalogue').description('inspect the local event catalogue');
@@ -432,11 +475,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
-    print(await createRule(jsonArgument(document, 'rule document'), controlOptions(program)));
+    print(await createRule(await documentArgument(document, 'rule document'), controlOptions(program)));
   });
   rule.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateRule(jsonArgument(document, 'rule document'), controlOptions(program)));
+    print(await updateRule(await documentArgument(document, 'rule document'), controlOptions(program)));
   });
   rule.command('enable <rule-id> <version>').action(async (ruleId: string, version: string) => {
     ran = true;
@@ -477,6 +520,39 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     });
 
+  rule
+    .command('analyse <rule-id>')
+    .description(
+      "suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
+    )
+    .option('--draft <source>', 'analyse a draft rule document instead of the stored version: - reads it from stdin')
+    .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
+    .action(async (ruleId: string, options: Record<string, unknown>) => {
+      ran = true;
+      // Analyse is a person's act (0.33.0 §3.3): it runs when they press it, on their own key. As `provider key set`
+      // is, it is taken only from the Agent Comms app (attested on macOS) or an interactive terminal — one whose output
+      // the person reads, since a draft may come on stdin — and an agent's shell and the MCP server are refused before
+      // anything is read or sent (security review of 0.33.0, finding 10).
+      await personSetupOrigin('analyse a rule', {
+        where: 'Events → Rules, Analyse',
+        action: 'analyse',
+        terminal: 'output',
+        // It changes nothing: Windows and Linux keep `provider key set`'s former rule for it (second look of 0.33.0).
+        unattested: 'accept',
+      });
+      const provider = options.provider as string | undefined;
+      if (provider !== undefined && !isAnalyseProvider(provider))
+        throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
+      let draft: Readonly<Record<string, unknown>> | undefined;
+      if (options.draft !== undefined) {
+        if (options.draft !== '-') throw new CommsError('USAGE', '--draft reads the draft from stdin: give it -');
+        draft = await draftInput(streams);
+      }
+      // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseRuleAnalyseArguments({ ruleId, ...(draft === undefined ? {} : { draft }), provider });
+      print(await ruleAnalyse(ruleId, { ...controlOptions(program), draft, provider }));
+    });
+
   const targets = program.command('targets').description('inspect immutable local event target versions');
   targets.command('list').action(async () => {
     ran = true;
@@ -489,7 +565,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   ] as const) {
     target.command(`${name} <document>`).action(async (document: string) => {
       ran = true;
-      print(await operation(jsonArgument(document, 'target document'), controlOptions(program)));
+      print(await operation(await documentArgument(document, 'target document'), controlOptions(program)));
     });
   }
   target.command('remove <target-id>').action(async (targetId: string) => {
@@ -624,6 +700,17 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     print(await judgesList(controlOptions(program)));
   });
   const judge = program.command('judge').description('manage immutable judges and run fixed synthetic tests');
+  judge
+    .command('show <judge-id>')
+    .description("show one judge version's exact canonical document, its digest and its state; never a key")
+    .option('--version <version>', 'that version, rather than the newest live one')
+    .action(async (judgeId: string, options) => {
+      ran = true;
+      const version = options.version === undefined ? undefined : parseVersion(options.version as string);
+      // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseJudgeShowArguments({ judgeId, ...(version === undefined ? {} : { version }) });
+      print(await judgeShow(judgeId, { ...controlOptions(program), version }));
+    });
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
     const parsed = jsonArgument(document, 'judge document');
@@ -711,8 +798,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // without an agent's marker, said to be unattested.
   // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
   // anything is read or sent, and no MCP tool performs them.
-  const personSetupOrigin = async (what: string): Promise<PersonSetupOrigin> => {
-    assertNotMcpServer(env, 'setup');
+  // Person-only reads and acts an agent has no tool for (security review of 0.33.0, finding 10): an agent's shell is
+  // refused too, by its agent marker — a speed bump against agents, not a boundary against code running as the person.
+  const refuseAgentShell = (what: string, where: string): void => {
     const marker = agentMarker(env);
     if (marker !== null)
       throw new CommsError(
@@ -720,23 +808,60 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         `only a person can ${what}, in the app or at their terminal, not an agent`,
         {
           details: { marker },
-          hint: 'Ask the person to do it in the app: Events → Judges, and Settings → AI providers.',
+          hint: `Ask the person to do it in the app: ${where}.`,
         },
       );
-    if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
+  };
+  const personSetupOrigin = async (
+    what: string,
+    options: {
+      readonly where?: string;
+      readonly action?: 'setup' | 'relay' | 'analyse';
+      // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
+      readonly terminal?: 'prompt' | 'output';
+      /**
+       * An unattested origin (Windows, Linux): a change is refused there and sent to the terminal, with the event
+       * service's words to type (`words`); only `rule analyse`, which changes nothing, takes it (second look of 0.33.0).
+       */
+      readonly unattested?: { readonly words: string } | 'accept';
+    } = {},
+  ): Promise<PersonSetupOrigin> => {
+    const where = options.where ?? 'Events → Judges, and Settings → AI providers';
+    const action = options.action ?? 'setup';
+    const terminal = options.terminal ?? 'prompt';
+    assertNotMcpServer(env, action);
+    const marker = agentMarker(env);
+    if (marker !== null)
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        `only a person can ${what}, in the app or at their terminal, not an agent`,
+        {
+          details: { marker },
+          hint: `Ask the person to do it in the app: ${where}.`,
+        },
+      );
+    if (
+      terminal === 'prompt'
+        ? canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true })
+        : readsOutput(env, streams)
+    )
       return PERSON_SETUP_ORIGINS.terminal;
-    // The config folder this run is for: a test build speaks only for a marked test profile's.
-    const configDir = program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir })))();
+    // The config folder this run is for, found only when the app's origin is checked: a test build speaks only for a
+    // marked test profile's.
+    const configDir = () => program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
+    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir: configDir() })))();
     if (origin.ok)
       return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
-    if (origin.reason === 'unattested-platform') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
+    if (origin.reason === 'unattested-platform') {
+      if (options.unattested === 'accept') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
+      throw changeAtTerminal(what, options.unattested?.words ?? 'command, with the same words');
+    }
     throw new CommsError(
       'APPROVAL_REQUIRED',
       `only a person can ${what}: in the Agent Comms app, or at an interactive terminal`,
       {
         details: { reason: origin.reason },
-        hint: 'Do it in the app: Events → Judges, and Settings → AI providers; or run this at your own terminal.',
+        hint: `Do it in the app: ${where}; or run this at your own terminal.`,
       },
     );
   };
@@ -750,7 +875,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--model <name>', "the local model server's model (default nimble)")
     .action(async (kind: string, options: Record<string, unknown>) => {
       ran = true;
-      const origin = await personSetupOrigin('set up a judge');
+      const origin = await personSetupOrigin('set up a judge', {
+        unattested: { words: `judge setup ${isSetupJudgeKind(kind) ? kind : '<kind>'}, with the same options` },
+      });
       if (!isSetupJudgeKind(kind)) throw new CommsError('USAGE', 'judge setup takes typesafe or local-endpoint');
       const provider = options.provider as string | undefined;
       const url = options.url as string | undefined;
@@ -771,35 +898,149 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
 
   const providers = program
     .command('provider')
-    .description('the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key');
+    .description(
+      'the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key',
+    );
   providers
     .command('list')
-    .description('list each AI provider and whether it has a key; never a key')
+    .description('list each provider and whether it has a key; never a key')
     .action(async () => {
       ran = true;
       print(await providerList(controlOptions(program)));
     });
-  const providerKey = providers.command('key').description("set or remove an AI provider's key, as the person");
+  const providerKey = providers.command('key').description("set or remove a provider's key, as the person");
   providerKey
     .command('set <provider>')
     .description('store a provider key, read from your hidden input or the app’s stdin, never from argv')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("set an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      const origin = await personSetupOrigin("set a provider's key", {
+        unattested: {
+          words: `provider key set ${isEventSecretProvider(provider) ? provider : '<provider>'}, which asks for the key, hidden`,
+        },
+      });
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
       print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
     });
   providerKey
     .command('remove <provider>')
-    .description('remove a provider key, and the copy its Jev judges hold')
+    .description('remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("remove an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      const origin = await personSetupOrigin("remove a provider's key", {
+        unattested: { words: `provider key remove ${isEventSecretProvider(provider) ? provider : '<provider>'}` },
+      });
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
+    });
+
+  // A rule's activation, approved in the app after its preview (0.33.0 design §3.1): the person's own act, as judge
+  // setup is, from the same origins. At a terminal the person approves with `approve`, which asks for the challenge.
+  rule
+    .command('approve <approval-id>')
+    .description("approve a rule's activation from the Agent Comms app, after its preview, as the person")
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      // Windows and Linux attest nothing: a standing disclosure is approved there at the terminal, never on a missing
+      // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
+      const origin = await personSetupOrigin('approve a rule', {
+        where: 'Events → Rules, Review and approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
+      print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+
+  // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream
+  // relay is (§3.5) — theirs to set, from the app or their terminal, like an AI provider's key — and the items waiting
+  // for a busy session, theirs to read and drop.
+  const integration = program
+    .command('integration')
+    .description(
+      'the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
+    );
+  integration
+    .command('show <integration>')
+    .description(
+      'linear: whether a key is kept, its workspace and teams (with --team, that team’s labels); agent-sessions: where the relay is and whether it is ready',
+    )
+    .option('--team <key>', 'linear: a team, by its key (such as CUE) or its id, whose labels to list')
+    .action(async (name: string, options: { readonly team?: string }) => {
+      ran = true;
+      // The person's view, at a terminal or in the app: never inside an MCP server's process, nor an agent's shell.
+      assertNotMcpServer(env, name === 'agent-sessions' ? 'relay' : 'integration');
+      refuseAgentShell(
+        name === 'agent-sessions' ? 'see where your claude-stream relay is' : 'see what your Linear key can see',
+        'Settings → Integrations',
+      );
+      if (name === 'agent-sessions') {
+        if (options.team !== undefined)
+          throw new CommsError('USAGE', 'integration show agent-sessions takes no --team');
+        print(await integrationShow(name, controlOptions(program)));
+        return;
+      }
+      if (name !== 'linear') throw new CommsError('USAGE', 'the integration is linear or agent-sessions');
+      print(await integrationShow(name, { ...controlOptions(program), team: options.team }));
+    });
+  integration
+    .command('set <integration>')
+    .description(
+      'set where the relay is, or a folder a file part may be read from (a person, at a terminal or in the app)',
+    )
+    .option('--relay-home <path>', "the relay's home folder, where its control.token is; default for the defaults")
+    .option('--relay-port <port>', "the relay's port; default for the Pilot app's record, else 4318")
+    .option('--allow-folder <path>', 'a folder a session’s file parts may be read from (repeat for more)', collect, [])
+    .option('--remove-folder <path>', 'a folder to take off that list (repeat for more)', collect, [])
+    .action(async (name: string, options: Record<string, unknown>) => {
+      ran = true;
+      if (name !== 'agent-sessions') throw new CommsError('USAGE', 'integration set takes agent-sessions');
+      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', {
+        where: 'Settings → Integrations → Agent sessions',
+        action: 'relay',
+        unattested: { words: 'integration set agent-sessions, with the same options' },
+      });
+      const port = options.relayPort as string | undefined;
+      print(
+        await integrationSet(
+          name,
+          {
+            ...(options.relayHome === undefined ? {} : { relayHome: options.relayHome as string }),
+            ...(port === undefined ? {} : { relayPort: port === 'default' ? 'default' : parseRelayPort(port) }),
+            ...((options.allowFolder as string[]).length === 0
+              ? {}
+              : { allowFolders: options.allowFolder as string[] }),
+            ...((options.removeFolder as string[]).length === 0
+              ? {}
+              : { removeFolders: options.removeFolder as string[] }),
+          },
+          { ...controlOptions(program), origin },
+        ),
+      );
+    });
+  const sessionQueue = program
+    .command('session-queue')
+    .description('the matches waiting for a busy agent session, each passed on when the session’s run ends');
+  sessionQueue
+    .command('list')
+    .description('list every match waiting for a busy session, oldest first: ids and times (a person)')
+    .action(async () => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      // Every session's waiting matches are the person's; a bound window sees its own lane's with its MCP tool.
+      refuseAgentShell('list the matches waiting for every session', 'Events → Deliveries');
+      print(await sessionQueueList(controlOptions(program)));
+    });
+  sessionQueue
+    .command('drop <delivery-id>')
+    .description('drop a waiting match: its delivery is cancelled and what it held purged, at once (a person)')
+    .action(async (deliveryId: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      refuseAgentShell('drop a match waiting for a session', 'Events → Deliveries');
+      print(await sessionQueueDrop(deliveryId, controlOptions(program)));
     });
 
   const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');
@@ -1197,6 +1438,66 @@ function isTerminalSecretReveal(
   value: unknown,
 ): value is { readonly receipt: Record<string, unknown>; readonly terminalReveal: string } {
   return isRecord(value) && isRecord(value.receipt) && typeof value.terminalReveal === 'string';
+}
+
+/** Commander's repeatable option: each value given, in order. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function parseRelayPort(value: string): number {
+  if (!/^[1-9][0-9]{0,4}$/u.test(value) || Number(value) > 65_535)
+    throw new CommsError('USAGE', "the relay's port is a whole number from 1 to 65535, or default");
+  return Number(value);
+}
+
+/** The most a document read from stdin may be: well past any rule, and short of filling memory. */
+const STDIN_DOCUMENT_MAX_BYTES = 1024 * 1024;
+
+/** A JSON document from stdin, as `-` names it: at most 1 MiB, its text as given. */
+async function stdinDocument(streams: EventsCliStreams, name: string): Promise<string> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > STDIN_DOCUMENT_MAX_BYTES) throw new CommsError('USAGE', `${name} on stdin is at most 1 MiB`);
+    chunks.push(bytes);
+  }
+  const text = Buffer.concat(chunks).toString('utf8');
+  if (text.trim() === '') throw new CommsError('USAGE', `${name} is required, on stdin`);
+  return text;
+}
+
+/**
+ * Whether the person reads this run's output at a terminal: its output is a terminal's, and it is not CI. A command whose
+ * input may be a pipe (Analyse's draft) asks this rather than whether it can prompt.
+ */
+function readsOutput(env: NodeJS.ProcessEnv, streams: EventsCliStreams): boolean {
+  if (env.CI && env.CI !== '0' && env.CI !== 'false') return false;
+  return Boolean(streams.stdout.isTTY);
+}
+
+/** Analyse's draft (0.33.0 §3.3): one JSON rule document on stdin, as the app's editor sends it. */
+async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<string, unknown>>> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > ANALYSE_DRAFT_MAX_BYTES)
+      throw new CommsError('USAGE', `a draft is at most ${ANALYSE_DRAFT_MAX_BYTES} bytes of JSON`);
+    chunks.push(bytes);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  } catch {
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  return parsed as Readonly<Record<string, unknown>>;
 }
 
 /** The most a provider key read from the app's stdin may be. */

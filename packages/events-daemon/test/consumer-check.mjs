@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { mkdtemp, readdir, readFile, rm, stat } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, posix } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -144,26 +145,45 @@ async function consumerCheck() {
 
   // `--import` takes a module specifier: on Windows an absolute path reads as a URL scheme, so pass a file URL.
   const sealUrl = new URL('./loopback-seal-preload.mjs', import.meta.url).href;
+  // A temporary home and Agent Comms folders, never the person's own: no command here reads their configuration,
+  // reaches their running event service, or looks for anything in their home.
+  const plain = await mkdtemp(join(tmpdir(), 'events-daemon-consumer-plain-'));
+  const quiet = {
+    ...process.env,
+    HOME: join(plain, 'home'),
+    USERPROFILE: join(plain, 'home'),
+    AGENT_COMMS_CONFIG_DIR: join(plain, 'config'),
+    AGENT_COMMS_STATE_DIR: join(plain, 'state'),
+    AGENT_COMMS_DATA_DIR: join(plain, 'data'),
+  };
   const help = execFileSync(process.execPath, ['--import', sealUrl, cli, '--help'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: quiet,
   });
   assert.match(help, /Usage: agent-events/);
   const cliVersion = execFileSync(process.execPath, ['--import', sealUrl, cli, '--version'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
+    env: quiet,
   });
   assert.equal(cliVersion, `${installed.version}\n`, 'the packed daemon CLI reports the installed package version');
   const statusArgs = ['--import', sealUrl, cli, '--json', 'status'];
   if (windows)
     assert.throws(
-      () => execFileSync(process.execPath, statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+      () =>
+        execFileSync(process.execPath, statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], env: quiet }),
       (error) => refusesWindows.test(`${error.stderr ?? ''}${error.stdout ?? ''}${error.message}`),
     );
   else {
-    const result = execFileSync(process.execPath, statusArgs, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+    const result = execFileSync(process.execPath, statusArgs, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: quiet,
+    });
     assert.equal(result, '{"owner":"not-running"}\n');
   }
+  await rm(plain, { recursive: true, force: true });
 
   function startMcp(command, args, env) {
     const child = spawn(process.execPath, ['--import', sealUrl, command, ...args], {
@@ -234,6 +254,9 @@ async function consumerCheck() {
     const dataDir = join(root, 'data');
     const env = {
       ...process.env,
+      // A temporary home: the owner looks for the claude-stream relay under it, never in the person's own.
+      HOME: join(root, 'home'),
+      USERPROFILE: join(root, 'home'),
       AGENT_COMMS_STATE_DIR: stateDir,
       AGENT_COMMS_CONFIG_DIR: configDir,
       // Pinned, so this check can see that Laya's artifact directory is never created.

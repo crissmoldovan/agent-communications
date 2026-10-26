@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
 import { mkdir, readFile, rm, stat } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { promisify } from 'node:util';
@@ -350,6 +351,8 @@ test('REL-B1: a fake-Google Gmail event crosses the foreground owner, CLI and MC
       await selectEventSecretStore(selected.database, 'file');
       selected.close();
       owner = await startEventOwner({
+        // Never the person's real home: the agent-sessions defaults are looked for under the test's own folder.
+        agentSessions: { homeDirectory: join(stateDir, 'no-home') },
         stateDir,
         configDir: harness.configDir,
         // The activation's one profile baseline goes to the loopback fake through Gmail's source, never the build.

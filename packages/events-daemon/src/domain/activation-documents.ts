@@ -15,6 +15,7 @@ import {
   isJsonValue,
   type JsonValue,
   TEST_CLOUD_EVENT,
+  targetQueues,
   validateCloudEventType,
 } from '@agentcomms/events';
 import {
@@ -27,12 +28,14 @@ import {
   type LayaEnablementInputs,
 } from './judges.ts';
 import { EventDomainError } from './lifecycle.ts';
+import { assertLinearSlotsMapped, canonicalLinearTarget, type LinearTargetDocument } from './linear-target.ts';
 import {
   assertQueueMapping,
   canonicalQueueTarget,
   isQueueRetention,
   type QueueTargetDocument,
 } from './queue-target.ts';
+import { assertSessionMapping, canonicalSessionTarget, type SessionTargetDocument } from './session-target.ts';
 import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
 import {
   canonicalSseSubscriber,
@@ -49,9 +52,27 @@ export interface DryRunTargetDocument {
   readonly retentionMs: number;
 }
 
-export type TargetDocument = DryRunTargetDocument | WebhookTargetDocument | SseTargetDocument | QueueTargetDocument;
+export type TargetDocument =
+  | DryRunTargetDocument
+  | WebhookTargetDocument
+  | SseTargetDocument
+  | QueueTargetDocument
+  | SessionTargetDocument
+  | LinearTargetDocument;
 
+export type { LinearTargetDocument } from './linear-target.ts';
 export type { QueueTargetDocument } from './queue-target.ts';
+export type { SessionTargetDocument } from './session-target.ts';
+
+/**
+ * The lane a target carries (routing design B5): a queue target's lane, or the lane an agent-session target finds its
+ * session by (0.33.0 design §3.5) — its items fall back to that lane's queue, so it carries the lane as a queue does.
+ */
+export function targetLane(target: TargetDocument): string | undefined {
+  if (target.kind === 'queue') return target.lane?.name;
+  if (target.kind === 'session' && 'lane' in target.find) return target.find.lane;
+  return undefined;
+}
 
 export type JudgeDocument = CanonicalJudgeDocument;
 
@@ -202,6 +223,10 @@ export function canonicalTarget(value: unknown): TargetDocument {
       return canonicalSseTarget(target);
     case 'queue':
       return canonicalQueueTarget(target);
+    case 'session':
+      return canonicalSessionTarget(target);
+    case 'linear':
+      return canonicalLinearTarget(target);
     default:
       return fail('a target document has a known kind');
   }
@@ -258,14 +283,15 @@ function canonicalRuleSource(value: unknown): CanonicalRuleSource {
 function assertOneTargetPerLane(targets: readonly TargetDocument[]): void {
   const carriers = new Map<string, string>();
   for (const target of targets) {
-    if (target.kind !== 'queue' || target.lane === undefined) continue;
-    const carrier = carriers.get(target.lane.name);
+    const lane = targetLane(target);
+    if (lane === undefined) continue;
+    const carrier = carriers.get(lane);
     if (carrier !== undefined && carrier !== target.targetId)
       fail(
-        `lane ${target.lane.name} is carried by two queue targets of this rule; a lane is its name, so one target carries it`,
+        `lane ${lane} is carried by two targets of this rule; a lane is its name, so one target carries it`,
         'LANE_NAME_IN_USE',
       );
-    carriers.set(target.lane.name, target.targetId);
+    carriers.set(lane, target.targetId);
   }
 }
 
@@ -320,12 +346,17 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('rule judges are an array');
   if (judges.length !== 0) return fail('rule judges are represented only by the optional agentic sibling');
   const retention = canonicalRetention(rule.retention);
-  // Q2 and Q4: a queue target needs its own retention on the rule and a mapping that includes what its items show.
-  const queued = targets.some((target) => target.kind === 'queue');
+  // Q2 and Q4: a queue target needs its own retention on the rule and a mapping that includes what its items show; so
+  // does a session target that can leave an item in the Queue (0.33.0 §3.5), and `targetQueues` is the one test.
+  const queued = targets.some(targetQueues);
+  // §2's anti-goal: a session receives no field the approved rule does not map.
+  for (const target of targets) if (target.kind === 'session') assertSessionMapping(target, mapping);
   if (queued && retention.queueMs === undefined) return fail('a rule with a queue target sets retention.queueMs');
   if (!queued && retention.queueMs !== undefined)
     return fail('retention.queueMs applies only to a rule with a queue target');
   if (queued) assertQueueMapping(eventType, mapping);
+  // A Linear target's slots name the rule's mapped fields only (0.33.0 design §3.4): nothing else reaches Linear.
+  for (const target of targets) if (target.kind === 'linear') assertLinearSlotsMapped(target, compiledMapping.value);
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);

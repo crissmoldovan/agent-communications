@@ -8,6 +8,7 @@ import {
   type MappedClassification,
 } from '@agentcomms/events';
 import type { QueueShow } from '../domain/queue-target.ts';
+import type { SessionTargetDocument } from '../domain/session-target.ts';
 
 export type DeliveryRepresentation = 'plain' | 'enveloped';
 
@@ -27,7 +28,12 @@ export type DeliveryTarget =
       readonly subscriberVersion: number;
     })
   // The action queue: a local list item, built from the projection rather than from CloudEvent bytes.
-  | (BaseDeliveryTarget & { readonly kind: 'queue'; readonly show: QueueShow; readonly retentionMs: number });
+  | (BaseDeliveryTarget & { readonly kind: 'queue'; readonly show: QueueShow; readonly retentionMs: number })
+  // An agent session (0.33.0 §3.5): the mapped values its context reads, built from the mapped data, never CloudEvent
+  // bytes; the prompt is written at dispatch, when its model and file parts are read.
+  | (BaseDeliveryTarget & { readonly kind: 'session'; readonly document: SessionTargetDocument })
+  // A Linear issue (0.33.0 design §3.4): its title and description, rendered once from the mapped data.
+  | (BaseDeliveryTarget & { readonly kind: 'linear' });
 
 export interface ConstructedTargetDelivery {
   readonly target: DeliveryTarget;
@@ -63,6 +69,10 @@ export function targetDeliveryKey(target: DeliveryTarget): string {
       return `sse:${target.targetId}:${target.targetVersion}:${target.subscriberId}:${target.subscriberVersion}`;
     case 'queue':
       return `queue:${target.targetId}:${target.targetVersion}`;
+    case 'session':
+      return `session:${target.targetId}:${target.targetVersion}`;
+    case 'linear':
+      return `linear:${target.targetId}:${target.targetVersion}`;
   }
 }
 

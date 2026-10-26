@@ -11,8 +11,15 @@ export type EventDomainErrorCode =
   | 'LAYA_SANDBOX_UNAVAILABLE'
   | 'LAYA_TEMPLATE_BLOCKED'
   | 'LANE_NAME_IN_USE'
+  // A Linear target whose team key or label name is not, in Linear, the one its id names (second look of 0.33.0).
+  | 'LINEAR_LABEL_MISMATCH'
+  | 'LINEAR_TEAM_MISMATCH'
   | 'QUEUE_MAPPING_INCOMPLETE'
   | 'SOURCE_CHANNEL_UNSUPPORTED'
+  // A target template (0.33.0 design §3.4, §3.6): a slot that names a field the rule does not map, and a model-written
+  // part, which arrives with the session target's context.
+  | 'TEMPLATE_FIELD_NOT_MAPPED'
+  | 'TEMPLATE_GENERATE_NOT_YET'
   | 'VERSION_DOCUMENT_INVALID';
 
 /** A content-free domain refusal. No caller should substitute an arbitrary Error message at a control boundary. */

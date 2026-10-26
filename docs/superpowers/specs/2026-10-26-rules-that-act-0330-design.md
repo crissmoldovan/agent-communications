@@ -197,6 +197,16 @@ Sender material sits in the envelope, and the frame ends with the rule's instruc
 
 ## 6. Known limits
 
+- **On Windows and Linux, changes go through a terminal.** Nothing there attests that the app started a command, so
+  the person-only changes — judge setup, a provider key set or removed (Linear's too), Settings → Integrations → Agent
+  sessions, a rule's approval — are refused from an origin nothing attests (`APPROVAL_REQUIRED`, exit 10,
+  `details.reason: ORIGIN_UNATTESTED`, audited as `desktop-app (unattested)`) by the CLI and by the owner, and are
+  done at an interactive terminal; the app offers Do it in Terminal. Core's `mcp install --app-approval`, which adds a
+  server to an app from Connections, is refused the same way, and Connections offers Approve in Terminal, as it does
+  for a core before 0.32.0. `approvedVia: app` therefore means the attested app. Analyse changes nothing and keeps its rule: the attested app, an interactive terminal, or, there, the app
+  unattested. The owner still takes the origin label as a same-user control client declares it (a speed bump against
+  agents, not a boundary).
+
 - **A window the person opened** (not one claude-stream runs) can't be started or sent a prompt by the relay. It is
   reached through a lane wake (0.31), and the target says so.
 - **Codex windows** are reached only when claude-stream runs them, or with `codex --remote`, which is experimental there.

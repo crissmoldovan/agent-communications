@@ -147,7 +147,32 @@ function install() {
   syncBuiltinESMExports();
 }
 
-if (ownPreload) install();
+/*
+ * The real-home guard (the second look at 0.33.0): a test that started the event service without a temporary home
+ * read the person's claude-stream relay token into memory. Under this preload, core's `homeForDiscovery` refuses the
+ * account's own home wherever user state is looked for, and counts each refusal; a process that caught one and went
+ * on still fails here, at exit. HOME itself is left alone, so a test's own temporary home is what it says.
+ */
+const REAL_HOME_ATTEMPTS = Symbol.for('agentcomms.test.real-home-attempts.v1');
+
+function guardRealHome() {
+  process.env.AGENTCOMMS_TEST_NO_REAL_HOME = '1';
+  process.on('exit', () => {
+    const attempts = globalThis[REAL_HOME_ATTEMPTS];
+    if (!Array.isArray(attempts) || attempts.length === 0) return;
+    process.stderr.write(
+      `real-home guard: this process looked for ${[...new Set(attempts)].join('; ')} in the account's real home folder; give the test a temporary home\n`,
+    );
+    const [first] = globalThis[Symbol.for('agentcomms.test.real-home-stacks.v1')] ?? [];
+    if (typeof first === 'string') process.stderr.write(`real-home guard: the first was\n${first}\n`);
+    process.exitCode = 1;
+  });
+}
+
+if (ownPreload) {
+  install();
+  guardRealHome();
+}
 
 export function assertLoopbackSeal() {
   if (globalThis[MARKER] !== true) throw new Error('loopback seal preload is required before network-capable imports');

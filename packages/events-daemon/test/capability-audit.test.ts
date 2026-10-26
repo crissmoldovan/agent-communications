@@ -148,6 +148,40 @@ const EXPECTED_SETUP_ROWS = [
   ['events-daemon.provider-key.remove', 'provider key remove', null, 'exception', 'providerKeyRemove'],
 ] as const;
 
+/**
+ * Rules edited in the app (0.33.0 design §3.1): a rule's activation is approved by the person in the app, after its
+ * preview, the app's only path; at a terminal the person types the challenge with `approve`.
+ */
+const EXPECTED_RULE_APPROVAL_ROWS = [
+  ['events-daemon.rule.approve', 'rule approve', null, 'exception', 'approveRuleFromApp'],
+] as const;
+
+/** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
+const EXPECTED_ANALYSE_ROWS = [
+  ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
+] as const;
+
+/** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
+/** One judge version's exact canonical document (0.33.0): content-free, as judges list is, so CLI and MCP alike. */
+const EXPECTED_JUDGE_SHOW_ROWS = [
+  ['events-daemon.judge.show', 'judge show', 'events_judge_show', 'both', 'judgeShow'],
+] as const;
+
+const EXPECTED_INTEGRATION_ROWS = [
+  ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
+] as const;
+
+/**
+ * Agent sessions through claude-stream (0.33.0 §3.5): where the relay is, and dropping a waiting match, are the
+ * person's, CLI-only; the waiting matches are both, a bound window's own lane's over MCP.
+ */
+const EXPECTED_SESSION_ROWS = [
+  ['events-daemon.integration.show-agent-sessions', 'integration show', null, 'exception', 'integrationShow'],
+  ['events-daemon.integration.set', 'integration set', null, 'exception', 'integrationSet'],
+  ['events-daemon.session-queue.list', 'session-queue list', 'events_session_queue_list', 'both', 'sessionQueueList'],
+  ['events-daemon.session-queue.drop', 'session-queue drop', null, 'exception', 'sessionQueueDrop'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -174,6 +208,11 @@ const expectedRows = [
   ...shapedRows(EXPECTED_LANE_ROWS),
   ...shapedRows(EXPECTED_MESSAGE_ROWS),
   ...shapedRows(EXPECTED_SETUP_ROWS),
+  ...shapedRows(EXPECTED_RULE_APPROVAL_ROWS),
+  ...shapedRows(EXPECTED_ANALYSE_ROWS),
+  ...shapedRows(EXPECTED_INTEGRATION_ROWS),
+  ...shapedRows(EXPECTED_SESSION_ROWS),
+  ...shapedRows(EXPECTED_JUDGE_SHOW_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
@@ -303,6 +342,12 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.judge.setup',
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
+    'events-daemon.rule.approve',
+    'events-daemon.rule.analyse',
+    'events-daemon.integration.show',
+    'events-daemon.integration.show-agent-sessions',
+    'events-daemon.integration.set',
+    'events-daemon.session-queue.drop',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

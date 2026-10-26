@@ -18,12 +18,23 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
 /**
  * The person-only gate: the queue's content reads (Q1), and `queue clear`, which an agent must not be able to use to
  * make the person's queue disappear; binding a lane; and since 0.32.0 `delivery show`, the dry-run log's `list` and
- * `show`, `messages list` and `message show`, and judge setup and provider keys. It refuses inside an MCP server's
- * process; a shell an agent runs is the person's own.
+ * `show`, `messages list` and `message show`, and judge setup and provider keys; and since 0.33.0 `integration show`.
+ * It refuses inside an MCP server's process; a shell an agent runs is the person's own.
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' = 'read',
+  action:
+    | 'read'
+    | 'clear'
+    | 'bind'
+    | 'delivery'
+    | 'dryrun'
+    | 'messages'
+    | 'setup'
+    | 'analyse'
+    | 'integration'
+    | 'relay'
+    | 'sessions' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -62,11 +73,36 @@ export function assertNotMcpServer(
         "what happened to each message is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
       hint: 'queue items gives an agent what is waiting, without what it says.',
     },
-    // Judge setup and AI provider keys (owner decision 2026-10-26): the person's, from the app or their terminal.
+    // Judge setup and provider keys (owner decision 2026-10-26; Linear's from 0.33.0): the person's, from the app or
+    // their terminal.
     setup: {
       message:
-        "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
-      hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
+        "setting up a judge or a provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to set it up in the app: Events → Judges, Settings → AI providers, or Settings → Integrations for Linear.',
+    },
+    // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read.
+    integration: {
+      message:
+        "what your Linear key can see is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
+      hint: 'events_provider_list says whether a Linear key is kept; the person connects Linear in Settings → Integrations.',
+    },
+    // Analyse (0.33.0 §3.3): what a rule did and the suggestions for it are the person's, when they ask for them.
+    analyse: {
+      message:
+        "analysing a rule is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to press Analyse on the rule in the app: Events → Rules.',
+    },
+    // Agent sessions (0.33.0 §3.5): where the person's claude-stream relay is, and its token's home, are the person's.
+    relay: {
+      message:
+        "where Agent Comms finds your claude-stream relay is for a person, at a terminal or in the app — the event service's MCP server cannot read or change it",
+      hint: 'An agent can ask the person to set it in the app: Settings → Integrations → Agent sessions.',
+    },
+    // The busy queue (0.33.0 §3.5): the person's to read and drop from; a bound window sees its own lane's over MCP.
+    sessions: {
+      message:
+        "the items waiting for a busy session are for a person to manage, at a terminal or in the app — the event service's MCP server cannot drop one",
+      hint: 'events_session_queue_list shows a bound window the items of its own lane.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

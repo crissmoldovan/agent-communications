@@ -11,6 +11,7 @@ import {
 import { useEffect, useState } from 'react';
 import { isLocalModel, isLoopbackUrl } from '../../grammar.ts';
 import { useChange } from '../../hooks/use-change.ts';
+import { DoInTerminal, refusedAsUnattested, setupsAtTerminal } from '../DoInTerminal.tsx';
 import { LOCAL_SETUP_COPY } from './copy.ts';
 import { SetupProblem } from './JudgeRow.tsx';
 
@@ -41,6 +42,9 @@ export function LocalModelDialog({
   const [model, setModel] = useState<string>(LOCAL_SETUP_COPY.defaultModel);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
+  // Where the app cannot attest the person, the server is set up in a terminal (Do it in Terminal).
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
 
   useEffect(() => {
     if (!open) return;
@@ -48,6 +52,7 @@ export function LocalModelDialog({
     setAddress(LOCAL_SETUP_COPY.addresses.ollama);
     setModel(currentModel ?? LOCAL_SETUP_COPY.defaultModel);
     setProblem(null);
+    setRefused(false);
   }, [open, currentModel]);
 
   const url = address.trim();
@@ -63,6 +68,7 @@ export function LocalModelDialog({
     setBusy(false);
     if (outcome.state === 'failed') {
       setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) setRefused(true);
       return;
     }
     if (outcome.state === 'needsTerminal') {
@@ -118,12 +124,27 @@ export function LocalModelDialog({
             <FieldError issues={name !== '' && !modelOk ? [{ message: LOCAL_SETUP_COPY.modelWrong }] : []} />
           </Field>
           <SetupProblem problem={problem} />
+          {atTerminal && urlOk && modelOk ? (
+            <DoInTerminal
+              key={`${url} ${name}`}
+              command={{
+                kind: 'atTerminal',
+                call: { kind: 'judgeSetup', judgeKind: 'local-endpoint', url, model: name },
+              }}
+              onDone={() => {
+                onOpenChange(false);
+                void onDone();
+              }}
+            />
+          ) : null}
         </div>
         <Dialog.Footer>
           <Dialog.Close render={<Button variant="ghost">{LOCAL_SETUP_COPY.cancel}</Button>} />
-          <Button variant="primary" loading={busy} disabled={!urlOk || !modelOk} onClick={() => void turnOn()}>
-            {on ? LOCAL_SETUP_COPY.save : LOCAL_SETUP_COPY.turnOn}
-          </Button>
+          {atTerminal ? null : (
+            <Button variant="primary" loading={busy} disabled={!urlOk || !modelOk} onClick={() => void turnOn()}>
+              {on ? LOCAL_SETUP_COPY.save : LOCAL_SETUP_COPY.turnOn}
+            </Button>
+          )}
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>

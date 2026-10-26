@@ -29,6 +29,7 @@ import {
   treeListing,
 } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -321,6 +322,7 @@ test('E2 laya update: the owner’s start-up applies E’s disable with its audi
   });
   const start = (laya: SyntheticLaya) =>
     startEventOwner({
+      ...noRealHome(stateDir),
       stateDir,
       configDir,
       dataDir,

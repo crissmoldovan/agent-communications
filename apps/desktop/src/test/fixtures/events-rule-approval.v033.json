@@ -1,0 +1,43 @@
+{
+  "ruleEnable": {
+    "intentId": "act_abc238ade1f281e860491b9ebbc1385d",
+    "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+    "binding": {
+      "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0",
+      "activationIntentId": "act_abc238ade1f281e860491b9ebbc1385d",
+      "activationKind": "rule",
+      "versions": [
+        { "kind": "rule", "id": "invoices", "version": 3 },
+        { "kind": "target", "id": "billing-queue", "version": 1 }
+      ]
+    },
+    "kind": "rule",
+    "status": "pending"
+  },
+  "ruleApprove": {
+    "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+    "ruleId": "invoices",
+    "version": 3,
+    "approved": true,
+    "approvedBy": "desktop-app",
+    "completion": {
+      "intentId": "act_abc238ade1f281e860491b9ebbc1385d",
+      "status": "completed",
+      "usedAt": "2026-10-26T07:52:14.172Z"
+    }
+  },
+  "targetsList": [
+    {
+      "target_id": "billing-queue",
+      "version": 1,
+      "digest": "852522335363774003d0c4ca4780dccb9acbc7ca4a103f11d37f501269cf2555",
+      "revoked_at": null
+    },
+    {
+      "target_id": "ci-hook",
+      "version": 1,
+      "digest": "1252522335363774003d0c4ca4780dccb9acbc7ca4a103f11d37f501269cf2555",
+      "revoked_at": null
+    }
+  ]
+}

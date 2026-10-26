@@ -40,6 +40,7 @@ import {
   treeListing,
 } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -145,6 +146,7 @@ async function production(prefix: string): Promise<Production> {
   const stateDir = join(root, 'state');
   const dataDir = join(root, 'data');
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(root),
     dataDir,
@@ -804,6 +806,7 @@ test('E2 Laya judge creation: where Laya is offered, judge add and rule create s
   const stateDir = join(root, 'state');
   const dataDir = join(root, 'data');
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(root),
     dataDir,

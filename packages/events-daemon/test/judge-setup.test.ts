@@ -12,6 +12,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /*
  * `judge setup`, `provider key set` and `provider key remove` (owner decision 2026-10-26): the person sets up and turns
@@ -27,6 +28,7 @@ const CONFIG_EXIT = new CommsError('CONFIG', 'x').exitCode;
 const OPENROUTER_KEY = 'fake-or';
 const OPENROUTER_KEY_2 = 'fake-or2';
 const TYPESAFE_KEY = 'fake-ts';
+const ANTHROPIC_KEY = 'fake-an';
 
 interface Ran {
   readonly code: number;
@@ -89,6 +91,9 @@ const PERSON_COMMANDS: readonly (readonly string[])[] = [
   ['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434'],
   ['provider', 'key', 'set', 'openrouter'],
   ['provider', 'key', 'remove', 'openrouter'],
+  // The Linear key a Linear target uses (0.33.0 design §3.4) is the person's in the same way.
+  ['provider', 'key', 'set', 'linear'],
+  ['provider', 'key', 'remove', 'linear'],
 ];
 
 test('judge setup and provider keys refuse every agent marker and the MCP server, before reading a key or calling the owner', async () => {
@@ -147,7 +152,7 @@ test('judge setup carries where the person was: a terminal approves its enableme
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   try {
     // At a terminal: the kind and the budget are approved there, and the audit line says so.
     const typed = await cli(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434'], {
@@ -163,10 +168,17 @@ test('judge setup carries where the person was: a terminal approves its enableme
     for (const approval of disclosures) assert.equal((approval as { approvedVia?: string }).approvedVia, 'terminal');
     const setups = (await core.audit.tail({ limit: 50 })).filter((line) => line.operation === 'events.judgeSetup');
     assert.equal(setups.at(-1)?.ids?.approvedBy, 'terminal');
-    // From the app: the result says which — the test build, or the app unattested on Windows and Linux.
+    // On Windows and Linux, which attest nothing, a setup is the terminal's: refused, with the words to type there,
+    // before the owner is asked (second look of the 0.33.0 security review).
+    const unattested = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', 'http://[::1]:8081'], {
+      stateDir,
+      desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+    });
+    assert.equal(unattested.code, APPROVAL_EXIT, unattested.stderr);
+    assert.match(unattested.stderr, /at your terminal, with the event service's judge setup local-endpoint/u);
+    // From the attested app: the result says which — the test build or the release — and its enablements are the app's.
     for (const [origin, approvedBy, port] of [
       [{ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }, 'desktop-app (test build)', 8080],
-      [{ ok: false, reason: 'unattested-platform' }, 'desktop-app (unattested)', 8081],
       [{ ok: true, build: 'release', identifier: 'com.cueplusplus.agentcomms' }, 'desktop-app', 8082],
     ] as const) {
       const ran = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', `http://[::1]:${port}`], {
@@ -209,6 +221,8 @@ test('judge setup refuses a local model server that is not on this machine, befo
   for (const args of [
     ['judge', 'setup', 'laya'],
     ['judge', 'setup', 'typesafe', '--provider', 'someone-else'],
+    // Linear keeps a key beside the AI providers, but it serves no judge.
+    ['judge', 'setup', 'typesafe', '--provider', 'linear'],
     ['judge', 'setup', 'typesafe', '--url', 'http://127.0.0.1:11434'],
     ['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434', '--provider', 'openrouter'],
     ['provider', 'key', 'set', 'someone-else'],
@@ -241,7 +255,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   const outputs: string[] = [];
   const ok = async (args: readonly string[], stdin?: string) => {
     const ran = await cli(['--json', ...args], { stateDir, ...(stdin === undefined ? {} : { stdin }) });
@@ -261,6 +275,8 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       providers: [
         { id: 'typesafe', name: 'TypeSafe', hasKey: false },
         { id: 'openrouter', name: 'OpenRouter', hasKey: false },
+        { id: 'anthropic', name: 'Anthropic', hasKey: false },
+        { id: 'linear', name: 'Linear', hasKey: false },
       ],
     });
 
@@ -283,6 +299,8 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       [
         ['typesafe', false],
         ['openrouter', true],
+        ['anthropic', false],
+        ['linear', false],
       ],
     );
 
@@ -365,6 +383,24 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     assert.equal(native.enabledNow, false);
     assert.equal(native.key, 'stored');
 
+    // Anthropic's key (0.33.0 design §3.3) is Analyse's alone: it is kept beside the others, serves no Jev judge, and
+    // Jev cannot be set up on it.
+    assert.deepEqual(await ok(['provider', 'key', 'set', 'anthropic'], `${ANTHROPIC_KEY}\n`), {
+      provider: 'anthropic',
+      hasKey: true,
+      judges: 0,
+    });
+    const anthropicJev = await cli(['judge', 'setup', 'typesafe', '--provider', 'anthropic'], { stateDir });
+    assert.equal(anthropicJev.code, USAGE_EXIT, anthropicJev.stderr);
+    assert.deepEqual(await ok(['provider', 'key', 'remove', 'anthropic']), {
+      provider: 'anthropic',
+      hasKey: false,
+      judges: 0,
+    });
+    const unknownProvider = await cli(['provider', 'key', 'set', 'someone-else'], { stateDir, stdin: 'fake-x\n' });
+    assert.equal(unknownProvider.code, USAGE_EXIT, unknownProvider.stderr);
+    assert.match(unknownProvider.stderr, /the provider is typesafe, openrouter, anthropic or linear/u);
+
     // A local model server: its URL, checked again by the owner, and a new version when it changes.
     const local = await ok(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434']);
     assert.equal(local.enabledNow, true);
@@ -427,12 +463,20 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     });
     assert.equal(typed.code, 0, typed.stderr);
     outputs.push(typed.stdout, typed.stderr);
-    // On Windows and Linux, which attest nothing, the app's own call is said to be unattested.
+    // On Windows and Linux, which attest nothing, removing a key is the terminal's: refused, nothing removed.
     const unattested = await cli(['--json', 'provider', 'key', 'remove', 'typesafe'], {
       stateDir,
       desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
     });
-    assert.equal(unattested.code, 0, unattested.stderr);
+    assert.equal(unattested.code, APPROVAL_EXIT, unattested.stderr);
+    assert.match(unattested.stderr, /at your terminal, with the event service's provider key remove typesafe/u);
+    assert.equal(
+      ((await ok(['provider', 'list'])) as { providers: { id: string; hasKey: boolean }[] }).providers.find(
+        (entry) => entry.id === 'typesafe',
+      )?.hasKey,
+      true,
+      'an unattested removal removed nothing',
+    );
     // The local test build, for its own test profile, is said to be the test build's: never the release app's.
     const typedAgain = await cli(['provider', 'key', 'set', 'typesafe'], {
       stateDir,
@@ -452,8 +496,11 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     assert.equal(lastSet?.ids?.approvedBy, 'terminal');
     assert.equal(lastSet?.surface, 'cli');
     const removes = keyLines.filter((line) => line.operation === 'events.providerKeyRemove');
-    assert.equal(removes.at(-2)?.ids?.approvedBy, 'desktop-app (unattested)');
-    assert.equal(removes.at(-2)?.surface, 'app');
+    assert.equal(
+      removes.some((line) => line.ids?.approvedBy === 'desktop-app (unattested)' && line.outcome === 'ok'),
+      false,
+      'no unattested removal was made',
+    );
     assert.equal(removes.at(-1)?.ids?.approvedBy, 'desktop-app (test build)');
     assert.equal(removes.at(-1)?.surface, 'app');
     // `judge kind disable` stays the off switch.
@@ -464,7 +511,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
   }
   try {
     // No key reached any output, the audit log, the database or its journal: only the events-only secret store.
-    const keys = [OPENROUTER_KEY, OPENROUTER_KEY_2, TYPESAFE_KEY];
+    const keys = [OPENROUTER_KEY, OPENROUTER_KEY_2, TYPESAFE_KEY, ANTHROPIC_KEY];
     for (const output of outputs)
       for (const key of keys) assert.ok(!output.includes(key), `an output names a provider key: ${output}`);
     for (const file of await filesBelow(stateDir, (name) => name === 'secrets')) {

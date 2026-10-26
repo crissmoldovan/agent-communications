@@ -51,6 +51,24 @@ export const AI_PROVIDERS = ['typesafe', 'openrouter'] as const;
 export type AiProvider = (typeof AI_PROVIDERS)[number];
 
 /**
+ * Every provider whose key the event service keeps (0.33.0, `allowlist.rs`, `KeyProvider`): Jev's two, Anthropic, which
+ * Analyse may run on, and Linear, whose personal API key Settings → Integrations connects. A key goes only through
+ * `providerKeySet`, on stdin.
+ */
+export const KEY_PROVIDERS = ['typesafe', 'openrouter', 'anthropic', 'linear'] as const;
+export type KeyProvider = (typeof KEY_PROVIDERS)[number];
+
+/** The providers Analyse's model runs on (0.33.0, `rule_editor.rs`, `AnalyseProvider`), each on the person's own key. */
+export const ANALYSE_PROVIDERS = ['openrouter', 'anthropic'] as const;
+export type AnalyseProvider = (typeof ANALYSE_PROVIDERS)[number];
+
+/** What Settings → Integrations shows (0.33.0, `rule_editor.rs`, `Integration`): Linear, and agent sessions. */
+export type Integration = 'linear' | 'agent-sessions';
+
+/** A rule or target document the rule editor wrote, as JSON: Rust checks its shape again and hands it over on stdin. */
+export type JsonDocument = Record<string, unknown>;
+
+/**
  * An approval that no longer waits, as Approvals → Recent reads it (`allowlist.rs`, `FinishedApprovalState`): one list
  * for each. Closed: never `pending` (Waiting's), `sending` or `corrupt`.
  */
@@ -190,7 +208,7 @@ export type Call =
   // Judge setup and AI provider keys (0.32.0): the list, a key's removal, and the person's own setup, applied by the CLI
   // itself. A key is never a call's: `providerKeySet` below hands it to the CLI on stdin.
   | { kind: 'providerList' }
-  | { kind: 'providerKeyRemove'; provider: AiProvider }
+  | { kind: 'providerKeyRemove'; provider: KeyProvider }
   | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
   // Connections (0.32.0): core's channels, read; adding one server to one app, prepared, then approved by the person in
   // the app with `mcpInstallApproved`, only for the approval the app prepared for that install (DA10's note of
@@ -205,6 +223,23 @@ export type Call =
   | { kind: 'eventsMessagesList'; since: number; before?: number | string; limit?: number }
   | { kind: 'eventsMessageShow'; eventId: string }
   | { kind: 'activityItems'; since: number; ids?: string[] }
+  // The rule editor (0.33.0, design 2026-10-26-rules-that-act-0330 §3.1–§3.5): target versions, read; each target and the
+  // rule the person wrote, handed to the CLI on stdin; the activation prepared, its preview read without a challenge,
+  // and approved only by the person's press, for that digest; Analyse, of the rule or the draft; Settings → Integrations.
+  | { kind: 'eventsTargetsList' }
+  | { kind: 'eventsTargetAdd'; document: JsonDocument }
+  | { kind: 'eventsTargetUpdate'; document: JsonDocument }
+  | { kind: 'eventsRuleCreate'; document: JsonDocument }
+  | { kind: 'eventsRuleUpdate'; document: JsonDocument }
+  | { kind: 'eventsRuleEnable'; ruleId: string; version: number }
+  | { kind: 'eventsApprovalView'; approvalId: string; digest: string }
+  | { kind: 'eventsRuleApprove'; approvalId: string; digest: string }
+  | { kind: 'eventsRuleAnalyse'; ruleId: string; draft?: JsonDocument; provider?: AnalyseProvider }
+  | { kind: 'integrationShow'; integration: Integration; team?: string }
+  | { kind: 'integrationSetAgentSessions'; relayHome: string }
+  | { kind: 'sessionQueueList' }
+  | { kind: 'sessionQueueDrop'; deliveryId: string }
+  | { kind: 'judgeShow'; judgeId: string; version?: number }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -258,7 +293,22 @@ export type TerminalCommand =
    * Binding a lane to an agent window, which only the person does, at a terminal (0.31.0, B1): `lane bind <lane>
    * --window <id>`, the window an activity key or a Claude Code session id. The app never runs it.
    */
-  | { kind: 'laneBind'; lane: string; window: string };
+  | { kind: 'laneBind'; lane: string; window: string }
+  /**
+   * Approving a rule's activation the editor prepared, at a terminal (0.33.0), where the app cannot attest the person in
+   * the app (Windows and Linux): the events service's `approve <approval-id>`, which shows its preview and asks for its
+   * challenge there. Rust opens only an approval it recorded for `eventsRuleEnable`; the app never answers it.
+   */
+  | { kind: 'ruleApprove'; approvalId: string }
+  /**
+   * A person-only setup at a terminal, where the app cannot attest the person (0.33.0): judge setup, a provider's key
+   * removed, or where the relay is — the call's own words — and setting a key, which the terminal asks for, hidden.
+   */
+  | {
+      kind: 'atTerminal';
+      call: Extract<Call, { kind: 'judgeSetup' | 'providerKeyRemove' | 'integrationSetAgentSessions' }>;
+    }
+  | { kind: 'providerKeySet'; provider: KeyProvider };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 
@@ -389,10 +439,11 @@ export interface Bridge {
   /** The answer to the quit question; the app then quits. */
   answerQuit(keep: boolean, remember: boolean): Promise<void>;
   /**
-   * Stores an AI provider's key (0.32.0): Rust hands it to the events CLI's `provider key set` on stdin, never in argv,
-   * and keeps it only for that call. The window clears its field once this is called, and never keeps the key.
+   * Stores an AI provider's key (0.32.0), or Linear's (0.33.0): Rust hands it to the events CLI's `provider key set` on
+   * stdin, never in argv, and keeps it only for that call. The window clears its field once this is called, and never
+   * keeps the key.
    */
-  providerKeySet(provider: AiProvider, key: string): Promise<CliResult>;
+  providerKeySet(provider: KeyProvider, key: string): Promise<CliResult>;
   /** Which build this is: a release, or the local test build (0.32.0). */
   appBuild(): Promise<AppBuild>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */

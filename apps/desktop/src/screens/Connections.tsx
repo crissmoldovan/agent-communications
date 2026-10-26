@@ -4,6 +4,7 @@ import { readSessions, type SessionView } from '../activity.ts';
 import { useAppBuild } from '../app-build.ts';
 import { useBridge } from '../bridge-context.tsx';
 import { ChangePreview } from '../components/ChangePreview.tsx';
+import { setupsAtTerminal } from '../components/DoInTerminal.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { SectionPanel } from '../components/SectionPanel.tsx';
@@ -145,7 +146,9 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
               view={value}
               lastUsed={lastUsed}
               canRemove={atLeast(version, MCP_UNINSTALL_VERSION)}
-              approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION)}
+              // Where nothing attests the app as the person's (Windows and Linux), core takes no approval from it (0.33.0):
+              // an install is approved in the terminal there, as before 0.32.0.
+              approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION) && !setupsAtTerminal()}
               readOnly={readOnly}
               installed={version}
               reload={channels.reload}

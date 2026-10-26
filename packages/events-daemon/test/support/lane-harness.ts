@@ -9,7 +9,7 @@ import { run } from '../../src/cli/program.ts';
 import { EventControlClient } from '../../src/control/client.ts';
 import type { LaneWindowIdentity } from '../../src/domain/lanes.ts';
 import { createEventsMcpServer } from '../../src/mcp/server.ts';
-import { startEventOwner } from '../../src/runtime/owner.ts';
+import { type EventOwnerOptions, startEventOwner } from '../../src/runtime/owner.ts';
 import { eventPaths } from '../../src/runtime/paths.ts';
 import { openEventDatabase } from '../../src/store/database.ts';
 import { selectEventSecretStore } from '../../src/store/event-secrets.ts';
@@ -144,7 +144,11 @@ export interface LaneHarness {
   readonly openCount: () => Promise<number>;
 }
 
-export async function withLaneOwner(work: (harness: LaneHarness) => Promise<void>): Promise<void> {
+export async function withLaneOwner(
+  work: (harness: LaneHarness) => Promise<void>,
+  /** More owner options, for a test that needs a seam this harness does not set (Linear's client, agent sessions). */
+  options: Partial<EventOwnerOptions> = {},
+): Promise<void> {
   const root = await shortTempDir('aev-lane-story-');
   const stateDir = join(root, 'state');
   const configDir = join(root, 'config');
@@ -205,8 +209,11 @@ export async function withLaneOwner(work: (harness: LaneHarness) => Promise<void
   const owner = await startEventOwner({
     stateDir,
     configDir,
+    // A home of its own, never the real one: a binding's `~` and the relay's default homes are looked for under it.
+    homeDirectory: join(root, 'home'),
     tickMs: 60_000,
     pollIntervalMs: 1,
+    ...options,
     gmailSourceFor: async () =>
       ({
         inboxId: ACCOUNT,

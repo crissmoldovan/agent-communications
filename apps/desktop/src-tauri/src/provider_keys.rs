@@ -4,7 +4,7 @@
 //! setting or a file. Its bytes are overwritten when the call ends, and its `Debug` shows none of them. What the
 //! webview and Tauri's own IPC buffers did with the text before it arrived is theirs: the window clears its field.
 
-use crate::allowlist::{provider_key_set, AiProvider};
+use crate::allowlist::{provider_key_set, KeyProvider};
 use crate::ipc::CliResult;
 use crate::runner::{run_with_input, RunContext};
 use serde::{Deserialize, Deserializer};
@@ -81,7 +81,7 @@ impl<'de> Deserialize<'de> for ProviderKey {
 }
 
 /// `provider key set <provider>`, with `key` on its stdin; the key is overwritten when this returns.
-pub fn set(provider: AiProvider, key: ProviderKey, ctx: &RunContext) -> CliResult {
+pub fn set(provider: KeyProvider, key: ProviderKey, ctx: &RunContext) -> CliResult {
     let result = run_with_input(&provider_key_set(provider), ctx, key.as_bytes());
     drop(key);
     result
@@ -112,7 +112,7 @@ mod tests {
     /// in its environment.
     #[test]
     fn the_built_command_never_carries_the_key() {
-        for provider in AiProvider::ALL {
+        for provider in KeyProvider::ALL {
             let words = provider_key_set(provider);
             assert_eq!(words.words, ["provider", "key", "set", provider.word()]);
             let program = Program {
@@ -183,7 +183,7 @@ mod tests {
             node: None,
         };
         let result = set(
-            AiProvider::Openrouter,
+            KeyProvider::Openrouter,
             ProviderKey::new(KEY.into()).expect("a key"),
             &ctx,
         );

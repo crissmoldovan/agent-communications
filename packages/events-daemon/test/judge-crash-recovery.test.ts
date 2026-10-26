@@ -10,6 +10,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { JUDGE_CRASH_POINTS, type JudgeCrashPoint } from './fixtures/judges/crash-recovery/points.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const NOW = 1_800_000_000_000;
 const ACCOUNT = 'ibx_E5CRASHAAAAAAA';
@@ -258,6 +259,7 @@ test('E5 crash: owner startup does not issue a judge-ledger statement before the
     phase = 'owner-start';
     try {
       owner = await startEventOwner({
+        ...noRealHome(setup.root),
         stateDir: setup.root,
         configDir: await emptyConfigDir(setup.root),
         tickMs: 60_000,
@@ -312,6 +314,7 @@ test('E7 owner: startup recovers in-flight judge work only after an active kind 
     setup.store.close();
     try {
       owner = await startEventOwner({
+        ...noRealHome(setup.root),
         stateDir: setup.root,
         configDir: await emptyConfigDir(setup.root),
         tickMs: 60_000,

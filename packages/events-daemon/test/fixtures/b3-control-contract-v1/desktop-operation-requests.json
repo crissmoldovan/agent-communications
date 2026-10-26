@@ -101,6 +101,24 @@
       "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
     }
   },
+  {
+    "name": "target-add-linear-request",
+    "request": {
+      "operation": "target-add",
+      "args": {
+        "document": {
+          "targetId": "billing-issues",
+          "version": 1,
+          "kind": "linear",
+          "team": { "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11", "key": "CUE" },
+          "title": { "text": "Invoice from {{sender}}" },
+          "description": { "text": "{{subject}}" },
+          "labels": [{ "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60", "name": "Billing" }],
+          "assignee": "me"
+        }
+      }
+    }
+  },
   { "name": "target-remove-request", "request": { "operation": "target-remove", "args": { "targetId": "target-1" } } },
   {
     "name": "approve-request",
@@ -181,5 +199,64 @@
   {
     "name": "provider-key-remove-request",
     "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+  },
+  {
+    "name": "rule-analyse-request",
+    "request": {
+      "operation": "rule-analyse",
+      "args": {
+        "ruleId": "invoices",
+        "provider": "openrouter"
+      }
+    }
+  },
+  {
+    "name": "provider-key-set-linear-request",
+    "request": { "operation": "provider-key-set", "args": { "provider": "linear" } }
+  },
+  {
+    "name": "integration-show-request",
+    "request": { "operation": "integration-show", "args": { "integration": "linear", "team": "CUE" } }
+  },
+  {
+    "name": "integration-show-agent-sessions-request",
+    "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } }
+  },
+  {
+    "name": "integration-set-request",
+    "request": {
+      "operation": "integration-set",
+      "args": {
+        "integration": "agent-sessions",
+        "relayHome": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "relayPort": "default",
+        "allowFolders": ["/example/home/work"]
+      }
+    }
+  },
+  { "name": "session-queue-list-request", "request": { "operation": "session-queue-list", "args": {} } },
+  {
+    "name": "session-queue-drop-request",
+    "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } }
+  },
+  {
+    "name": "rule-approve-request",
+    "request": {
+      "operation": "rule-approve",
+      "args": {
+        "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+        "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0"
+      }
+    }
+  },
+  {
+    "name": "judge-show-request",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev",
+        "version": 1
+      }
+    }
   }
 ]

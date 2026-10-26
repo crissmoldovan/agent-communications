@@ -182,6 +182,55 @@ agent-events lane unbind david       # at once; the window's watches end
 - **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
   2025-era client connects as before.
 
+## A Linear issue
+
+From 0.33.0 a rule can add an issue to your Linear workspace. Connect Linear once with a personal API key from your
+Linear account's settings, in the app's Settings → Integrations or at your terminal:
+
+```bash
+# 1. your Linear key: typed at this terminal, hidden — never piped in, never an argument
+agent-events provider key set linear
+
+# 2. what the key can see: the workspace and its teams, and a team's labels
+agent-events --json integration show linear --team CUE
+
+# 3. a target: the team, its labels, who it is assigned to, and the title and description, whose {{field}} slots
+#    name fields the rule keeps
+agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear","team":{"id":"<team id>","key":"CUE"},"title":{"text":"Invoice from {{sender}}"},"description":{"text":"{{subject}}"},"labels":[{"id":"<label id>","name":"Billing"}],"assignee":"me"}'
+```
+
+- **The key is yours.** It is kept with the AI provider keys, set and removed only where you are — at an interactive
+  terminal, or in the Agent Comms app — never by an agent, and never shown again. `provider list` and
+  `events_provider_list` say whether a Linear key is kept. `integration show linear` is your read too: it refuses
+  inside an MCP server's process, and no MCP tool reaches it.
+- **Only what the rule keeps.** Each `{{field}}` in the title and description names one of the rule's mapped fields
+  (`{{subject}}`, `{{sender}}`, or `{{from.address}}` within a mapped `from`); a rule naming any other is refused when
+  you activate it. A model-written title or description comes later. The approval says which team, labels and
+  assignee, and which fields fill the title and the description.
+- **A slot's value stays text.** Linear makes a mention from a person's or an issue's plain address, links bare
+  addresses and issue ids, and reads the description as Markdown. So in the description every slot's value is a block
+  quote, its text inside a code block, where Linear makes no link, mention or formatting: a value from the message is
+  labelled "From outside: written by the sender, not checked", and a constant the rule's mapping sets "From the rule's
+  mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain text,
+  each is one line. The templates' own words are written as they are, as you approved them, and the description ends
+  with the rule and delivery that added the issue.
+- **Checked against Linear.** When you enable a rule and a Linear key is kept, the event service asks Linear (as
+  `integration show linear --team` does) whether each target's team key is the team its id names, and each label name
+  its id's; a mismatch is refused (`LINEAR_TEAM_MISMATCH`, `LINEAR_LABEL_MISMATCH`), and so is a key Linear refuses or a
+  Linear that does not answer. With no key kept the check is skipped — nothing is sent until there is one — and
+  `approval view` says so.
+- **One issue per match.** The issue is sent to `https://api.linear.app/graphql` — the one Linear address the event
+  service may reach — through the same pinned, checked connection as a hosted judge. A rate limit, a 5xx or no answer
+  is tried again, as a webhook's failure is, up to ten times; Linear refusing the issue fails it at once with Linear's
+  code (`LINEAR_INVALID_INPUT`, `LINEAR_AUTHENTICATION_ERROR`, …). The issue's id is chosen from the delivery's, and each
+  try first looks for it, so a retry after a lost answer never adds a second issue. With no key, a delivery waits
+  (`LINEAR_KEY_MISSING`) and sends nothing.
+- **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
+  added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
+  is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the
+  rule's delivery retention: `deliveries list` and `delivery show` give them as `linear: { identifier, url }`, the
+  address without the title's words. Nothing the issue says is kept.
+
 ## What happened to a message
 
 From 0.32.0 the event service tells you what became of each message it observed: whether each rule matched it and what
@@ -217,6 +266,59 @@ agent-events message show <event-id> --json          # one message, with every l
   did in Gmail or Slack yourself is in neither. `--since` and `--before` take milliseconds since 1970, and `--limit`
   is 1 to 500.
 
+## Analyse a rule
+
+From 0.33.0 the event service suggests how to improve a rule, or a draft of it, part by part: each suggestion says what
+the part says now, what it could say, why, and what that rests on. It never applies one. The desktop app puts the one
+you choose into the editor, and you approve the new version as any other. At a terminal:
+
+```bash
+agent-events rule analyse invoices --json                        # the rule's active version, else its newest
+agent-events rule analyse invoices --draft - --json < draft.json # a draft: one JSON rule document on stdin
+agent-events rule analyse invoices --provider anthropic --json   # the model on your Anthropic key
+```
+
+- **What it reads.** The rule, or the draft, and content-free counts of what the rule did on this Mac in the last 30
+  days:
+  - its decisions, and their outcomes;
+  - the judge's answers, and their spread;
+  - per sending domain, what the judge said;
+  - the queue items you marked done or dismissed, against the judge's number for each.
+
+  It reads no subject, body, snippet or address. A domain is counted only when a judged decision kept it: from 0.33.0
+  a judged decision keeps its sender's domain (never the address), when the rule tests or keeps `from.address` and the
+  domain is a plain ASCII hostname. It is kept apart from the decision's metadata, encrypted, and only as long as the
+  rule keeps the message's content — its projection's deadline, the ingest retention (7 days by default) — not the 90
+  days of the decision's content-free metadata; it goes sooner with that metadata, and a tightening shortens it. So
+  Analyse's per-domain counts cover the last week or so, the rest of its counts the last 30 days.
+- **What it suggests from the counts alone:**
+  - a sending domain the judge said no to three times or more, and never yes: the condition, with that domain left out
+    before the judge is asked;
+  - when every message you kept scored above every one you dismissed: a judge bar between them;
+  - when nothing passed in 30 days: a note that says so.
+- **What a model suggests,** each through its own fixed brief (`src/domain/analyse-prompts.ts`):
+  - the judge's question, as TypeSafe advises for System One questions: one yes-or-no about one fact, naming who asks
+    for what;
+  - a session's context text, as a task, steps, limits and what to do when unsure;
+  - a Linear issue's title template, using only the rule's mapped fields.
+- **Where the model runs.** On the provider you name, or else the first with a key: OpenRouter
+  (`anthropic/claude-sonnet-5.5`, the key Jev may already use), then Anthropic's own API (`claude-sonnet-5-5`, with
+  `agent-events provider key set anthropic`). The result's `model` names the provider and the model, or why it did not
+  run — `NO_KEY`, with `noKey` listing the providers that have none. The suggestions from the counts come either way.
+- **What it sends.** The rule's own text around each part — its question, a session's text and a Linear title as you
+  wrote them, and its condition with each address and domain it names (a person it watches for, a domain an applied
+  exclusion left out) replaced by `<address>` or `<domain>` — and the counts without any domain: never a message or
+  anything from one, no sender, subject, body or address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
+  `https://api.anthropic.com/v1/messages`, through the same pinned path as the judges, with a 64 KiB request, a 256 KiB
+  answer and a 60-second deadline.
+- **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
+  refused with a closed reason (`MODEL_OUTPUT_NOT_JSON`, `MODEL_OUTPUT_SLOTS`, …), and the provider's own words are
+  never kept. A suggestion you apply is your rule's text from then on, and you approve it with the rule.
+- **Who can run it: you.** It runs when you press Analyse in the app or run it at an interactive terminal, as
+  `provider key set` does. `rule analyse` refuses inside the event service's MCP server, in an agent's shell (an
+  agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
+  a boundary against code running as you — and no MCP tool runs it.
+
 ## What you can do with it
 
 - **Sources:**
@@ -240,6 +342,7 @@ agent-events message show <event-id> --json          # one message, with every l
     token, and its origin is checked.
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window
     ([A lane](#a-lane)).
+  - **A Linear issue** in your workspace, with your Linear key (0.33.0, [A Linear issue](#a-linear-issue)).
   - **The dry-run log.**
 - **Rules and deliveries you can read (0.32.0):**
   - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words
@@ -283,6 +386,7 @@ channel servers applies, and the result tells you to restart the client. The
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
+  - analyse a rule (`rule analyse`);
   - resume a target;
   - decide a held event.
 
@@ -327,6 +431,11 @@ network traffic Laya has — and checks every file against the release's lock an
 runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
 files of every entry it replaced.
 
+**A judge's exact document.** `agent-events judge show <judge-id> [--version <n>] --json` (and `events_judge_show` over
+MCP) gives one judge version's canonical document, as a rule embeds it, with its digest and whether it is `live` or
+`revoked`: the newest live version unless you name one. It is configuration only — kind, provider, model, endpoint,
+prompt template and protocol. A hosted judge's key is kept apart from its document, so it never appears here.
+
 **Every judge kind is off until you turn it on: in the desktop app, or at your terminal.** Installing, updating, a rule
 or a budget never turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of
 that kind. Removing a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later
@@ -351,18 +460,22 @@ agent-events judge setup local-endpoint --url http://127.0.0.1:11434 --model nim
 `judge setup` adds the judge (`jev`, or `local-model`), gives Jev its provider's stored key, approves the daemon-wide
 budget when there is none for the judge's provider — 60 calls per rolling hour, 1,000,000 input tokens per rolling 30
 days and two calls at a time, overall and for that provider — and turns the kind on. Running the command is your
-approval of those enablements: each is recorded as approved through the app (`approvedVia: app` on its approval), and
-the audit log says where you ran it — `approvedBy: desktop-app` from the Agent Comms app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
+approval of those enablements: each is recorded with where you approved it (`approvedVia: app` on its approval from
+the attested Agent Comms app, `terminal` at a terminal), and the audit log says the same — `approvedBy: desktop-app` from
+the app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
 provider, the URL or the model changed; a rule keeps using the judge version it names until you update it. A local
 model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `provider key set` again replaces a key,
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
 refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
 where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
 key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its pid; the local test
-build counts only for its own marked test profile). Windows and Linux check nothing, a known limit: there a command
-without an agent's marker counts as the app's, and its audit line says `desktop-app (unattested)`. The result and the
-audit line say where you were — `desktop-app`, `desktop-app (test build)`, `desktop-app (unattested)` or `terminal` —
-as the CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
+build counts only for its own marked test profile). Windows and Linux check nothing, so there these changes go
+through a terminal: a command that is neither at an interactive terminal nor attested as the app's is refused with
+`APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
+says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
+`integration set agent-sessions` and `rule approve`. `rule analyse` changes nothing and still runs from the app there.
+The result and the audit line say where you were — `desktop-app`, `desktop-app (test build)` or `terminal` — as the
+CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
 refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`
 says only whether each provider has a key.
 

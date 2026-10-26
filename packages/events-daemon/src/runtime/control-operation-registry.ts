@@ -113,10 +113,15 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // A story per message (0.32.0): the person's read of what happened to each observed event, CLI and app only.
   { capabilityOperation: 'messagesList', wireOperation: 'messages-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'messageShow', wireOperation: 'message-show', desktopCallable: true, family: 'owner' },
+  // Analyse (0.33.0 design §3.3): the person's view of one rule and its last 30 days, CLI and app only; it writes nothing.
+  { capabilityOperation: 'ruleAnalyse', wireOperation: 'rule-analyse', desktopCallable: true, family: 'owner' },
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step, and
   // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
   // origin only; the provider list says only whether each has a key.
   { capabilityOperation: 'judgeSetup', wireOperation: 'judge-setup', desktopCallable: true, family: 'owner' },
+  // A rule's activation, approved by the person in the app after its preview (0.33.0 design §3.1): from the app's
+  // origins only, for exactly the digest the person saw, as judge setup approves its enablements.
+  { capabilityOperation: 'approveRuleFromApp', wireOperation: 'rule-approve', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'providerList', wireOperation: 'provider-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'providerKeySet', wireOperation: 'provider-key-set', desktopCallable: true, family: 'owner' },
   {
@@ -125,6 +130,27 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
     desktopCallable: true,
     family: 'owner',
   },
+  // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see. The person's read, CLI and app.
+  { capabilityOperation: 'integrationShow', wireOperation: 'integration-show', desktopCallable: true, family: 'owner' },
+  // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
+  // their terminal (its show is `integration-show` above) — and the busy queue, the person's to read and drop from; a
+  // bound window sees its own lane's.
+  { capabilityOperation: 'integrationSet', wireOperation: 'integration-set', desktopCallable: true, family: 'owner' },
+  {
+    capabilityOperation: 'sessionQueueList',
+    wireOperation: 'session-queue-list',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'sessionQueueDrop',
+    wireOperation: 'session-queue-drop',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  // One judge version's exact canonical document (0.33.0), for the app's rule editor to embed; content-free, as
+  // `judges list` is, so CLI and MCP alike.
+  { capabilityOperation: 'judgeShow', wireOperation: 'judge-show', desktopCallable: true, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

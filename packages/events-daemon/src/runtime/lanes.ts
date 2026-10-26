@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
-import { CommsError, homeDirectory, shortenHome } from '@agentcomms/core';
+import { CommsError, homeDirectory, homeForDiscovery, shortenHome } from '@agentcomms/core';
+import { type TargetDocument, targetLane } from '../domain/activation-documents.ts';
 import {
   isActivityKey,
   isClaudeCodeSessionId,
@@ -13,6 +14,7 @@ import {
   type LaneUnbindResultV1,
   type LaneWindowIdentity,
   lanePointerText,
+  sqlTargetLane,
   UNIDENTIFIABLE_WINDOW_REASON,
 } from '../domain/lanes.ts';
 import type { QueueChannel } from '../domain/queue-target.ts';
@@ -128,7 +130,10 @@ export interface LaneServiceOptions {
   readonly now?: (() => number) | undefined;
   /** How often a long-poll looks again without being told of an append (an item reopened, say). */
   readonly recheckMs?: number | undefined;
-  /** The person's home folder, shown as `~` in a binding's folder; the process's own by default. */
+  /**
+   * The person's home folder, shown as `~` in a binding's folder; the process's own by default, found the first time a
+   * binding is shown, so a service that shows none never reads it.
+   */
   readonly home?: string | undefined;
 }
 
@@ -221,22 +226,36 @@ function bindingView(row: BindingRow, home: string): LaneBindingV1 {
   };
 }
 
+/** The lane a stored target document carries, read defensively: `targetLane`'s answer for any JSON value. */
+function storedTargetLane(target: unknown): string | undefined {
+  if (typeof target !== 'object' || target === null) return undefined;
+  const record = target as { readonly kind?: unknown; readonly lane?: unknown; readonly find?: unknown };
+  if (record.kind === 'queue' || record.kind === 'session') {
+    try {
+      const lane = targetLane(record as TargetDocument);
+      return typeof lane === 'string' ? lane : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 /** Every lane an active rule's queue target carries, with the rule and its source channel (B5). */
-const CARRIED_LANES = `SELECT json_extract(target.value, '$.lane.name') AS lane, pointer.object_id AS rule_id,
+const CARRIED_LANES = `SELECT ${sqlTargetLane('target.value')} AS lane, pointer.object_id AS rule_id,
          json_extract(stored.document, '$.source.channel') AS channel
     FROM active_versions AS pointer
     JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
     JOIN json_each(stored.document, '$.targets') AS target
    WHERE pointer.kind = 'rule'
-     AND json_extract(target.value, '$.kind') = 'queue'
-     AND json_extract(target.value, '$.lane.name') IS NOT NULL`;
+     AND ${sqlTargetLane('target.value')} IS NOT NULL`;
 
 export class LaneService {
   readonly #store: EventDatabase;
   readonly #queue: LaneServiceOptions['queue'];
   readonly #now: () => number;
   readonly #recheckMs: number;
-  readonly #home: string;
+  #home: string | undefined;
   readonly #tasks = new Map<string, Task>();
   /**
    * Per binding, its high-water mark: the last item a wake named. Wakes name only items past it, oldest first, so none
@@ -246,12 +265,18 @@ export class LaneService {
   readonly #waiters = new Set<Waiter>();
   #stopped = false;
 
+  #homeFolder(): string {
+    // Under test the account's real home is refused (`homeForDiscovery`): a test gives the owner a temporary one.
+    this.#home ??= homeForDiscovery(homeDirectory(), "the lanes' binding folders");
+    return this.#home;
+  }
+
   constructor(options: LaneServiceOptions) {
     this.#store = options.store;
     this.#queue = options.queue;
     this.#now = options.now ?? Date.now;
     this.#recheckMs = options.recheckMs ?? 1_000;
-    this.#home = options.home ?? homeDirectory();
+    this.#home = options.home;
   }
 
   /**
@@ -332,7 +357,7 @@ export class LaneService {
             rules: [...entry.rules].sort().map((id) => ({ id })),
             channels: [...entry.channels].sort(),
             open: open.get(name) ?? 0,
-            binding: binding === undefined ? null : bindingView(binding, this.#home),
+            binding: binding === undefined ? null : bindingView(binding, this.#homeFolder()),
           };
         }),
     };
@@ -414,7 +439,7 @@ export class LaneService {
           row.since,
         );
     });
-    return { lane, binding: bindingView(row, this.#home) };
+    return { lane, binding: bindingView(row, this.#homeFolder()) };
   }
 
   /**
@@ -455,7 +480,7 @@ export class LaneService {
       (
         this.#store.database
           .prepare(
-            "SELECT target_id, version, json_extract(document, '$.lane.name') AS lane FROM target_versions WHERE json_extract(document, '$.lane.name') IS NOT NULL",
+            `SELECT target_id, version, ${sqlTargetLane('document')} AS lane FROM target_versions WHERE ${sqlTargetLane('document')} IS NOT NULL`,
           )
           .all() as Array<{ target_id: string; version: number; lane: string }>
       ).map((row) => [`${row.target_id}@${row.version}`, row.lane]),
@@ -479,7 +504,7 @@ export class LaneService {
     if (typeof deliveryId !== 'string') return;
     const row = this.#store.database
       .prepare(
-        `SELECT delivery.state, json_extract(target.document, '$.lane.name') AS lane
+        `SELECT delivery.state, ${sqlTargetLane('target.document')} AS lane
            FROM deliveries AS delivery
            LEFT JOIN target_versions AS target
              ON target.target_id = delivery.target_id AND target.version = delivery.target_version
@@ -511,8 +536,9 @@ export class LaneService {
       const foreign =
         Array.isArray(targets) &&
         targets.some((target) => {
-          const lane = (target as { readonly lane?: { readonly name?: unknown } } | null)?.lane?.name;
-          return typeof lane === 'string' && lane !== mine;
+          // A queue's lane, or the lane a session target finds its session by (0.33.0 §3.5): the same rule (B5).
+          const lane = storedTargetLane(target);
+          return lane !== undefined && lane !== mine;
         });
       if (!foreign) return entry;
       const { counts7d: _hidden, ...rest } = entry;

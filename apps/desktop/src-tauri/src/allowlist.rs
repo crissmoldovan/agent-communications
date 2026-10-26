@@ -1,13 +1,16 @@
 //! The allow-list (DA4, plan "Global Constraints"): every call the app may make, each argument checked against core's
 //! grammars before a word is built. A value that does not match never constructs, so the invoke that carried it fails
-//! before anything runs. No call carries `--approval`, and none is `approve` (DA1, DA10). Two approvals are the
-//! person's in the app (0.32.0, DA10's notes of 2026-10-26): a judge's setup, and adding a server to an app, whose
-//! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`).
+//! before anything runs. No call carries `--approval`, and none is `approve` (DA1, DA10). Three approvals are the
+//! person's in the app (0.32.0, DA10's notes of 2026-10-26; 0.33.0): a judge's setup; adding a server to an app, whose
+//! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`); and a
+//! rule's activation, whose `eventsRuleApprove` (`rule approve`) answers only the one the rule editor prepared with
+//! `eventsRuleEnable`, for its digest (`rule_editor`).
 
 use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
+use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -213,6 +216,32 @@ checked_word!(
     grammar::local_model,
     "a local model's name"
 );
+checked_word!(
+    /// A Linear team whose labels `integration show linear --team` lists (0.33.0): its key, or its id.
+    LinearTeam,
+    crate::rule_editor::linear_team,
+    "a Linear team's key or id"
+);
+checked_word!(
+    /// Where the event service finds the person's claude-stream relay (0.33.0, design §3.5): `default`, or the relay's
+    /// home folder, whole and normal (`rule_editor::relay_home_setting`).
+    RelayHomeSetting,
+    crate::rule_editor::relay_home_setting,
+    "the relay's home: default, or a whole folder"
+);
+checked_word!(
+    /// A judge's id, as `judge show` names one (0.33.0): a letter or digit, then up to 127 letters, digits and `._:-`.
+    JudgeId,
+    crate::rule_editor::judge_id,
+    "a judge id"
+);
+checked_word!(
+    /// The fingerprint of a rule's activation, as `rule enable` binds it and its preview shows it (0.33.0): 64
+    /// lowercase hex digits.
+    Digest,
+    crate::rule_editor::digest,
+    "a digest"
+);
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +348,43 @@ impl AiProvider {
             AiProvider::Typesafe => "typesafe",
             AiProvider::Openrouter => "openrouter",
         }
+    }
+}
+
+/// The providers whose keys the event service keeps (0.33.0, design §3.3, §3.4): Jev's two, Anthropic, which Analyse may
+/// run on, and Linear, whose personal API key Settings → Integrations connects. A key is set only through
+/// `provider_key_set`, on stdin; a call names only which one to remove. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeyProvider {
+    Typesafe,
+    Openrouter,
+    Anthropic,
+    Linear,
+}
+
+impl KeyProvider {
+    pub const ALL: [KeyProvider; 4] = [
+        KeyProvider::Typesafe,
+        KeyProvider::Openrouter,
+        KeyProvider::Anthropic,
+        KeyProvider::Linear,
+    ];
+
+    /// The provider as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            KeyProvider::Typesafe => "typesafe",
+            KeyProvider::Openrouter => "openrouter",
+            KeyProvider::Anthropic => "anthropic",
+            KeyProvider::Linear => "linear",
+        }
+    }
+
+    /// Whether the event service has had this provider's key since 0.32.0: Jev's two did; Anthropic and Linear come in
+    /// 0.33.0.
+    fn since_judge_setup(self) -> bool {
+        matches!(self, KeyProvider::Typesafe | KeyProvider::Openrouter)
     }
 }
 
@@ -872,7 +938,7 @@ pub enum Call {
     /// The events service's `provider key remove <provider>` (0.32.0): takes the person's key away, and the copy its
     /// Jev judges hold. Setting a key is never a call: the key goes to `provider_key_set`, which hands it to the CLI on
     /// stdin, so no word of it is ever a `Call`'s.
-    ProviderKeyRemove { provider: AiProvider },
+    ProviderKeyRemove { provider: KeyProvider },
     /// The events service's `judge setup typesafe --provider <provider>`, or `judge setup local-endpoint --url <url>
     /// [--model <name>]` (0.32.0, owner decision 2026-10-26): the person's own setup, which turns the kind on and
     /// approves its enablements as their act. Jev names its provider, whose stored key it uses; a local model server
@@ -925,6 +991,78 @@ pub enum Call {
     },
     /// The events service's `message show <eventId>` (0.32.0): one event's entry, with its queue item's full history.
     EventsMessageShow { event_id: EventId },
+    /// The events service's `targets list` (0.33.0's rule editor): every target version's id, version and digest, so a
+    /// changed target is given the next version. Content-free and read-only.
+    EventsTargetsList {},
+    /// The events service's `target add -` (0.33.0): a new target the rule editor needs, its document on stdin. A
+    /// target version is inert until a rule the person approves names it.
+    EventsTargetAdd { document: TargetDocument },
+    /// The events service's `target update -` (0.33.0): a target's next version, its document on stdin, as `target
+    /// add` takes one.
+    EventsTargetUpdate { document: TargetDocument },
+    /// The events service's `rule create -` (0.33.0, design §3.1): a new rule the person wrote in the app, its document
+    /// on stdin. A version is inert until the person approves it.
+    EventsRuleCreate { document: RuleDocument },
+    /// The events service's `rule update -` (0.33.0): a rule's next version, its document on stdin. The version that
+    /// runs keeps running until the person approves this one.
+    EventsRuleUpdate { document: RuleDocument },
+    /// The events service's `rule enable <rule> <version>` (0.33.0): prepares that version's activation, the D2
+    /// approval the person answers in the app. Rust records the approval it comes back with, and its digest, as the
+    /// app's own (`terminal::Prepared`): only that one `eventsRuleApprove` answers, and the preview's Cancel revokes.
+    EventsRuleEnable {
+        rule_id: RuleId,
+        version: RuleVersion,
+    },
+    /// The events service's `approval view <approval> --digest <digest>` (0.33.0): the activation's own preview, for
+    /// the review the person reads. Its challenges are taken out before the window sees it (`rule_editor`).
+    EventsApprovalView {
+        approval_id: ApprovalId,
+        digest: Digest,
+    },
+    /// The events service's `rule approve <approval> --digest <digest>` (0.33.0, design §3.1): the person pressed
+    /// Approve in the app, after the preview of exactly this digest. Only an approval `eventsRuleEnable` recorded for
+    /// this digest is answered (`connections::run_app_approval`), once; the CLI refuses an agent and, on macOS, a
+    /// process the app did not start.
+    EventsRuleApprove {
+        approval_id: ApprovalId,
+        digest: Digest,
+    },
+    /// The events service's `rule analyse <rule> [--draft -] [--provider <openrouter|anthropic>]` (0.33.0, design
+    /// §3.3): suggestions for a rule, or for the unsaved draft on stdin, its model on the provider the person picked.
+    /// The person's read, refused inside an MCP server and to an agent's shell; it applies nothing.
+    EventsRuleAnalyse {
+        rule_id: RuleId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        draft: Option<RuleDocument>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<AnalyseProvider>,
+    },
+    /// The events service's `integration show <linear|agent-sessions> [--team <team>]` (0.33.0, design §3.4, §3.5):
+    /// whether Linear is connected, the workspace and teams its key sees, and with a team that team's labels; or the
+    /// relay the agent-session target reaches and how it answers. Never a key or a token. Only Linear takes a team.
+    IntegrationShow {
+        integration: Integration,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<LinearTeam>,
+    },
+    /// The events service's `integration set agent-sessions --relay-home <default|folder>` (0.33.0, design §3.5): where
+    /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
+    /// to a process the app did not start). The token in that folder is never a call's.
+    IntegrationSetAgentSessions { relay_home: RelayHomeSetting },
+    /// The events service's `judge show <judge> [--version <n>]` (0.33.0): one judge version's exact canonical document,
+    /// its digest and whether it is live, which the rule editor embeds in a rule as the event service will approve it.
+    /// Configuration only — a judge's key is a separate secret, never in it — and read-only.
+    JudgeShow {
+        judge_id: JudgeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<RuleVersion>,
+    },
+    /// The events service's `session-queue list` (0.33.0, design §3.5): the matches waiting for a busy agent session,
+    /// oldest first — ids and times, content-free. The person's read, refused inside an MCP server. No argument.
+    SessionQueueList {},
+    /// The events service's `session-queue drop <delivery>` (0.33.0): drops one waiting match — its delivery is
+    /// cancelled and what it held purged — a tightening the app applies itself (DA10), once the person confirms.
+    SessionQueueDrop { delivery_id: DeliveryId },
     /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
     /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
     ActivityItems {
@@ -962,6 +1100,11 @@ pub const DELIVERY_DETAIL_VERSION: &str = "0.32.0";
 /// The first release of the events service with judge setup and AI provider keys (owner decision 2026-10-26): its
 /// `judge setup`, `provider list` and `provider key set|remove`. An older one keeps Turn on in Terminal (DA12).
 pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
+
+/// The first release of the events service with the rule editor's calls (design 2026-10-26-rules-that-act-0330):
+/// documents on stdin, `rule approve`, `rule analyse`, `integration show|set`, and the Anthropic and Linear keys. An older
+/// one keeps the rule's page as it was, and says "Needs 0.33.0 or later" (DA12).
+pub const RULE_EDITOR_VERSION: &str = "0.33.0";
 
 /// The first release with the Messages screen's reads (spec 2026-10-26-owner-feedback-0320 §3.6): the events service's
 /// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
@@ -1346,7 +1489,107 @@ impl Call {
                 std::iter::once(u64::from(*since).to_string())
                     .chain(ids.iter().flat_map(|ids| ["--ids".to_string(), ids.word()])),
             ),
+            Call::EventsTargetsList {} => events(&["targets", "list"]),
+            Call::EventsTargetAdd { .. } => events(&["target", "add", "-"]),
+            Call::EventsTargetUpdate { .. } => events(&["target", "update", "-"]),
+            Call::EventsRuleCreate { .. } => events(&["rule", "create", "-"]),
+            Call::EventsRuleUpdate { .. } => events(&["rule", "update", "-"]),
+            Call::EventsRuleEnable { rule_id, version } => with(
+                events(&["rule", "enable", rule_id.as_str()]),
+                [u64::from(*version).to_string()],
+            ),
+            Call::EventsApprovalView {
+                approval_id,
+                digest,
+            } => events(&[
+                "approval",
+                "view",
+                approval_id.as_str(),
+                "--digest",
+                digest.as_str(),
+            ]),
+            // It approves, and completes the activation: as long as judge setup's.
+            Call::EventsRuleApprove {
+                approval_id,
+                digest,
+            } => Words {
+                timeout: SETUP_TIMEOUT,
+                ..events(&[
+                    "rule",
+                    "approve",
+                    approval_id.as_str(),
+                    "--digest",
+                    digest.as_str(),
+                ])
+            },
+            // A model may write some of its suggestions: as long as a doctor's.
+            Call::EventsRuleAnalyse {
+                rule_id,
+                draft,
+                provider,
+            } => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..with(
+                    events(&["rule", "analyse", rule_id.as_str()]),
+                    draft
+                        .iter()
+                        .flat_map(|_| ["--draft".to_string(), "-".to_string()])
+                        .chain(provider.iter().flat_map(|provider| {
+                            ["--provider".to_string(), provider.word().to_string()]
+                        })),
+                )
+            },
+            Call::IntegrationShow { integration, team } => {
+                if team.is_some() && *integration != Integration::Linear {
+                    return Err(AppError::refused(
+                        "only Linear's integration lists a team's labels",
+                    ));
+                }
+                with(
+                    events(&["integration", "show", integration.word()]),
+                    team.iter()
+                        .flat_map(|team| ["--team".to_string(), team.as_str().to_string()]),
+                )
+            }
+            Call::IntegrationSetAgentSessions { relay_home } => events(&[
+                "integration",
+                "set",
+                "agent-sessions",
+                "--relay-home",
+                relay_home.as_str(),
+            ]),
+            Call::JudgeShow { judge_id, version } => {
+                let mut words = events(&["judge", "show", judge_id.as_str()]);
+                if let Some(version) = version {
+                    words = with(
+                        words,
+                        ["--version".to_owned(), u64::from(*version).to_string()],
+                    );
+                }
+                words
+            }
+            Call::SessionQueueList {} => events(&["session-queue", "list"]),
+            Call::SessionQueueDrop { delivery_id } => {
+                events(&["session-queue", "drop", delivery_id.as_str()])
+            }
         })
+    }
+
+    /// The document the call hands the CLI on stdin (0.33.0), compact JSON: a target or a rule the editor wrote, or the
+    /// draft Analyse reads. None for every other call, whose stdin stays closed.
+    pub fn input(&self) -> Option<Vec<u8>> {
+        match self {
+            Call::EventsTargetAdd { document } | Call::EventsTargetUpdate { document } => {
+                Some(document.bytes())
+            }
+            Call::EventsRuleCreate { document } | Call::EventsRuleUpdate { document } => {
+                Some(document.bytes())
+            }
+            Call::EventsRuleAnalyse {
+                draft: Some(draft), ..
+            } => Some(draft.bytes()),
+            _ => None,
+        }
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
@@ -1392,6 +1635,9 @@ impl Call {
             Call::EventsDeliveryShow { .. } | Call::EventsDryrunShow { .. } => {
                 Some(DELIVERY_DETAIL_VERSION)
             }
+            Call::ProviderKeyRemove { provider } if !provider.since_judge_setup() => {
+                Some(RULE_EDITOR_VERSION)
+            }
             Call::ProviderList {} | Call::ProviderKeyRemove { .. } | Call::JudgeSetup { .. } => {
                 Some(JUDGE_SETUP_VERSION)
             }
@@ -1400,6 +1646,20 @@ impl Call {
             Call::EventsMessagesList { .. }
             | Call::EventsMessageShow { .. }
             | Call::ActivityItems { .. } => Some(MESSAGES_VERSION),
+            Call::EventsTargetsList {}
+            | Call::EventsTargetAdd { .. }
+            | Call::EventsTargetUpdate { .. }
+            | Call::EventsRuleCreate { .. }
+            | Call::EventsRuleUpdate { .. }
+            | Call::EventsRuleEnable { .. }
+            | Call::EventsApprovalView { .. }
+            | Call::EventsRuleApprove { .. }
+            | Call::EventsRuleAnalyse { .. }
+            | Call::IntegrationShow { .. }
+            | Call::IntegrationSetAgentSessions { .. }
+            | Call::JudgeShow { .. }
+            | Call::SessionQueueList {}
+            | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
             _ => None,
         }
     }
@@ -1412,10 +1672,10 @@ pub fn service_run() -> Words {
     events(&["run"])
 }
 
-/// The events service's `provider key set <provider>` (0.32.0, owner decision 2026-10-26): the one command whose input
-/// is a secret. It is no `Call`, so no word the window sends can carry a key: `provider_key_set` builds these words and
-/// hands the key to the CLI on stdin (`runner::run_with_input`), never in argv.
-pub fn provider_key_set(provider: AiProvider) -> Words {
+/// The events service's `provider key set <provider>` (0.32.0, owner decision 2026-10-26; Anthropic and Linear since
+/// 0.33.0): the one command whose input is a secret. It is no `Call`, so no word the window sends can carry a key:
+/// `provider_key_set` builds these words and hands the key to the CLI on stdin (`runner::run_with_input`), never in argv.
+pub fn provider_key_set(provider: KeyProvider) -> Words {
     events(&["provider", "key", "set", provider.word()])
 }
 
@@ -1540,6 +1800,34 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
         json!({ "kind": "activityItems", "since": SINCE_MS }),
         json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"] }),
+        json!({ "kind": "providerKeyRemove", "provider": "anthropic" }),
+        json!({ "kind": "providerKeyRemove", "provider": "linear" }),
+        json!({ "kind": "eventsTargetsList" }),
+        json!({ "kind": "eventsTargetAdd", "document": TARGET_DOCUMENT.clone() }),
+        json!({ "kind": "eventsTargetUpdate", "document": TARGET_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleCreate", "document": RULE_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleUpdate", "document": RULE_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 }),
+        json!({ "kind": "eventsApprovalView", "approvalId": ID, "digest": DIGEST }),
+        json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }),
+        json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices" }),
+        json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "draft": RULE_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "provider": "anthropic" }),
+        json!({
+            "kind": "eventsRuleAnalyse",
+            "ruleId": "invoices",
+            "draft": RULE_DOCUMENT.clone(),
+            "provider": "openrouter"
+        }),
+        json!({ "kind": "integrationShow", "integration": "linear" }),
+        json!({ "kind": "integrationShow", "integration": "agent-sessions" }),
+        json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" }),
+        json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
+        json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
+        json!({ "kind": "sessionQueueList" }),
+        json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
+        json!({ "kind": "judgeShow", "judgeId": "jev" }),
+        json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 }),
     ];
     values
         .into_iter()
@@ -1613,6 +1901,27 @@ pub(crate) fn desktop_judges_contract_words(
 /// A well-formed approval id, for the tests: `ap_` and 26 of Crockford's letters.
 #[cfg(test)]
 pub(crate) const ID: &str = "ap_0123456789ABCDEFGHJKMNPQRS";
+
+/// A well-formed digest, for the tests: 64 lowercase hex digits.
+#[cfg(test)]
+pub(crate) const DIGEST: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
+
+/// A rule document as the editor makes one, for the tests: made up, nobody's.
+#[cfg(test)]
+pub(crate) static RULE_DOCUMENT: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::json!({
+        "ruleId": "invoices",
+        "version": 3,
+        "condition": { "path": "/subject", "op": "contains", "value": "invoice", "caseSensitive": false },
+        "targets": [{ "targetId": "invoices-log", "version": 1, "kind": "dry-run", "retentionMs": 86400000 }]
+    })
+});
+
+/// A target document as the editor makes one, for the tests.
+#[cfg(test)]
+pub(crate) static TARGET_DOCUMENT: LazyLock<serde_json::Value> = LazyLock::new(
+    || serde_json::json!({ "targetId": "invoices-log", "version": 2, "kind": "dry-run", "retentionMs": 43200000 }),
+);
 
 /// A well-formed activity session key, for the tests.
 #[cfg(test)]
@@ -2146,9 +2455,17 @@ mod tests {
     fn no_call_carries_approval_and_version_takes_no_pins() {
         for (call, value) in samples() {
             let Ok(words) = call.words() else { continue };
-            for word in &words.words {
+            for (index, word) in words.words.iter().enumerate() {
+                // `rule approve` (0.33.0) is the person's press in the app, and answers only the activation the app
+                // prepared, for its digest (`connections::run_app_approval`); `approve`, the typed approval at a
+                // terminal, is never a call.
+                let rule_approve = matches!(call, Call::EventsRuleApprove { .. })
+                    && index == 1
+                    && words.words[0] == "rule";
                 assert!(
-                    !word.starts_with("--approval") && word != "approve" && word != "--yes",
+                    !word.starts_with("--approval")
+                        && (word != "approve" || rule_approve)
+                        && word != "--yes",
                     "{value} carries {word}"
                 );
             }
@@ -3391,8 +3708,10 @@ mod tests {
     }
 
     /// Nothing the window sends reaches a rule's or a delivery's words unchecked: each id is a word of the grammar's,
-    /// never an option or two words; each call names exactly its one field; and nothing enables, creates, updates or
-    /// tests a rule, or lists the dry-run log: switching a rule on is the person's approval, at a terminal.
+    /// never an option or two words; and each call names exactly its fields. Since 0.33.0 the rule editor creates and
+    /// updates a rule, but only from one document on stdin, at most `RULE_DOCUMENT_LIMIT` bytes, with no field beside
+    /// it; it prepares an activation, and switching it on stays the person's approval. Nothing tests a rule or lists
+    /// the dry-run log.
     #[test]
     fn rule_and_delivery_calls_refuse_bad_ids_and_extra_fields() {
         let rule_kinds = ["eventsRuleShow", "eventsRuleDisable", "eventsRuleRemove"];
@@ -3487,10 +3806,46 @@ mod tests {
                 refused(given);
             }
         }
+        // Since 0.33.0 the rule editor prepares an activation with `eventsRuleEnable`, which takes a rule and its version
+        // and nothing else; switching it on stays the person's press (`eventsRuleApprove`).
+        refused(json!({ "kind": "eventsRuleEnable" }));
+        refused(json!({ "kind": "eventsRuleEnable", "ruleId": "mail-subject" }));
+        refused(
+            json!({ "kind": "eventsRuleEnable", "ruleId": "mail-subject", "version": 2, "deliveryId": DELIVERY }),
+        );
+        // Creating and updating a rule take its one document, and nothing beside it: a document within the cap is taken,
+        // one past it is refused, as is any other field — an id, a version or an argument — next to it.
+        let limit = crate::rule_editor::RULE_DOCUMENT_LIMIT;
+        let padded = |padding: usize| {
+            let mut document = RULE_DOCUMENT.clone();
+            document["padding"] = json!("");
+            let base = serde_json::to_vec(&document).expect("json").len();
+            document["padding"] = json!("x".repeat(padding.saturating_sub(base)));
+            document
+        };
+        for kind in ["eventsRuleCreate", "eventsRuleUpdate"] {
+            let at_cap = padded(limit);
+            assert_eq!(serde_json::to_vec(&at_cap).expect("json").len(), limit);
+            assert!(
+                serde_json::from_value::<Call>(json!({ "kind": kind, "document": at_cap })).is_ok(),
+                "{kind} takes a document of exactly the cap"
+            );
+            refused(json!({ "kind": kind, "document": padded(limit + 1) }));
+            refused(json!({ "kind": kind, "document": padded(limit * 4) }));
+            for (field, value) in [
+                ("ruleId", json!("mail-subject")),
+                ("version", json!(2)),
+                ("approvalId", json!(ID)),
+                ("args", json!(["--force"])),
+                ("json", json!(false)),
+                ("deliveryId", json!(DELIVERY)),
+            ] {
+                let mut given = json!({ "kind": kind, "document": RULE_DOCUMENT.clone() });
+                given[field] = value;
+                refused(given);
+            }
+        }
         for kind in [
-            "eventsRuleEnable",
-            "eventsRuleCreate",
-            "eventsRuleUpdate",
             "eventsRuleTest",
             "eventsRuleTestRetained",
             "eventsDryrunList",
@@ -3655,6 +4010,312 @@ mod tests {
                 "APP_REFUSED",
                 "{value}"
             );
+        }
+    }
+
+    /// The rule editor's calls (0.33.0, design 2026-10-26-rules-that-act-0330 §3.1–§3.5): each the events launcher, its
+    /// words, `--json` and the pins; a document only ever on stdin, as compact JSON, and never a word of the command;
+    /// each needs 0.33.0, and none prepares a change the terminal opens.
+    #[test]
+    fn rule_editor_calls_build_exactly_their_words_and_hand_documents_on_stdin() {
+        let line = |value: serde_json::Value| events_line(value);
+        assert_eq!(
+            line(json!({ "kind": "eventsTargetsList" })),
+            ["targets", "list"]
+        );
+        for (kind, words) in [
+            ("eventsTargetAdd", ["target", "add", "-"]),
+            ("eventsTargetUpdate", ["target", "update", "-"]),
+        ] {
+            let value = json!({ "kind": kind, "document": TARGET_DOCUMENT.clone() });
+            assert_eq!(line(value.clone()), words);
+            let input = call(value).input().expect("a document on stdin");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&input).expect("json"),
+                *TARGET_DOCUMENT
+            );
+            assert!(!input.contains(&b'\n'), "compact JSON, one line");
+        }
+        for (kind, words) in [
+            ("eventsRuleCreate", ["rule", "create", "-"]),
+            ("eventsRuleUpdate", ["rule", "update", "-"]),
+        ] {
+            let value = json!({ "kind": kind, "document": RULE_DOCUMENT.clone() });
+            assert_eq!(line(value.clone()), words);
+            let built = call(value.clone()).words().expect("words");
+            // Not a word of the document is in argv.
+            assert!(
+                built.words.iter().all(|word| !word.contains("invoice")),
+                "{value}"
+            );
+            let input = call(value).input().expect("a document on stdin");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&input).expect("json"),
+                *RULE_DOCUMENT
+            );
+        }
+        assert_eq!(
+            line(json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 })),
+            ["rule", "enable", "invoices", "3"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "eventsApprovalView", "approvalId": ID, "digest": DIGEST })),
+            ["approval", "view", ID, "--digest", DIGEST]
+        );
+        let approve =
+            call(json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }));
+        assert_eq!(
+            approve.words().expect("words").words,
+            ["rule", "approve", ID, "--digest", DIGEST]
+        );
+        assert_eq!(
+            approve.words().expect("words").timeout,
+            Duration::from_secs(60)
+        );
+        let analyse = call(json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices" }))
+            .words()
+            .expect("words");
+        assert_eq!(analyse.words, ["rule", "analyse", "invoices"]);
+        assert_eq!(analyse.shape, Shape::Bare);
+        assert!(analyse.pins && analyse.quiet_updates);
+        assert_eq!(analyse.timeout, Duration::from_secs(90));
+        let draft = json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "draft": RULE_DOCUMENT.clone() });
+        assert_eq!(
+            call(draft.clone()).words().expect("words").words,
+            ["rule", "analyse", "invoices", "--draft", "-"]
+        );
+        assert!(call(draft).input().is_some());
+        assert_eq!(
+            call(json!({
+                "kind": "eventsRuleAnalyse",
+                "ruleId": "invoices",
+                "draft": RULE_DOCUMENT.clone(),
+                "provider": "anthropic"
+            }))
+            .words()
+            .expect("words")
+            .words,
+            [
+                "rule",
+                "analyse",
+                "invoices",
+                "--draft",
+                "-",
+                "--provider",
+                "anthropic"
+            ]
+        );
+        assert!(
+            call(json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices" }))
+                .input()
+                .is_none()
+        );
+        for integration in ["linear", "agent-sessions"] {
+            assert_eq!(
+                line(json!({ "kind": "integrationShow", "integration": integration })),
+                ["integration", "show", integration]
+            );
+        }
+        for home in ["default", "/example/home/.local/state/agent-relay"] {
+            assert_eq!(
+                line(json!({ "kind": "integrationSetAgentSessions", "relayHome": home })),
+                ["integration", "set", "agent-sessions", "--relay-home", home]
+            );
+        }
+        for provider in ["anthropic", "linear"] {
+            let value = json!({ "kind": "providerKeyRemove", "provider": provider });
+            assert_eq!(line(value.clone()), ["provider", "key", "remove", provider]);
+            assert_eq!(call(value).needs(), Some("0.33.0"), "{provider}");
+        }
+        assert_eq!(
+            provider_key_set(KeyProvider::Linear).words,
+            ["provider", "key", "set", "linear"]
+        );
+        // Every editor call needs 0.33.0; none prepares a change; only the four with a document read stdin.
+        let editor = [
+            "eventsTargetsList",
+            "eventsTargetAdd",
+            "eventsTargetUpdate",
+            "eventsRuleCreate",
+            "eventsRuleUpdate",
+            "eventsRuleEnable",
+            "eventsApprovalView",
+            "eventsRuleApprove",
+            "eventsRuleAnalyse",
+            "integrationShow",
+            "integrationSetAgentSessions",
+            "sessionQueueList",
+            "sessionQueueDrop",
+            "judgeShow",
+        ];
+        let mut seen = 0;
+        for (sample, value) in samples() {
+            let kind = value["kind"].as_str().unwrap_or("");
+            if !editor.contains(&kind) {
+                assert!(sample.input().is_none(), "{value} reads no stdin");
+                continue;
+            }
+            seen += 1;
+            assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
+            assert!(!sample.prepares_change(), "{value}");
+        }
+        assert_eq!(seen, 21);
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "jev" })),
+            ["judge", "show", "jev"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 })),
+            ["judge", "show", "local-model", "--version", "2"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueList" })),
+            ["session-queue", "list"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY })),
+            ["session-queue", "drop", DELIVERY]
+        );
+        assert_eq!(
+            line(json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" })),
+            ["integration", "show", "linear", "--team", "CUE"]
+        );
+        assert_eq!(
+            call(
+                json!({ "kind": "integrationShow", "integration": "agent-sessions", "team": "CUE" })
+            )
+            .words()
+            .expect_err("refused")
+            .code,
+            "APP_REFUSED"
+        );
+        assert_eq!(RULE_EDITOR_VERSION, "0.33.0");
+        assert!(!crate::version::at_least("0.32.0", RULE_EDITOR_VERSION));
+        assert!(crate::version::at_least(
+            "0.33.0-feat-0.33-editors",
+            RULE_EDITOR_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches the CLI but those words and a checked document: a document of another shape, a
+    /// free word, a home that is a folder, a version that is not whole, an extra field — each refused before anything
+    /// runs.
+    #[test]
+    fn rule_editor_calls_refuse_bad_documents_words_and_extra_fields() {
+        for kind in ["eventsRuleCreate", "eventsRuleUpdate"] {
+            for document in [
+                json!(null),
+                json!("{\"ruleId\":\"invoices\"}"),
+                json!({ "ruleId": "invoices" }),
+                json!({ "ruleId": "--json", "version": 1 }),
+                json!({ "ruleId": "invoices", "version": 0 }),
+            ] {
+                refused(json!({ "kind": kind, "document": document }));
+            }
+            refused(json!({ "kind": kind }));
+            refused(
+                json!({ "kind": kind, "document": RULE_DOCUMENT.clone(), "ruleId": "invoices" }),
+            );
+        }
+        for kind in ["eventsTargetAdd", "eventsTargetUpdate"] {
+            refused(
+                json!({ "kind": kind, "document": { "targetId": "hook", "version": 1, "kind": "webhook" } }),
+            );
+            refused(json!({ "kind": kind, "document": RULE_DOCUMENT.clone() }));
+            refused(
+                json!({ "kind": kind, "document": TARGET_DOCUMENT.clone(), "secret": "fake-secret" }),
+            );
+        }
+        for version in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("3"),
+            json!(1_000_001),
+        ] {
+            refused(
+                json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": version }),
+            );
+        }
+        refused(json!({ "kind": "eventsRuleEnable", "ruleId": "-invoices", "version": 1 }));
+        for kind in ["eventsApprovalView", "eventsRuleApprove"] {
+            refused(json!({ "kind": kind, "approvalId": ID }));
+            refused(json!({ "kind": kind, "approvalId": ID, "digest": DIGEST.to_uppercase() }));
+            refused(json!({ "kind": kind, "approvalId": ID, "digest": &DIGEST[1..] }));
+            refused(json!({ "kind": kind, "approvalId": "ap_short", "digest": DIGEST }));
+            refused(
+                json!({ "kind": kind, "approvalId": ID, "digest": DIGEST, "challenge": "fake-challenge" }),
+            );
+            refused(
+                json!({ "kind": kind, "approvalId": ID, "digest": DIGEST, "answer": "fake-challenge" }),
+            );
+        }
+        refused(
+            json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "draft": "rule invoices" }),
+        );
+        for provider in ["typesafe", "linear", "OpenRouter", "", "--json"] {
+            refused(
+                json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "provider": provider }),
+            );
+        }
+        refused(json!({ "kind": "eventsRuleAnalyse", "ruleId": "invoices", "model": "claude" }));
+        refused(json!({ "kind": "eventsRuleAnalyse" }));
+        for integration in ["Linear", "github", "", "agent_sessions"] {
+            refused(json!({ "kind": "integrationShow", "integration": integration }));
+        }
+        for home in [
+            "~/.local/state/agent-relay",
+            "pilot",
+            "",
+            "--json",
+            "/example/../etc",
+            "/example/home/",
+        ] {
+            refused(json!({ "kind": "integrationSetAgentSessions", "relayHome": home }));
+        }
+        for team in ["", "--json", "CUE OPS", "CUE-1"] {
+            refused(json!({ "kind": "integrationShow", "integration": "linear", "team": team }));
+        }
+        refused(json!({ "kind": "integrationSetAgentSessions" }));
+        refused(json!({ "kind": "sessionQueueList", "deliveryId": DELIVERY }));
+        refused(json!({ "kind": "sessionQueueDrop" }));
+        refused(json!({ "kind": "judgeShow" }));
+        for judge in ["", "--json", "-jev", ".jev", "a b", "x/y", "jev\u{202e}"] {
+            refused(json!({ "kind": "judgeShow", "judgeId": judge }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "j".repeat(129) }));
+        assert!(serde_json::from_value::<Call>(
+            json!({ "kind": "judgeShow", "judgeId": "j".repeat(128) })
+        )
+        .is_ok());
+        for version in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(1_000_001),
+        ] {
+            refused(json!({ "kind": "judgeShow", "judgeId": "jev", "version": version }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "jev", "document": {} }));
+        for delivery in ["", "--json", "a b", "x/y"] {
+            refused(json!({ "kind": "sessionQueueDrop", "deliveryId": delivery }));
+        }
+        refused(json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }));
+        refused(
+            json!({ "kind": "integrationSetAgentSessions", "relayHome": "default", "token": "fake-token" }),
+        );
+        refused(json!({ "kind": "integrationShow", "integration": "linear", "key": "fake-key" }));
+        refused(json!({ "kind": "eventsTargetsList", "targetId": "x" }));
+        // No call sets a key, a rule text, or answers a challenge.
+        for kind in [
+            "integrationSetLinear",
+            "providerKeySet",
+            "ruleTextParse",
+            "eventsApprove",
+            "eventsRuleApproveAt",
+        ] {
+            refused(json!({ "kind": kind }));
         }
     }
 

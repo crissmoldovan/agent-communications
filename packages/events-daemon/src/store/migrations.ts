@@ -1,9 +1,59 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { sqlTargetLane } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE, JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
 const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
-const PROVIDER_KEY_SQL_VALUES = [JUDGE_KIND_TYPESAFE, 'openrouter'].map((id) => `'${id}'`).join(', ');
+/**
+ * The providers each migration's key-slot CHECK admits, frozen per migration: a migration's statements never change
+ * once released, so a later release widens the list with a migration of its own.
+ */
+const providerKeySqlValues = (providers: readonly string[]): string => providers.map((id) => `'${id}'`).join(', ');
+const PROVIDER_KEY_SQL_VALUES = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter']);
+/** 0.33.0 (design §3.3): Analyse's model runs on OpenRouter or Anthropic, so Anthropic gains a key slot. */
+const PROVIDER_KEY_SQL_VALUES_V29 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic']);
+
+/** The key-slot table's statements, with the providers its CHECK admits (v26, and its widenings since). */
+function providerSlotTableStatements(version: number, providers: string): readonly string[] {
+  const table = `event_secret_generations_v${version}`;
+  return [
+    'DROP INDEX event_secret_generations_current',
+    `CREATE TABLE ${table} (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${providers}))
+        )
+      ) STRICT`,
+    `INSERT INTO ${table}
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+    'DROP TABLE event_secret_generations',
+    `ALTER TABLE ${table} RENAME TO event_secret_generations`,
+    `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+    `UPDATE meta SET value = '${version}' WHERE key = 'schema_version'`,
+  ];
+}
+/** 0.33.0 (design §3.4): a Linear target adds issues with the person's Linear key, so Linear gains a key slot too. */
+const PROVIDER_KEY_SQL_VALUES_V30 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic', 'linear']);
 
 export interface EventMigration {
   readonly version: number;
@@ -988,6 +1038,249 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     statements: [
       "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
       "UPDATE meta SET value = '28' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // 0.33.0 (design §3.3): Analyse's model runs on the provider the person picks among those with keys — OpenRouter,
+    // or Anthropic's own Messages API — so Anthropic gains a key slot beside TypeSafe's and OpenRouter's. The table is
+    // rebuilt as v26 built it, with the wider CHECK; every row is copied as it is.
+    version: 29,
+    name: 'event-secret-provider-slot-anthropic-v1',
+    statements: providerSlotTableStatements(29, PROVIDER_KEY_SQL_VALUES_V29),
+  },
+  {
+    // A Linear key (0.33.0 design §3.4): the person's Linear API key is kept beside the AI provider keys, in a slot whose
+    // owner is Linear itself, so a rule's Linear target can add issues with it. The table is rebuilt as v26 built it,
+    // with the wider CHECK; every row is copied as it is.
+    version: 30,
+    name: 'event-secret-linear-slot-v1',
+    statements: providerSlotTableStatements(30, PROVIDER_KEY_SQL_VALUES_V30),
+  },
+  {
+    // The Linear target (0.33.0 design §3.4): a delivery may add a Linear issue, and records which issue it added — its
+    // id, its identifier (CUE-123) and its address without the title's words — and nothing of what it says. The kind
+    // check is a closed set, so the table is rebuilt with its exact columns, in order, as migration 24 rebuilt it.
+    version: 31,
+    name: 'event-linear-target-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v31 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
+      ) STRICT`,
+      `INSERT INTO deliveries_v31
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v31 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      "UPDATE meta SET value = '31' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Agent sessions through claude-stream (0.33.0 design §3.5): a delivery may target a session the relay runs. The
+    // deliveries kind check is a closed set, so the table is rebuilt from migration 31's — Linear's columns
+    // included — with its exact columns, in order, to admit it, as migration 24 did for the queue. Three tables follow, all content-free:
+    // - session_queue: a delivery that met a busy session waits here, oldest first per relay session, until the
+    //   relay's event stream says that session's run ended; the delivery keeps its own encrypted record and retention,
+    //   and its row goes with it — the triggers run whenever the delivery stops being one that may still be tried;
+    // - session_deliveries: the relay session a delivery chose, and the run it made, so a retry reuses both;
+    // - agent_session_settings: where the person's relay is, and the folders a file part may be read from.
+    // A session target found by a lane carries that lane (B5), so a lane's binding follows those targets too.
+    version: 32,
+    name: 'agent-session-target-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v32 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear', 'session')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
+      ) STRICT`,
+      `INSERT INTO deliveries_v32
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id,
+        linear_issue_id, linear_identifier, linear_url)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id, linear_issue_id, linear_identifier, linear_url
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v32 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      `CREATE TABLE session_queue (
+        delivery_id TEXT PRIMARY KEY,
+        relay_session_id TEXT NOT NULL CHECK (length(relay_session_id) = 41 AND substr(relay_session_id, 1, 5) = 'sess_'),
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL CHECK (target_version > 0),
+        queued_at INTEGER NOT NULL,
+        released_at INTEGER
+      ) STRICT`,
+      'CREATE INDEX session_queue_order ON session_queue(relay_session_id, queued_at, delivery_id)',
+      `CREATE TABLE session_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        relay_session_id TEXT NOT NULL CHECK (length(relay_session_id) = 41 AND substr(relay_session_id, 1, 5) = 'sess_'),
+        started INTEGER NOT NULL CHECK (started IN (0, 1)),
+        run_id TEXT CHECK (run_id IS NULL OR (length(run_id) = 40 AND substr(run_id, 1, 4) = 'run_')),
+        chosen_at INTEGER NOT NULL
+      ) STRICT`,
+      `CREATE TRIGGER session_queue_goes_with_its_delivery
+        AFTER UPDATE OF state ON deliveries WHEN NEW.state NOT IN ('queued', 'retryable', 'disclosing')
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = NEW.id;
+        END`,
+      `CREATE TRIGGER session_work_goes_with_its_delivery
+        AFTER DELETE ON deliveries
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = OLD.id;
+          DELETE FROM session_deliveries WHERE delivery_id = OLD.id;
+        END`,
+      `CREATE TABLE agent_session_settings (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        relay_home TEXT CHECK (relay_home IS NULL OR (length(relay_home) BETWEEN 2 AND 1024 AND substr(relay_home, 1, 1) = '/')),
+        relay_port INTEGER CHECK (relay_port IS NULL OR relay_port BETWEEN 1 AND 65535),
+        allowed_folders TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(allowed_folders) AND json_type(allowed_folders) = 'array'),
+        updated_at INTEGER NOT NULL
+      ) STRICT`,
+      'DROP TRIGGER lane_bindings_follow_rule_pointer_update',
+      'DROP TRIGGER lane_bindings_follow_rule_pointer_delete',
+      ...(['UPDATE', 'DELETE'] as const).map(
+        (change) => `CREATE TRIGGER lane_bindings_follow_rule_pointer_${change.toLowerCase()}
+        AFTER ${change} ON active_versions WHEN OLD.kind = 'rule'
+        BEGIN
+          DELETE FROM lane_bindings WHERE lane NOT IN (
+            SELECT ${sqlTargetLane('target.value')}
+              FROM active_versions AS pointer
+              JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
+              JOIN json_each(stored.document, '$.targets') AS target
+             WHERE pointer.kind = 'rule'
+               AND ${sqlTargetLane('target.value')} IS NOT NULL
+          );
+        END`,
+      ),
+      "UPDATE meta SET value = '32' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Analyse's sending domains (security review of 0.33.0, finding 9): a judged decision's sender domain is kept on
+    // its own, encrypted, until its projection's deadline — the rule's content (ingest) retention — not for the 90 days
+    // of the decision's metadata. It goes sooner with that metadata: the trigger runs whenever a decision's record is
+    // cleared (expiry, account removal, a replacement), and the row goes with its decision.
+    version: 33,
+    name: 'decision-sender-domains-v1',
+    statements: [
+      `CREATE TABLE decision_sender_domains (
+        decision_id TEXT PRIMARY KEY REFERENCES decisions(id) ON DELETE CASCADE,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        expires_at INTEGER NOT NULL,
+        encrypted_domain BLOB NOT NULL
+      ) STRICT`,
+      'CREATE INDEX decision_sender_domains_expiry ON decision_sender_domains(expires_at)',
+      'CREATE INDEX decision_sender_domains_rule ON decision_sender_domains(rule_id, rule_version)',
+      `CREATE TRIGGER decision_sender_domains_go_with_metadata
+        AFTER UPDATE OF encrypted_record ON decisions
+        WHEN NEW.encrypted_record IS NULL
+        BEGIN
+          DELETE FROM decision_sender_domains WHERE decision_id = NEW.id;
+        END`,
+      "UPDATE meta SET value = '33' WHERE key = 'schema_version'",
     ],
   },
 ];

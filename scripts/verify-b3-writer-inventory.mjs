@@ -20,6 +20,8 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/dispatcher.ts',
   'packages/events-daemon/src/runtime/webhook-dispatcher.ts',
   'packages/events-daemon/src/runtime/sse-dispatcher.ts',
+  // The Linear target (0.33.0): its delivery boundary opens the rendered issue through the centrally leased cipher.
+  'packages/events-daemon/src/runtime/linear-dispatcher.ts',
   // The action queue (0.30.0): its delivery boundary seals items; its read model opens them. Both go through the
   // centrally leased cipher.
   'packages/events-daemon/src/runtime/queue-dispatcher.ts',
@@ -28,6 +30,13 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/delivery-show.ts',
   // `messages list` / `message show` (0.32.0): open a queue item's kept summary through the same leased cipher.
   'packages/events-daemon/src/runtime/messages.ts',
+  // `rule analyse` (0.33.0): reads a decision's judge metadata — its number and sending domain — through the same
+  // centrally leased cipher, and writes nothing.
+  'packages/events-daemon/src/runtime/rule-analyse.ts',
+  // The agent-session target (0.33.0): its dispatcher opens a session delivery's record, seals the context it resolves
+  // back into that record (so a busy session's next try sends the same words), and seals the queue item a match
+  // becomes, through the same centrally leased cipher.
+  'packages/events-daemon/src/runtime/session-dispatcher.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',

@@ -68,6 +68,8 @@ function request(
     uses: FOUR,
     paths,
     platform: 'linux',
+    // A home under the test's own folder: a managed shim is never looked for in the person's ~/.local/bin.
+    env: { HOME: join(paths.dataDir, '..', 'home') },
     ...overrides,
   };
 }

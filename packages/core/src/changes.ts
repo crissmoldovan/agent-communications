@@ -414,7 +414,8 @@ export async function approveChangeInApp(
   core: Core,
   approvalId: string,
   request: ChangeSpec,
-  options: ChangeOptions & { approvedBy: NonNullable<AuditRecord['approvedBy']> },
+  // The attested app only: an origin nothing attests is sent to the terminal before an approval is answered.
+  options: ChangeOptions & { approvedBy: 'desktop-app' | 'desktop-app (test build)' },
 ): Promise<ApprovalRecord> {
   let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
   // Set once the code is being issued and answered: from then on, anything that throws revokes the approval.
@@ -487,7 +488,8 @@ export async function recordChangeApprovalRefused(
   core: Core,
   approvalId: string,
   error: unknown,
-  options: ChangeOptions,
+  // Who was refused, when it was an origin claiming the app that nothing attests (Windows and Linux).
+  options: ChangeOptions & { approvedBy?: 'desktop-app (unattested)' | undefined },
 ): Promise<void> {
   // Only a valid version-2 change says what it was about: nothing is read from any other form, nor of any other kind.
   const record = asV2(
@@ -502,6 +504,7 @@ export async function recordChangeApprovalRefused(
     approvalId,
     target: change?.target ?? null,
     policy: record && change ? changePolicyOf(record) : undefined,
+    approvedBy: options.approvedBy,
   });
 }
 

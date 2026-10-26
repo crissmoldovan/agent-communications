@@ -118,16 +118,32 @@ pub fn queue_link(url: &str) -> bool {
     })
 }
 
-/// Whether `open_link` opens `url`: a doctor fix's link, the Judges README, or a queue item's link.
+/// A Linear issue's address, as a Linear delivery keeps it (0.33.0, `linearIssueRecord` in
+/// `packages/events-daemon/src/runtime/linear-dispatcher.ts`): `https://linear.app/<workspace>/issue/<TEAM-n>`, or
+/// `https://linear.app/issue/<TEAM-n>`, with none of the title's words Linear appends. Nothing else of Linear's.
+static LINEAR_ISSUE_LINK: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"^https://linear\.app/(?:[A-Za-z0-9_-]{1,64}/)?issue/[A-Za-z0-9_]{1,32}-[0-9]{1,10}$",
+    )
+    .expect("a pattern")
+});
+
+/// Whether `url` is a Linear issue's address a delivery recorded, which the app opens in the person's browser.
+pub fn linear_issue_link(url: &str) -> bool {
+    LINEAR_ISSUE_LINK.is_match(url)
+}
+
+/// Whether `open_link` opens `url`: a doctor fix's link, the Judges README, a queue item's link, or the Linear issue a
+/// delivery added.
 pub fn may_open(url: &str) -> bool {
-    allowed_link(url) || queue_link(url)
+    allowed_link(url) || queue_link(url) || linear_issue_link(url)
 }
 
 /// Opens `url` in the default browser, once `may_open` takes it.
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
     if !may_open(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, where TypeSafe and OpenRouter give out API keys, and a queue item's message as the event service links it, on mail.google.com or app.slack.com",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, where TypeSafe and OpenRouter give out API keys, a queue item's message as the event service links it, on mail.google.com or app.slack.com, and a Linear issue a delivery added, on linear.app",
         ));
     }
     app.opener()
@@ -434,6 +450,33 @@ mod tests {
 
     /// Anything else on those hosts is refused: Gmail's compose page, a Slack workspace's own host, Slack's admin, and
     /// each real shape with anything added or taken away.
+    /// A Linear issue a delivery added (0.33.0): exactly the address the event service keeps, and nothing else of
+    /// Linear's — not its settings, its API, another host, a title's words or a query.
+    #[test]
+    fn linear_issue_links_open_exactly_the_address_a_delivery_keeps() {
+        for url in [
+            "https://linear.app/example/issue/CUE-1",
+            "https://linear.app/issue/CUE-12",
+            "https://linear.app/example-co/issue/OPS_2-1234567890",
+        ] {
+            assert!(may_open(url), "{url}");
+        }
+        for url in [
+            "http://linear.app/example/issue/CUE-1",
+            "https://linear.app/example/issue/CUE-1/pay-the-invoice",
+            "https://linear.app/example/issue/CUE-1?x=1",
+            "https://linear.app/example/issue/CUE-1#comment",
+            "https://linear.app/settings/account/security",
+            "https://api.linear.app/graphql",
+            "https://linear.app.example/issue/CUE-1",
+            "https://evil.example/linear.app/issue/CUE-1",
+            "https://linear.app/example/issue/CUE",
+            "https://linear.app/a/b/issue/CUE-1",
+        ] {
+            assert!(!may_open(url), "{url}");
+        }
+    }
+
     #[test]
     fn queue_links_refuse_everything_else_on_gmail_and_slack() {
         let (_, refused) = queue_links();

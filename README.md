@@ -212,6 +212,11 @@ The Windows and Linux files are built by CI and attached to the same release. A 
 updater key, as these are, has its updater off and says so in Settings: install a newer release over it. Start at
 login is off until you switch it on there.
 
+On Windows and Linux nothing attests that the app started a command, so the app's person-only changes — adding a
+server to an app in Connections, setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent
+sessions, approving a rule — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the
+command to run there.
+
 ### Or package by package
 
 Three independent things ship besides the core server. Take one, or all of them.
@@ -408,6 +413,60 @@ WhatsApp is recorded only as counts.
 - `agentcomms activity record off` stops recording at once, and `agentcomms activity retention <days>` shortens how
   long it is kept; `comms_activity_settings` does the same for an agent. Turning recording back on, or keeping it
   longer, is a loosening, approved as every other is.
+
+### Agent sessions, through claude-stream
+
+From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working
+in a folder, started there if there is none, or the one behind the agent window you bound to a lane. Agent Comms is one more client of the
+relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac only.
+
+- **Tell it where the relay is**, once, at your terminal or in the app (Settings → Integrations → Agent sessions):
+  `agent-events integration set agent-sessions --relay-home <folder>`. Without a setting it looks in claude-stream's
+  default home, `~/.local/state/agent-relay`, then the Pilot app's; the port comes from the Pilot app's record, or is
+  4318. `agent-events integration show agent-sessions` says what it found and whether the relay is ready. It reads the
+  relay's `control.token` as you, refuses one others can read (or a link, or anything but a plain file), and never
+  prints it or puts it in a command line. It sends the token only to a port that a process of yours listens on — any
+  local user can take a free loopback port — asking `lsof` on macOS and `/proc/net/tcp` on Linux first; on Windows that
+  is not checked.
+- **The rule says everything the session gets**, and you approve it like any rule:
+
+  ```
+  then
+    session acme, version 1, working in /example/home/work/acme
+      if none start with claude-code
+      if busy wait
+      give
+        fields from.address, subject
+        text "Check the invoice against Stripe before replying."
+        written by anthropic/claude-sonnet-5.5 via openrouter, asking "Say in one line what they want.", from subject
+        file /example/home/work/acme/billing/HOW-WE-INVOICE.md
+      instruction "Reply to the sender with what you found."
+  ```
+
+  The prompt is a fixed frame — "[Agent Comms] The rule acme passed you a message from gmail/cue/gmail." — with each
+  part labelled, and every field the sender wrote, every model's words and every file's text inside the
+  untrusted-content envelope. Only fields the rule's mapping keeps are sent. A model writes its part on your own
+  OpenRouter or Anthropic key, at most 400 tokens, once for each match. A file is read only under the relay's allowed
+  roots or a folder you add (`--allow-folder`), at most 64 KB, and only when it is a plain file of yours with no other
+  name (no link, hard link or FIFO), never in Agent Comms' own folders; a relay root of `/` or your home folder itself
+  confines nothing, so it is ignored, and `--allow-folder` refuses them. What a match's parts resolved to is kept,
+  sealed with the match, only while it may still be sent: a match that fails keeps none of it, and one that waited
+  sends a file's text only if its folder is still allowed — a folder you have since removed (`--remove-folder`) leaves
+  a note in its place. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose
+  `acceptEdits` or `plan`; a rule can never fix `bypassPermissions`.
+- **claude-stream keeps what it is sent.** The relay journals each prompt, the sender's words included, under its own
+  retention: Agent Comms' retention settings do not reach it, and the approval preview says so.
+- **A busy session queues the match** until its run ends (or leaves it in the Queue, with `if busy leave it in the
+  queue`): `agent-events session-queue list` shows what waits, and `session-queue drop <delivery-id>` drops one. A busy
+  session is never a failure: the match waits until the session is free or the match itself expires, tried again
+  further apart the longer it has waited (at most every five minutes), and its context is resolved once however long it
+  waits. Other failures count: after 12 the match fails. A session that becomes one the relay only watches, or one
+  fenced or moved, is not waited on: another is found or started.
+- **A window you opened yourself** is not one the relay can prompt: a session found by a lane whose window claude-stream
+  does not run becomes a lane item, as in 0.31.0, and wakes that window.
+- **A match starts at most one session.** If the session it started is fenced or moved to another executor, watched or
+  gone by the time it is prompted, the match fails, saying which (`SESSION_FENCED`, `SESSION_MOVED`, `SESSION_WATCHED`,
+  `SESSION_GONE`), rather than start another.
 
 ### Upgrading
 

@@ -3,7 +3,8 @@
  * and subject where a dry run kept them, as outside text — with Open in Gmail or Slack and a link to its story; why it
  * was passed on; for a dry run, the record it would have delivered, every field a sender wrote as outside text; for a
  * webhook, its host; and its tries, with Try now while it will try again, and Stop trying… while it waits or will try
- * again (from the events service's 0.32.0) or once it has failed.
+ * again (from the events service's 0.32.0) or once it has failed. A match waiting for a busy agent session (0.33.0)
+ * says since when, from `session-queue list`, and is dropped with Drop…, confirmed first, by `session-queue drop`.
  *
  * `delivery show` and `dryrun show` answer the app from the events service's 0.32.0: before it, the page says so and
  * reads neither, and shows what the list knows. Earlier tries are not kept one by one, only their count and the last
@@ -28,10 +29,13 @@ import {
   nextTry,
   readDeliveryShow,
   readDryrunShow,
+  readSessionQueue,
+  type SessionQueueItem,
   stateWords,
+  waitingForSession,
 } from '../../events-deliveries.ts';
 import { channelOf, describeCondition, judgeName, type TargetView } from '../../events-rules.ts';
-import { atLeast } from '../../gates.ts';
+import { atLeast, GATES } from '../../gates.ts';
 import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
@@ -59,6 +63,8 @@ export const DELIVERY_COPY = {
     'Only the parts the rule keeps. Text the sender wrote is shown as plain text, never as links or formatting.',
   wouldGone: 'The dry-run log no longer has this entry: each is deleted after 24 hours.',
   sends: 'Where it sends',
+  linearAdded: (identifier: string) => `Added ${identifier} in Linear.`,
+  openInLinear: 'Open in Linear',
   signed: 'Signed with the target’s key',
   tries: 'Tries',
   counted: 'Earlier tries are counted, not kept one by one.',
@@ -72,6 +78,16 @@ export const DELIVERY_COPY = {
   stopFailedBody: 'It failed, and the message it kept for it is deleted now. Nothing is sent for it.',
   inFlight: 'It is being sent right now, so it cannot be stopped yet. If this try fails, you can stop it then.',
   stopAction: 'Stop trying',
+  drop: 'Drop…',
+  dropTitle: 'Drop this waiting match?',
+  dropBody:
+    "It is waiting for the session's run to end. Dropping it cancels its delivery and deletes what it kept for the session, at once: it is never passed on.",
+  dropAction: 'Drop it',
+  waitingSince: "Waiting for the session's run to end since ",
+  passedOnThen: ': it is passed on then.',
+  waitingNoSince: "Waiting for the session's run to end: it is passed on then.",
+  waitsUntil: 'It waits at most until ',
+  released: "The session's run has ended: it is passed on in a moment.",
   unreadable: 'That answer could not be read.',
   gone: 'This delivery is no longer listed.',
 } as const;
@@ -166,20 +182,28 @@ export function refusedInFlight(result: { code: string; message: string }): bool
 function Actions({
   row,
   stopsWhileTrying,
+  dropsWaiting,
   onChanged,
   onProblem,
 }: {
   row: DeliveryRow;
   /** Whether the events service stops a delivery that will be tried, not only a failed one (0.32.0). */
   stopsWhileTrying: boolean;
+  /** Whether the events service drops a match from its busy queue (0.33.0). */
+  dropsWaiting: boolean;
   onChanged: () => Promise<void>;
   onProblem: (problem: string | null) => void;
 }) {
   const bridge = useBridge();
   const [busy, setBusy] = useState(false);
-  const tryNow = row.state === 'retryable';
-  const stop = row.state === 'dead-lettered' || (stopsWhileTrying && STOPPABLE_WHILE_TRYING.has(row.state));
-  if (!row.openable || (!tryNow && !stop)) return null;
+  // A match waiting for a busy session is not tried again by hand: the relay would say busy again. It is dropped from
+  // the busy queue instead, which cancels its delivery.
+  const waiting = waitingForSession(row);
+  const tryNow = row.state === 'retryable' && !waiting;
+  const stop =
+    !waiting && (row.state === 'dead-lettered' || (stopsWhileTrying && STOPPABLE_WHILE_TRYING.has(row.state)));
+  const drop = waiting && dropsWaiting;
+  if (!row.openable || (!tryNow && !stop && !drop)) return null;
   const apply = async (call: Call) => {
     setBusy(true);
     onProblem(null);
@@ -234,13 +258,63 @@ function Actions({
           </AlertDialog.Content>
         </AlertDialog.Root>
       ) : null}
+      {drop ? (
+        <AlertDialog.Root>
+          <AlertDialog.Trigger
+            render={
+              <Button size="sm" variant="danger-outline" disabled={busy}>
+                {DELIVERY_COPY.drop}
+              </Button>
+            }
+          />
+          <AlertDialog.Content>
+            <AlertDialog.Title>{DELIVERY_COPY.dropTitle}</AlertDialog.Title>
+            <AlertDialog.Description>{DELIVERY_COPY.dropBody}</AlertDialog.Description>
+            <AlertDialog.Footer>
+              <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
+              <AlertDialog.Action
+                tone="danger"
+                onClick={() => void apply({ kind: 'sessionQueueDrop', deliveryId: row.id })}
+              >
+                {DELIVERY_COPY.dropAction}
+              </AlertDialog.Action>
+            </AlertDialog.Footer>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
+      ) : null}
     </span>
+  );
+}
+
+/** Since when a match waits for a busy session, and until when at most; or that the session's run has ended. */
+function Waiting({ item }: { item: SessionQueueItem | null }) {
+  if (item?.released === true) return <p className="text-fg">{DELIVERY_COPY.released}</p>;
+  return (
+    <>
+      <p className="text-fg" data-slot="waiting">
+        {item === null ? (
+          DELIVERY_COPY.waitingNoSince
+        ) : (
+          <>
+            {DELIVERY_COPY.waitingSince}
+            <Short at={item.queuedAt} />
+            {DELIVERY_COPY.passedOnThen}
+          </>
+        )}
+      </p>
+      {item?.expiresAt == null ? null : (
+        <p className="text-(length:--cue-text-label) text-fg-muted">
+          {DELIVERY_COPY.waitsUntil}
+          <Short at={item.expiresAt} />.
+        </p>
+      )}
+    </>
   );
 }
 
 /** The page's state chip: "Will try again at 12:10", "Recorded · nothing sent", or the state in plain words. */
 function StateChip({ row, kind }: { row: DeliveryRow; kind: string | null }) {
-  const { words, tone } = stateWords({ state: row.state, targetKind: kind });
+  const { words, tone } = stateWords({ state: row.state, targetKind: kind, lastErrorCode: row.lastErrorCode });
   const next = nextTry(row);
   if (row.state === 'delivered' && kind === 'dry-run') return <Chip tone={tone}>{DELIVERY_COPY.recorded}</Chip>;
   return (
@@ -443,12 +517,15 @@ function Tries({
   kind,
   retryLimit,
   expiresAt,
+  waiting,
   action,
 }: {
   row: DeliveryRow;
   kind: string | null;
   retryLimit: number | null;
   expiresAt: number | null;
+  /** For a match waiting for a busy session: its item in the busy queue, or null while it is not known. */
+  waiting: SessionQueueItem | null;
   action: ReactNode;
 }) {
   const next = nextTry(row);
@@ -510,6 +587,7 @@ function Tries({
         ) : null}
       </p>
       {answer === null ? null : <p className="text-fg">{`Its last try: ${answer}.`}</p>}
+      {waitingForSession(row) ? <Waiting item={waiting} /> : null}
       {next === null ? null : (
         <p className="text-fg" data-slot="next-try">
           {'Next try at '}
@@ -526,6 +604,40 @@ function Tries({
   );
 }
 
+/** The Linear issue a delivery added (0.33.0): its identifier, and its page, opened in the person's browser. */
+function LinearIssue({
+  issue,
+  onProblem,
+}: {
+  issue: NonNullable<DeliveryRow['linear']>;
+  onProblem: (problem: string | null) => void;
+}) {
+  const bridge = useBridge();
+  const { url } = issue;
+  return (
+    <Part title={DELIVERY_COPY.sends}>
+      <p className="text-fg">
+        <UntrustedText text={DELIVERY_COPY.linearAdded(issue.identifier)} />
+      </p>
+      {url === null ? null : (
+        <p>
+          <Link
+            href={url}
+            external
+            onClick={(event) => {
+              // The window never leaves the app: the issue opens in the browser, through `open_link`.
+              event.preventDefault();
+              bridge.openLink(url).catch((error: unknown) => onProblem(errorMessage(error)));
+            }}
+          >
+            {DELIVERY_COPY.openInLinear}
+          </Link>
+        </p>
+      )}
+    </Part>
+  );
+}
+
 export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLists; nav: EventsNav }) {
   const { eventsVersion } = useAppData();
   const [problem, setProblem] = useState<string | null>(null);
@@ -538,6 +650,11 @@ export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLi
   const dryRunKept = detail?.dryRun != null && detail.dryRun.expiresAt !== null;
   const dry = useRead(dryRunKept ? { kind: 'eventsDryrunShow', deliveryId: id } : null, readDryrunShow);
   const row = detail?.delivery ?? listed ?? null;
+  const dropsWaiting = installed !== null && atLeast(installed, GATES.ruleEditor);
+  const waiting = row !== null && dropsWaiting && waitingForSession(row);
+  const queue = useRead(waiting ? { kind: 'sessionQueueList' } : null, readSessionQueue);
+  const queued =
+    queue.read.state === 'ready' ? (queue.read.value.find((each) => each.deliveryId === id) ?? null) : null;
   const back = <BackTo label={DELIVERY_COPY.allDeliveries} onBack={() => nav.openDelivery(null)} />;
   if (row === null) {
     return (
@@ -563,9 +680,17 @@ export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLi
   });
   const made = madeAtOf(lists, row);
   const reload = async () => {
-    await Promise.all([show.reload(), lists.reloadDeliveries()]);
+    await Promise.all([show.reload(), lists.reloadDeliveries(), ...(waiting ? [queue.reload()] : [])]);
   };
-  const action = <Actions row={row} stopsWhileTrying={supported} onChanged={reload} onProblem={setProblem} />;
+  const action = (
+    <Actions
+      row={row}
+      stopsWhileTrying={supported}
+      dropsWaiting={dropsWaiting}
+      onChanged={reload}
+      onProblem={setProblem}
+    />
+  );
   return (
     <section aria-label="Delivery" className="flex flex-col gap-(--cue-space-4)">
       {back}
@@ -602,6 +727,7 @@ export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLi
       {detail !== null && kind === 'dry-run' ? (
         <WouldHave dryRun={detail.dryRun} read={dryRunKept ? dry.read : null} />
       ) : null}
+      {row.linear === null ? null : <LinearIssue issue={row.linear} onProblem={setProblem} />}
       {kind === 'webhook' && host !== null ? (
         <Part title={DELIVERY_COPY.sends}>
           <p className="text-fg">
@@ -618,6 +744,7 @@ export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLi
         kind={kind}
         retryLimit={target?.retryLimit ?? null}
         expiresAt={detail?.dryRun?.expiresAt ?? null}
+        waiting={queued}
         action={null}
       />
     </section>

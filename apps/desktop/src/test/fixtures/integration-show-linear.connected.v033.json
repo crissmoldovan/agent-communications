@@ -1,0 +1,9 @@
+{
+  "integration": "linear",
+  "connected": true,
+  "workspace": "Example Co",
+  "teams": [
+    { "id": "0b1c2d3e-0000-4000-8000-00000000c0e1", "key": "CUE", "name": "Cue" },
+    { "id": "0b1c2d3e-0000-4000-8000-00000000c0e2", "key": "OPS", "name": "Operations" }
+  ]
+}

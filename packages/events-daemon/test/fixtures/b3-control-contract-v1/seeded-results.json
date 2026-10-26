@@ -670,6 +670,16 @@
           "id": "openrouter",
           "name": "OpenRouter",
           "hasKey": true
+        },
+        {
+          "id": "anthropic",
+          "name": "Anthropic",
+          "hasKey": false
+        },
+        {
+          "id": "linear",
+          "name": "Linear",
+          "hasKey": false
         }
       ]
     }
@@ -700,6 +710,347 @@
       "provider": "openrouter",
       "hasKey": false,
       "judges": 1
+    }
+  },
+  {
+    "name": "rule-analyse-result",
+    "request": {
+      "operation": "rule-analyse",
+      "args": {
+        "ruleId": "invoices"
+      }
+    },
+    "result": {
+      "ruleId": "invoices",
+      "analysed": {
+        "source": "stored",
+        "version": 1
+      },
+      "counts": {
+        "windowDays": 30,
+        "since": 1790424000000,
+        "decisions": 13,
+        "outcomes": {
+          "matched": 5,
+          "no-match": 8,
+          "mapping-rejected": 0,
+          "retention-expired": 0,
+          "hold": 0
+        },
+        "judge": {
+          "answered": 12,
+          "yes": 5,
+          "no": 7,
+          "held": 0,
+          "spread": [1, 2, 2, 1, 1, 0, 0, 2, 1, 2],
+          "lowest": 0.05,
+          "highest": 0.95
+        },
+        "domainsKnown": 9,
+        "domains": [
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nbank.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 4,
+            "yes": 0,
+            "no": 4
+          },
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nreceipts.shop.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 3,
+            "yes": 0,
+            "no": 3
+          },
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nsupplier.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 2,
+            "yes": 2,
+            "no": 0
+          }
+        ],
+        "queue": {
+          "open": 1,
+          "done": 2,
+          "dismissed": 2,
+          "lowestDone": 0.86,
+          "highestDismissed": 0.73
+        }
+      },
+      "suggestions": [
+        {
+          "part": "condition",
+          "before": "match subject contains \"invoice\"",
+          "after": "match all\n  subject contains \"invoice\"\n  not from.address has domain \"bank.example\"\n  not from.address has domain \"receipts.shop.example\"",
+          "why": "The judge said no to all 7 messages from these 2 sending domains in the last 30 days, and yes to none. Leaving them out before the judge is asked saves about 7 judge calls a month.",
+          "evidence": {
+            "by": "counts",
+            "windowDays": 30,
+            "judgedNo": 7,
+            "domains": [
+              {
+                "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nbank.example\n</untrusted-content boundary=\"BOUNDARY\">",
+                "judgedNo": 4,
+                "judgedYes": 0
+              },
+              {
+                "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nreceipts.shop.example\n</untrusted-content boundary=\"BOUNDARY\">",
+                "judgedNo": 3,
+                "judgedYes": 0
+              }
+            ]
+          }
+        },
+        {
+          "part": "judge.threshold",
+          "before": "yes at 0.7, if unsure drop",
+          "after": "yes at 0.79, if unsure drop",
+          "why": "Every one of the 2 messages you kept scored 0.86 or more, and the 2 you dismissed scored 0.73 at most. A bar of 0.79, between them, keeps the first and leaves out the second.",
+          "evidence": {
+            "by": "counts",
+            "windowDays": 30,
+            "kept": 2,
+            "dismissed": 2,
+            "lowestKept": 0.86,
+            "highestDismissed": 0.73,
+            "threshold": 0.7
+          }
+        },
+        {
+          "part": "judge.question",
+          "before": "Is this asking me to pay or send something?",
+          "after": "Is the sender asking me to pay them, or to send them an invoice?",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5"
+          }
+        },
+        {
+          "part": "session.context",
+          "before": "Check the invoice against Stripe before replying.",
+          "after": "Task: answer an invoice request.\n1. Find the invoice in Stripe.\n2. Draft a reply and wait for my approval.\nNever pay. If unsure, ask me.",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5",
+            "targetId": "billing-session",
+            "contextIndex": 0
+          }
+        },
+        {
+          "part": "linear.title",
+          "before": "Invoice from {{from.name}}",
+          "after": "Invoice request from {{from.name}}",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5",
+            "targetId": "billing-issue"
+          }
+        }
+      ],
+      "model": {
+        "provider": "openrouter",
+        "name": "OpenRouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "noKey": ["anthropic"],
+        "sent": "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
+        "ran": true,
+        "reason": null,
+        "parts": [
+          {
+            "part": "judge.question",
+            "at": {},
+            "outcome": "suggested"
+          },
+          {
+            "part": "session.context",
+            "at": {
+              "targetId": "billing-session",
+              "contextIndex": 0
+            },
+            "outcome": "suggested"
+          },
+          {
+            "part": "linear.title",
+            "at": {
+              "targetId": "billing-issue"
+            },
+            "outcome": "suggested"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "name": "integration-show-result",
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "linear",
+        "team": "CUE"
+      }
+    },
+    "result": {
+      "integration": "linear",
+      "connected": true,
+      "workspace": "Example Workspace",
+      "teams": [
+        {
+          "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+          "key": "CUE",
+          "name": "Example Team"
+        }
+      ],
+      "labels": [
+        {
+          "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+          "name": "Billing"
+        }
+      ]
+    }
+  },
+  {
+    "name": "integration-show-unconnected-result",
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "linear"
+      }
+    },
+    "result": {
+      "integration": "linear",
+      "connected": false,
+      "workspace": null,
+      "teams": []
+    }
+  },
+  {
+    "name": "integration-show-agent-sessions-result",
+    "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } },
+    "result": {
+      "integration": "agent-sessions",
+      "settings": {
+        "relayHome": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "relayPort": null,
+        "allowedFolders": ["/example/home/work"]
+      },
+      "relay": {
+        "found": true,
+        "home": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "source": "setting",
+        "url": "http://127.0.0.1:53817",
+        "ready": true,
+        "version": "0.2.20",
+        "allowedRoots": ["/example/home/work"],
+        "problem": null
+      },
+      "waiting": 1
+    }
+  },
+  {
+    "name": "integration-set-result",
+    "request": {
+      "operation": "integration-set",
+      "args": {
+        "integration": "agent-sessions",
+        "relayHome": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "relayPort": "default",
+        "allowFolders": ["/example/home/work"]
+      }
+    },
+    "result": {
+      "integration": "agent-sessions",
+      "settings": {
+        "relayHome": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "relayPort": null,
+        "allowedFolders": ["/example/home/work"]
+      },
+      "relay": {
+        "found": true,
+        "home": "/example/home/Library/Application Support/com.cueplusplus.claude-stream.pilot/relay-home",
+        "source": "setting",
+        "url": "http://127.0.0.1:53817",
+        "ready": true,
+        "version": "0.2.20",
+        "allowedRoots": ["/example/home/work"],
+        "problem": null
+      },
+      "waiting": 1
+    }
+  },
+  {
+    "name": "session-queue-list-result",
+    "request": { "operation": "session-queue-list", "args": {} },
+    "result": {
+      "items": [
+        {
+          "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+          "relaySessionId": "sess_7c9e6679-7425-40de-944b-e07fc1f90ae7",
+          "ruleId": "invoices",
+          "ruleVersion": 3,
+          "targetId": "acme-session",
+          "targetVersion": 1,
+          "lane": null,
+          "queuedAt": "2026-10-26T09:12:30.000Z",
+          "released": false,
+          "expiresAt": "2026-11-02T09:12:29.000Z"
+        }
+      ]
+    }
+  },
+  {
+    "name": "session-queue-drop-result",
+    "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } },
+    "result": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e", "dropped": true }
+  },
+  {
+    "name": "rule-approve-result",
+    "request": {
+      "operation": "rule-approve",
+      "args": {
+        "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+        "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0"
+      }
+    },
+    "result": {
+      "approvalId": "ap_NFB269AFMQY89NN2RMJ1PPB1Y8",
+      "ruleId": "david-by-mail",
+      "version": 1,
+      "approved": true,
+      "approvedBy": "desktop-app",
+      "completion": {
+        "intentId": "act_abc238ade1f281e860491b9ebbc1385d",
+        "status": "completed",
+        "usedAt": "2026-10-26T07:52:14.172Z"
+      }
+    }
+  },
+  {
+    "name": "judge-show-result",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev"
+      }
+    },
+    "result": {
+      "judgeId": "jev",
+      "version": 1,
+      "document": {
+        "judgeId": "jev",
+        "version": 1,
+        "kind": "typesafe",
+        "provider": "openrouter",
+        "model": "typesafe/jev-1.14",
+        "endpoint": "https://openrouter.ai/api/v1/systemone",
+        "promptTemplate": "typesafe-jev-noul-v1",
+        "protocol": "noul"
+      },
+      "digest": "016f6fab0c5468f0de527e6d12c912e4b5cc236948a80cd899747da40d020d3e",
+      "state": "live"
     }
   }
 ]

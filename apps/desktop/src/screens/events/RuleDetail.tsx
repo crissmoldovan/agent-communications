@@ -4,8 +4,9 @@
  * with their times and what changed; and, collapsed, the ids, each said in plain words.
  *
  * Turn off and Remove… are tightenings the app applies itself (DA10), Remove… once its dialog is answered. Switching
- * a rule on is the person's approval, never the app's: a rule not switched on points at Approvals. Editing a rule and
- * trying it on a recent message come in a later release.
+ * a rule on is the person's approval, never the app's: a rule not switched on points at Approvals. Edit… (0.33.0) opens
+ * the rule editor on its next version, which the person approves in the app; trying a rule on a recent message comes in
+ * a later release.
  */
 import { AlertDialog, Button, Chip, Collapsible, Panel, Spinner } from '@cueplusplus/ui';
 import { ChevronRight } from 'lucide-react';
@@ -51,6 +52,8 @@ export const RULE_COPY = {
   versionWords: { active: 'on', superseded: 'replaced', revoked: 'off', none: 'not switched on' },
   newVersion:
     'To change a rule, ask an agent to write a new version. It waits for your approval, and this one keeps running until then.',
+  editVersion: 'Edit… makes a new version. It waits for your approval, and this one keeps running until then.',
+  edit: 'Edit…',
   notSwitchedOn: 'Not switched on. If an agent asked for it, its approval is in Approvals.',
   openApprovals: 'Open Approvals',
   technical: 'Technical details',
@@ -164,11 +167,14 @@ const VERSION_TONES = { active: 'ok', superseded: 'neutral', revoked: 'neutral' 
 function Versions({
   versions,
   on,
+  editable,
   onApprovals,
 }: {
   versions: readonly RuleVersionView[];
   /** Whether a version is on: only then does a new one wait while this one keeps running. */
   on: boolean;
+  /** Whether the person edits rules here (0.33.0). */
+  editable: boolean;
   onApprovals?: () => void;
 }) {
   const newestFirst = [...versions].reverse();
@@ -204,7 +210,11 @@ function Versions({
           );
         })}
       </ul>
-      {on ? <p className="text-(length:--cue-text-label) text-fg-muted">{RULE_COPY.newVersion}</p> : null}
+      {on ? (
+        <p className="text-(length:--cue-text-label) text-fg-muted">
+          {editable ? RULE_COPY.editVersion : RULE_COPY.newVersion}
+        </p>
+      ) : null}
     </Part>
   );
 }
@@ -366,11 +376,14 @@ export function RuleDetail({
   lists,
   nav,
   onScreen,
+  onEdit,
 }: {
   id: string;
   lists: EventsLists;
   nav: EventsNav;
   onScreen?: ((screen: Screen) => void) | undefined;
+  /** Edit…, where the event service has the rule editor (0.33.0); absent otherwise. */
+  onEdit?: (() => void) | undefined;
 }) {
   const [problem, setProblem] = useState<string | null>(null);
   const read = lists.versions.get(id) ?? { state: 'loading' as const };
@@ -397,6 +410,11 @@ export function RuleDetail({
         {status === null ? null : <StatusChip status={status} />}
         {document !== null && dryRunOnly(document) ? <Chip tone="accent">{DRY_RUN}</Chip> : null}
         {status === 'on' ? <Actions id={id} onChanged={lists.reloadRules} onProblem={setProblem} /> : null}
+        {onEdit !== undefined && document !== null ? (
+          <Button size="sm" className={status === 'on' ? undefined : 'ml-auto'} onClick={onEdit}>
+            {RULE_COPY.edit}
+          </Button>
+        ) : null}
       </div>
       {problem === null ? null : <Problem message={problem} />}
       {read.state === 'loading' ? <Spinner label={COPY.loading} /> : null}
@@ -423,6 +441,7 @@ export function RuleDetail({
           <Versions
             versions={versions}
             on={status === 'on'}
+            editable={onEdit !== undefined}
             {...(onScreen === undefined ? {} : { onApprovals: () => onScreen('approvals') })}
           />
           <TechnicalDetails id={id} versions={versions} />

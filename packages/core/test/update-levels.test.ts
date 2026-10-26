@@ -190,7 +190,11 @@ test('moving to a level that updates less waits for a yes, says what stops, and 
   assert.equal((await run(['update', '--level', 'every-14-days', '--json'])).status, 10);
   assert.equal((await run(['update', '--level', 'auto', '--json'])).status, 0);
   assert.equal((await run(['update', '--level', 'weekly', '--json'])).status, 64);
-  const outcome = await gatedChange(m.core, updateLevelChange(m.core, 'never'), { channel: 'core', surface: 'mcp' });
+  // The machine's own environment, with its temporary home: the update job is looked for there, never in the real one.
+  const outcome = await gatedChange(m.core, updateLevelChange(m.core, 'never', { env: m.env }), {
+    channel: 'core',
+    surface: 'mcp',
+  });
   assert.equal(outcome.status, 'approval-required');
 });
 

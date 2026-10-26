@@ -48,6 +48,8 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'messages',
     'message',
     'provider',
+    'integration',
+    'session-queue',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -71,6 +73,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_subscriber_update',
         'events_subscriber_remove',
         'events_judges_list',
+        'events_judge_show',
         'events_judge_add',
         'events_judge_update',
         'events_judge_remove',
@@ -118,9 +121,17 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_wait',
         'events_lane_item',
         'events_provider_list',
+        'events_session_queue_list',
       ].sort(),
     );
-    for (const personal of ['events_judge_setup', 'events_provider_key_set', 'events_provider_key_remove'])
+    for (const personal of [
+      'events_judge_setup',
+      'events_provider_key_set',
+      'events_provider_key_remove',
+      'events_integration_show',
+      'events_integration_set',
+      'events_session_queue_drop',
+    ])
       assert.ok(
         !names.includes(personal),
         `${personal}: judge setup and AI provider keys are the person's, in the app or at a terminal (2026-10-26)`,

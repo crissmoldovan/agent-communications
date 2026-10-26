@@ -345,6 +345,18 @@ describe('the desktop workflows', () => {
         if (!target.startsWith('apps/desktop/')) outside.add(target);
       }
     }
+    // The rule text the editor imports from `@agentcomms/events`' source (0.33.0), and every module it imports.
+    const ruleText = ['packages/events/src/rule-text/index.ts'];
+    const seen = new Set<string>();
+    while (ruleText.length > 0) {
+      const file = ruleText.pop() ?? '';
+      if (seen.has(file)) continue;
+      seen.add(file);
+      outside.add(file);
+      for (const [, specifier] of read(file).matchAll(/(?:\bfrom\s*|\bimport\s*\(\s*)['"](\.{1,2}\/[^'"]+)['"]/g))
+        ruleText.push(join(dirname(file), specifier ?? '').replaceAll('\\', '/'));
+    }
+    expect(seen.size, 'the rule text and its relative imports').toBeGreaterThan(5);
     for (const read of [
       'README.md',
       '.gitignore',
@@ -1146,12 +1158,26 @@ function expectQuietAboutSecrets(script: string): void {
 
 describe('the licence notices', () => {
   type Script = {
+    firstPartySource: (file: string, root?: string, app?: string) => boolean;
     cratesOf: (metadata: unknown) => { name: string; version: string }[];
     rustSection: (crates: object[], textsOf: (crate: { name: string }) => { file: string; text: string }[]) => string;
     resolveStylesheet: (specifier: string, from: string) => string | null;
   };
   const load = async (): Promise<Script> =>
     (await import(pathToFileURL(join(APP, 'scripts', 'third-party-licenses.mjs')).href)) as Script;
+
+  it("take the repository's own package source as the app's, and nothing else of a package (0.33.0)", async () => {
+    const { firstPartySource } = await load();
+    // The rule text the editor imports from `@agentcomms/events`: the repository's own, under the app's licence.
+    expect(firstPartySource(join(ROOT, 'packages', 'events', 'src', 'rule-text', 'parse.ts'))).toBe(true);
+    // A package's vendored data is its vendor's, and outside `src` is not the source the app imports.
+    expect(firstPartySource(join(ROOT, 'packages', 'events', 'vendor', 'unicode-15.1.0', 'generated', 'x.ts'))).toBe(
+      false,
+    );
+    expect(firstPartySource(join(ROOT, 'packages', 'events', 'dist', 'index.mjs'))).toBe(false);
+    expect(firstPartySource(join(ROOT, 'packages', 'no-such-package', 'src', 'index.ts'))).toBe(false);
+    expect(firstPartySource(join(ROOT, 'node_modules', 'zod', 'index.js'))).toBe(false);
+  });
 
   it("follow the app's normal and build dependencies, and leave out what only builds its tests", async () => {
     const { cratesOf } = await load();

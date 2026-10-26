@@ -1,0 +1,34 @@
+{
+  "jev@4": {
+    "judgeId": "jev",
+    "version": 4,
+    "document": {
+      "judgeId": "jev",
+      "version": 4,
+      "kind": "typesafe",
+      "provider": "typesafe",
+      "model": "jev-1.13.0",
+      "endpoint": "https://api.typesafe.ai/v1/systemone",
+      "promptTemplate": "typesafe-jev-noul-v1",
+      "protocol": "noul"
+    },
+    "digest": "c5365bfbde0c98ebf4598d167b5391dfd1b1c6e8866d7c557358f3e117845e77",
+    "state": "live"
+  },
+  "jev-billing@1": {
+    "judgeId": "jev-billing",
+    "version": 1,
+    "document": {
+      "judgeId": "jev-billing",
+      "version": 1,
+      "kind": "typesafe",
+      "provider": "openrouter",
+      "model": "jev-1",
+      "endpoint": "https://api.example/system-one",
+      "promptTemplate": "fake-template-1",
+      "protocol": "noul"
+    },
+    "digest": "f8abe994b538fb42574c085737a7a5e7db82f65d0207e020998b88925d01c856",
+    "state": "live"
+  }
+}

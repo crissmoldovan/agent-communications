@@ -24,12 +24,9 @@ export const MESSAGE_DECISION_OUTCOMES: readonly [
 export type MessageDecisionOutcome = (typeof MESSAGE_DECISION_OUTCOMES)[number];
 
 /** A delivery's target kind, as the deliveries table keeps it. */
-export const MESSAGE_TARGET_KINDS: readonly ['dry-run', 'webhook', 'sse', 'queue'] = Object.freeze([
-  'dry-run',
-  'webhook',
-  'sse',
-  'queue',
-] as const);
+export const MESSAGE_TARGET_KINDS: readonly ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] = Object.freeze(
+  ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] as const,
+);
 export type MessageTargetKind = (typeof MESSAGE_TARGET_KINDS)[number];
 
 /** A delivery's state, as the deliveries table keeps it (`store/schema-v1.ts`). */

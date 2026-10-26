@@ -392,8 +392,10 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * review, 2026-10-26).
  *
  * Who may: the person, in the Agent Comms app — on macOS a process the app itself started, as `desktopAppOrigin` checks
- * (a speed bump against agents, not a boundary against code running as the person); on Windows and Linux, which check
- * nothing (a known limit), any process without an agent's marker, said `desktop-app (unattested)`. Always refused to an agent's shell (its marker) and inside an MCP
+ * (a speed bump against agents, not a boundary against code running as the person). On Windows and Linux nothing
+ * attests the app, so nothing is approved here: the person approves the change at their terminal (the second look at
+ * 0.33.0; the app offers Approve in Terminal), and the refusal is audited as `desktop-app (unattested)`, so
+ * `approvedVia: 'app'` means the attested app. Always refused to an agent's shell (its marker) and inside an MCP
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
  * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
  */
@@ -416,6 +418,7 @@ async function appliedFromApp<T>(
     });
   }
   let origin: DesktopOrigin = { ok: false, reason: 'not-checked' };
+  let refusedAs: 'desktop-app (unattested)' | undefined;
   try {
     const marker = agentMarker(options.env);
     if (marker !== null) {
@@ -433,9 +436,20 @@ async function appliedFromApp<T>(
       );
     }
     // On macOS the process that started this one must be Agent Comms itself, its running code verified by its pid;
-    // Windows and Linux check nothing, and keep the checks above (known limit).
+    // Windows and Linux attest nothing, so there the change is approved at the person's terminal instead.
     origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
-    if (!origin.ok && origin.reason !== 'unattested-platform') {
+    if (!origin.ok && origin.reason === 'unattested-platform') {
+      refusedAs = 'desktop-app (unattested)';
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'nothing on this platform attests that the Agent Comms app started this, so approve the change at your terminal',
+        {
+          hint: 'In the app, press Approve in Terminal; or run the same mcp install at your own terminal, without --app-approval.',
+          details: { reason: 'ORIGIN_UNATTESTED' },
+        },
+      );
+    }
+    if (!origin.ok) {
       throw new CommsError(
         'APPROVAL_REQUIRED',
         'only the Agent Comms app can approve a change in the app, and this was not started by it',
@@ -446,20 +460,18 @@ async function appliedFromApp<T>(
       );
     }
   } catch (error) {
-    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app' });
+    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app', approvedBy: refusedAs });
     throw error;
   }
+  // Only an attested origin reaches here.
+  if (!origin.ok) throw new CommsError('APPROVAL_REQUIRED', 'only the Agent Comms app can approve a change in the app');
   // Planned first, from the configuration as it is now: a plan that refuses or throws approves nothing.
   const request = await change.plan(await core.config.load());
   // Checked against the approval before it is answered: only this exact change, which must need approval.
   await approveChangeInApp(core, approvalId, request, {
     surface: 'app',
     platform,
-    approvedBy: !origin.ok
-      ? 'desktop-app (unattested)'
-      : origin.build === 'test'
-        ? 'desktop-app (test build)'
-        : 'desktop-app',
+    approvedBy: origin.build === 'test' ? 'desktop-app (test build)' : 'desktop-app',
   });
   try {
     const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });

@@ -371,6 +371,77 @@ test('E7: evaluator taints exact judge input, reserves, uses sealed transport, a
   }
 });
 
+test('ANALYSE: a judged decision keeps its sender’s domain apart, sealed, until its projection’s deadline — never the address', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // 0.33.0 design §3.3: Analyse counts the judge's answers per sending domain. The rule tests the sender's address, so
+  // its projection holds it; the decision keeps only the domain, encrypted in a table of its own, until the projection's
+  // own deadline — the rule's content retention — and its metadata holds no domain (security review of 0.33.0, 9).
+  for (const [condition, expected] of [
+    [
+      {
+        all: [
+          { path: '/subject', op: 'exists' },
+          { path: '/from/address', op: 'exists' },
+        ],
+      },
+      'example.test',
+    ],
+    [{ path: '/subject', op: 'exists' }, undefined],
+  ] as const) {
+    const requests: Buffer[] = [];
+    const setup = await fixture(11434, condition);
+    try {
+      const taint = productionTaintRecorder(setup.stateDir);
+      const transport = new JudgeTransport({ tcpConnect: async () => respondingSocket(requests) as never });
+      assert.equal(
+        await evaluatorFor(setup, transport, taint).admit({
+          event: setup.event,
+          eventId: setup.event.id,
+          ruleId: 'rule-e7',
+          ruleVersion: 1,
+          stagedAt: NOW,
+        }),
+        'terminal',
+      );
+      const decision = setup.store.database.prepare('SELECT id, outcome, encrypted_record FROM decisions').get() as {
+        id: string;
+        outcome: string;
+        encrypted_record: Uint8Array;
+      };
+      assert.equal(decision.outcome, 'matched');
+      const metadata = (
+        await setup.cipher.decrypt(
+          { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decision.id }] },
+          decision.encrypted_record,
+        )
+      ).toString('utf8');
+      assert.equal('senderDomain' in (JSON.parse(metadata) as object), false, 'the metadata holds no domain');
+      assert.equal(metadata.includes('sender@example.test'), false, 'the address is never kept');
+      assert.equal(metadata.includes('Synthetic Sender'), false, 'nor the sender’s name');
+      const kept = setup.store.database
+        .prepare('SELECT decision_id, rule_id, rule_version, expires_at, encrypted_domain FROM decision_sender_domains')
+        .all() as { decision_id: string; expires_at: number; encrypted_domain: Uint8Array }[];
+      if (expected === undefined) {
+        assert.deepEqual(kept, [], 'a projection without the address keeps no domain');
+        continue;
+      }
+      assert.equal(kept.length, 1);
+      assert.equal(kept[0]?.decision_id, decision.id);
+      assert.equal(kept[0]?.expires_at, NOW + 60_000, 'the projection’s deadline: staged time plus ingest retention');
+      const domain = await setup.cipher.decrypt(
+        { table: 'decision_sender_domains', column: 'encryptedDomain', key: [{ type: 'text', value: decision.id }] },
+        kept[0]?.encrypted_domain,
+      );
+      assert.equal(domain.toString('utf8'), expected);
+      assert.equal(Buffer.from(kept[0]?.encrypted_domain ?? []).includes(Buffer.from(expected)), false, 'sealed');
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('E7: pause fences reserved judge I/O and completed-response decision writes', { skip: WINDOWS_SKIP }, async () => {
   {
     const requests: Buffer[] = [];

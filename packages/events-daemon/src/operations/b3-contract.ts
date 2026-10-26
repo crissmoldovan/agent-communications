@@ -16,11 +16,14 @@ import {
   canonicalTarget,
   type JudgeBudgetDocument,
   normaliseActivationDocument,
+  type SessionTargetDocument,
   type SubscriberDocument,
   type TargetDocument,
+  targetLane,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
-import { PERSON_SETUP_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
+import { ANALYSE_PROVIDERS, ANALYSE_ROUTES, type AnalyseProvider } from '../domain/analyse-model.ts';
+import { PERSON_CHANGE_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
 import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
   isActivityKey,
@@ -32,6 +35,7 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -42,6 +46,7 @@ import {
   type MessageShowResultV1,
   type MessagesListResultV1,
 } from '../domain/messages.ts';
+import { type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import {
   isQueueItemId,
   QUEUE_CHANNELS,
@@ -52,6 +57,8 @@ import {
   type QueueChannel,
   type QueueStateFilter,
 } from '../domain/queue-target.ts';
+import { ANALYSE_WINDOW_DAYS, RULE_ANALYSE_PARTS, type RuleAnalyseResultV1 } from '../domain/rule-analyse.ts';
+import type { AgentSessionsIntegrationV1 } from '../runtime/agent-sessions.ts';
 import {
   type B3ControlWireOperation,
   type DesktopControlWireOperation,
@@ -59,7 +66,14 @@ import {
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
-import type { JudgeSetupResultV1, ProviderKeyResultV1, ProviderListResultV1 } from '../runtime/judge-setup.ts';
+import type {
+  JudgeSetupResultV1,
+  ProviderKeyResultV1,
+  ProviderListResultV1,
+  RuleApprovalResultV1,
+} from '../runtime/judge-setup.ts';
+import type { JudgeShowResultV1 } from '../runtime/judge-show.ts';
+import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -69,8 +83,8 @@ import type {
   QueueStateChangeResultV1,
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
+import type { SessionQueueDropResultV1, SessionQueueListResultV1 } from '../runtime/session-queue.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
-import type { EventSecretProvider } from '../store/event-secrets.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -568,9 +582,16 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'messages-list': MessagesListResultV1;
   readonly 'message-show': MessageShowResultV1;
   readonly 'judge-setup': JudgeSetupResultV1;
+  readonly 'rule-approve': RuleApprovalResultV1;
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
+  readonly 'integration-show': IntegrationShowResultV1 | AgentSessionsIntegrationV1;
+  readonly 'integration-set': AgentSessionsIntegrationV1;
+  readonly 'session-queue-list': SessionQueueListResultV1;
+  readonly 'session-queue-drop': SessionQueueDropResultV1;
+  readonly 'rule-analyse': RuleAnalyseResultV1;
+  readonly 'judge-show': JudgeShowResultV1;
 };
 
 /**
@@ -734,9 +755,42 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
     readonly url?: string | undefined;
     readonly model?: string | undefined;
   };
+  /**
+   * A rule's activation, approved by the person in the app after its preview (0.33.0 design §3.1): the approval `rule
+   * enable` prepared, and the digest the preview showed. No challenge is in it: the owner issues and answers its own.
+   */
+  readonly 'rule-approve': { readonly approvalId: string; readonly digest: string };
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+  /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, and one team's labels. */
+  readonly 'integration-show':
+    | { readonly integration: 'linear'; readonly team?: string | undefined }
+    | { readonly integration: 'agent-sessions' };
+  /**
+   * Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is, theirs to see and to set from the
+   * app or their terminal; and the busy queue, theirs to read and to drop from. No token is in any of them.
+   */
+  readonly 'integration-set': {
+    readonly integration: 'agent-sessions';
+    readonly relayHome?: string | undefined;
+    readonly relayPort?: number | 'default' | undefined;
+    readonly allowFolders?: readonly string[] | undefined;
+    readonly removeFolders?: readonly string[] | undefined;
+  };
+  readonly 'session-queue-list': Record<string, never>;
+  readonly 'session-queue-drop': { readonly deliveryId: string };
+  /**
+   * Analyse (0.33.0 design §3.3): the person's view of one rule, or a draft of it from the editor, and the provider its
+   * model runs on when they pick one. It writes nothing.
+   */
+  /** One judge version's exact canonical document (0.33.0), the newest live one unless a version is named. */
+  readonly 'judge-show': { readonly judgeId: string; readonly version?: number | undefined };
+  readonly 'rule-analyse': {
+    readonly ruleId: string;
+    readonly draft?: Readonly<Record<string, JsonValue>> | undefined;
+    readonly provider?: AnalyseProvider | undefined;
+  };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -969,7 +1023,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -984,10 +1038,26 @@ function assertEventSource(value: unknown, name: string): void {
   for (const key of keys) assertText(value[key], `${name} ${key}`);
 }
 
+/** A Linear delivery's issue (0.33.0 design §3.4): its identifier and its linear.app address, and only on one. */
+function assertDeliveryRowLinear(row: unknown): void {
+  if (!isRecord(row) || !Object.hasOwn(row, 'linear')) return;
+  if (row.targetKind !== 'linear') throw new TypeError('only a Linear delivery shows a Linear issue');
+  assertClosedRecord(row.linear, ['identifier', 'url'], 'a delivery’s Linear issue');
+  if (typeof row.linear.identifier !== 'string' || !/^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u.test(row.linear.identifier))
+    throw new TypeError('a Linear issue identifier is a team key and a number');
+  if (typeof row.linear.url !== 'string' || !row.linear.url.startsWith('https://linear.app/'))
+    throw new TypeError('a Linear issue address is on linear.app');
+}
+
 /** `delivery show` (0.32.0, owner feedback §3.5): content-free ids, times and the judge's yes or no. */
 function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   const row = value.delivery;
-  assertClosedRecord(row, DELIVERY_ROW_FIELDS, 'a shown delivery row');
+  assertDeliveryRowLinear(row);
+  assertClosedRecord(
+    row,
+    [...DELIVERY_ROW_FIELDS, ...(isRecord(row) && Object.hasOwn(row, 'linear') ? ['linear'] : [])],
+    'a shown delivery row',
+  );
   for (const field of ['deliveryId', 'accountId', 'ruleId', 'targetId', 'state', 'decisionId'])
     assertText(row[field], `a shown delivery ${field}`);
   for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);
@@ -1045,12 +1115,44 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   assertPositiveInteger(target.version, 'a shown target version');
   if (target.host !== undefined && (target.kind !== 'webhook' || typeof target.host !== 'string' || target.host === ''))
     throw new TypeError('only a webhook target shows its host');
-  if (target.lane !== undefined && (target.kind !== 'queue' || !isLaneName(target.lane)))
-    throw new TypeError('only a queue target shows its lane');
+  if (target.lane !== undefined && ((target.kind !== 'queue' && target.kind !== 'session') || !isLaneName(target.lane)))
+    throw new TypeError('only a queue or session target shows its lane');
   if (value.dryRun !== null) {
     assertClosedRecord(value.dryRun, ['expiresAt'], 'a shown dry-run entry');
     if (target.kind !== 'dry-run') throw new TypeError('only a dry-run delivery shows a log entry');
     assertNullable(value.dryRun.expiresAt, assertNonNegativeInteger, 'a shown dry-run expiry');
+  }
+}
+
+/**
+ * `integration show linear` (0.33.0 design §3.4): whether a Linear key is kept, the workspace and teams it sees, and one
+ * team's labels when asked. Ids are Linear's; names are the workspace's own, one line each.
+ */
+function assertIntegrationShow(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(
+    value,
+    ['integration', 'connected', 'workspace', 'teams', ...(Object.hasOwn(value, 'labels') ? ['labels'] : [])],
+    'an integration show result',
+  );
+  if (value.integration !== 'linear') throw new TypeError('an integration show result names Linear');
+  if (typeof value.connected !== 'boolean')
+    throw new TypeError('an integration show result says whether it is connected');
+  if (value.connected) assertText(value.workspace, 'a Linear workspace');
+  else if (value.workspace !== null) throw new TypeError('an unconnected integration has no workspace');
+  if (!Array.isArray(value.teams)) throw new TypeError('an integration show result lists its teams');
+  if (!value.connected && (value.teams.length > 0 || Object.hasOwn(value, 'labels')))
+    throw new TypeError('an unconnected integration lists nothing');
+  for (const team of value.teams) {
+    assertClosedRecord(team, ['id', 'key', 'name'], 'a Linear team');
+    if (!isLinearId(team.id)) throw new TypeError('a Linear team id is a Linear id');
+    for (const field of ['key', 'name']) assertText(team[field], `a Linear team ${field}`);
+  }
+  if (!Object.hasOwn(value, 'labels')) return;
+  if (!Array.isArray(value.labels)) throw new TypeError('an integration show result lists its labels');
+  for (const label of value.labels) {
+    assertClosedRecord(label, ['id', 'name'], 'a Linear label');
+    if (!isLinearId(label.id)) throw new TypeError('a Linear label id is a Linear id');
+    assertText(label.name, 'a Linear label name');
   }
 }
 
@@ -1083,10 +1185,71 @@ function assertJudgeSetupResult(value: Readonly<Record<string, unknown>>): void 
   if (value.key !== 'stored' && value.key !== 'unchanged' && value.key !== 'none')
     throw new TypeError('a judge setup key state is unknown');
   assertText(value.destination, 'a judge setup destination');
-  // Where the person was (0.32.0, the second look at the release): the release app, the test build, the app unattested
-  // on Windows and Linux, or a terminal.
-  if (!(PERSON_SETUP_APPROVERS as readonly unknown[]).includes(value.approvedBy))
+  // Where the person was (0.32.0, the second look at the release): the release app, the test build, or a terminal. On
+  // Windows and Linux nothing attests the app, so a setup there is made at a terminal (0.33.0, the second look).
+  if (!(PERSON_CHANGE_APPROVERS as readonly unknown[]).includes(value.approvedBy))
     throw new TypeError('a judge setup is approved by the person, in the app or at a terminal');
+}
+
+/** `integration show|set agent-sessions` (0.33.0 §3.5): the settings and what the relay said; never its token. */
+function assertAgentSessionsIntegration(value: Readonly<Record<string, unknown>>): void {
+  assertClosedRecord(value, ['integration', 'settings', 'relay', 'waiting'], 'the agent sessions integration');
+  if (value.integration !== 'agent-sessions') throw new TypeError('an integration result names agent-sessions');
+  assertClosedRecord(value.settings, ['relayHome', 'relayPort', 'allowedFolders'], 'agent session settings');
+  assertNullable(value.settings.relayHome, assertText, 'the relay home setting');
+  assertNullable(value.settings.relayPort, assertPositiveInteger, 'the relay port setting');
+  if (!Array.isArray(value.settings.allowedFolders) || value.settings.allowedFolders.some((f) => typeof f !== 'string'))
+    throw new TypeError('the allowed folders are a list of folders');
+  assertClosedRecord(
+    value.relay,
+    ['found', 'home', 'source', 'url', 'ready', 'version', 'allowedRoots', 'problem'],
+    'the relay as found',
+  );
+  const relay = value.relay;
+  for (const field of ['found', 'ready'])
+    if (typeof relay[field] !== 'boolean') throw new TypeError(`the relay's ${field} is true or false`);
+  for (const field of ['home', 'url', 'version', 'problem'])
+    assertNullable(relay[field], assertText, `the relay ${field}`);
+  if (relay.source !== null && !['setting', 'default', 'pilot'].includes(relay.source as string))
+    throw new TypeError("the relay's home is the setting's, the default or the Pilot app's");
+  if (typeof relay.url === 'string' && !/^http:\/\/127\.0\.0\.1:[0-9]{1,5}$/u.test(relay.url))
+    throw new TypeError('the relay is reached on loopback only');
+  if (
+    relay.allowedRoots !== null &&
+    (!Array.isArray(relay.allowedRoots) || relay.allowedRoots.some((r) => typeof r !== 'string'))
+  )
+    throw new TypeError("the relay's allowed roots are a list of folders");
+  assertNonNegativeInteger(value.waiting, 'the items waiting for a busy session');
+}
+
+/** One `session-queue list` item: ids, a lane and times, content-free. */
+function assertSessionQueueItem(value: unknown): void {
+  assertClosedRecord(
+    value,
+    [
+      'deliveryId',
+      'relaySessionId',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+      'lane',
+      'queuedAt',
+      'released',
+      'expiresAt',
+    ],
+    'a waiting session item',
+  );
+  for (const field of ['deliveryId', 'ruleId', 'targetId']) assertText(value[field], `a waiting session item ${field}`);
+  if (typeof value.relaySessionId !== 'string' || !/^sess_[0-9a-f-]{36}$/u.test(value.relaySessionId))
+    throw new TypeError('a waiting session item names its relay session');
+  for (const field of ['ruleVersion', 'targetVersion'])
+    assertPositiveInteger(value[field], `a waiting session item ${field}`);
+  if (value.lane !== null && !isLaneName(value.lane))
+    throw new TypeError('a waiting session item has a malformed lane');
+  assertIsoTime(value.queuedAt, 'a waiting session item queuedAt');
+  assertIsoTime(value.expiresAt, 'a waiting session item expiresAt');
+  if (typeof value.released !== 'boolean') throw new TypeError('a waiting session item says whether it was let go');
 }
 
 /** A lane's binding, as `lane list` and `lane bind` give it (routing design §6's JSON contract). */
@@ -1267,9 +1430,16 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'messages-list': ['messages', 'next'],
   'message-show': ['message'],
   'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
+  'rule-approve': ['approvalId', 'ruleId', 'version', 'approved', 'approvedBy', 'completion'],
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
+  'integration-show': ['integration', 'connected', 'workspace', 'teams'],
+  'integration-set': ['integration', 'settings', 'relay', 'waiting'],
+  'session-queue-list': ['items'],
+  'session-queue-drop': ['deliveryId', 'dropped'],
+  'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
+  'judge-show': ['judgeId', 'version', 'document', 'digest', 'state'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1283,6 +1453,90 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
     'record',
   ],
 });
+
+function assertNullableNumber(value: unknown, name: string): void {
+  if (value !== null && (typeof value !== 'number' || !Number.isFinite(value)))
+    throw new TypeError(`${name} must be a number or null`);
+}
+
+/**
+ * Analyse's result (0.33.0 design §3.3): what was analysed, the counts — numbers, closed words and, for each listed
+ * sending domain, the domain inside the untrusted-content envelope — the suggestions and what the model did.
+ */
+function assertRuleAnalyseResult(value: Readonly<Record<string, unknown>>): void {
+  assertText(value.ruleId, 'an analysed rule id');
+  if (!isRecord(value.analysed)) throw new TypeError('an analysis says what it analysed');
+  if (value.analysed.source === 'stored') {
+    assertClosedRecord(value.analysed, ['source', 'version'], 'an analysed stored version');
+    assertPositiveInteger(value.analysed.version, 'an analysed version');
+  } else assertClosedRecord(value.analysed, ['source'], 'an analysed draft');
+  if (value.analysed.source !== 'stored' && value.analysed.source !== 'draft')
+    throw new TypeError('an analysis analysed a stored version or a draft');
+  const counts = value.counts;
+  assertClosedRecord(
+    counts,
+    ['windowDays', 'since', 'decisions', 'outcomes', 'judge', 'domainsKnown', 'domains', 'queue'],
+    'analysed counts',
+  );
+  if (counts.windowDays !== ANALYSE_WINDOW_DAYS) throw new TypeError('analysed counts cover 30 days');
+  for (const field of ['since', 'decisions', 'domainsKnown']) assertNonNegativeInteger(counts[field], field);
+  assertClosedRecord(counts.outcomes, MESSAGE_DECISION_OUTCOMES, 'analysed outcomes');
+  for (const outcome of MESSAGE_DECISION_OUTCOMES) assertNonNegativeInteger(counts.outcomes[outcome], outcome);
+  if (counts.judge !== null) {
+    assertClosedRecord(
+      counts.judge,
+      ['answered', 'yes', 'no', 'held', 'spread', 'lowest', 'highest'],
+      "analysed judge's answers",
+    );
+    for (const field of ['answered', 'yes', 'no', 'held']) assertNonNegativeInteger(counts.judge[field], field);
+    if (!Array.isArray(counts.judge.spread) || counts.judge.spread.length !== 10)
+      throw new TypeError("the judge's spread is ten bands");
+    for (const band of counts.judge.spread) assertNonNegativeInteger(band, 'a spread band');
+    assertNullableNumber(counts.judge.lowest, 'the lowest answer');
+    assertNullableNumber(counts.judge.highest, 'the highest answer');
+  }
+  if (!Array.isArray(counts.domains)) throw new TypeError('analysed domains are a list');
+  for (const entry of counts.domains) {
+    assertClosedRecord(entry, ['domain', 'judged', 'yes', 'no'], 'an analysed domain');
+    if (typeof entry.domain !== 'string' || !entry.domain.startsWith('<untrusted-content '))
+      throw new TypeError('a sending domain is inside the untrusted-content envelope');
+    for (const field of ['judged', 'yes', 'no']) assertNonNegativeInteger(entry[field], field);
+  }
+  assertClosedRecord(counts.queue, ['open', 'done', 'dismissed', 'lowestDone', 'highestDismissed'], 'analysed queue');
+  for (const field of ['open', 'done', 'dismissed']) assertNonNegativeInteger(counts.queue[field], field);
+  assertNullableNumber(counts.queue.lowestDone, 'the lowest kept score');
+  assertNullableNumber(counts.queue.highestDismissed, 'the highest dismissed score');
+  if (!Array.isArray(value.suggestions)) throw new TypeError('suggestions are a list');
+  for (const suggestion of value.suggestions) {
+    assertClosedRecord(suggestion, ['part', 'before', 'after', 'why', 'evidence'], 'a suggestion');
+    if (!(RULE_ANALYSE_PARTS as readonly unknown[]).includes(suggestion.part))
+      throw new TypeError('a suggestion names a part of the rule');
+    for (const field of ['before', 'after'])
+      if (suggestion[field] !== null && typeof suggestion[field] !== 'string')
+        throw new TypeError(`a suggestion's ${field} is text or null`);
+    assertText(suggestion.why, "a suggestion's why");
+    if (!isRecord(suggestion.evidence) || (suggestion.evidence.by !== 'counts' && suggestion.evidence.by !== 'model'))
+      throw new TypeError('a suggestion says what it rests on');
+  }
+  const model = value.model;
+  assertClosedRecord(model, ['provider', 'name', 'model', 'ran', 'reason', 'noKey', 'sent', 'parts'], 'the model part');
+  if (model.provider !== null && !(ANALYSE_PROVIDERS as readonly unknown[]).includes(model.provider))
+    throw new TypeError("the model's provider is one of Analyse's");
+  if (typeof model.ran !== 'boolean') throw new TypeError('the model part says whether it ran');
+  if (model.reason !== null && model.reason !== 'NO_KEY' && model.reason !== 'NO_MODEL_PARTS')
+    throw new TypeError('the model part says why it did not run in closed words');
+  if (
+    !Array.isArray(model.noKey) ||
+    model.noKey.some((entry) => !(ANALYSE_PROVIDERS as readonly unknown[]).includes(entry))
+  )
+    throw new TypeError('the providers without a key are Analyse providers');
+  assertText(model.sent, 'what the model was sent');
+  if (!Array.isArray(model.parts)) throw new TypeError("the model's parts are a list");
+  for (const part of model.parts) {
+    assertClosedRecord(part, ['part', 'at', 'outcome'], "a model's part");
+    assertText(part.outcome, "a model part's outcome");
+  }
+}
 
 function assertText(value: unknown, name: string): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -1388,6 +1642,11 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     const { tightening, ...version } = value;
     assertTighteningPreview(tightening);
     assertB3OrdinaryControlResultV1(operation, version);
+    return;
+  }
+  if (operation === 'integration-show' && isRecord(value)) {
+    if (value.integration === 'agent-sessions') assertAgentSessionsIntegration(value);
+    else assertIntegrationShow(value);
     return;
   }
   assertClosedRecord(value, fields, `a ${operation} result`);
@@ -1531,23 +1790,65 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'judge-setup':
       assertJudgeSetupResult(value);
       return;
+    case 'rule-approve':
+      assertText(value.approvalId, 'an approved approval id');
+      assertText(value.ruleId, 'an approved rule id');
+      assertPositiveInteger(value.version, 'an approved rule version');
+      if (value.approved !== true) throw new TypeError('a rule approval says it approved');
+      if (
+        typeof value.approvedBy !== 'string' ||
+        value.approvedBy === 'terminal' ||
+        !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
+      )
+        throw new TypeError('a rule approval names the app it came from');
+      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a rule approval's completion");
+      assertText(value.completion.intentId, 'a completed activation');
+      if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
+      assertText(value.completion.usedAt, 'when the approval was used');
+      return;
     case 'provider-list':
       if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
       for (const entry of value.providers) {
         assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
-        if (entry.id !== JUDGE_KIND_TYPESAFE && entry.id !== 'openrouter')
-          throw new TypeError('a listed provider is unknown');
+        if (!isEventSecretProvider(entry.id)) throw new TypeError('a listed provider is unknown');
         assertText(entry.name, 'a listed provider name');
         if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
       }
       return;
+    case 'rule-analyse':
+      assertRuleAnalyseResult(value);
+      return;
+    case 'judge-show': {
+      assertText(value.judgeId, 'a shown judge id');
+      assertPositiveInteger(value.version, 'a shown judge version');
+      if (value.state !== 'live' && value.state !== 'revoked') throw new TypeError('a shown judge is live or revoked');
+      if (typeof value.digest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.digest))
+        throw new TypeError("a shown judge's digest is a SHA-256");
+      // The document is exactly a canonical judge document: closed, with no field a key could ride in.
+      const document = canonicalJudge(value.document);
+      if (canonicalJson(document as never) !== canonicalJson(value.document as never))
+        throw new TypeError('a shown judge document is canonical');
+      if (document.judgeId !== value.judgeId || document.version !== value.version)
+        throw new TypeError('a shown judge document is that judge version');
+      return;
+    }
     case 'provider-key-set':
     case 'provider-key-remove':
-      if (value.provider !== JUDGE_KIND_TYPESAFE && value.provider !== 'openrouter')
-        throw new TypeError('a provider key result names a known provider');
+      if (!isEventSecretProvider(value.provider)) throw new TypeError('a provider key result names a known provider');
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');
+      return;
+    case 'integration-set':
+      assertAgentSessionsIntegration(value);
+      return;
+    case 'session-queue-list':
+      if (!Array.isArray(value.items)) throw new TypeError('a session queue list needs its items');
+      for (const item of value.items) assertSessionQueueItem(item);
+      return;
+    case 'session-queue-drop':
+      assertText(value.deliveryId, 'a dropped session item id');
+      if (value.dropped !== true) throw new TypeError('a session queue drop says it dropped the item');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);
@@ -1796,6 +2097,11 @@ export interface B3ApprovalPreviewTerminalView {
  */
 export interface B3ApprovalPreviewContext {
   readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
+  /**
+   * Whether a Linear key is kept now (second look of 0.33.0). False says the Linear targets' team and labels were not
+   * checked against Linear when the rule was prepared; undefined says nothing.
+   */
+  readonly linearConnected?: boolean | undefined;
 }
 
 /** Every character a reader could take for a quote mark, other than the double quote JSON escapes itself. */
@@ -1851,6 +2157,75 @@ function hostedJudgeDestination(document: ActivationDocumentV1): readonly string
   ];
 }
 
+const SESSION_PROVIDER_WORDS: Readonly<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex' };
+const SESSION_MODE_PREVIEW: Readonly<Record<string, string>> = {
+  manual: 'the session asks before it acts',
+  acceptEdits: 'the session may edit files without asking, and asks before anything else',
+  plan: 'the session only plans, and changes nothing',
+};
+
+/** A context part as the preview names it, every rule-author string one literal it cannot close. */
+function contextPartPreview(part: SessionTargetDocument['context'][number]): string {
+  if ('text' in part) return `fixed text ${authorLiteral(part.text)}`;
+  if ('fields' in part) return `the mapped fields ${part.fields.map(authorLiteral).join(', ')}`;
+  if ('file' in part) return `the file ${authorLiteral(part.file)}, read when the match is passed on (at most 64 KB)`;
+  const route = ANALYSE_ROUTES[part.generate.provider];
+  return `what ${authorLiteral(part.generate.model)} writes, asked ${authorLiteral(part.generate.instruction)} — it is sent the mapped fields ${part.generate.from
+    .map(authorLiteral)
+    .join(', ')} through ${route.name} (${route.host}), on your own key`;
+}
+
+/**
+ * The agent-session disclosure (0.33.0 §3.5): plainly, that matches' mapped fields and the listed context go to a
+ * coding-agent session in the named folder — or the session behind the window bound to a lane — which can act with the
+ * named mode; whether one is started, what happens while it is busy, every context part, and its instruction.
+ */
+function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  return document.rule.targets.flatMap((target) => {
+    if (target.kind !== 'session') return [];
+    const named = `Session ${target.targetId}@${target.version}`;
+    const provider = SESSION_PROVIDER_WORDS[target.provider] ?? target.provider;
+    const where =
+      'folder' in target.find
+        ? `a ${provider} session working in ${authorLiteral(target.find.folder)}`
+        : `the ${provider} session behind the agent window bound to lane ${target.find.lane}`;
+    const lines = [
+      `${named}: each match's mapped fields and the context below go to ${where}, a coding agent there, which may act: ${SESSION_MODE_PREVIEW[target.mode] ?? target.mode}.`,
+      // Security review of 0.33.0: what the relay keeps is outside Agent Comms' retention, and the person is told so.
+      `${named}: claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.`,
+      target.ifNone === 'start'
+        ? `${named}: if there is no such session, one is started with ${provider} in that folder.`
+        : 'lane' in target.find
+          ? `${named}: if the bound window is not a session claude-stream runs, the match is a lane item in lane ${target.find.lane}, as today.`
+          : `${named}: if there is no such session, the match is left in the Queue.`,
+      target.ifBusy === 'queue'
+        ? `${named}: while the session is busy, the match waits for it, and goes when its run ends.`
+        : `${named}: while the session is busy, the match is left in the Queue.`,
+      ...target.context.map((part, index) => `${named}: context part ${index + 1}, ${contextPartPreview(part)}.`),
+      ...(target.instruction === undefined ? [] : [`${named}: it is told last ${authorLiteral(target.instruction)}.`]),
+    ];
+    return lines.map((line) => neutralise(line).text);
+  });
+}
+
+/**
+ * What each Linear target of a rule does (0.33.0 design §3.4): the team, its labels and who it is assigned to, and which
+ * mapped fields fill the title and the description. Every value is the approved document's, through `neutralise`.
+ */
+function linearTargetLines(document: ActivationDocumentV1, linearConnected?: boolean): readonly string[] {
+  if (document.kind !== 'rule') return [];
+  const lines = document.rule.targets.flatMap((target) =>
+    target.kind === 'linear' ? [neutralise(linearTargetDisclosure(target)).text] : [],
+  );
+  // With no Linear key, activation could not ask Linear whether each team key and label name match their ids.
+  if (lines.length > 0 && linearConnected === false)
+    lines.push(
+      'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the rule again.',
+    );
+  return lines;
+}
+
 /** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
 function boundWindowText(binding: LaneBindingV1): string {
   const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
@@ -1891,9 +2266,10 @@ export function renderB3ApprovalPreviewV1(
     document.kind === 'rule'
       ? [
           ...new Set(
-            document.rule.targets.flatMap((target) =>
-              target.kind === 'queue' && target.lane !== undefined ? [target.lane.name] : [],
-            ),
+            document.rule.targets.flatMap((target) => {
+              const lane = targetLane(target);
+              return lane === undefined ? [] : [lane];
+            }),
           ),
         ].map((name) => {
           const binding = context.lanes?.find((lane) => lane.name === name)?.binding ?? null;
@@ -1923,6 +2299,8 @@ export function renderB3ApprovalPreviewV1(
       ...ruleSummaryLine(document),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
+      ...sessionDisclosure(document),
+      ...linearTargetLines(document, context.linearConnected),
       ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,
