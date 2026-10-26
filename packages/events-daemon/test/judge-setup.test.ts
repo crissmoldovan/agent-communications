@@ -139,6 +139,48 @@ test('from a pipe, the person’s setup is refused unless Agent Comms started it
   assert.equal(atTerminal.code, USAGE_EXIT, atTerminal.stderr);
 });
 
+test('judge setup carries where the person was: a terminal approves its enablements at the terminal, and every result says who', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-origin-');
+  const configDir = await emptyConfigDir(stateDir);
+  const opened = await openEventDatabase({ stateDir });
+  await selectEventSecretStore(opened.database, 'file');
+  opened.close();
+  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  try {
+    // At a terminal: the kind and the budget are approved there, and the audit line says so.
+    const typed = await cli(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434'], {
+      stateDir,
+      tty: true,
+    });
+    assert.equal(typed.code, 0, typed.stderr);
+    const core = openCore({ pathOverrides: { stateDir, configDir } });
+    const disclosures = (await core.approvals.list()).flatMap((entry) =>
+      entry.form === 'v2' && entry.record.kind === 'disclosure' ? [entry.record] : [],
+    );
+    assert.equal(disclosures.length, 2, 'the budget and the kind');
+    for (const approval of disclosures) assert.equal((approval as { approvedVia?: string }).approvedVia, 'terminal');
+    const setups = (await core.audit.tail({ limit: 50 })).filter((line) => line.operation === 'events.judgeSetup');
+    assert.equal(setups.at(-1)?.ids?.approvedBy, 'terminal');
+    // From the app: the result says which — the test build, or the app unattested on Windows and Linux.
+    for (const [origin, approvedBy, port] of [
+      [{ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }, 'desktop-app (test build)', 8080],
+      [{ ok: false, reason: 'unattested-platform' }, 'desktop-app (unattested)', 8081],
+      [{ ok: true, build: 'release', identifier: 'com.cueplusplus.agentcomms' }, 'desktop-app', 8082],
+    ] as const) {
+      const ran = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', `http://[::1]:${port}`], {
+        stateDir,
+        desktopOrigin: async () => origin as DesktopOrigin,
+      });
+      assert.equal(ran.code, 0, ran.stderr);
+      assert.equal((JSON.parse(ran.stdout) as { approvedBy: string }).approvedBy, approvedBy);
+    }
+  } finally {
+    await owner.stop();
+  }
+});
+
 test('judge setup refuses a local model server that is not on this machine, before it reaches the owner', async () => {
   for (const url of [
     'http://192.168.1.20:11434',

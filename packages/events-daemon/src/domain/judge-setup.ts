@@ -41,6 +41,14 @@ export const PERSON_SETUP_ORIGINS: Readonly<{
 /** Who the person's setup was approved by, as its audit line says: the attested app, the app unattested, or a terminal. */
 export type PersonSetupApprover = 'desktop-app' | 'desktop-app (test build)' | 'desktop-app (unattested)' | 'terminal';
 
+/** Every approver a setup's result and audit line may name. */
+export const PERSON_SETUP_APPROVERS: readonly PersonSetupApprover[] = Object.freeze([
+  'desktop-app',
+  'desktop-app (test build)',
+  'desktop-app (unattested)',
+  'terminal',
+] as const);
+
 /** The approver an origin names, or null for any other client. */
 export function personSetupApprover(origin: string | undefined): PersonSetupApprover | null {
   switch (origin) {

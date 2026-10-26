@@ -2297,7 +2297,7 @@
             },
             "key": { "enum": ["stored", "unchanged", "none"] },
             "destination": { "type": "string", "minLength": 1 },
-            "approvedBy": { "const": "desktop-app" }
+            "approvedBy": { "enum": ["desktop-app", "desktop-app (test build)", "desktop-app (unattested)", "terminal"] }
           }
         },
         "provider-list": {

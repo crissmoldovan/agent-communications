@@ -4,6 +4,7 @@ import {
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
+  type PersonSetupApprover,
   personSetupApprover,
   type SetupJudgeKind,
   setupBudgetDocument,
@@ -27,9 +28,6 @@ import type { B3SecretControl } from './b3-secret-control.ts';
 import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
-
-/** Who approved a setup's enablements: the person, through the desktop app or the CLI command it runs. */
-export const SETUP_APPROVED_BY = 'desktop-app';
 
 /** The AI providers a person keeps keys for, as Settings → AI providers names them. */
 export const PROVIDER_NAMES: Readonly<Record<EventSecretProvider, string>> = Object.freeze({
@@ -73,7 +71,12 @@ export interface JudgeSetupResultV1 {
   readonly key: 'stored' | 'unchanged' | 'none';
   /** Where the fields a rule names go when it asks this judge. */
   readonly destination: string;
-  readonly approvedBy: typeof SETUP_APPROVED_BY;
+  /**
+   * Who approved the enablements: the person, where the CLI found them — the release app, the test build, the app
+   * unattested (Windows, Linux) or a terminal. A label the control client declares: the control token is a same-user
+   * file, so this is a speed bump, not a boundary.
+   */
+  readonly approvedBy: PersonSetupApprover;
 }
 
 /** The plain words for where a judge's fields go: the disclosure the person agrees to by setting it up. */
@@ -99,7 +102,7 @@ function provider(value: unknown): EventSecretProvider {
 export class JudgeSetupService {
   readonly #store: EventDatabase;
   readonly #b3: B3OwnerService;
-  readonly #activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge' | 'approve'>;
+  readonly #activations: Pick<ActivationRuntime, 'issueChallenge' | 'issueApprovalViewChallenge' | 'approve'>;
   readonly #secrets: Pick<
     B3SecretControl,
     'providerKeys' | 'providerKeySet' | 'providerKeyRemove' | 'syncJudgeKeyFromProvider'
@@ -111,7 +114,7 @@ export class JudgeSetupService {
   constructor(input: {
     readonly store: EventDatabase;
     readonly b3: B3OwnerService;
-    readonly activations: Pick<ActivationRuntime, 'issueApprovalViewChallenge' | 'approve'>;
+    readonly activations: Pick<ActivationRuntime, 'issueChallenge' | 'issueApprovalViewChallenge' | 'approve'>;
     readonly secrets: Pick<
       B3SecretControl,
       'providerKeys' | 'providerKeySet' | 'providerKeyRemove' | 'syncJudgeKeyFromProvider'
@@ -186,6 +189,9 @@ export class JudgeSetupService {
       kind,
       ...(jevProvider === undefined ? {} : { provider: jevProvider }),
     };
+    // Where the person was, which `#audited` refuses the call without: the enablements are approved on that channel.
+    const approver = personSetupApprover(origin) ?? 'terminal';
+    const via = approver === 'terminal' ? ('terminal' as const) : ('app' as const);
     return this.#audited('judgeSetup', origin, ids, async () => {
       if (
         jevProvider !== undefined &&
@@ -210,9 +216,9 @@ export class JudgeSetupService {
               provider: jevProvider,
             });
       // 3. The daemon-wide budget, when there is none for the judge's provider.
-      const budget = await this.#budget(judge.provider);
+      const budget = await this.#budget(judge.provider, via);
       // 4. The kind, last: nothing is turned on until everything it needs is in place.
-      const enabledNow = await this.#enableKind(kind);
+      const enabledNow = await this.#enableKind(kind, via);
       return {
         kind,
         enabled: true,
@@ -221,7 +227,7 @@ export class JudgeSetupService {
         budget,
         key,
         destination: judgeDestination(kind, judge.provider),
-        approvedBy: SETUP_APPROVED_BY,
+        approvedBy: approver,
       };
     });
   }
@@ -252,7 +258,7 @@ export class JudgeSetupService {
     return described(document, version, true);
   }
 
-  async #budget(judgeProvider: string): Promise<JudgeSetupResultV1['budget']> {
+  async #budget(judgeProvider: string, via: 'terminal' | 'app'): Promise<JudgeSetupResultV1['budget']> {
     const versions = new ImmutableVersions(this.#store.database);
     const activePointer = versions.activeVersion('judge-budget', JUDGE_BUDGET_ID);
     const active = activePointer === null ? null : versions.loadJudgeBudget(activePointer.version);
@@ -266,7 +272,7 @@ export class JudgeSetupService {
     if (providerLimits === undefined) throw new CommsError('BAD_DATA', 'the judge budget has no ceiling for the judge');
     if (document !== null) {
       const prepared = (await this.#b3.handle({ operation: 'updateBudget', args: { document } })) as PreparedActivation;
-      await this.#approve(prepared);
+      await this.#approve(prepared, via);
     }
     return {
       version: applied.version,
@@ -276,25 +282,29 @@ export class JudgeSetupService {
     };
   }
 
-  async #enableKind(kind: SetupJudgeKind): Promise<boolean> {
+  async #enableKind(kind: SetupJudgeKind, via: 'terminal' | 'app'): Promise<boolean> {
     const versions = new ImmutableVersions(this.#store.database);
     if (versions.activeVersion('judge-kind', kind) !== null) return false;
     const prepared = (await this.#b3.handle({ operation: 'enableJudgeKind', args: { kind } })) as PreparedActivation;
     if (typeof prepared?.approvalId !== 'string')
       throw new CommsError('CONFIG', 'the judge kind could not be prepared for its approval');
-    await this.#approve(prepared);
+    await this.#approve(prepared, via);
     return true;
   }
 
   /**
-   * D2's own approval, through the app channel: the owner issues the approval's challenge and answers it at once, so
-   * core records the disclosure approved via `app` and claims it, and the activation completes as a typed approval does.
+   * D2's own approval, on the channel the person was on: in the app, the owner issues the approval-view challenge and
+   * answers it at once, so core records the disclosure approved via `app`; at a terminal, the terminal's own challenge,
+   * recorded via `terminal`. Either way the activation completes as a typed approval does.
    */
-  async #approve(prepared: PreparedActivation): Promise<void> {
-    const challenge = await this.#activations.issueApprovalViewChallenge(prepared.approvalId, this.#now() + 5 * 60_000);
+  async #approve(prepared: PreparedActivation, via: 'terminal' | 'app'): Promise<void> {
+    const challenge =
+      via === 'terminal'
+        ? await this.#activations.issueChallenge(prepared.approvalId)
+        : await this.#activations.issueApprovalViewChallenge(prepared.approvalId, this.#now() + 5 * 60_000);
     if (challenge === null) throw new CommsError('APPROVAL_VOID', 'the setup approval could not be issued');
     await withEventWriterLease(this.#quiescer, () =>
-      this.#activations.approve({ approvalId: prepared.approvalId, answer: challenge, via: 'app' }),
+      this.#activations.approve({ approvalId: prepared.approvalId, answer: challenge, via }),
     );
   }
 

@@ -23,10 +23,14 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `provider-key-set` and `provider-key-remove` owner wires (judges set up in the app, owner decision 2026-10-26), and
  * the person's `messages-list` and `message-show` owner wires, their arguments and their entry grammar (a story per
  * message, 0.32.0 spec §3.6). No existing branch changed.
+ *
+ * 0.32.0's second security look (2026-10-26) widens one value of a branch 0.32.0 itself added: `judge-setup`'s result
+ * `approvedBy`, which was always `desktop-app`, names where the person was — `desktop-app`, `desktop-app (test build)`,
+ * `desktop-app (unattested)` or `terminal` — as the CLI established it. No branch an earlier release shipped changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'e4d79aa97765f87fa1063fac0b89dd6b1d2a0dbc2b4d692e83b9e768d0478af8',
+    'd58a64b6128178f705208d2c7768e24a3660e73238d1daad19390de60ed75e62',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
