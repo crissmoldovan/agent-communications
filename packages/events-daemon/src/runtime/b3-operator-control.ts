@@ -518,7 +518,13 @@ export class B3OperatorControl implements B3OwnerService {
     const candidate = this.#deliveryRow(deliveryId);
     return this.#withDeliveryWriteFence(candidate, 'drop', () => {
       const row = this.#deliveryRow(deliveryId);
-      if (row.state !== 'dead-lettered') throw voided('only a dead-letter delivery can be dropped');
+      // 0.32.0 (owner feedback §3.5): "Stop trying". A delivery that will be tried again is cancelled at once — a
+      // tightening, applied in this one fenced transaction, so a dispatcher claim either came first (the delivery is
+      // being sent and is refused) or finds it cancelled.
+      if (row.state === 'queued' || row.state === 'retryable') return this.#stopTrying(row, deliveryId);
+      if (row.state === 'disclosing') throw deliveryInFlight();
+      if (row.state !== 'dead-lettered')
+        throw voided('only a delivery that will be tried again, or one that failed for good, can be dropped');
       const changed = this.#store.database
         .prepare(
           `UPDATE deliveries
@@ -533,6 +539,24 @@ export class B3OperatorControl implements B3OwnerService {
         purgeUnreferencedSystemTargets(this.#store.database, { ...target, now: this.#now() });
       return { kind: 'delivery-dropped', deliveryId };
     });
+  }
+
+  /** Cancels a queued or retryable delivery, as every cancel path does: its payload and next try go with it. */
+  #stopTrying(
+    row: DeliveryFenceRow,
+    deliveryId: string,
+  ): { readonly kind: 'delivery-dropped'; readonly deliveryId: string } {
+    const changed = this.#store.database
+      .prepare(
+        `UPDATE deliveries
+            SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
+          WHERE id = ? AND state = ? AND attempts = ? AND switch_generation = ?`,
+      )
+      .run(row.id, row.state, row.attempts, row.switch_generation).changes;
+    if (changed !== 1) throw voided('the delivery changed before it could be stopped');
+    for (const target of removeRetainedDeliveryTargetReference(this.#store.database, row.id))
+      purgeUnreferencedSystemTargets(this.#store.database, { ...target, now: this.#now() });
+    return { kind: 'delivery-dropped', deliveryId };
   }
 
   #withDeliveryWriteFence<T>(row: DeliveryFenceRow, operation: 'retry' | 'drop', work: () => T): Promise<T> {
@@ -738,4 +762,12 @@ function availableJudgeKind(kind: string): Exclude<JudgeKind, typeof JUDGE_KIND_
 
 function voided(message: string): CommsError {
   return new CommsError('APPROVAL_VOID', message);
+}
+
+/** A delivery a dispatcher holds right now cannot be stopped mid-attempt; its reason says so, for the app. */
+function deliveryInFlight(): CommsError {
+  return new CommsError('APPROVAL_VOID', 'the delivery is being sent right now; it can be stopped once this try ends', {
+    hint: 'A try that fails becomes one that will be tried again, which can then be stopped.',
+    details: { reason: 'DELIVERY_IN_FLIGHT' },
+  });
 }

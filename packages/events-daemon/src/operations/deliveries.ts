@@ -32,8 +32,18 @@ export async function retryDelivery(deliveryId: string, options: Options = {}): 
   return new EventControlClient({ stateDir: options.stateDir }).request('retryDelivery', { deliveryId });
 }
 
-export async function dropDelivery(deliveryId: string, options: Options = {}): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir }).request('dropDelivery', { deliveryId });
+/**
+ * Stops a delivery that will be tried again (it is cancelled at once), or drops a dead letter's retained payload. Over
+ * MCP `caller` is the agent window, which cannot reach a lane target's delivery unless it is bound to that lane.
+ */
+export async function dropDelivery(
+  deliveryId: string,
+  options: Options & { readonly caller?: LaneWindowIdentity | undefined } = {},
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir }).request(
+    'dropDelivery',
+    options.caller === undefined ? { deliveryId } : { deliveryId, caller: options.caller },
+  );
 }
 
 export async function heldList(options: Options = {}): Promise<unknown> {

@@ -96,6 +96,17 @@ export type QueueState = 'open' | 'done' | 'dismissed' | 'all';
 export const QUEUE_CHANNELS = ['gmail', 'slack', 'resend', 'whatsapp'] as const;
 export type QueueChannel = (typeof QUEUE_CHANNELS)[number];
 
+/**
+ * The apps Connections adds a server to or takes one from (0.32.0, `connections.rs`, `McpClient`): core's clients, less
+ * `json`, which prints an entry rather than registering one. In core's order.
+ */
+export const MCP_CLIENTS = ['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemini', 'vscode'] as const;
+export type McpClient = (typeof MCP_CLIENTS)[number];
+
+/** The servers core registers (`connections.rs`, `McpServer`): its own, the four channels and the event service's. */
+export const MCP_SERVERS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
+export type McpServer = (typeof MCP_SERVERS)[number];
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -171,6 +182,13 @@ export type Call =
   | { kind: 'providerList' }
   | { kind: 'providerKeyRemove'; provider: AiProvider }
   | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
+  // Connections (0.32.0): core's channels, read; adding one server to one app, prepared, then approved by the person in
+  // the app with `mcpInstallApproved`, only for the approval the app prepared for that install (DA10's note of
+  // 2026-10-26), and taking one away, a tightening core applies at once.
+  | { kind: 'channels' }
+  | { kind: 'mcpInstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpUninstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServer; approvalId: string }
   // The Messages screen (0.32.0, spec §3.6): the event service's messages and one message, and core's activity by
   // message, each the person's read. Times are whole milliseconds, a page's `before` a time or the cursor the last page
   // gave, the event 32 hex digits, each id a Gmail message's or a Slack `<channel>/<ts>`, all checked in Rust.
@@ -301,6 +319,18 @@ export interface EventServiceState {
   fullDiskAccess: FullDiskAccess;
 }
 
+/**
+ * Which build of the app this is (0.32.0, `build_info.rs`): a release, or the local test build, whose identifier ends
+ * in `.test`. `commit` (the short commit, then the branch pointing at it, if one does) and `builtAt` (an ISO time) are
+ * what `local-test-release.sh` compiled in, and null in any other build.
+ */
+export interface AppBuild {
+  identifier: string;
+  isTest: boolean;
+  commit: string | null;
+  builtAt: string | null;
+}
+
 /** The events Rust emits to the window, and what each carries. */
 export interface AppEvents {
   'deep-link': DeepLinkTarget;
@@ -313,7 +343,7 @@ export interface AppEvents {
   'quit-requested': null;
 }
 
-/** The twenty-two commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** The twenty-three commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -353,6 +383,8 @@ export interface Bridge {
    * and keeps it only for that call. The window clears its field once this is called, and never keeps the key.
    */
   providerKeySet(provider: AiProvider, key: string): Promise<CliResult>;
+  /** Which build this is: a release, or the local test build (0.32.0). */
+  appBuild(): Promise<AppBuild>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -382,6 +414,7 @@ export const tauriBridge: Bridge = {
   openFullDiskAccess: () => invoke('open_full_disk_access'),
   answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
   providerKeySet: (provider, key) => invoke('provider_key_set', { provider, key }),
+  appBuild: () => invoke('app_build'),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 

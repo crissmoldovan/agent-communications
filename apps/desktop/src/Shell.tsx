@@ -1,4 +1,4 @@
-import { AppShell, Chip, Sidebar } from '@cueplusplus/ui';
+import { AppShell, Sidebar } from '@cueplusplus/ui';
 import {
   Activity,
   Bot,
@@ -7,15 +7,20 @@ import {
   Inbox,
   LayoutDashboard,
   MessagesSquare,
+  Plug,
   RefreshCw,
   Settings,
   Stethoscope,
   Users,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
+import { TEST_BUILD_COPY, useAppBuild } from './app-build.ts';
 import { AppearanceMenu } from './components/AppearanceMenu.tsx';
+import { NewTag } from './components/NewTag.tsx';
 import { QueueBadge } from './components/QueueBadge.tsx';
+import { TestBuildBand, TestProfile } from './components/TestBuild.tsx';
 import { COPY, type Screen, SECTIONS, SETTINGS } from './copy.ts';
+import { useAppData } from './data.tsx';
 import { isMac } from './platform.ts';
 
 const ICONS: Record<Screen, ComponentType> = {
@@ -23,6 +28,7 @@ const ICONS: Record<Screen, ComponentType> = {
   queue: Inbox,
   messages: MessagesSquare,
   accounts: Users,
+  connections: Plug,
   approvals: CheckCheck,
   activity: History,
   agent: Bot,
@@ -40,6 +46,10 @@ const ICONS: Record<Screen, ComponentType> = {
  * The redesign's frame (the desktop design, D3 and §9): the header is no bar of its own but the top of the two columns
  * under it, the brand over the sidebar's ground and the menu over the page's, and text the screens leave unsized is the
  * rung's body size. Each is a token, so every theme paints it in its own colours.
+ *
+ * The local test build (0.32.0, spec §3.7) is told apart: an orange band across the top, which then holds the traffic
+ * lights; the brand Agent Comms Test with an orange chip and a stripe down the sidebar; and the test profile's folder
+ * at the sidebar's foot. A release build, or one that cannot say which it is, shows none of them.
  */
 export function Shell({
   screen,
@@ -52,13 +62,17 @@ export function Shell({
   mac?: boolean;
   children: ReactNode;
 }) {
-  const item = (target: Screen, label: string, isNew = false) => (
+  const build = useAppBuild();
+  const test = build?.isTest === true ? build : null;
+  const { installation } = useAppData();
+  const installed = installation.state === 'ready' ? installation.value : null;
+  const item = (target: Screen, label: string, isNew?: true) => (
     <Sidebar.Item
       key={target}
       icon={ICONS[target]}
       active={screen === target}
       onClick={() => onScreen(target)}
-      // The queue's open count, once there is one (0.30.0); a New tag beside a section new in this release.
+      // The queue's open count, once there is one (0.30.0), and a section new in this release's "New" (0.32.0).
       {...(target === 'queue' ? { badge: <QueueBadge /> } : isNew ? { badge: <NewTag /> } : {})}
     >
       {label}
@@ -66,44 +80,53 @@ export function Shell({
   );
   return (
     <AppShell.Root className={mac ? 'app-macos text-(length:--cue-text-body)' : 'text-(length:--cue-text-body)'}>
+      {test === null ? null : <TestBuildBand build={test} mac={mac} />}
       <AppShell.Bar
         platformDrag
         className="app-titlebar bg-bg"
-        brandClassName="app-titlebar-brand bg-sunken"
+        // Under a test build's band the traffic lights sit on the band, so the brand needs no room for them.
+        brandClassName={test === null ? 'app-titlebar-brand bg-sunken' : 'bg-sunken'}
         brand={
           <span className="flex min-w-0 items-center gap-(--cue-space-3)">
             <span
               aria-hidden="true"
-              className="flex size-chip shrink-0 items-center justify-center rounded-control bg-accent font-semibold text-(length:--cue-text-ui) text-accent-fg"
+              data-slot="brand-chip"
+              className={
+                test === null
+                  ? 'flex size-chip shrink-0 items-center justify-center rounded-control bg-accent font-semibold text-(length:--cue-text-ui) text-accent-fg'
+                  : 'flex size-chip shrink-0 items-center justify-center rounded-control bg-warn font-semibold text-(length:--cue-text-ui) text-warn-fg'
+              }
             >
-              A
+              {test === null ? 'A' : TEST_BUILD_COPY.chip}
             </span>
-            <span className="truncate font-semibold text-fg">{COPY.appName}</span>
+            <span className="truncate font-semibold text-fg">
+              {test === null ? COPY.appName : TEST_BUILD_COPY.appName}
+            </span>
           </span>
         }
         actions={<AppearanceMenu />}
       />
       <AppShell.Body>
-        <AppShell.Sidebar aria-label="Sections" drawerTitle="Sections" collapsible={false} className="bg-sunken">
+        <AppShell.Sidebar
+          aria-label="Sections"
+          drawerTitle="Sections"
+          collapsible={false}
+          className={test === null ? 'bg-sunken' : 'bg-sunken shadow-[inset_3px_0_0_var(--cue-warn)]'}
+        >
           <Sidebar.Section>
-            {SECTIONS.map(({ screen: target, label, isNew }) => item(target, label, isNew === true))}
+            {SECTIONS.map(({ screen: target, label, isNew }) => item(target, label, isNew))}
           </Sidebar.Section>
-          <Sidebar.Section className="mt-auto">{item(SETTINGS.screen, SETTINGS.label)}</Sidebar.Section>
+          <Sidebar.Section className="mt-auto">
+            {item(SETTINGS.screen, SETTINGS.label)}
+            {test === null || installed === null ? null : (
+              <TestProfile folders={installed.folders} home={installed.home} />
+            )}
+          </Sidebar.Section>
         </AppShell.Sidebar>
         <AppShell.Content>
           <AppShell.Scroller>{children}</AppShell.Scroller>
         </AppShell.Content>
       </AppShell.Body>
     </AppShell.Root>
-  );
-}
-
-/** A section's New tag: a quiet accent chip, read after the section's name with a space between. */
-function NewTag() {
-  return (
-    <Chip tone="accent" variant="tinted" data-slot="section-new">
-      {/* A space first: the sidebar's row draws none between its name and its badge. */}
-      <span className="sr-only"> </span>New
-    </Chip>
   );
 }

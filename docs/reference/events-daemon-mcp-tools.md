@@ -41,7 +41,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_judge_model_remove`](#events_judge_model_remove) | Deletes the verified Laya model and runtime files, only while Laya is disabled. |
 | [`events_deliveries_list`](#events_deliveries_list) | Lists content-free delivery metadata. |
 | [`events_delivery_retry`](#events_delivery_retry) | Retries one exact retryable delivery. |
-| [`events_delivery_drop`](#events_delivery_drop) | Drops one exact dead-letter delivery and its retained payload. |
+| [`events_delivery_drop`](#events_delivery_drop) | Stops one exact delivery that will be tried again, or drops one dead-letter delivery and its retained payload. |
 | [`events_held_list`](#events_held_list) | Lists content-free held-decision metadata; only a terminal/app may resolve one. |
 | [`events_catalogue_show`](#events_catalogue_show) | Shows one selectable local event definition. |
 | [`events_sources_list`](#events_sources_list) | Lists configured local event sources. |
@@ -343,7 +343,7 @@ Retries one exact retryable delivery.
 
 ### `events_delivery_drop`
 
-Drops one exact dead-letter delivery and its retained payload.
+Stops one exact delivery that will be tried again, or drops one dead-letter delivery and its retained payload.
 
 *writes · destructive*
 

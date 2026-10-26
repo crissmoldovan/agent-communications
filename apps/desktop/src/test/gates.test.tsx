@@ -15,8 +15,10 @@ async function advance(ms: number): Promise<void> {
 const LABELS: Record<Screen, string> = {
   overview: 'Overview',
   queue: 'Queue',
-  messages: 'Messages',
+  messages: 'Messages New',
   accounts: 'Accounts',
+  // Its button's name, with its "New" tag (0.32.0).
+  connections: 'Connections New',
   approvals: 'Approvals',
   activity: 'Activity',
   agent: 'Agent',

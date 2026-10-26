@@ -4,9 +4,11 @@
 //!
 //! The count is core's `approvals list --state pending`, run through the allow-list every 60 seconds (DA4), and again
 //! whenever the window runs it. It shows beside the icon on macOS and Linux, and in the tooltip everywhere: Windows
-//! shows no title beside a tray icon (DA15).
+//! shows no title beside a tray icon (DA15). The local test build says so in both (0.32.0, spec §3.7): its tooltip names
+//! Agent Comms Test, and its title starts with `T`.
 
 use crate::allowlist::{Call, PauseDays};
+use crate::build_info;
 use crate::commands::context;
 use crate::event_service::{self, QuitRoute};
 use crate::ipc::CliResult;
@@ -91,18 +93,39 @@ impl TrayAction {
     }
 }
 
-/// The tray's tooltip: the app's name, and how many approvals wait.
-pub fn tooltip(n: usize) -> String {
+/// The tray's tooltip: the app's name, Agent Comms Test in the test build, and how many approvals wait.
+pub fn tooltip(n: usize, test: bool) -> String {
+    let name = if test {
+        "Agent Comms Test"
+    } else {
+        "Agent Comms"
+    };
     match n {
-        0 => "Agent Comms".into(),
-        1 => "Agent Comms — 1 approval waiting".into(),
-        n => format!("Agent Comms — {n} approvals waiting"),
+        0 => name.into(),
+        1 => format!("{name} — 1 approval waiting"),
+        n => format!("{name} — {n} approvals waiting"),
     }
 }
 
-/// The title beside the icon on macOS and Linux: the count, or nothing at 0.
-pub fn title(n: usize) -> Option<String> {
-    (n > 0).then(|| n.to_string())
+/// The title beside the icon on macOS and Linux: the count, or nothing at 0. The test build's starts with `T`, and is
+/// there even at 0.
+pub fn title(n: usize, test: bool) -> Option<String> {
+    match (test, n) {
+        (false, 0) => None,
+        (false, n) => Some(n.to_string()),
+        (true, 0) => Some("T".into()),
+        (true, n) => Some(format!("T {n}")),
+    }
+}
+
+/// Whether the app answering is the local test build: its identifier ends in `.test` (`build_info`).
+pub fn is_test_build(identifier: &str) -> bool {
+    build_info::is_test(identifier)
+}
+
+/// Whether this app is the local test build.
+fn test_build(app: &AppHandle) -> bool {
+    is_test_build(&app.config().identifier)
 }
 
 /// Whether `End every standing approval` may run: core 0.23.0 or later has `standing off`, as the allow-list says.
@@ -121,9 +144,10 @@ struct TrayMenu {
     standing_off: MenuItem<Wry>,
 }
 
-/// Builds the tray: the template icon, the tooltip `Agent Comms`, and the menu, opened by a left click. Then reads the
-/// count, at once and every 60 seconds.
+/// Builds the tray: the template icon, the tooltip `Agent Comms` (`Agent Comms Test`, with the title `T`, in the test
+/// build), and the menu, opened by a left click. Then reads the count, at once and every 60 seconds.
 pub fn build(app: &AppHandle) -> tauri::Result<()> {
+    let test = test_build(app);
     let item = |action: TrayAction, enabled: bool| {
         MenuItem::with_id(app, action.id(), action.label(), enabled, None::<&str>)
     };
@@ -146,11 +170,16 @@ pub fn build(app: &AppHandle) -> tauri::Result<()> {
             &quit,
         ],
     )?;
-    TrayIconBuilder::with_id(TRAY_ID)
+    let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(Image::from_bytes(ICON)?)
         .icon_as_template(true)
-        .tooltip(tooltip(0))
-        .menu(&menu)
+        .tooltip(tooltip(0, test));
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    let tray = match title(0, test) {
+        Some(first) => tray.title(first),
+        None => tray,
+    };
+    tray.menu(&menu)
         .show_menu_on_left_click(true)
         .on_menu_event(|app, event| on_menu(app, event.id().as_ref()))
         .build(app)?;
@@ -168,9 +197,10 @@ pub fn set_count(app: &AppHandle, n: usize) {
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
         return;
     };
+    let test = test_build(app);
     #[cfg(any(target_os = "macos", target_os = "linux"))]
-    let _ = tray.set_title(title(n));
-    let _ = tray.set_tooltip(Some(tooltip(n)));
+    let _ = tray.set_title(title(n, test));
+    let _ = tray.set_tooltip(Some(tooltip(n, test)));
 }
 
 /// Reads the count again, and whether core has `standing off`. Without `launch/core` nothing runs, and nothing waits.
@@ -252,13 +282,43 @@ mod tests {
 
     #[test]
     fn tooltip_counts_approvals() {
-        assert_eq!(tooltip(0), "Agent Comms");
-        assert_eq!(tooltip(1), "Agent Comms — 1 approval waiting");
-        assert_eq!(tooltip(2), "Agent Comms — 2 approvals waiting");
-        assert_eq!(tooltip(120), "Agent Comms — 120 approvals waiting");
-        assert_eq!(title(0), None);
-        assert_eq!(title(1).as_deref(), Some("1"));
-        assert_eq!(title(37).as_deref(), Some("37"));
+        assert_eq!(tooltip(0, false), "Agent Comms");
+        assert_eq!(tooltip(1, false), "Agent Comms — 1 approval waiting");
+        assert_eq!(tooltip(2, false), "Agent Comms — 2 approvals waiting");
+        assert_eq!(tooltip(120, false), "Agent Comms — 120 approvals waiting");
+        assert_eq!(title(0, false), None);
+        assert_eq!(title(1, false).as_deref(), Some("1"));
+        assert_eq!(title(37, false).as_deref(), Some("37"));
+    }
+
+    /// The test build is told apart in the menu bar too (0.32.0, spec 2026-10-26-owner-feedback-0320 §3.7): its tooltip
+    /// names Agent Comms Test, and its title is prefixed `T`, shown even when nothing waits.
+    #[test]
+    fn the_test_builds_tray_says_agent_comms_test_and_its_title_starts_with_t() {
+        assert_eq!(tooltip(0, true), "Agent Comms Test");
+        assert_eq!(tooltip(1, true), "Agent Comms Test — 1 approval waiting");
+        assert_eq!(tooltip(5, true), "Agent Comms Test — 5 approvals waiting");
+        assert_eq!(title(0, true).as_deref(), Some("T"));
+        assert_eq!(title(1, true).as_deref(), Some("T 1"));
+        assert_eq!(title(37, true).as_deref(), Some("T 37"));
+        // Which build it is comes from the identifier, as `app_build` reads it: the release's says nothing more.
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("the config");
+        let release = config["identifier"].as_str().expect("an identifier");
+        assert!(!is_test_build(release));
+        assert!(is_test_build(&format!("{release}.test")));
+        // The tray is built with the build's words, and every count shown after goes through them.
+        let source = include_str!("tray.rs");
+        let code = &source[..source.find("#[cfg(test)]").expect("the tests")];
+        assert!(
+            code.contains(".tooltip(tooltip(0, test))"),
+            "the first tooltip"
+        );
+        assert!(code.contains("set_title(title(n, test))"), "the title");
+        assert!(
+            code.contains("set_tooltip(Some(tooltip(n, test)))"),
+            "the tooltip"
+        );
     }
 
     #[test]

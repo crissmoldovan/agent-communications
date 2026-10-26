@@ -9,8 +9,9 @@ const APP = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string): string => readFileSync(`${APP}${path}`, 'utf8');
 
 /**
- * The twenty-two commands the app's Rust side answers, each granted as `allow-<name>`: Phase C's fourteen, the event
- * service's seven (desktop 0.27.0), and `provider_key_set` (0.32.0), which hands an AI provider's key to the CLI on stdin.
+ * The twenty-three commands the app's Rust side answers, each granted as `allow-<name>`: Phase C's fourteen, the event
+ * service's seven (desktop 0.27.0), `provider_key_set` (0.32.0), which hands an AI provider's key to the CLI on stdin,
+ * and `app_build` (0.32.0), which build this is.
  */
 const COMMANDS = [
   'installation',
@@ -35,6 +36,7 @@ const COMMANDS = [
   'open_full_disk_access',
   'answer_quit',
   'provider_key_set',
+  'app_build',
 ];
 
 /** Phase C's no-egress policy, with the one inline script — the pre-paint script — pinned by its hash (DA7, DA14). */
@@ -102,7 +104,7 @@ describe('the content policy', () => {
     expect(html).not.toMatch(/https?:\/\//);
   });
 
-  it('capabilities grant only events, dragging and the twenty-two commands', () => {
+  it('capabilities grant only events, dragging and the twenty-three commands', () => {
     const capability = JSON.parse(read('src-tauri/capabilities/default.json'));
     expect(capability.windows).toEqual(['main']);
     expect([...capability.permissions].sort()).toEqual(

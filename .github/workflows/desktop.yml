@@ -21,6 +21,7 @@ on:
       # What the app's checks read from the rest of the repository (a test in apps/desktop holds this list to them).
       - 'scripts/third-party-licenses.mjs'
       - 'scripts/channels.mjs'
+      - 'scripts/local-test-release.sh'
       - 'test/helpers/printed-command-guard.mjs'
       - 'packages/core/src/paths.ts'
       - 'packages/core/src/config.ts'
@@ -54,6 +55,7 @@ on:
       # What the app's checks read from the rest of the repository (a test in apps/desktop holds this list to them).
       - 'scripts/third-party-licenses.mjs'
       - 'scripts/channels.mjs'
+      - 'scripts/local-test-release.sh'
       - 'test/helpers/printed-command-guard.mjs'
       - 'packages/core/src/paths.ts'
       - 'packages/core/src/config.ts'

@@ -1,7 +1,8 @@
-//! The twenty-two commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
+//! The twenty-three commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
 use crate::allowlist::{AccountName, AiProvider, ApprovalId, Call, ConversationId};
+use crate::build_info::{self, AppBuild};
 use crate::ipc::{
     AppError, AppSettings, CliResult, DeepLinkTarget, EventServiceState, Installation,
     ProfileOpened, TerminalCommand, TerminalOutcome, UpdaterState,
@@ -11,7 +12,8 @@ use crate::paths::FolderOverrides;
 use crate::provider_keys::{self, ProviderKey};
 use crate::runner::{run, RunContext};
 use crate::{
-    deeplink, event_service, links, login_item, settings, terminal, tray, updater, AppState,
+    connections, deeplink, event_service, links, login_item, settings, terminal, tray, updater,
+    AppState,
 };
 use tauri::{AppHandle, Manager, State};
 
@@ -39,6 +41,7 @@ pub const NAMES: &[&str] = &[
     "open_full_disk_access",
     "answer_quit",
     "provider_key_set",
+    "app_build",
 ];
 
 /// This machine's run context, with Settings' folder overrides.
@@ -79,7 +82,11 @@ pub async fn cli(
     let ctx = context(&state);
     let counts = matches!(call, Call::ApprovalsPending {});
     let asked = call.clone();
-    let result = blocking(move || run(&call, &ctx)).await?;
+    let prepared = state.prepared.clone();
+    // An approval answered in the app runs only for the change the app prepared it for (0.32.0, `connections`).
+    let result =
+        blocking(move || connections::run_app_approval(&prepared, &call, || run(&call, &ctx)))
+            .await??;
     state.prepared.record(&asked, &result);
     if let (Call::ApprovalRevoke { approval_id }, CliResult::Ok { exit: 0, .. }) = (&asked, &result)
     {
@@ -269,6 +276,13 @@ pub async fn provider_key_set(
     blocking(move || provider_keys::set(provider, key, &ctx)).await
 }
 
+/// Which build this is (0.32.0, spec 2026-10-26-owner-feedback-0320 §3.7): its identifier, whether it is the local
+/// test build, and the commit and time compiled into it. It reads nothing at run time but Tauri's own config.
+#[tauri::command]
+pub fn app_build(app: AppHandle) -> Result<AppBuild, AppError> {
+    Ok(build_info::current(&app.config().identifier))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -289,7 +303,9 @@ mod tests {
 
     #[test]
     fn capabilities_grant_exactly_the_commands() {
-        assert_eq!(NAMES.len(), 22);
+        assert_eq!(NAMES.len(), 23);
+        // The last, 0.32.0's: which build this is (spec 2026-10-26-owner-feedback-0320 §3.7).
+        assert_eq!(NAMES.last(), Some(&"app_build"));
         assert_eq!(build_rs_commands(), NAMES);
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json"))

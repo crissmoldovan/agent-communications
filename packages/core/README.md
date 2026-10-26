@@ -61,6 +61,12 @@ Every channel CLI, and the declared events service through core, registers and p
 `comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
 request, and the other way round.
 
+`mcp install` is also approved in the desktop app, as Connections adds a server to an app (0.32.0): the app shows
+core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`, which
+approves that change through the app channel (`approvedVia: app`, and `approvedBy: desktop-app` on its audit line) and
+applies it. `--app-approval` is refused to an agent's shell and inside an MCP server's process, takes no
+`--approval`, and spends only the change it was prepared for; no MCP tool has it.
+
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,
 labelled in its words, even where the app could post. Choosing `labelled` waits for your yes, because it trades Slack's

@@ -98,7 +98,7 @@ describe('Messages', () => {
       );
       expect(labels.slice(0, 3)).toEqual(['Overview', 'Queue', 'Messages']);
       const entry = within(navigation).getByRole('button', { name: /^Messages/ });
-      expect(entry.querySelector('[data-slot="section-new"]')?.textContent?.trim()).toBe('New');
+      expect(entry.querySelector('[data-slot="new-tag"]')?.textContent?.trim()).toBe('New');
       expect(entry.textContent).toBe('Messages New');
       fireEvent.click(entry);
       expect(await screen.findByRole('heading', { level: 1, name: 'Messages' })).toBeTruthy();

@@ -277,7 +277,13 @@ export async function claimChangeApproval(
       target: binding.target,
       policy: decided,
       paths: binding.loosened.map((loosening) => loosening.path),
-      reason: decided === 'confirm' ? 'approved at a terminal' : 'approved in chat',
+      // Where the person approved it: in the desktop app (0.32.0), at a terminal, or, under `chat`, in the chat.
+      reason:
+        record.approvedVia === 'app'
+          ? 'approved in the desktop app'
+          : decided === 'confirm'
+            ? 'approved at a terminal'
+            : 'approved in chat',
     });
     // `binding.loosened` digests to what the record holds — the claim refused otherwise — so these are exactly the
     // loosenings the person approved.
@@ -353,20 +359,24 @@ export async function beginChangeApproval(
   }
 }
 
-/** Records the approval, if the code typed back is the one shown. */
+/**
+ * Records the approval, if the code typed back is the one shown. `via` is where the person approved it: at a terminal,
+ * or in the desktop app (0.32.0, `gatedChangeAtTerminal`'s `appApproval`), which the record and its audit line say.
+ */
 export async function finishChangeApproval(
   core: Core,
   approvalId: string,
   answer: string,
-  options: ChangeOptions,
+  options: ChangeOptions & { via?: 'terminal' | 'app' | undefined },
 ): Promise<ApprovalRecord> {
   let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
+  const via = options.via ?? 'terminal';
   try {
     record = await changeRecord(core, approvalId);
     const digest = changeDigest(record.change);
     const approved = await core.approvals.approve(
       approvalId,
-      'terminal',
+      via,
       { draftMessageId: digest, contentDigest: digest },
       answer,
       'change',
@@ -380,7 +390,8 @@ export async function finishChangeApproval(
       target: record.change.target,
       policy: changePolicyOf(record),
       paths: record.change.loosened.map((loosening) => loosening.path),
-      reason: 'approved at a terminal',
+      reason: via === 'app' ? 'approved in the desktop app' : 'approved at a terminal',
+      ...(via === 'app' ? { approvedBy: 'desktop-app' as const } : {}),
     });
     return approved;
   } catch (error) {
@@ -482,6 +493,8 @@ interface ChangeAuditEntry {
   policy?: ChangePolicy | undefined;
   paths?: readonly string[] | undefined;
   reason?: string | undefined;
+  /** Who approved it, when it was the person in the desktop app (0.32.0). */
+  approvedBy?: 'desktop-app' | undefined;
 }
 
 /**
@@ -501,6 +514,7 @@ async function auditChange(core: Core, entry: ChangeAuditEntry): Promise<void> {
     ...(entry.policy ? { policy: entry.policy } : {}),
     ...(entry.paths && entry.paths.length > 0 ? { ids: { paths: [...entry.paths] } } : {}),
     ...(entry.reason ? { reason: truncateDisplay(entry.reason, 300) } : {}),
+    ...(entry.approvedBy ? { approvedBy: entry.approvedBy } : {}),
   });
 }
 

@@ -1,7 +1,9 @@
 //! Agent Comms: a tray app that shows this machine's agent-communications. It never sends, posts or approves.
 
 pub mod allowlist;
+pub mod build_info;
 pub mod commands;
+pub mod connections;
 pub mod deeplink;
 pub mod event_service;
 pub mod grammar;
@@ -30,7 +32,7 @@ pub struct AppState {
     pub prepared: Arc<terminal::Prepared>,
 }
 
-/// Starts the app: its plugins, its state, its twenty-two commands, the main window (`window::build_main`), the tray,
+/// Starts the app: its plugins, its state, its twenty-three commands, the main window (`window::build_main`), the tray,
 /// the deep links, the updater and the event service's supervisor (`event_service`).
 pub fn run() {
     let builder = tauri::Builder::default();
@@ -91,6 +93,7 @@ pub fn run() {
             commands::open_full_disk_access,
             commands::answer_quit,
             commands::provider_key_set,
+            commands::app_build,
         ])
         .on_window_event(window::on_window_event)
         .setup(|app| {

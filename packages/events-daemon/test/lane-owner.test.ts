@@ -780,3 +780,41 @@ test('0.32 B4: dryrun list and show --json give the app the log as data; the ter
     assert.match(terminal.out, /^Local dry-run delivery /mu);
   });
 });
+
+// 0.32.0: `delivery drop` now stops a delivery that will be tried again. Over MCP a window that is not bound to a lane
+// cannot stop, drop or even confirm a delivery to that lane (routing B4): for it, the delivery is not there.
+test('0.32 B7: over MCP, a window not bound to a lane cannot drop its deliveries; the bound one and the person reach them', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A delivery only the lane may touch');
+    const rows = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Array<{
+      deliveryId: string;
+      targetId: string;
+    }>;
+    const laneDelivery = rows.find((row) => row.targetId === 'lane-david')?.deliveryId as string;
+    const dryDelivery = rows.find((row) => row.targetId === 'dry-david')?.deliveryId as string;
+    const unbound = await tool(other, 'events_delivery_drop', { deliveryId: laneDelivery });
+    assert.equal(unbound.result?.isError, true);
+    assert.match(resultText(unbound), /the delivery does not exist/u, 'the other window learns nothing of it');
+    // The bound window and the person reach it: it is delivered, so there is nothing to stop.
+    const bound = await tool(david, 'events_delivery_drop', { deliveryId: laneDelivery });
+    assert.equal(bound.result?.isError, true);
+    assert.match(resultText(bound), /can be dropped/u);
+    assert.doesNotMatch(resultText(bound), /does not exist/u);
+    const person = await cli(harness.stateDir, ['delivery', 'drop', laneDelivery, '--json']);
+    assert.equal(person.code, 10, person.err);
+    assert.match(person.err, /can be dropped/u);
+    // A delivery outside any lane is reached by every window, as the list shows it to every window.
+    const outside = await tool(other, 'events_delivery_drop', { deliveryId: dryDelivery });
+    assert.match(resultText(outside), /can be dropped/u);
+  });
+});
