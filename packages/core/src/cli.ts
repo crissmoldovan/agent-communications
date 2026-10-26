@@ -102,6 +102,7 @@ import {
   type ServerUninstallRequest,
   type ServerUninstallResult,
   serverInstallChange,
+  serverInstallsChange,
   serverPruneChange,
   serverUninstallChange,
 } from './operations/servers.ts';
@@ -130,6 +131,7 @@ import {
   escapeForDisplay,
   renderDoctor,
   renderInstall,
+  renderInstalls,
   renderPrune,
   renderUpdate,
   renderUpdateCheck,
@@ -268,10 +270,13 @@ Usage — run these with this CLI, each as the words after its program:
                                 start the missing profile file for that place from a starter, and print
                                 its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
-  mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
+  mcp install --client <client> [--server <server>[,<server>…]] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
-                                register the core server, or another declared server, and prove it starts
+                                register the core server, or other declared servers, and prove each starts;
+                                several, separated by commas, are one preview and one approval, registered
+                                in that order and stopped at the first that fails; --name and the pins are
+                                for one server on its own
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
                                 remove the managed runtimes that nothing uses: every managed server's,
                                 listed by server, or with --server that one's
@@ -1397,6 +1402,10 @@ export async function main(
           }
           const words = ['mcp', 'install', '--client', values.client];
           if (values.server) words.push('--server', values.server);
+          // Several servers, separated by commas (0.34.0, design 2026-10-26-desktop-0340 B3): one plan, one preview and
+          // one approval for all of them, registered in order. One server is the install it always was.
+          const several =
+            values.server?.includes(',') === true ? values.server.split(',').map((server) => server.trim()) : undefined;
           if (values.name) words.push('--name', values.name);
           if (values.account) words.push('--account', values.account);
           if (values.inbox) words.push('--inbox', values.inbox);
@@ -1405,6 +1414,33 @@ export async function main(
           if (values.launcher) words.push('--launcher', values.launcher);
           if (values.force) words.push('--force');
           if (values['no-verify']) words.push('--no-verify');
+          if (several !== undefined) {
+            const result = await gatedChangeAtTerminal(
+              core,
+              serverInstallsChange(
+                core,
+                env,
+                {
+                  servers: several,
+                  client: values.client as SupportedClient,
+                  // Refused by the operation, in the words the tool gets too: each names one server's entry.
+                  name: values.name,
+                  account: values.account,
+                  inbox: values.inbox,
+                  workspace: values.workspace,
+                  readOnly: values['read-only'],
+                  launcher: values.launcher as Launcher | undefined,
+                  force: values.force,
+                  print: values.print,
+                  noVerify: values['no-verify'],
+                },
+                installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+              ),
+              { ...approval, rerun: words, appApproval },
+            );
+            writeResult(result, output, (r) => renderInstalls(r, output.color));
+            return;
+          }
           const result = await gatedChangeAtTerminal(
             core,
             serverInstallChange(
