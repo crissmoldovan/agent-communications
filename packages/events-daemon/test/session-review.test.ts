@@ -168,3 +168,73 @@ test('REVIEW-5: a rule whose session target finds by a lane shows an unbound win
     assert.equal(shown[0]?.counts7d, undefined, 'a lane rule’s counts are not an unbound window’s to see');
   });
 });
+
+test('REVIEW-4: a FIFO swapped in for a file part never stalls the service, and the part is left out', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(async ({ harness, relay, folder }) => {
+    relay.addSession({ cwd: folder });
+    const brief = join(folder, 'brief.md');
+    await writeFile(brief, 'brief\n');
+    await approveRule(harness, [
+      {
+        targetId: 'acme-session',
+        version: 1,
+        kind: 'session',
+        find: { folder },
+        ifNone: 'start',
+        provider: 'claude',
+        context: [{ file: brief }],
+      },
+    ]);
+    // After the approval, something with write access to the folder swaps in a FIFO that nobody writes to.
+    await unlink(brief);
+    execFileSync('/usr/bin/mkfifo', [brief]);
+    harness.mailbox.send('trigger');
+    const ticked = await Promise.race([
+      (async () => {
+        for (let index = 0; index < 5; index += 1) await harness.tick();
+        return 'returned';
+      })(),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 4_000)),
+    ]);
+    if (ticked === 'hung') execFileSync('/bin/sh', ['-c', `printf x > '${brief}'`]);
+    assert.equal(ticked, 'returned', 'the owner’s ticks go on');
+    await until(harness, () => relay.runs.length === 1, 'the run');
+    assert.match(relay.runs[0]?.prompt ?? '', /brief\.md: left out, because it is not a file\./u);
+  });
+});
+
+test('REVIEW-4: a relay that says `/` confines nothing, so only the folders the person added are roots', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, root, folder }) => {
+      const elsewhere = join(root, 'elsewhere');
+      await mkdir(elsewhere);
+      const target = (targetId: string, at: string) => ({
+        targetId,
+        version: 1,
+        kind: 'session',
+        find: { folder: at },
+        ifNone: 'start',
+        provider: 'claude',
+      });
+      await harness.control.request('target-add', { document: target('outside', elsewhere) });
+      await harness.control.request('rule-create', { document: ruleWith([target('outside', elsewhere)]) });
+      await assert.rejects(
+        harness.control.request('rule-enable', { ruleId: RULE, version: 1 }),
+        /is not inside the relay's allowed roots/u,
+        'the relay’s `/` is not used: the person added only the acme folder',
+      );
+      const person = new EventControlClient({ stateDir: harness.stateDir, clientName: PERSON });
+      const shown = (await person.request('integration-show', { integration: 'agent-sessions' })) as {
+        relay: { allowedRoots: unknown };
+        settings: { allowedFolders: unknown };
+      };
+      assert.equal(shown.relay.allowedRoots, null, 'a relay root that confines nothing is not shown as one');
+      assert.deepEqual(shown.settings.allowedFolders, [folder]);
+    },
+    { relay: { allowedRoots: ['/'] } },
+  );
+});

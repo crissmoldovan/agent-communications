@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { link, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { CONTEXT_LIMITS } from '@agentcomms/events';
 import { ANALYSE_GLOBAL_ONLY_ENDPOINTS, preparePinnedConnection } from '../src/network/pinned-connection.ts';
+import { isTooWideRoot, settingsFrom } from '../src/runtime/agent-sessions.ts';
 import { contextGenerator, generateFailure, generateRequest } from '../src/runtime/context-generate.ts';
 import { readContextFile, resolveContextParts } from '../src/runtime/session-context.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
@@ -196,4 +198,71 @@ test('CONTEXT-6: the session-context purpose admits the two model endpoints, and
       /reserved for the fixed model endpoints/u,
       url,
     );
+});
+
+test('REVIEW-4a: a FIFO at a file part’s path is refused at once, never read', { skip: WINDOWS_SKIP }, async () => {
+  await withFolder(async (root) => {
+    const pipe = join(root, 'pipe.md');
+    execFileSync('/usr/bin/mkfifo', [pipe]);
+    const started = Date.now();
+    const outcome = await Promise.race([
+      readContextFile(pipe, [root]),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1_500)),
+    ]);
+    if (outcome === 'hung') execFileSync('/bin/sh', ['-c', `printf x > '${pipe}'`]);
+    assert.deepEqual(outcome, { ok: false, reason: 'not-a-file' });
+    assert.ok(Date.now() - started < 1_000, 'it does not wait for a writer');
+  });
+});
+
+test('REVIEW-4b: a hard link inside an allowed folder, naming a file outside it, is refused', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withFolder(async (root) => {
+    const allowed = join(root, 'work');
+    await mkdir(allowed);
+    await mkdir(join(root, 'outside'));
+    const secret = join(root, 'outside', 'id_fake');
+    await writeFile(secret, 'not for the session\n');
+    await link(secret, join(allowed, 'notes.md'));
+    assert.deepEqual(await readContextFile(join(allowed, 'notes.md'), [allowed]), { ok: false, reason: 'outside' });
+  });
+});
+
+test('REVIEW-4c: Agent Comms’ own folders are never read, even under an allowed root', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withFolder(async (root) => {
+    const state = join(root, 'agent-comms-state');
+    await mkdir(state);
+    await writeFile(join(state, 'audit.jsonl'), '{}\n');
+    await writeFile(join(root, 'notes.md'), 'fine');
+    assert.deepEqual(await readContextFile(join(state, 'audit.jsonl'), [root], [state]), {
+      ok: false,
+      reason: 'outside',
+    });
+    // Reached through a link from inside the root, the realpath is still Agent Comms' own.
+    await symlink(state, join(root, 'via-link'));
+    assert.deepEqual(await readContextFile(join(root, 'via-link', 'audit.jsonl'), [root], [state]), {
+      ok: false,
+      reason: 'outside',
+    });
+    assert.deepEqual(await readContextFile(join(root, 'notes.md'), [root], [state]), { ok: true, text: 'fine' });
+  });
+});
+
+test('REVIEW-4d: `/` and the home folder itself confine nothing, so they are never roots', () => {
+  for (const root of ['/', '/example/home', '/example/home/'])
+    assert.equal(isTooWideRoot(root, '/example/home'), true, root);
+  for (const root of ['/example/home/work', '/example'])
+    assert.equal(isTooWideRoot(root, '/example/home'), false, root);
+  assert.throws(
+    () =>
+      settingsFrom(
+        { allowFolders: ['/example/home'] },
+        { relayHome: null, relayPort: null, allowedFolders: [] },
+        '/example/home',
+      ),
+    /never \/ or your home folder itself/u,
+  );
 });

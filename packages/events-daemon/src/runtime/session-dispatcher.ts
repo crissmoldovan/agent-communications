@@ -358,6 +358,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       parts: delivery.target.context,
       values: delivery.record.values,
       fileRoots: await this.#sessions.fileRoots(ready),
+      deniedFolders: this.#sessions.deniedFolders(),
       generate: this.#generate,
     });
     const boundary = newBoundary();
