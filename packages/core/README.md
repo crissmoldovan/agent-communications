@@ -31,6 +31,8 @@ npx @agentcomms/core mcp install --server events --client claude-code   # regist
 npx @agentcomms/core mcp uninstall --client cursor --server gmail   # take one server out of one client, at once
 npx @agentcomms/core activity sessions   # the agent windows that read or sent anything, newest first
 npx @agentcomms/core activity items --json   # every call that names a message, grouped by the message
+npx @agentcomms/core search status   # Search on this machine: on or off, what is kept by count, the model, backups
+npx @agentcomms/core search query -- what did David ask about invoices   # by words, and by meaning with a local model
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
 npx @agentcomms/core update --status  # where updates stand here: level, pause, last check, versions, background job; asks npm nothing
 npx @agentcomms/core update --pause 7  # hold update notices for 1, 7 or 14 days (no approval); --resume ends it
@@ -124,6 +126,28 @@ days. It holds ids, subjects, senders and file names, and never a message body, 
   (`AGENTCOMMS_MCP_SERVER`) — core's, each channel's and the event service's — so the refusal holds in any program one
   of them starts.
 - An agent sees only its own window, through `comms_activity` (or `agentcomms activity mine`).
+
+## Search on this machine
+
+`agentcomms search …` keeps the words of the messages agents read, for the accounts the person chose, so they can find
+what each person asked (design 2026-10-26-local-search). Off by default; `search on`, `search accounts add` and
+`search model set` are loosenings, approved at a terminal or in the attested app with `--app-approval`; `search off`,
+`accounts remove`, `model none` and `delete --all --confirm` apply at once.
+
+- **Capture:** a channel hands `captureForSearch(core, account, captures)` what an ok call had in hand; core keeps it
+  only while Search keeps that account, never from the account's own handles, as one sealed line in
+  `<state>/search/inbox/<UTC day>-<pid>.jsonl`. It never throws and never changes a result.
+- **The store:** `<state>/search/search.sqlite` through `node:sqlite`, opened only by the person's search commands —
+  the indexer is its one writer, run by `search index`, before every search for two seconds, and by the app. Full-text
+  search is probed (FTS5, contentless, `unicode61 remove_diacritics 2`), so a Node without it — before 22.18 — says
+  so and keeps nothing. Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index`
+  in the configured secret store; the words index, the vectors and the handles are not.
+- **Meaning:** a loopback Ollama only, a reviewed model only (`qwen3-embedding:0.6b`, `embeddinggemma`, `bge-m3`),
+  checked against `/api/tags` before any word is sent; words only without one.
+- **Who reads it:** the person alone. Every command but `status` and the tightenings is refused inside an MCP
+  server's process and under an agent's marker, and there is no MCP tool; doctor's `search` check is content-free.
+  Every sender-derived field of a hit comes back in the untrusted-content envelope, and a search writes one activity
+  line with its words and a count, and no items.
 
 ## What an agent may do, and how it writes
 
