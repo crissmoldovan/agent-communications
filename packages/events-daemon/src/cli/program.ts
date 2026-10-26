@@ -24,6 +24,7 @@ import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { integrationSet, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
 import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
@@ -768,8 +769,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const personSetupOrigin = async (
     what: string,
     where = 'Events → Judges, and Settings → AI providers',
+    action: 'setup' | 'relay' = 'setup',
   ): Promise<PersonSetupOrigin> => {
-    assertNotMcpServer(env, 'setup');
+    assertNotMcpServer(env, action);
     const marker = agentMarker(env);
     if (marker !== null)
       throw new CommsError(
@@ -873,20 +875,86 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
     });
 
-  // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see, the person's read only.
+  // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream
+  // relay is (§3.5) — theirs to set, from the app or their terminal, like an AI provider's key — and the items waiting
+  // for a busy session, theirs to read and drop.
   const integration = program
     .command('integration')
-    .description('the services a rule can act in — Linear — and what your key there can see (a person only)');
+    .description(
+      'the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
+    );
   integration
     .command('show <integration>')
-    .description('show whether a Linear key is kept, its workspace and teams, and with --team that team’s labels')
-    .option('--team <key>', 'a team, by its key (such as CUE) or its id, whose labels to list')
+    .description(
+      'linear: whether a key is kept, its workspace and teams (with --team, that team’s labels); agent-sessions: where the relay is and whether it is ready',
+    )
+    .option('--team <key>', 'linear: a team, by its key (such as CUE) or its id, whose labels to list')
     .action(async (name: string, options: { readonly team?: string }) => {
       ran = true;
       // The person's view, at a terminal or in the app: never inside an MCP server's process.
-      assertNotMcpServer(env, 'integration');
-      if (name !== 'linear') throw new CommsError('USAGE', 'the integration is linear');
+      assertNotMcpServer(env, name === 'agent-sessions' ? 'relay' : 'integration');
+      if (name === 'agent-sessions') {
+        if (options.team !== undefined)
+          throw new CommsError('USAGE', 'integration show agent-sessions takes no --team');
+        print(await integrationShow(name, controlOptions(program)));
+        return;
+      }
+      if (name !== 'linear') throw new CommsError('USAGE', 'the integration is linear or agent-sessions');
       print(await integrationShow(name, { ...controlOptions(program), team: options.team }));
+    });
+  integration
+    .command('set <integration>')
+    .description(
+      'set where the relay is, or a folder a file part may be read from (a person, at a terminal or in the app)',
+    )
+    .option('--relay-home <path>', "the relay's home folder, where its control.token is; default for the defaults")
+    .option('--relay-port <port>', "the relay's port; default for the Pilot app's record, else 4318")
+    .option('--allow-folder <path>', 'a folder a session’s file parts may be read from (repeat for more)', collect, [])
+    .option('--remove-folder <path>', 'a folder to take off that list (repeat for more)', collect, [])
+    .action(async (name: string, options: Record<string, unknown>) => {
+      ran = true;
+      if (name !== 'agent-sessions') throw new CommsError('USAGE', 'integration set takes agent-sessions');
+      const origin = await personSetupOrigin(
+        'change where Agent Comms finds your claude-stream relay',
+        'Settings → Integrations → Agent sessions',
+        'relay',
+      );
+      const port = options.relayPort as string | undefined;
+      print(
+        await integrationSet(
+          name,
+          {
+            ...(options.relayHome === undefined ? {} : { relayHome: options.relayHome as string }),
+            ...(port === undefined ? {} : { relayPort: port === 'default' ? 'default' : parseRelayPort(port) }),
+            ...((options.allowFolder as string[]).length === 0
+              ? {}
+              : { allowFolders: options.allowFolder as string[] }),
+            ...((options.removeFolder as string[]).length === 0
+              ? {}
+              : { removeFolders: options.removeFolder as string[] }),
+          },
+          { ...controlOptions(program), origin },
+        ),
+      );
+    });
+  const sessionQueue = program
+    .command('session-queue')
+    .description('the matches waiting for a busy agent session, each passed on when the session’s run ends');
+  sessionQueue
+    .command('list')
+    .description('list every match waiting for a busy session, oldest first: ids and times (a person)')
+    .action(async () => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      print(await sessionQueueList(controlOptions(program)));
+    });
+  sessionQueue
+    .command('drop <delivery-id>')
+    .description('drop a waiting match: its delivery is cancelled and what it held purged, at once (a person)')
+    .action(async (deliveryId: string) => {
+      ran = true;
+      assertNotMcpServer(env, 'sessions');
+      print(await sessionQueueDrop(deliveryId, controlOptions(program)));
     });
 
   const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');
@@ -1284,6 +1352,17 @@ function isTerminalSecretReveal(
   value: unknown,
 ): value is { readonly receipt: Record<string, unknown>; readonly terminalReveal: string } {
   return isRecord(value) && isRecord(value.receipt) && typeof value.terminalReveal === 'string';
+}
+
+/** Commander's repeatable option: each value given, in order. */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function parseRelayPort(value: string): number {
+  if (!/^[1-9][0-9]{0,4}$/u.test(value) || Number(value) > 65_535)
+    throw new CommsError('USAGE', "the relay's port is a whole number from 1 to 65535, or default");
+  return Number(value);
 }
 
 /** The most a document read from stdin may be: well past any rule, and short of filling memory. */

@@ -108,6 +108,24 @@ export default {
   'packages/events-daemon/test/revocation.test.ts#1': [
     { target: "({ targetId: 'target-purge', version: 1, kind: 'dry-run', retentionMs: 86_400_000 })" },
   ],
+  // The agent-session target (0.33.0 §3.5): a session found by its folder, and one found by a lane, which queues.
+  'packages/events-daemon/test/session-owner.test.ts#1': [
+    {
+      targets:
+        "[{ targetId: 'acme-session', version: 1, kind: 'session', find: { folder: '/example/home/acme' }, ifNone: 'start', provider: 'claude', mode: 'manual', ifBusy: 'queue', context: [{ fields: ['/subject'] }, { text: 'Check the invoice.' }] }]",
+    },
+    {
+      targets:
+        "[{ targetId: 'acme-session', version: 1, kind: 'session', find: { lane: 'david' }, ifNone: 'queue-only', provider: 'claude', mode: 'manual', ifBusy: 'queue', context: [] }]",
+    },
+  ],
+  'packages/events-daemon/test/session-target-domain.test.ts#1': [
+    {
+      targets:
+        "[{ targetId: 'acme-session', version: 1, kind: 'session', find: { folder: '/example/home/acme' }, ifNone: 'start', provider: 'claude', mode: 'manual', ifBusy: 'queue', context: [{ fields: ['/subject'] }, { text: 'Check the invoice.' }] }]",
+      extra: '({})',
+    },
+  ],
   'packages/events-daemon/test/support/browser-sse-fixture.ts#1': [
     {
       subscriber:

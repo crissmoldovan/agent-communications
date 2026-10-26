@@ -231,6 +231,9 @@ export class DeliveryReader {
     }
     const lane = record(document?.lane)?.name;
     if (delivery.targetKind === 'queue' && typeof lane === 'string') return { ...base, lane };
+    // A session found by a lane (0.33.0 §3.5) carries that lane: its fallback items are the lane's.
+    const sessionLane = record(document?.find)?.lane;
+    if (delivery.targetKind === 'session' && typeof sessionLane === 'string') return { ...base, lane: sessionLane };
     return base;
   }
 

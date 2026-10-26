@@ -9,6 +9,7 @@ import {
   normaliseActivationDocument,
   type SubscriberDocument,
   type TargetDocument,
+  targetLane,
 } from './activation-documents.ts';
 import {
   assertCreatableLayaJudge,
@@ -24,6 +25,7 @@ import {
   type LayaEnablementInputs,
   layaEnablementInputsFor,
 } from './judges.ts';
+import { sqlTargetLane } from './lanes.ts';
 import { assertJudgeKindEnabled, EventDomainError, isJudgeKind, JUDGE_KINDS } from './lifecycle.ts';
 
 export type ActiveVersionKind = 'rule' | 'judge-budget' | 'judge-kind';
@@ -256,19 +258,20 @@ export class ImmutableVersions {
    */
   #assertLanesFree(rule: CanonicalFullRuleDocument): void {
     const lanes = new Map<string, string>();
-    for (const target of rule.targets)
-      if (target.kind === 'queue' && target.lane !== undefined) lanes.set(target.lane.name, target.targetId);
+    for (const target of rule.targets) {
+      const lane = targetLane(target);
+      if (lane !== undefined) lanes.set(lane, target.targetId);
+    }
     if (lanes.size === 0) return;
     const carried = this.#database
       .prepare(
-        `SELECT pointer.object_id AS rule_id, json_extract(target.value, '$.lane.name') AS lane,
+        `SELECT pointer.object_id AS rule_id, ${sqlTargetLane('target.value')} AS lane,
                 json_extract(target.value, '$.targetId') AS target_id
            FROM active_versions AS pointer
            JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
            JOIN json_each(stored.document, '$.targets') AS target
           WHERE pointer.kind = 'rule' AND pointer.object_id <> ?
-            AND json_extract(target.value, '$.kind') = 'queue'
-            AND json_extract(target.value, '$.lane.name') IS NOT NULL
+            AND ${sqlTargetLane('target.value')} IS NOT NULL
           ORDER BY pointer.object_id`,
       )
       .all(rule.ruleId) as Array<{ rule_id: string; lane: string; target_id: string }>;
@@ -277,7 +280,7 @@ export class ImmutableVersions {
       if (mine !== undefined && mine !== other.target_id)
         throw new EventDomainError(
           'LANE_NAME_IN_USE',
-          `lane ${other.lane} is already carried by another active rule's queue target; a lane is its name, so one target carries it`,
+          `lane ${other.lane} is already carried by another active rule's target; a lane is its name, so one target carries it`,
         );
     }
   }

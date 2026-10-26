@@ -45,6 +45,11 @@ export interface AnalyseTransportOptions {
   readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
   readonly clock?: AnalyseTransportClock | undefined;
   readonly deadlineMs?: number | undefined;
+  /**
+   * Whose call this is, for the pinned path: Analyse's (the default), or a rule's `generate` context part
+   * (`session-context`, 0.33.0 §3.6). Each admits the same two model endpoints, and only them.
+   */
+  readonly hostedPurpose?: 'analyse' | 'session-context' | undefined;
 }
 
 class DeadlineExceeded extends Error {}
@@ -196,6 +201,7 @@ export class AnalyseTransport {
   readonly #tlsConnect: (options: PinnedTlsOptions) => Promise<tls.TLSSocket>;
   readonly #clock: AnalyseTransportClock;
   readonly #deadlineMs: number;
+  readonly #hostedPurpose: 'analyse' | 'session-context';
 
   constructor(options: AnalyseTransportOptions = {}) {
     this.#resolver = options.resolver;
@@ -203,6 +209,7 @@ export class AnalyseTransport {
     this.#tlsConnect = options.tlsConnect ?? connectPinnedTls;
     this.#clock = options.clock ?? systemClock;
     this.#deadlineMs = options.deadlineMs ?? ANALYSE_CALL_DEADLINE_MS;
+    this.#hostedPurpose = options.hostedPurpose ?? 'analyse';
   }
 
   /** One call: the prepared request to the route's fixed endpoint, and the model's text or a closed refusal. */
@@ -220,7 +227,7 @@ export class AnalyseTransport {
       const connection = await preparePinnedConnection({
         url: route.endpoint,
         addressMode: 'global-only',
-        hostedPurpose: 'analyse',
+        hostedPurpose: this.#hostedPurpose,
         signal: deadline.signal,
         ...(this.#resolver === undefined ? {} : { resolver: this.#resolver }),
       });

@@ -1,6 +1,6 @@
 /** The rule text's words: what the printer writes and the parser reads, kept in one place so the two agree. */
 import type { JsonValue } from '../json.ts';
-import { RULE_RETENTION_DEFAULTS } from '../retention.ts';
+import { RULE_RETENTION_DEFAULTS, targetQueues } from '../retention.ts';
 import { WORD_CHARACTERS } from './lines.ts';
 
 /**
@@ -100,9 +100,12 @@ export function isRecord(value: unknown): value is Readonly<Record<string, JsonV
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Whether a rule's targets include a queue: then its retention has a queue line, 7 days unless said. */
+/**
+ * Whether a rule's targets can put an item in the Queue — a queue, or a session target that leaves an item there
+ * (`targetQueues`): then its retention has a queue line, 7 days unless said.
+ */
 export function hasQueue(targets: JsonValue | undefined): boolean {
-  return Array.isArray(targets) && targets.some((target) => isRecord(target) && target.kind === 'queue');
+  return Array.isArray(targets) && targets.some(targetQueues);
 }
 
 /** A whole number the text can write: 0 or more, and safe. */

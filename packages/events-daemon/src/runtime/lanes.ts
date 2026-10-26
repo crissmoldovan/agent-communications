@@ -13,6 +13,7 @@ import {
   type LaneUnbindResultV1,
   type LaneWindowIdentity,
   lanePointerText,
+  sqlTargetLane,
   UNIDENTIFIABLE_WINDOW_REASON,
 } from '../domain/lanes.ts';
 import type { QueueChannel } from '../domain/queue-target.ts';
@@ -222,14 +223,13 @@ function bindingView(row: BindingRow, home: string): LaneBindingV1 {
 }
 
 /** Every lane an active rule's queue target carries, with the rule and its source channel (B5). */
-const CARRIED_LANES = `SELECT json_extract(target.value, '$.lane.name') AS lane, pointer.object_id AS rule_id,
+const CARRIED_LANES = `SELECT ${sqlTargetLane('target.value')} AS lane, pointer.object_id AS rule_id,
          json_extract(stored.document, '$.source.channel') AS channel
     FROM active_versions AS pointer
     JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
     JOIN json_each(stored.document, '$.targets') AS target
    WHERE pointer.kind = 'rule'
-     AND json_extract(target.value, '$.kind') = 'queue'
-     AND json_extract(target.value, '$.lane.name') IS NOT NULL`;
+     AND ${sqlTargetLane('target.value')} IS NOT NULL`;
 
 export class LaneService {
   readonly #store: EventDatabase;
@@ -455,7 +455,7 @@ export class LaneService {
       (
         this.#store.database
           .prepare(
-            "SELECT target_id, version, json_extract(document, '$.lane.name') AS lane FROM target_versions WHERE json_extract(document, '$.lane.name') IS NOT NULL",
+            `SELECT target_id, version, ${sqlTargetLane('document')} AS lane FROM target_versions WHERE ${sqlTargetLane('document')} IS NOT NULL`,
           )
           .all() as Array<{ target_id: string; version: number; lane: string }>
       ).map((row) => [`${row.target_id}@${row.version}`, row.lane]),
@@ -479,7 +479,7 @@ export class LaneService {
     if (typeof deliveryId !== 'string') return;
     const row = this.#store.database
       .prepare(
-        `SELECT delivery.state, json_extract(target.document, '$.lane.name') AS lane
+        `SELECT delivery.state, ${sqlTargetLane('target.document')} AS lane
            FROM deliveries AS delivery
            LEFT JOIN target_versions AS target
              ON target.target_id = delivery.target_id AND target.version = delivery.target_version

@@ -1,4 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
+import type { AgentSessionsIntegrationV1 } from '../runtime/agent-sessions.ts';
 import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 
 type Options = { readonly stateDir?: string | undefined };
@@ -9,13 +10,16 @@ type Options = { readonly stateDir?: string | undefined };
  * labels an issue in that team can carry.
  */
 
-/** Whether a Linear key is kept, and the workspace and teams it sees — and, for `team`, its labels. Never the key. */
+/**
+ * Whether a Linear key is kept, and the workspace and teams it sees — and, for `team`, its labels. Never the key. For
+ * `agent-sessions` (0.33.0 design §3.5): where the person's claude-stream relay is, and whether it is ready.
+ */
 export async function integrationShow(
   integration: string,
   options: Options & { readonly team?: string | undefined } = {},
-): Promise<IntegrationShowResultV1> {
+): Promise<IntegrationShowResultV1 | AgentSessionsIntegrationV1> {
   return (await new EventControlClient({ stateDir: options.stateDir }).request('integration-show', {
     integration,
     ...(options.team === undefined ? {} : { team: options.team }),
-  })) as IntegrationShowResultV1;
+  })) as IntegrationShowResultV1 | AgentSessionsIntegrationV1;
 }

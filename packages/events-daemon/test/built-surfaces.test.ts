@@ -146,6 +146,7 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_target_remove',
           'events_queue_items',
           'events_queue_counts',
+          'events_session_queue_list',
           'events_queue_done',
           'events_queue_dismiss',
           'events_queue_reopen',

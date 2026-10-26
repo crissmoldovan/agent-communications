@@ -63,6 +63,8 @@
     "packages/events-daemon/test/rule-analyse-domain.test.ts": 1,
     "packages/events-daemon/test/rule-analyse.test.ts": 1,
     "packages/events-daemon/test/rule-show.test.ts": 2,
+    "packages/events-daemon/test/session-owner.test.ts": 1,
+    "packages/events-daemon/test/session-target-domain.test.ts": 1,
     "packages/events-daemon/test/sse-persistence-auth.test.ts": 1,
     "packages/events-daemon/test/support/b3-control-v3-vectors.ts": 1,
     "packages/events-daemon/test/support/browser-sse-fixture.ts": 1,
@@ -10085,6 +10087,565 @@
           "sseReplayMs": 86400000,
           "deadLetterMs": 86400000,
           "decisionMetadataMs": 86400000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-owner.test.ts:96"],
+      "document": {
+        "ruleId": "david-by-mail",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LANEOWNERLANE001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "snippet": {
+            "$path": "/snippet"
+          },
+          "messageId": {
+            "$path": "/messageId"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme-session",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude",
+            "mode": "manual",
+            "ifBusy": "queue",
+            "context": [
+              {
+                "fields": ["/subject"]
+              },
+              {
+                "text": "Check the invoice."
+              }
+            ]
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-owner.test.ts:96"],
+      "document": {
+        "ruleId": "david-by-mail",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LANEOWNERLANE001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "snippet": {
+            "$path": "/snippet"
+          },
+          "messageId": {
+            "$path": "/messageId"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme-session",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "lane": "david"
+            },
+            "ifNone": "queue-only",
+            "provider": "claude",
+            "mode": "manual",
+            "ifBusy": "queue",
+            "context": []
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-owner.test.ts:96"],
+      "document": {
+        "ruleId": "david-by-mail",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LANEOWNERLANE001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          },
+          "snippet": {
+            "$path": "/snippet"
+          },
+          "messageId": {
+            "$path": "/messageId"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "elsewhere",
+            "version": 1,
+            "kind": "session",
+            "ifNone": "start",
+            "provider": "claude",
+            "find": {
+              "folder": "/example/home/elsewhere"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme-session",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude",
+            "mode": "manual",
+            "ifBusy": "queue",
+            "context": [
+              {
+                "fields": ["/subject"]
+              },
+              {
+                "text": "Check the invoice."
+              }
+            ]
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude",
+            "ifBusy": "queue-only"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude",
+            "ifBusy": "queue-only"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "lane": "david"
+            },
+            "ifNone": "queue-only",
+            "provider": "claude"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "lane": "david"
+            },
+            "ifNone": "queue-only",
+            "provider": "claude"
+          },
+          {
+            "targetId": "q",
+            "version": 1,
+            "kind": "queue",
+            "retentionMs": 604800000,
+            "show": "summary",
+            "lane": {
+              "name": "david"
+            }
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000,
+          "queueMs": 604800000
         }
       }
     },

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { type JsonObject, type JsonValue, parseRuleText, printRuleText } from '../src/index.ts';
+import { type JsonObject, type JsonValue, parseRuleText, printRuleText, targetQueues } from '../src/index.ts';
 
 /**
  * A property test of the rule text (0.33.0 design §3.2) over generated rule documents, with a fixed seed and no new
@@ -310,7 +310,8 @@ function template(random: Random, depth: number): JsonObject {
 
 function target(random: Random, index: number): JsonObject {
   const identity = { targetId: `${name(random)}${index}`, version: random.int(0, 9) };
-  const kind = random.pick(['dry-run', 'queue', 'webhook', 'sse', 'linear']);
+  const kind = random.pick(['dry-run', 'queue', 'webhook', 'sse', 'session', 'linear']);
+  if (kind === 'session') return sessionTarget(random, identity);
   if (kind === 'dry-run') return { ...identity, kind, ...(random.chance(0.8) ? { retentionMs: count(random) } : {}) };
   if (kind === 'queue')
     return {
@@ -352,6 +353,38 @@ function target(random: Random, index: number): JsonObject {
     kind,
     ...(random.chance(0.8) ? { subscriberId: name(random), subscriberVersion: random.int(0, 9) } : {}),
     ...(random.chance(0.8) ? { representation: random.pick(['plain', 'enveloped']) } : {}),
+  };
+}
+
+/** An agent-session target (0.33.0 §3.5): found by a folder or a lane, with every context part kind (§3.6). */
+function sessionTarget(random: Random, identity: JsonObject): JsonObject {
+  const fields = () => random.some(1, 3, () => pointer(random)).filter((entry, at, all) => all.indexOf(entry) === at);
+  const part = () =>
+    random.pick([
+      () => ({ text: text(random) }),
+      () => ({ fields: fields() }),
+      () => ({
+        generate: {
+          provider: random.pick(['openrouter', name(random)]),
+          model: random.pick(['anthropic/claude-sonnet-4.5', name(random)]),
+          instruction: text(random),
+          from: fields(),
+        },
+      }),
+      () => ({ file: random.pick(['/example/home/acme/HOW.md', '/example/home/with space/a.md', name(random)]) }),
+    ])();
+  return {
+    ...identity,
+    kind: 'session',
+    find: random.chance(0.5)
+      ? { folder: random.pick(['/example/home/acme', '/example/home/with space', name(random)]) }
+      : { lane: name(random) },
+    ifNone: random.pick(['start', 'queue-only']),
+    provider: random.pick(['claude', 'codex']),
+    mode: random.pick(['manual', 'acceptEdits', 'plan', name(random)]),
+    ifBusy: random.pick(['queue', 'queue-only']),
+    context: random.some(0, 4, part),
+    ...(random.chance(0.5) ? { instruction: text(random) } : {}),
   };
 }
 
@@ -423,7 +456,7 @@ const DEFAULTS: Readonly<Record<string, number>> = {
 /** A readable rule document: every part has words in the rule text. */
 function readable(random: Random): JsonObject {
   const targets = random.some(1, 4, () => undefined).map((_, index) => target(random, index));
-  const queued = targets.some((entry) => entry.kind === 'queue');
+  const queued = targets.some(targetQueues);
   const retention: Record<string, JsonValue> = {};
   for (const field of RETENTION_FIELDS)
     retention[field] = random.chance(0.5) ? (DEFAULTS[field] as number) : count(random);
@@ -513,6 +546,22 @@ function odd(random: Random): JsonObject {
     },
     () => {
       doc.deliveryRateCap = random.pick([1.5, -1, '60']);
+    },
+    () => {
+      // A session target with a part, a find or a provider the readable form has no words for.
+      doc.targets = [
+        {
+          targetId: 's',
+          version: 1,
+          kind: 'session',
+          find: random.pick([{ folder: '/a', lane: 'b' }, { folder: '/a' }, { path: '/a' }]),
+          ifNone: 'start',
+          provider: random.pick(['claude', 'gemini']),
+          mode: 'manual',
+          ifBusy: 'queue',
+          context: [{ text: 'fine' }, random.pick([{ prompt: 'x' }, { text: 7 }, { generate: { provider: 'p' } }])],
+        },
+      ];
     },
   ];
   for (let index = random.int(1, 3); index > 0; index -= 1) random.pick(mutations)();

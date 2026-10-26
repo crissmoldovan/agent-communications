@@ -56,7 +56,8 @@ Scripts should read these rather than parse output.
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
-| [`integration`](#agent-events-integration) | the services a rule can act in — Linear — and what your key there can see (a person only) |
+| [`integration`](#agent-events-integration) | the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
+| [`session-queue`](#agent-events-session-queue) | the matches waiting for a busy agent session, each passed on when the session’s run ends |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
@@ -695,7 +696,7 @@ agent-events provider key remove [options] <provider>
 
 ### `agent-events integration`
 
-the services a rule can act in — Linear — and what your key there can see (a person only)
+the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)
 
 ```
 agent-events integration [options] [command]
@@ -703,7 +704,7 @@ agent-events integration [options] [command]
 
 ### `agent-events integration show`
 
-show whether a Linear key is kept, its workspace and teams, and with --team that team’s labels
+linear: whether a key is kept, its workspace and teams (with --team, that team’s labels); agent-sessions: where the relay is and whether it is ready
 
 ```
 agent-events integration show [options] <integration>
@@ -711,7 +712,46 @@ agent-events integration show [options] <integration>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--team <key>` | a team, by its key (such as CUE) or its id, whose labels to list | — |
+| `--team <key>` | linear: a team, by its key (such as CUE) or its id, whose labels to list | — |
+
+### `agent-events integration set`
+
+set where the relay is, or a folder a file part may be read from (a person, at a terminal or in the app)
+
+```
+agent-events integration set [options] <integration>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--relay-home <path>` | the relay's home folder, where its control.token is; default for the defaults | — |
+| `--relay-port <port>` | the relay's port; default for the Pilot app's record, else 4318 | — |
+| `--allow-folder <path>` | a folder a session’s file parts may be read from (repeat for more) | `[]` |
+| `--remove-folder <path>` | a folder to take off that list (repeat for more) | `[]` |
+
+### `agent-events session-queue`
+
+the matches waiting for a busy agent session, each passed on when the session’s run ends
+
+```
+agent-events session-queue [options] [command]
+```
+
+### `agent-events session-queue list`
+
+list every match waiting for a busy session, oldest first: ids and times (a person)
+
+```
+agent-events session-queue list [options]
+```
+
+### `agent-events session-queue drop`
+
+drop a waiting match: its delivery is cancelled and what it held purged, at once (a person)
+
+```
+agent-events session-queue drop [options] <delivery-id>
+```
 
 ### `agent-events deliveries`
 

@@ -35,6 +35,16 @@ together under one version.
     first. `deliveries list` and `delivery show` name the issue (`linear: { identifier, url }`), never what it says.
   - **Migrations:** two event service migrations run on their own: 30, a key slot for Linear, and 31, a delivery that
     can record its Linear issue.
+- **Agent sessions, through claude-stream** (`@agentcomms/events`, `@agentcomms/events-daemon`): a rule's `session`
+  target hands each match to a coding-agent session your claude-stream relay runs — the one working in a folder,
+  started there with Claude Code or Codex if there is none, or the one behind the window you bound to a lane — in the
+  mode the rule fixes (`manual` by default; `bypassPermissions` is refused). Its context is fixed text, the mapped
+  fields, a model's words (on your OpenRouter or Anthropic key) and a file (at most 64 KB, under an allowed folder), in
+  a fixed frame with sender material in the untrusted-content envelope. A busy session queues the match until its run
+  ends; `session-queue list|drop` show and drop what waits, and a bound window sees its own lane's with
+  `events_session_queue_list`. `integration show|set agent-sessions` says where the relay is — yours to set, from the
+  app or your terminal. The rule text prints and parses the `session` block. One automatic migration, 32, admits the
+  session kind and adds the content-free busy queue.
 - **A judge's exact document** (`@agentcomms/events-daemon`): `agent-events judge show <judgeId> [--version <n>] --json`
   and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
   prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any
