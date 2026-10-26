@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "The main window: Tauri's events, dragging the window by its header, and the app's twenty-one commands. No plugin is granted: the app's plugins run from Rust.",
+  "description": "The main window: Tauri's events, dragging the window by its header, and the app's twenty-two commands. No plugin is granted: the app's plugins run from Rust.",
   "windows": ["main"],
   "permissions": [
     "core:event:allow-listen",
@@ -28,6 +28,7 @@
     "allow-restart-event-service",
     "allow-answer-first-start",
     "allow-open-full-disk-access",
-    "allow-answer-quit"
+    "allow-answer-quit",
+    "allow-app-build"
   ]
 }

@@ -3,7 +3,17 @@
  * every call is recorded. Nothing is run, opened or copied, and no test reaches Tauri, a CLI, the network or a home.
  */
 import judgesContract from '../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json';
-import type { AppEvents, Bridge, Call, CliResult, EventServiceState, Folders, Installation, Product } from '../ipc.ts';
+import type {
+  AppBuild,
+  AppEvents,
+  Bridge,
+  Call,
+  CliResult,
+  EventServiceState,
+  Folders,
+  Installation,
+  Product,
+} from '../ipc.ts';
 import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
 import accountsResend from './fixtures/accounts-resend.populated.json';
@@ -68,6 +78,14 @@ const SERVICE_RUNNING: EventServiceState = {
   logTail: [],
   firstStartQuestion: false,
   fullDiskAccess: 'not-needed',
+};
+
+/** A release build, as every test sees the app unless it says otherwise (0.32.0, `app_build`). */
+export const RELEASE_BUILD: AppBuild = {
+  identifier: 'com.cueplusplus.agentcomms',
+  isTest: false,
+  commit: null,
+  builtAt: null,
 };
 
 /** Nothing running: what each state that is not running clears. */
@@ -400,6 +418,9 @@ export function createFakeBridge(
     },
     async openFullDiskAccess() {},
     async answerQuit() {},
+    async appBuild() {
+      return RELEASE_BUILD;
+    },
   };
 
   const bridge = { calls } as FakeBridge;

@@ -299,6 +299,18 @@ export interface EventServiceState {
   fullDiskAccess: FullDiskAccess;
 }
 
+/**
+ * Which build of the app this is (0.32.0, `build_info.rs`): a release, or the local test build, whose identifier ends
+ * in `.test`. `commit` (the short commit, then the branch pointing at it, if one does) and `builtAt` (an ISO time) are
+ * what `local-test-release.sh` compiled in, and null in any other build.
+ */
+export interface AppBuild {
+  identifier: string;
+  isTest: boolean;
+  commit: string | null;
+  builtAt: string | null;
+}
+
 /** The events Rust emits to the window, and what each carries. */
 export interface AppEvents {
   'deep-link': DeepLinkTarget;
@@ -311,7 +323,7 @@ export interface AppEvents {
   'quit-requested': null;
 }
 
-/** The twenty-one commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** The twenty-two commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -346,6 +358,8 @@ export interface Bridge {
   openFullDiskAccess(): Promise<void>;
   /** The answer to the quit question; the app then quits. */
   answerQuit(keep: boolean, remember: boolean): Promise<void>;
+  /** Which build this is: a release, or the local test build (0.32.0). */
+  appBuild(): Promise<AppBuild>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -374,6 +388,7 @@ export const tauriBridge: Bridge = {
   answerFirstStart: (start) => invoke('answer_first_start', { start }),
   openFullDiskAccess: () => invoke('open_full_disk_access'),
   answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
+  appBuild: () => invoke('app_build'),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 
