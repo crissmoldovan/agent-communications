@@ -247,6 +247,16 @@ the app works in two ways.
   `approve <id>`, through its own launcher. The agent that is waiting on it (`approval wait`) applies it, as today.
 - **The app never runs a change with `--approval`.**
 
+**Note, 2026-10-26 (0.32.0; owner decision of 2026-10-26: judges set up in the app).** For judges only, two rules
+loosen. **The app approves a judge's enablements:** Events → Judges → Set up… runs the events service's `judge setup`,
+which turns the kind on, and the judge budget when it has none for the judge's provider, as the person's own act —
+recorded as approved through the app (events design, D2's note of the same day). The app still runs no change with
+`--approval`, and still opens the terminal for every other approval. **The app handles one secret:** Settings → AI
+providers takes a TypeSafe or OpenRouter key in a password field the window never keeps in its state, empties the field
+as it sends it, and hands it to the twenty-second command, `provider_key_set`, which gives it to `provider key set` on
+stdin — never argv, an environment variable, a log, a setting or a file — and overwrites its own copy when the call
+ends. Every other token or secret stays at the terminal. Turning a judge off, and removing a key, apply at once.
+
 ### DA11. What a preview shows
 
 - **Each waiting approval:** the summary `approvals list` gives (its kind, the enveloped recipients, subject and
