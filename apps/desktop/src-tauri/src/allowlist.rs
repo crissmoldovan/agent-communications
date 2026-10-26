@@ -1,7 +1,10 @@
 //! The allow-list (DA4, plan "Global Constraints"): every call the app may make, each argument checked against core's
 //! grammars before a word is built. A value that does not match never constructs, so the invoke that carried it fails
-//! before anything runs. No call carries `--approval`, and none is `approve`: the app never approves (DA1, DA10).
+//! before anything runs. No call carries `--approval`, and none is `approve` (DA1, DA10). Two approvals are the
+//! person's in the app (0.32.0, DA10's notes of 2026-10-26): a judge's setup, and adding a server to an app, whose
+//! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`).
 
+use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
@@ -659,6 +662,32 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         model: Option<LocalModel>,
     },
+    /// Core `channels` (0.32.0's Connections, spec 2026-10-26-owner-feedback-0320 §3.3): every declared server, where it
+    /// is installed, each client entry that starts it, and the client configs core could not read. Read-only, and it
+    /// never returns an entry's `env`. It takes no argument.
+    Channels {},
+    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app.
+    /// It prepares a change: core answers with its preview, and the person approves it in Terminal (DA10). Both words
+    /// are closed (`connections`), and nothing else rides along.
+    McpInstall {
+        client: McpClient,
+        server: McpServer,
+    },
+    /// Core `mcp uninstall --client <client> --server <server>` (0.32.0): takes one server away from one app. It gives an
+    /// agent nothing, a tightening, which core applies at once.
+    McpUninstall {
+        client: McpClient,
+        server: McpServer,
+    },
+    /// Core `mcp install --client <client> --server <server> --app-approval <id>` (0.32.0, spec §3.3 and §5 question 3):
+    /// the person approved, in the app, the install the app prepared with `McpInstall` — core approves that change
+    /// through the app channel and applies it. Only an approval `cli` recorded for an equal `McpInstall` is answered
+    /// (`connections::run_app_approval`), once.
+    McpInstallApproved {
+        client: McpClient,
+        server: McpServer,
+        approval_id: ApprovalId,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -711,6 +740,8 @@ pub struct Words {
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// An install the person approved in the app: it may fetch a runtime and start the server to prove it (0.32.0).
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
 /// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -974,17 +1005,57 @@ impl Call {
                     ..words
                 }
             }
+            Call::Channels {} => core(&["channels"]),
+            // A first install may read the release's document and verify it before it shows its preview.
+            Call::McpInstall { client, server } => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&[
+                    "mcp",
+                    "install",
+                    "--client",
+                    client.word(),
+                    "--server",
+                    server.word(),
+                ])
+            },
+            Call::McpUninstall { client, server } => core(&[
+                "mcp",
+                "uninstall",
+                "--client",
+                client.word(),
+                "--server",
+                server.word(),
+            ]),
+            // It registers, fetches a runtime when one is needed, and proves the server starts.
+            Call::McpInstallApproved {
+                client,
+                server,
+                approval_id,
+            } => Words {
+                timeout: INSTALL_TIMEOUT,
+                ..core(&[
+                    "mcp",
+                    "install",
+                    "--client",
+                    client.word(),
+                    "--server",
+                    server.word(),
+                    "--app-approval",
+                    approval_id.as_str(),
+                ])
+            },
         })
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the five change shapes, and only those.
+    /// (DA10): the six change shapes, and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
             Call::UpdateLevel { .. }
                 | Call::UpdateRollback {}
                 | Call::UpdateBackgroundJob { on: true }
+                | Call::McpInstall { .. }
                 | Call::BehaviourAllow { .. }
                 | Call::BehaviourClear { .. }
         )
@@ -1019,6 +1090,8 @@ impl Call {
             Call::ProviderList {} | Call::ProviderKeyRemove { .. } | Call::JudgeSetup { .. } => {
                 Some(JUDGE_SETUP_VERSION)
             }
+            Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
+            Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
             _ => None,
         }
     }
@@ -1142,6 +1215,10 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
             "url": "http://[::1]:8080",
             "model": "nimble"
         }),
+        json!({ "kind": "channels" }),
+        json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+        json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
+        json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
     ];
     values
         .into_iter()
@@ -1881,7 +1958,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_five_change_shapes_prepare() {
+    fn only_the_six_change_shapes_prepare() {
         let preparing: Vec<serde_json::Value> = samples()
             .into_iter()
             .filter(|(call, _)| call.prepares_change())
@@ -1899,6 +1976,7 @@ mod tests {
                 json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+                json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
             ]
         );
     }

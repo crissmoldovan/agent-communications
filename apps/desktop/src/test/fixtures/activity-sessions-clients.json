@@ -1,0 +1,113 @@
+{
+  "since": "2026-09-26T14:00:00.000Z",
+  "sessions": [
+    {
+      "key": "5e55105e00000001",
+      "grouped": true,
+      "surfaces": ["mcp"],
+      "folder": "/example/home/work/acme-site",
+      "client": { "name": "claude-code", "version": "2.1.0" },
+      "parent": { "pid": 4100, "startedAt": "Mon Oct 26 13:30:00 2026", "name": "claude" },
+      "firstSeen": "2026-10-26T13:31:00.000Z",
+      "lastSeen": "2026-10-26T13:58:00.000Z",
+      "processes": 2,
+      "channels": ["gmail", "events"],
+      "accounts": ["example/gmail"],
+      "counts": {
+        "kind": { "read": 4, "write": 1, "told": 0, "approval": 0 },
+        "outcome": { "ok": 5, "refused": 0, "failed": 0 }
+      },
+      "folderShown": "~/work/acme-site"
+    },
+    {
+      "key": "5e55105e00000002",
+      "grouped": false,
+      "surfaces": ["mcp"],
+      "folder": "/example/home/work/ops",
+      "client": { "name": "claude-code", "version": "2.1.0" },
+      "parent": null,
+      "firstSeen": "2026-10-26T12:40:00.000Z",
+      "lastSeen": "2026-10-26T13:00:00.000Z",
+      "processes": 1,
+      "channels": ["slack"],
+      "accounts": ["example/slack"],
+      "counts": {
+        "kind": { "read": 2, "write": 0, "told": 0, "approval": 0 },
+        "outcome": { "ok": 2, "refused": 0, "failed": 0 }
+      },
+      "folderShown": "~/work/ops"
+    },
+    {
+      "key": "5e55105e00000003",
+      "grouped": false,
+      "surfaces": ["daemon"],
+      "folder": null,
+      "client": null,
+      "parent": null,
+      "firstSeen": "2026-10-26T12:00:00.000Z",
+      "lastSeen": "2026-10-26T13:50:00.000Z",
+      "processes": 1,
+      "channels": ["events"],
+      "accounts": ["example/gmail"],
+      "counts": {
+        "kind": { "read": 0, "write": 0, "told": 3, "approval": 0 },
+        "outcome": { "ok": 3, "refused": 0, "failed": 0 }
+      },
+      "folderShown": null
+    },
+    {
+      "key": "5e55105e00000004",
+      "grouped": false,
+      "surfaces": ["mcp"],
+      "folder": "/example/home/work/billing-tool",
+      "client": { "name": "cursor-vscode", "version": "1.0.0" },
+      "parent": null,
+      "firstSeen": "2026-10-25T09:00:00.000Z",
+      "lastSeen": "2026-10-25T10:00:00.000Z",
+      "processes": 1,
+      "channels": ["gmail"],
+      "accounts": ["example/gmail"],
+      "counts": {
+        "kind": { "read": 1, "write": 0, "told": 0, "approval": 0 },
+        "outcome": { "ok": 1, "refused": 0, "failed": 0 }
+      },
+      "folderShown": "~/work/billing-tool"
+    },
+    {
+      "key": "5e55105e00000005",
+      "grouped": false,
+      "surfaces": ["mcp"],
+      "folder": "/example/home/work/side-project",
+      "client": { "name": "<b>helpful-agent</b>", "version": null },
+      "parent": null,
+      "firstSeen": "2026-10-24T08:00:00.000Z",
+      "lastSeen": "2026-10-24T08:30:00.000Z",
+      "processes": 1,
+      "channels": ["whatsapp"],
+      "accounts": ["example/whatsapp"],
+      "counts": {
+        "kind": { "read": 1, "write": 0, "told": 0, "approval": 0 },
+        "outcome": { "ok": 1, "refused": 0, "failed": 0 }
+      },
+      "folderShown": "~/work/side-project"
+    },
+    {
+      "key": "5e55105e00000006",
+      "grouped": false,
+      "surfaces": ["cli"],
+      "folder": "/example/home",
+      "client": null,
+      "parent": null,
+      "firstSeen": "2026-10-26T11:00:00.000Z",
+      "lastSeen": "2026-10-26T11:00:00.000Z",
+      "processes": 1,
+      "channels": ["resend"],
+      "accounts": ["example/resend"],
+      "counts": {
+        "kind": { "read": 1, "write": 0, "told": 0, "approval": 0 },
+        "outcome": { "ok": 1, "refused": 0, "failed": 0 }
+      },
+      "folderShown": "~"
+    }
+  ]
+}

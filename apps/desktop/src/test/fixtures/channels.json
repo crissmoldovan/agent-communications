@@ -1,0 +1,172 @@
+{
+  "core": "0.32.0",
+  "channels": [
+    {
+      "channel": "core",
+      "kind": "channel",
+      "label": "Core",
+      "package": "@agentcomms/core",
+      "binary": "agentcomms",
+      "serverName": "agentcomms",
+      "installs": "0.32.0",
+      "installed": true,
+      "runtimes": [
+        { "version": "0.32.0", "path": "/example/home/.local/share/agent-communications/runtime/core/0.32.0" }
+      ],
+      "onPath": { "path": "/example/home/.local/bin/agentcomms", "version": "0.32.0" },
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.claude.json",
+          "launcher": "managed",
+          "version": "0.32.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false
+        },
+        {
+          "client": "codex",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.codex/config.toml",
+          "launcher": "managed",
+          "version": "0.32.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false
+        }
+      ]
+    },
+    {
+      "channel": "gmail",
+      "kind": "channel",
+      "label": "Gmail",
+      "package": "@agentcomms/gmail",
+      "binary": "agent-gmail",
+      "serverName": "gmail",
+      "installs": "0.32.0",
+      "installed": true,
+      "runtimes": [
+        { "version": "0.31.0", "path": "/example/home/.local/share/agent-communications/runtime/gmail/0.31.0" }
+      ],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "gmail",
+          "scope": "user",
+          "path": "/example/home/.claude.json",
+          "launcher": "managed",
+          "version": "0.31.0",
+          "narrowing": ["--inbox", "example/gmail"],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": true
+        }
+      ]
+    },
+    {
+      "channel": "slack",
+      "kind": "channel",
+      "label": "Slack",
+      "package": "@agentcomms/slack",
+      "binary": "agent-slack",
+      "serverName": "slack",
+      "installs": "0.32.0",
+      "installed": false,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "slack",
+          "scope": "user",
+          "path": "/example/home/.claude.json",
+          "launcher": "managed",
+          "version": "0.32.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": "/example/home/.local/share/agent-communications/runtime/slack/0.32.0/node_modules/@agentcomms/slack/dist/mcp.mjs",
+          "behindCore": false
+        }
+      ]
+    },
+    {
+      "channel": "resend",
+      "kind": "channel",
+      "label": "Resend",
+      "package": "@agentcomms/resend",
+      "binary": "agent-resend",
+      "serverName": "resend",
+      "installs": "0.32.0",
+      "installed": false,
+      "runtimes": [],
+      "onPath": null,
+      "registered": []
+    },
+    {
+      "channel": "whatsapp",
+      "kind": "channel",
+      "label": "WhatsApp",
+      "package": "@agentcomms/whatsapp",
+      "binary": "agent-whatsapp",
+      "serverName": "whatsapp",
+      "installs": "0.32.0",
+      "installed": false,
+      "runtimes": [],
+      "onPath": null,
+      "registered": []
+    },
+    {
+      "channel": "events",
+      "kind": "service",
+      "label": "Events",
+      "package": "@agentcomms/events-daemon",
+      "binary": "agent-events",
+      "serverName": "events",
+      "installs": "0.32.0",
+      "installed": true,
+      "runtimes": [
+        { "version": "0.32.0", "path": "/example/home/.local/share/agent-communications/runtime/events/0.32.0" }
+      ],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "events",
+          "scope": "project",
+          "path": "/example/home/work/acme-site/.mcp.json",
+          "launcher": "managed",
+          "version": "0.32.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false
+        },
+        {
+          "client": "vscode",
+          "name": "events",
+          "scope": "user",
+          "path": "/example/home/Library/Application Support/Code/User/mcp.json",
+          "launcher": "npx",
+          "version": "0.32.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false
+        }
+      ]
+    }
+  ],
+  "unreadable": [
+    {
+      "client": "cursor",
+      "path": "/example/home/.cursor/mcp.json",
+      "reason": "it is not valid JSON, so what it registers is not known"
+    }
+  ]
+}

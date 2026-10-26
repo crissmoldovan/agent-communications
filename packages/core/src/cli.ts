@@ -269,7 +269,8 @@ Usage — run these with this CLI, each as the words after its program:
   mcp install --client <client> [--server <server>] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
-                                register the core server, or another declared server, and prove it starts
+                                register the core server, or another declared server, and prove it starts;
+                                the desktop app passes --app-approval <id>, the person's approval in the app
   mcp prune [--server <server>] [--dry-run] [--include-printed] [--approval <id>]
                                 remove the managed runtimes that nothing uses: every managed server's,
                                 listed by server, or with --server that one's
@@ -385,6 +386,8 @@ function parse(argv: string[]) {
       // No longer answers anything: kept so that it is refused with what to do instead, not as an unknown option.
       yes: { type: 'boolean', default: false },
       approval: { type: 'string' },
+      // `mcp install` only (0.32.0): the approval the desktop app prepared and the person approved there.
+      'app-approval': { type: 'string' },
       client: { type: 'string' },
       server: { type: 'string' },
       name: { type: 'string' },
@@ -713,6 +716,11 @@ export async function main(
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
+    if (values['app-approval'] !== undefined && !(command === 'mcp' && sub === 'install')) {
+      throw new CommsError('USAGE', '--app-approval is an option of the mcp install command only', {
+        hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`),
+      });
+    }
   } catch (error) {
     return writeError(error as CommsError, output);
   }
@@ -1366,7 +1374,8 @@ export async function main(
               undefined,
               installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
             ),
-            { ...approval, rerun: words },
+            // The desktop app's own approval, when it passes one: approved in the app, and claimed here.
+            { ...approval, rerun: words, appApproval: values['app-approval'] },
           );
           // Asked to register and did not — the client's CLI is not on PATH — or registered an entry that did not
           // start. The result is still printed, but a zero exit told a script (or an agent) that it worked.

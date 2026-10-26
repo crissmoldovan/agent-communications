@@ -22,6 +22,23 @@ app_config="$home/Library/Application Support/$identifier"
 main=$(cd "$(git rev-parse --git-common-dir)/.." && pwd)
 work="$(dirname "$main")/.agentcomms-wt/local-test"
 
+# What the test app's band names (0.32.0): AGENTCOMMS_BUILD_COMMIT, the short commit of $1 and then the branch pointing
+# at it, if one does (the branch $2 names, or HEAD's, before any other), and AGENTCOMMS_BUILD_TIME, now in UTC. The app
+# compiles both in (apps/desktop/src-tauri/src/build_info.rs).
+build_stamp() {
+  short=$(git rev-parse --short "$1")
+  branch=
+  if [ "$2" = HEAD ]; then
+    branch=$(git symbolic-ref --short -q HEAD || true)
+  elif git show-ref --verify --quiet "refs/heads/$2"; then
+    branch=$2
+  fi
+  [ -n "$branch" ] || branch=$(git for-each-ref --points-at "$1" --format='%(refname:short)' refs/heads | head -n 1)
+  AGENTCOMMS_BUILD_COMMIT="$short${branch:+ $branch}"
+  AGENTCOMMS_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  export AGENTCOMMS_BUILD_COMMIT AGENTCOMMS_BUILD_TIME
+}
+
 if [ "${1:-}" = --remove ]; then
   osascript -e "quit app \"$app_name\"" >/dev/null 2>&1 || true
   "$profile/data/launch/events-daemon" stop --config-dir "$profile/config" --state-dir "$profile/state" \
@@ -76,6 +93,7 @@ version=$("$node" -p "require('$work/packages/events-daemon/package.json').versi
 printf 'current=%s-events-daemon\n' "$version" > "$profile/data/launch/events-daemon.current"
 
 echo "4/5 Building Agent Comms Test (its own identifier, no updater, unsigned)"
+build_stamp "$commit" "$ref"
 config=$(printf '{"identifier":"%s","productName":"%s","plugins":{"updater":{"pubkey":""},"deep-link":{"desktop":{"schemes":["agentcomms-test"]}}},"bundle":{"createUpdaterArtifacts":false}}' "$identifier" "$app_name")
 (cd "$work/apps/desktop" && pnpm exec tauri build --bundles app --config "$config" >/dev/null)
 built="$work/apps/desktop/src-tauri/target/release/bundle/macos/$app_name.app"
