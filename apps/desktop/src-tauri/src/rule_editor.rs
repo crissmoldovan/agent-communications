@@ -267,6 +267,17 @@ pub fn linear_team(value: &str) -> bool {
     key || id
 }
 
+/// A judge's id, as `judge show <judge>` takes one (0.33.0, `judge-show.ts`): a letter or digit, then up to 127
+/// letters, digits and `._:-`. It never starts with `-`, so it is never read as an option.
+pub fn judge_id(value: &str) -> bool {
+    let mut bytes = value.bytes();
+    value.len() <= 128
+        && bytes
+            .next()
+            .is_some_and(|first| first.is_ascii_alphanumeric())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
+}
+
 /// Whether `value` is a digest as the event service makes them: 64 lowercase hex digits.
 pub fn digest(value: &str) -> bool {
     value.len() == 64

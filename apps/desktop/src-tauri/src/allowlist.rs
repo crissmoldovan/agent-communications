@@ -230,6 +230,12 @@ checked_word!(
     "the relay's home: default, or a whole folder"
 );
 checked_word!(
+    /// A judge's id, as `judge show` names one (0.33.0): a letter or digit, then up to 127 letters, digits and `._:-`.
+    JudgeId,
+    crate::rule_editor::judge_id,
+    "a judge id"
+);
+checked_word!(
     /// The fingerprint of a rule's activation, as `rule enable` binds it and its preview shows it (0.33.0): 64
     /// lowercase hex digits.
     Digest,
@@ -1043,6 +1049,14 @@ pub enum Call {
     /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
     /// to a process the app did not start). The token in that folder is never a call's.
     IntegrationSetAgentSessions { relay_home: RelayHomeSetting },
+    /// The events service's `judge show <judge> [--version <n>]` (0.33.0): one judge version's exact canonical document,
+    /// its digest and whether it is live, which the rule editor embeds in a rule as the event service will approve it.
+    /// Configuration only — a judge's key is a separate secret, never in it — and read-only.
+    JudgeShow {
+        judge_id: JudgeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<RuleVersion>,
+    },
     /// The events service's `session-queue list` (0.33.0, design §3.5): the matches waiting for a busy agent session,
     /// oldest first — ids and times, content-free. The person's read, refused inside an MCP server. No argument.
     SessionQueueList {},
@@ -1544,6 +1558,16 @@ impl Call {
                 "--relay-home",
                 relay_home.as_str(),
             ]),
+            Call::JudgeShow { judge_id, version } => {
+                let mut words = events(&["judge", "show", judge_id.as_str()]);
+                if let Some(version) = version {
+                    words = with(
+                        words,
+                        ["--version".to_owned(), u64::from(*version).to_string()],
+                    );
+                }
+                words
+            }
             Call::SessionQueueList {} => events(&["session-queue", "list"]),
             Call::SessionQueueDrop { delivery_id } => {
                 events(&["session-queue", "drop", delivery_id.as_str()])
@@ -1633,6 +1657,7 @@ impl Call {
             | Call::EventsRuleAnalyse { .. }
             | Call::IntegrationShow { .. }
             | Call::IntegrationSetAgentSessions { .. }
+            | Call::JudgeShow { .. }
             | Call::SessionQueueList {}
             | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
             _ => None,
@@ -1801,6 +1826,8 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
         json!({ "kind": "sessionQueueList" }),
         json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
+        json!({ "kind": "judgeShow", "judgeId": "jev" }),
+        json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 }),
     ];
     values
         .into_iter()
@@ -4087,6 +4114,7 @@ mod tests {
             "integrationSetAgentSessions",
             "sessionQueueList",
             "sessionQueueDrop",
+            "judgeShow",
         ];
         let mut seen = 0;
         for (sample, value) in samples() {
@@ -4099,7 +4127,15 @@ mod tests {
             assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
             assert!(!sample.prepares_change(), "{value}");
         }
-        assert_eq!(seen, 19);
+        assert_eq!(seen, 21);
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "jev" })),
+            ["judge", "show", "jev"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 })),
+            ["judge", "show", "local-model", "--version", "2"]
+        );
         assert_eq!(
             line(json!({ "kind": "sessionQueueList" })),
             ["session-queue", "list"]
@@ -4211,6 +4247,25 @@ mod tests {
         refused(json!({ "kind": "integrationSetAgentSessions" }));
         refused(json!({ "kind": "sessionQueueList", "deliveryId": DELIVERY }));
         refused(json!({ "kind": "sessionQueueDrop" }));
+        refused(json!({ "kind": "judgeShow" }));
+        for judge in ["", "--json", "-jev", ".jev", "a b", "x/y", "jev\u{202e}"] {
+            refused(json!({ "kind": "judgeShow", "judgeId": judge }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "j".repeat(129) }));
+        assert!(serde_json::from_value::<Call>(
+            json!({ "kind": "judgeShow", "judgeId": "j".repeat(128) })
+        )
+        .is_ok());
+        for version in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(1_000_001),
+        ] {
+            refused(json!({ "kind": "judgeShow", "judgeId": "jev", "version": version }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "jev", "document": {} }));
         for delivery in ["", "--json", "a b", "x/y"] {
             refused(json!({ "kind": "sessionQueueDrop", "deliveryId": delivery }));
         }

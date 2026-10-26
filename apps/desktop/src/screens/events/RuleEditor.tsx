@@ -11,7 +11,7 @@
  */
 import { Button, Chip, Panel, SegmentedControl, Spinner } from '@cueplusplus/ui';
 import { Sparkles } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { aliasOf } from '../../account-aliases.ts';
 import { useBridge } from '../../bridge-context.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
@@ -32,10 +32,10 @@ import { useCall } from '../../hooks/use-call.ts';
 import { readAgentSessions, readLinear } from '../../integrations.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
 import { useNavigate } from '../../navigation.tsx';
-import { readListedJudges } from '../../providers.ts';
+import { readJudgeShow, readListedJudges } from '../../providers.ts';
 import { blocking, type Check, draftChecks, parseChecks } from '../../rule-editor/checks.ts';
 import { ANALYSE_COPY, EDITOR_COPY as COPY, REVIEW_COPY } from '../../rule-editor/copy.ts';
-import { canonical, isObject, type JsonObject, newRule, nextVersion } from '../../rule-editor/model.ts';
+import { canonical, isObject, type JsonObject, newRule, nextVersion, setJudge } from '../../rule-editor/model.ts';
 import {
   knownTargets,
   readActivation,
@@ -75,20 +75,8 @@ function documentsOf(lists: EventsLists): JsonObject[] {
   );
 }
 
-/** Each judge version a rule carries a copy of, by `<id>@<version>`. */
-function knownJudges(documents: readonly JsonObject[]): Map<string, JsonObject> {
-  const known = new Map<string, JsonObject>();
-  for (const document of documents) {
-    const judges = [
-      ...(isObject(document.agentic) && isObject(document.agentic.judge) ? [document.agentic.judge] : []),
-      ...(Array.isArray(document.judges) ? document.judges.filter(isObject) : []),
-    ];
-    for (const judge of judges)
-      if (typeof judge.judgeId === 'string' && typeof judge.version === 'number')
-        known.set(`${judge.judgeId}@${judge.version}`, judge);
-  }
-  return known;
-}
+/** A judge version's key, `<id>@<version>`, as the picker names it. */
+const judgeKey = (judge: { judgeId: string; version: number }) => `${judge.judgeId}@${judge.version}`;
 
 function startDocument(
   target: EditTarget,
@@ -188,8 +176,12 @@ export function RuleEditor({
       ? lanes.value.lanes.flatMap((lane) => (isObject(lane) && typeof lane.name === 'string' ? [lane.name] : []))
       : null;
   const documents = useMemo(() => documentsOf(lists), [lists]);
+  // Every live judge `judges list` names is offered; the one chosen is embedded exactly as `judge show` gives its
+  // document, read once per version.
+  const [judgeDocuments, setJudgeDocuments] = useState<ReadonlyMap<string, JsonObject>>(() => new Map());
+  const [judgeReading, setJudgeReading] = useState(false);
+  const [judgeProblem, setJudgeProblem] = useState<string | null>(null);
   const judgeChoices: JudgeChoice[] = useMemo(() => {
-    const known = knownJudges(documents);
     const listed = judges.state === 'ready' ? (readListedJudges(judges.value) ?? []) : [];
     return listed
       .filter((judge) => judge.revokedAt === null)
@@ -198,9 +190,40 @@ export function RuleEditor({
         version: judge.version,
         kind: judge.kind,
         provider: judge.provider,
-        document: known.get(`${judge.judgeId}@${judge.version}`) ?? null,
+        document: judgeDocuments.get(judgeKey(judge)) ?? null,
       }));
-  }, [documents, judges]);
+  }, [judgeDocuments, judges]);
+  const chooseJudge = useCallback(
+    async (choice: JudgeChoice | null) => {
+      setJudgeProblem(null);
+      if (choice === null) {
+        setDocument((current) => setJudge(current, null));
+        return;
+      }
+      let judge = choice.document;
+      if (judge === null) {
+        setJudgeReading(true);
+        try {
+          const result = await bridge.cli({ kind: 'judgeShow', judgeId: choice.judgeId, version: choice.version });
+          judge = result.status === 'ok' ? (readJudgeShow(result.data, choice) as JsonObject | null) : null;
+          if (judge === null) {
+            setJudgeProblem(result.status === 'failed' ? result.message : COPY.judgeUnreadable);
+            return;
+          }
+          const read = judge;
+          setJudgeDocuments((before) => new Map(before).set(judgeKey(choice), read));
+        } catch (error) {
+          setJudgeProblem(errorMessage(error));
+          return;
+        } finally {
+          setJudgeReading(false);
+        }
+      }
+      const chosen = judge;
+      setDocument((current) => setJudge(current, chosen));
+    },
+    [bridge],
+  );
   const takenTargetIds = useMemo(() => {
     const versionsOf = targetsRead.state === 'ready' ? readTargetVersions(targetsRead.value) : null;
     return new Set(versionsOf?.keys() ?? []);
@@ -364,6 +387,9 @@ export function RuleEditor({
               context={{
                 names: lists.names,
                 judges: judgeChoices,
+                onChooseJudge: (choice) => void chooseJudge(choice),
+                judgeReading,
+                judgeProblem,
                 linear,
                 takenTargetIds,
                 onEditAsText: () => toMode('text'),

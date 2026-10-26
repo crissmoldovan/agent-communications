@@ -239,6 +239,7 @@ export type Call =
   | { kind: 'integrationSetAgentSessions'; relayHome: string }
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
+  | { kind: 'judgeShow'; judgeId: string; version?: number }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };

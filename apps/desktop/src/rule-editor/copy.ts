@@ -53,7 +53,8 @@ export const EDITOR_COPY = {
   unsure: { 'no-match': "Don't pass it on", hold: 'Hold it for me' },
   judgeLimits: (calls: number) => `It is asked at most ${calls} times an hour, as before.`,
   noJudgeKnown: 'Set up a judge in Events → Judges first.',
-  judgeUnknown: 'Comes in a later release: the app cannot read this judge’s details yet.',
+  judgeReading: 'Reading the judge’s details…',
+  judgeUnreadable: 'That judge’s details could not be read.',
   actions: {
     queue: 'Put it in the Queue',
     session: 'Send it to an agent session',

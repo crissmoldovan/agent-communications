@@ -9,7 +9,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Call } from '../ipc.ts';
 import { renderApp } from './render.tsx';
-import { APPROVAL, DIGEST, editorBridge } from './rule-editor-bridge.ts';
+import { APPROVAL, DIGEST, editorBridge, JUDGE_SHOWS } from './rule-editor-bridge.ts';
 
 async function openRulesTab(): Promise<void> {
   const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
@@ -312,6 +312,59 @@ describe('the rule editor', () => {
     expect(service.calls('eventsRuleUpdate')).toEqual([]);
     expect(service.calls('eventsRuleApprove')).toEqual([]);
   });
+
+  it('the judge picker offers every live judge, and embeds the one chosen exactly as judge show gives it', async () => {
+    const service = editorBridge();
+    renderApp(service.bridge, { screen: 'events' });
+    const editor = await editInvoices();
+    // Both judges `judges list` names are offered, the one no rule carries yet among them; none is held back.
+    fireEvent.click(within(editor).getByRole('combobox', { name: 'Judge' }));
+    const options = await screen.findAllByRole('option');
+    expect(options.map((each) => each.textContent)).toEqual(['Jev, through OpenRouter, version 1', 'Jev, version 4']);
+    expect(options.every((each) => each.getAttribute('aria-disabled') !== 'true')).toBe(true);
+    expect(service.calls('judgeShow')).toEqual([]);
+    const jev = await screen.findByRole('option', { name: 'Jev, version 4' });
+    fireEvent.pointerMove(jev);
+    fireEvent.mouseMove(jev);
+    fireEvent.click(jev);
+    await waitFor(() =>
+      expect(service.calls('judgeShow')).toEqual([{ kind: 'judgeShow', judgeId: 'jev', version: 4 }]),
+    );
+    await waitFor(() =>
+      expect(within(editor).getByRole('combobox', { name: 'Judge' }).textContent).toContain('Jev, version 4'),
+    );
+    // The question, inputs and bar the rule had stay; the judge is the shown document, byte for byte.
+    expect(fieldValue(editor, 'Question')).not.toBe('');
+    fireEvent.click(within(editor).getByRole('button', { name: 'Review and approve…' }));
+    await screen.findByRole('dialog', { name: 'Approve version 3 of invoices' });
+    const [update] = service.calls('eventsRuleUpdate') as Extract<Call, { kind: 'eventsRuleUpdate' }>[];
+    const agentic = update?.document.agentic as Record<string, unknown>;
+    expect(JSON.stringify(agentic.judge)).toBe(JSON.stringify(JUDGE_SHOWS['jev@4']?.document));
+    expect((update?.document.judges as unknown[])[0]).toEqual(JUDGE_SHOWS['jev@4']?.document);
+  });
+
+  it('a judge whose answer is not the live version asked for is not embedded, and the editor says so', async () => {
+    for (const answer of [
+      { ...JUDGE_SHOWS['jev@4'], state: 'revoked' },
+      { ...JUDGE_SHOWS['jev@4'], version: 5 },
+      { ...JUDGE_SHOWS['jev@4'], document: { ...JUDGE_SHOWS['jev@4']?.document, judgeId: 'jev-billing' } },
+      { ...JUDGE_SHOWS['jev@4'], digest: 'not-a-digest' },
+    ]) {
+      const service = editorBridge({ fixtures: { judgeShow: answer } });
+      const { unmount } = renderApp(service.bridge, { screen: 'events' });
+      const editor = await editInvoices();
+      fireEvent.click(within(editor).getByRole('combobox', { name: 'Judge' }));
+      const jev = await screen.findByRole('option', { name: 'Jev, version 4' });
+      fireEvent.pointerMove(jev);
+      fireEvent.mouseMove(jev);
+      fireEvent.click(jev);
+      expect(await within(editor).findByText('That judge’s details could not be read.')).toBeTruthy();
+      expect(within(editor).getByRole('combobox', { name: 'Judge' }).textContent).toContain(
+        'Jev, through OpenRouter, version 1',
+      );
+      unmount();
+    }
+  }, 15_000);
 
   it('before 0.33.0 a rule page has no Edit…, and Rules no New rule…', async () => {
     const service = editorBridge({ fixtures: { version: '0.32.0' } });
