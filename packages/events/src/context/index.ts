@@ -18,16 +18,14 @@ import type { Issue, Result } from '../result.ts';
 import { isWellFormed, utf8ByteLength } from '../text.ts';
 
 /**
- * The providers a `generate` part may name. OpenRouter only in this release: the `anthropic` provider key is the
- * Analyse builder's (design §3.3), and a part names it once that key exists.
+ * The providers a `generate` part may name (design §3.3, §3.6): OpenRouter and Anthropic, each with the person's own
+ * key. The models each runs are the event service's to pin (its Analyse model constants), and the part names one.
  */
-export const CONTEXT_GENERATE_PROVIDERS: readonly ['openrouter'] = Object.freeze(['openrouter'] as const);
+export const CONTEXT_GENERATE_PROVIDERS: readonly ['openrouter', 'anthropic'] = Object.freeze([
+  'openrouter',
+  'anthropic',
+] as const);
 export type ContextGenerateProvider = (typeof CONTEXT_GENERATE_PROVIDERS)[number];
-
-/** The model each provider writes with when a new rule names none (design §3.3): a Claude model OpenRouter lists. */
-export const CONTEXT_GENERATE_DEFAULT_MODELS: Readonly<Record<ContextGenerateProvider, string>> = Object.freeze({
-  openrouter: 'anthropic/claude-sonnet-4.5',
-});
 
 /** The closed limits of a context list and of the prompt written from it. */
 export const CONTEXT_LIMITS: {
@@ -337,7 +335,10 @@ const FILE_FAILURES: Readonly<Record<FileFailure, string>> = {
   unreadable: 'it could not be read',
 };
 
-const PROVIDER_NAMES: Readonly<Record<ContextGenerateProvider, string>> = { openrouter: 'OpenRouter' };
+const PROVIDER_NAMES: Readonly<Record<ContextGenerateProvider, string>> = {
+  openrouter: 'OpenRouter',
+  anthropic: 'Anthropic',
+};
 
 /** A field as the person wrote it in the rule text: `from.address`, or its pointer when it is not a dotted name. */
 export function contextFieldName(pointer: string): string {

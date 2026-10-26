@@ -74,6 +74,7 @@ import { EventRecordCipher } from '../store/records.ts';
 import { assertLiveEventAccount, type ConnectedEventAccount, connectedEventAccounts } from './account-fence.ts';
 import { ActivationRuntime } from './activations.ts';
 import { AgentSessionService } from './agent-sessions.ts';
+import type { AnalyseTransport } from './analyse-transport.ts';
 import { type B3ControlPorts, type B3DeliveryWriteFenceRequest, createB3ControlPorts } from './b3-control-ports.ts';
 import { projectE2Doctor } from './b3-doctor-projection.ts';
 import { B3OperatorControl } from './b3-operator-control.ts';
@@ -95,7 +96,7 @@ import {
   type FixedSyntheticTargetTransport,
   TargetResumeControl,
 } from './b3-target-test-control.ts';
-import { openRouterGenerator } from './context-generate.ts';
+import { contextGenerator } from './context-generate.ts';
 import { isOwnerControlWireOperation, OWNER_CONTROL_WIRES } from './control-operation-registry.ts';
 import { DELIVERY_ACTIVITY_INTERVAL_MS, DeliveryActivity } from './delivery-activity.ts';
 import { hasLiveDeliveryLineage } from './delivery-claim.ts';
@@ -129,6 +130,7 @@ import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
 import { GmailReplacementDrains, replacementIntentSummary } from './replacements.ts';
 import { disableRule, removeTarget } from './revocations.ts';
+import { RuleAnalyseService } from './rule-analyse.ts';
 import { RuleReader } from './rule-show.ts';
 import { EventScheduler } from './scheduler.ts';
 import type { ContextGenerator } from './session-context.ts';
@@ -202,6 +204,11 @@ export interface EventOwnerOptions {
   readonly now?: (() => number) | undefined;
   /** Test-only deterministic identifiers for contract-vector reproduction. */
   readonly newIntentId?: (() => string) | undefined;
+  /**
+   * Analyse's model transport (0.33.0 §3.3). Production leaves it unset: the pinned, global-only path to the provider's
+   * fixed endpoint. A test supplies a loopback fake.
+   */
+  readonly analyseTransport?: Pick<AnalyseTransport, 'call'> | undefined;
   /**
    * Test-only control transport seam. It receives the production authenticated-request handler without opening a
    * Unix listener, which lets contract tests run in restricted sandboxes while exercising the real owner.
@@ -1148,6 +1155,23 @@ async function startOwnerWithLock(
   const readers: OwnerReaders = {
     deliveries: new DeliveryReader({ store: database, cipher, now }),
     rules: new RuleReader({ store: database, now, accounts: () => connectedEventAccounts(core.config) }),
+    // Analyse (0.33.0 §3.3): the rule, its content-free counts, and a model on the person's own provider key, read at
+    // the call and never kept.
+    analyse: new RuleAnalyseService({
+      store: database,
+      cipher,
+      keyPresence: () => b3Ports.secrets.providerKeys(),
+      keyFor: async (provider) => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner(provider),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+      ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
+      now,
+    }),
   };
   notifyLaneAppend = () => lanes.notifyAppended();
   // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
@@ -1200,12 +1224,14 @@ async function startOwnerWithLock(
     onReleased: () => tickAfterRelease(),
     ...(options.agentSessions?.reconcileMs === undefined ? {} : { reconcileMs: options.agentSessions.reconcileMs }),
   });
+  // A generate part's model runs on Analyse's transport and routes, under its own hosted purpose, with the person's key
+  // for the part's provider, read at the call and never kept.
   const generate =
     options.agentSessions?.generate ??
-    openRouterGenerator({
-      key: async () => {
+    contextGenerator({
+      key: async (provider) => {
         const generations = await eventSecrets.readLiveGenerations({
-          owner: providerSecretOwner('openrouter'),
+          owner: providerSecretOwner(provider),
           purpose: 'provider-key',
           cipher,
         });
@@ -1779,10 +1805,11 @@ async function writeLastStop(paths: EventPaths, reason: LastStopReason): Promise
   }
 }
 
-/** The person's reads that need the owner's clock or cipher (0.32.0). */
+/** The person's reads that need the owner's clock or cipher (0.32.0), and Analyse (0.33.0). */
 interface OwnerReaders {
   readonly deliveries: DeliveryReader;
   readonly rules: RuleReader;
+  readonly analyse: RuleAnalyseService;
 }
 
 async function handleControl(
@@ -1913,6 +1940,10 @@ async function handleControl(
       return messages.list(personOnly(request.args, 'messages list'));
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
+    // Analyse (0.33.0 §3.3): the person's, from the CLI and the app; a caller is refused. It writes nothing.
+    case OWNER_CONTROL_WIRES.ruleAnalyse:
+      if (readers === undefined) throw new CommsError('USAGE', 'rule analyse is not available');
+      return readers.analyse.analyse(personOnly(request.args, 'rule analyse'), request.signal);
     // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
     case OWNER_CONTROL_WIRES.judgeSetup:
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);

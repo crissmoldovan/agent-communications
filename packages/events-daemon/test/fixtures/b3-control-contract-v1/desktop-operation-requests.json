@@ -183,6 +183,16 @@
     "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
   },
   {
+    "name": "rule-analyse-request",
+    "request": {
+      "operation": "rule-analyse",
+      "args": {
+        "ruleId": "invoices",
+        "provider": "openrouter"
+      }
+    }
+  },
+  {
     "name": "integration-show-request",
     "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } }
   },

@@ -113,6 +113,8 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // A story per message (0.32.0): the person's read of what happened to each observed event, CLI and app only.
   { capabilityOperation: 'messagesList', wireOperation: 'messages-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'messageShow', wireOperation: 'message-show', desktopCallable: true, family: 'owner' },
+  // Analyse (0.33.0 design §3.3): the person's view of one rule and its last 30 days, CLI and app only; it writes nothing.
+  { capabilityOperation: 'ruleAnalyse', wireOperation: 'rule-analyse', desktopCallable: true, family: 'owner' },
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step, and
   // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
   // origin only; the provider list says only whether each has a key.

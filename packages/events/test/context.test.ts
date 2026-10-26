@@ -52,7 +52,7 @@ test('context: a part is exactly one of the four shapes', () => {
     [{ fields: [''] }],
     [{ fields: ['/subject', '/subject'] }],
     [{ fields: Array.from({ length: CONTEXT_LIMITS.pointers + 1 }, (_, index) => `/f${index}`) }],
-    [{ generate: { provider: 'anthropic', model: 'claude', instruction: 'x', from: ['/subject'] } }],
+    [{ generate: { provider: 'gemini', model: 'claude', instruction: 'x', from: ['/subject'] } }],
     [{ generate: { provider: 'openrouter', model: 'Bad Model', instruction: 'x', from: ['/subject'] } }],
     [{ generate: { provider: 'openrouter', model: 'a/b', instruction: '', from: ['/subject'] } }],
     [{ generate: { provider: 'openrouter', model: 'a/b', instruction: 'x', from: [] } }],
@@ -69,12 +69,19 @@ test('context: a part is exactly one of the four shapes', () => {
   }
 });
 
-test('context: generate names OpenRouter only in this release, until the anthropic key exists', () => {
+test('context: generate names OpenRouter or Anthropic, each on the person’s own key', () => {
+  for (const provider of ['openrouter', 'anthropic'])
+    assert.ok(
+      canonicalContextParts([
+        { generate: { provider, model: 'claude-sonnet-5-5', instruction: 'x', from: ['/subject'] } },
+      ]).ok,
+      provider,
+    );
   const result = canonicalContextParts([
-    { generate: { provider: 'anthropic', model: 'claude-sonnet', instruction: 'x', from: ['/subject'] } },
+    { generate: { provider: 'someone-else', model: 'm', instruction: 'x', from: ['/subject'] } },
   ]);
   assert.equal(result.ok, false);
-  if (!result.ok) assert.match(result.issues[0]?.message ?? '', /openrouter/u);
+  if (!result.ok) assert.match(result.issues[0]?.message ?? '', /openrouter or anthropic/u);
 });
 
 test('context: the instruction is checked as text', () => {

@@ -112,6 +112,10 @@ const ESCAPED: Readonly<Record<string, readonly string[]>> = {
   'packages/events-daemon/test/queue-domain.test.ts': ['raw /retention ='],
   // A rule with no targets yet.
   'packages/events-daemon/test/phase-d-owner-e2e.test.ts': ['raw /targets ='],
+  // Authoring session targets (0.33.0 §3.5) whose defaults the event service writes out, or refuses: and a rule that
+  // can queue without its queueMs.
+  'packages/events-daemon/test/session-owner.test.ts': ['raw item'],
+  'packages/events-daemon/test/session-target-domain.test.ts': ['raw /retention =', 'raw item'],
   // Partial rules written straight into the store.
   'packages/events-daemon/test/sse-persistence-auth.test.ts': [
     'raw /condition absent',

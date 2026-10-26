@@ -148,6 +148,11 @@ const EXPECTED_SETUP_ROWS = [
   ['events-daemon.provider-key.remove', 'provider key remove', null, 'exception', 'providerKeyRemove'],
 ] as const;
 
+/** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
+const EXPECTED_ANALYSE_ROWS = [
+  ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
+] as const;
+
 /**
  * Agent sessions through claude-stream (0.33.0 §3.5): where the relay is, and dropping a waiting match, are the
  * person's, CLI-only; the waiting matches are both, a bound window's own lane's over MCP.
@@ -185,6 +190,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_LANE_ROWS),
   ...shapedRows(EXPECTED_MESSAGE_ROWS),
   ...shapedRows(EXPECTED_SETUP_ROWS),
+  ...shapedRows(EXPECTED_ANALYSE_ROWS),
   ...shapedRows(EXPECTED_SESSION_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
@@ -315,6 +321,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.judge.setup',
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
+    'events-daemon.rule.analyse',
     'events-daemon.integration.show',
     'events-daemon.integration.set',
     'events-daemon.session-queue.drop',

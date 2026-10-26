@@ -165,7 +165,7 @@ export class AgentSessionService {
         if (sessionRoots.length === 0)
           throw new EventDomainError(
             'VERSION_DOCUMENT_INVALID',
-            `the session folder ${folder} cannot be checked: the relay does not say its allowed roots, and none is set; run agent-events integration set agent-sessions --allow-folder <its root>`,
+            `the session folder ${folder} cannot be checked: the relay does not say its allowed roots, and none is set: add its root in Settings → Integrations → Agent sessions (integration set agent-sessions --allow-folder)`,
           );
         if (!sessionRoots.some((root) => isInside(folder, root)))
           throw new EventDomainError(

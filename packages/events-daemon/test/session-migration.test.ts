@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import { applyMigrations, EVENT_MIGRATIONS } from '../src/store/migrations.ts';
 
 /**
- * Migration 29 (0.33.0 design §3.5): deliveries admit the session kind, the busy queue and the chosen sessions are
+ * Migration 30 (0.33.0 design §3.5): deliveries admit the session kind, the busy queue and the chosen sessions are
  * content-free and go with their delivery, and a lane's binding follows a session target that finds by the lane.
  */
 
@@ -16,12 +16,12 @@ function columns(database: DatabaseSync, table: string): readonly string[] {
   );
 }
 
-function v28WithWork(): DatabaseSync {
+function v29WithWork(): DatabaseSync {
   const database = new DatabaseSync(':memory:');
   database.exec('PRAGMA foreign_keys = ON');
   applyMigrations(
     database,
-    EVENT_MIGRATIONS.filter((migration) => migration.version <= 28),
+    EVENT_MIGRATIONS.filter((migration) => migration.version <= 29),
   );
   database.exec(
     `INSERT INTO ingest
@@ -49,8 +49,8 @@ const insertSessionDelivery = (database: DatabaseSync, id: string) =>
     )
     .run(id, `session:s:1:${id}`);
 
-test('SESSION-M1: v29 rebuilds deliveries to admit the session kind, keeping every row and column', () => {
-  const database = v28WithWork();
+test('SESSION-M1: v30 rebuilds deliveries to admit the session kind, keeping every row and column', () => {
+  const database = v29WithWork();
   try {
     const beforeColumns = columns(database, 'deliveries');
     const before = database.prepare('SELECT * FROM deliveries ORDER BY rowid').all();
@@ -60,7 +60,7 @@ test('SESSION-M1: v29 rebuilds deliveries to admit the session kind, keeping eve
       (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
       String(EVENT_MIGRATIONS.at(-1)?.version),
     );
-    assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'agent-session-target-v1')?.version, 29);
+    assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'agent-session-target-v1')?.version, 30);
     assert.deepEqual(columns(database, 'deliveries'), beforeColumns);
     assert.deepEqual(database.prepare('SELECT * FROM deliveries ORDER BY rowid').all(), before);
     insertSessionDelivery(database, 'delivery-session');
@@ -89,7 +89,7 @@ test('SESSION-M1: v29 rebuilds deliveries to admit the session kind, keeping eve
 });
 
 test('SESSION-M2: a busy-queue row goes with its delivery, whichever way the delivery stops being tried', () => {
-  const database = v28WithWork();
+  const database = v29WithWork();
   try {
     applyMigrations(database);
     for (const [id, state] of [
@@ -136,7 +136,7 @@ test('SESSION-M2: a busy-queue row goes with its delivery, whichever way the del
 });
 
 test('SESSION-M3: a lane binding follows a session target that finds its session by the lane', () => {
-  const database = v28WithWork();
+  const database = v29WithWork();
   try {
     applyMigrations(database);
     const sessionTarget = JSON.stringify({ targetId: 's', version: 1, kind: 'session', find: { lane: 'david' } });

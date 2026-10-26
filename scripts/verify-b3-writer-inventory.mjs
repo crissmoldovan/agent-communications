@@ -28,6 +28,9 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/delivery-show.ts',
   // `messages list` / `message show` (0.32.0): open a queue item's kept summary through the same leased cipher.
   'packages/events-daemon/src/runtime/messages.ts',
+  // `rule analyse` (0.33.0): reads a decision's judge metadata — its number and sending domain — through the same
+  // centrally leased cipher, and writes nothing.
+  'packages/events-daemon/src/runtime/rule-analyse.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',

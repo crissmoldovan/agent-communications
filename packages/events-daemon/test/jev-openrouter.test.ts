@@ -70,7 +70,7 @@ test('Jev provider: OpenRouter fixes its endpoint and concrete model; TypeSafe�
   );
 });
 
-test('Jev provider: the hosted network check admits exactly OpenRouter’s System One and chat completions URLs, and refuses any other', async () => {
+test('Jev provider: the hosted network check admits exactly OpenRouter’s System One URL, and still refuses any other', async () => {
   let lookups = 0;
   const resolver = {
     async lookup(hostname: string) {
@@ -88,20 +88,8 @@ test('Jev provider: the hosted network check admits exactly OpenRouter’s Syste
   assert.equal(connection.useTls, true);
   assert.equal(connection.tls.certificateHost, 'openrouter.ai');
   assert.equal(lookups, 1);
-  // A rule's generate part writes through OpenRouter's chat completions (0.33.0 §3.6): admitted too, exactly.
-  assert.equal(
-    (
-      await preparePinnedConnection({
-        url: 'https://openrouter.ai/api/v1/chat/completions',
-        addressMode: 'global-only',
-        resolver,
-      })
-    ).url.pathname,
-    '/api/v1/chat/completions',
-  );
   for (const url of [
-    'https://openrouter.ai/api/v1/chat/completions?x=1',
-    'https://openrouter.ai/api/v1/completions',
+    'https://openrouter.ai/api/v1/chat/completions',
     'https://openrouter.ai:8443/api/v1/systemone',
     'https://evil.openrouter.ai/api/v1/systemone',
     'https://openrouter.ai.example/api/v1/systemone',
@@ -113,7 +101,7 @@ test('Jev provider: the hosted network check admits exactly OpenRouter’s Syste
       /global-only/u,
       url,
     );
-  assert.equal(lookups, 2, 'a refused hosted URL is refused before DNS');
+  assert.equal(lookups, 1, 'a refused hosted URL is refused before DNS');
 });
 
 test('Jev provider: an OpenRouter judge sends the same System One request to OpenRouter, with its key as a Bearer token', async () => {

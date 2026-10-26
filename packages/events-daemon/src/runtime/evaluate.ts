@@ -1,5 +1,6 @@
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { withSenderDomain } from '../domain/sender-domain.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
@@ -365,9 +366,11 @@ export class EventEvaluator {
               channel: rule.source.channel,
               classification: evaluated.classification,
             });
+          // Analyse (0.33.0 §3.3) counts the judge's answers per sending domain: the domain, never the address, rides
+          // in the same encrypted, content-free metadata and goes with it.
           const encryptedMetadata = await this.#cipher.encrypt(
             { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decisionId }] },
-            Buffer.from(JSON.stringify(judged.metadata)),
+            Buffer.from(JSON.stringify(withSenderDomain(judged.metadata, rule, projection.event))),
           );
           if (!(await this.#accountStillLive(rule.source.channel, ingest.account_id))) return 'terminal';
           const terminal = this.#commit(() => {

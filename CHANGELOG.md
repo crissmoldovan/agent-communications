@@ -9,6 +9,23 @@ together under one version.
   shows (`when a new message arrives in cue/gmail, in the inbox`, `match any`, `ask`, `then`, `keep`, `at most`), and
   `parseRuleText` reads it back to the same document, with each mistake's line and column. Anything the text has no
   words for is kept as `raw` JSON, so nothing is dropped. The grammar is in `packages/events/src/rule-text/GRAMMAR.md`.
+- **Analyse** (`@agentcomms/events-daemon`): `agent-events rule analyse <ruleId> [--draft -] --json` suggests how to
+  improve a rule part by part — from its own text and content-free counts of its last 30 days (a sending domain the
+  judge always refused, a bar between kept and dismissed scores, a rule that never matched), and from a model on your
+  own OpenRouter or Anthropic key for the judge's question, a session's text and a Linear title — and never applies
+  one. It reads and sends no message content, and runs only at your terminal or in the app. `provider key set` takes
+  `anthropic`; a judged decision now keeps its sender's domain, never the address, in its encrypted metadata (one
+  automatic migration, 29, gives Anthropic a key slot).
+- **Agent sessions, through claude-stream** (`@agentcomms/events`, `@agentcomms/events-daemon`): a rule's `session`
+  target hands each match to a coding-agent session your claude-stream relay runs — the one working in a folder,
+  started there with Claude Code or Codex if there is none, or the one behind the window you bound to a lane — in the
+  mode the rule fixes (`manual` by default; `bypassPermissions` is refused). Its context is fixed text, the mapped
+  fields, a model's words (on your OpenRouter or Anthropic key) and a file (at most 64 KB, under an allowed folder), in
+  a fixed frame with sender material in the untrusted-content envelope. A busy session queues the match until its run
+  ends; `session-queue list|drop` show and drop what waits, and a bound window sees its own lane's with
+  `events_session_queue_list`. `integration set|show agent-sessions` says where the relay is — yours to set, from the
+  app or your terminal. The rule text prints and parses the `session` block. One automatic migration, 30, admits the
+  session kind and adds the content-free busy queue.
 
 ## 0.32.0
 

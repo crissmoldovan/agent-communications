@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-/** The closed set of target kinds a delivery row can carry (migration 24; `session` from migration 29, 0.33.0). */
+/** The closed set of target kinds a delivery row can carry (migration 24; `session` from migration 30, 0.33.0). */
 export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue' | 'session';
 
 /**
