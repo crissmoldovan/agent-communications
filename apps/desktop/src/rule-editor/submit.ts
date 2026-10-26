@@ -17,7 +17,7 @@ import {
   whereTheyGo,
 } from '../events-rules.ts';
 import { canonical, isObject, type JsonObject, targetsIn } from './model.ts';
-import { linearView, SESSION_MODE_WORDS, sessionView } from './targets.ts';
+import { contextPart, linearView, SESSION_MODE_WORDS, sessionView, templateOf } from './targets.ts';
 
 const plain = (text: string): RulePart => ({ text, kind: 'plain' });
 const value = (text: string): RulePart => ({ text, kind: 'value' });
@@ -162,7 +162,11 @@ const JEV_ROUTES: Readonly<Record<string, string>> = {
 
 /**
  * "What leaves this Mac": each place a match's fields go, with which fields; or that nothing leaves it. Read from the
- * activation's own preview, so it says what the approval binds, not what the editor meant.
+ * activation's own preview, so it says what the approval binds, not what the editor meant. As the terminal's preview
+ * does (`renderB3ApprovalPreviewV1`), it says all a session target is given — whether one is started, what happens
+ * while it is busy, every context part and the instruction it is told last — and all a Linear issue carries: its team,
+ * title and description, labels and assignee. Whatever an author wrote is author text; a part the app cannot read is
+ * shown as written, never left out.
  */
 export function whatLeaves(rule: JsonObject): RulePart[][] {
   const lines: RulePart[][] = [];
@@ -180,6 +184,9 @@ export function whatLeaves(rule: JsonObject): RulePart[][] {
   for (const target of targetsIn(rule)) {
     const fields = fieldList(kept);
     switch (target.kind) {
+      case 'dry-run':
+      case 'queue':
+        break;
       case 'webhook': {
         const url = isObject(target.url) ? target.url : {};
         const host =
@@ -194,57 +201,157 @@ export function whatLeaves(rule: JsonObject): RulePart[][] {
       case 'sse':
         lines.push([...fields, plain(' go to the apps that subscribe to the live stream.')]);
         break;
-      case 'linear': {
-        const linear = linearView(target);
-        lines.push([
-          plain('An issue is added in Linear (api.linear.app), team '),
-          value(linear?.teamKey || linear?.teamId || 'its team'),
-          plain(', with '),
-          ...fields,
-          plain('.'),
-        ]);
+      case 'linear':
+        lines.push(...linearLines(target, fields));
         break;
-      }
-      case 'session': {
-        const session = sessionView(target);
-        if (session === null) break;
-        if (session.windowOnly) {
-          lines.push([
-            ...fields,
-            plain(' wake the agent window bound to lane '),
-            authored(session.where),
-            plain(', which reads them.'),
-          ]);
-          break;
-        }
-        const who = session.provider === 'codex' ? 'a Codex session' : 'a Claude Code session';
-        lines.push([
-          ...fields,
-          plain(` and the context it lists go to ${who} `),
-          ...(session.findBy === 'lane'
-            ? [plain('bound to lane '), authored(session.where)]
-            : [plain('in '), authored(session.where)]),
-          plain(`, where ${SESSION_MODE_WORDS[session.mode]}.`),
-        ]);
-        for (const part of session.context ?? []) {
-          if (part.kind === 'generate')
-            lines.push([
-              ...fieldList(part.from),
-              plain(' go to '),
-              value(part.provider || 'a model'),
-              plain(' to write: '),
-              authored(part.instruction),
-            ]);
-          if (part.kind === 'file')
-            lines.push([plain('The file '), authored(part.path), plain(' goes to the session.')]);
-        }
+      case 'session':
+        lines.push(...sessionLines(target, fields));
         break;
-      }
       default:
+        lines.push([plain('A target the app cannot describe, as written: '), authored(written(target))]);
         break;
     }
   }
   return lines.length === 0 ? [[plain('Nothing leaves this Mac.')]] : lines;
+}
+
+/** A value as its author wrote it: a string itself, anything else its JSON. */
+function written(value: unknown): string {
+  return typeof value === 'string' ? value : (JSON.stringify(value) ?? String(value));
+}
+
+/** The fields of a target the review has words for; any other is shown as written. */
+const SESSION_FIELDS = [
+  'targetId',
+  'version',
+  'kind',
+  'find',
+  'ifNone',
+  'provider',
+  'mode',
+  'ifBusy',
+  'context',
+  'instruction',
+];
+const LINEAR_FIELDS = ['targetId', 'version', 'kind', 'team', 'title', 'description', 'labels', 'assignee'];
+
+function otherFields(target: JsonObject, known: readonly string[]): RulePart[][] {
+  const others = Object.keys(target).filter((key) => !known.includes(key));
+  return others.map((key) => [plain(`It also carries ${key}, as written: `), authored(written(target[key]))]);
+}
+
+/** What a model writes for a part, asked by its author, from which fields, through which provider. */
+function generated(part: { provider: string; model: string; instruction: string; from: string[] }): RulePart[] {
+  return [
+    plain('what '),
+    authored(part.model || 'a model'),
+    plain(' writes, asked '),
+    authored(part.instruction),
+    plain(' — it is sent '),
+    ...fieldList(part.from),
+    plain(' through '),
+    value(part.provider || 'its provider'),
+    plain(', on your own key'),
+  ];
+}
+
+function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
+  const session = sessionView(target);
+  if (session === null) return [];
+  if (session.windowOnly)
+    return [
+      [
+        ...fields,
+        plain(' wake the agent window bound to lane '),
+        authored(session.where),
+        plain(', which reads them.'),
+      ],
+    ];
+  const who = session.provider === 'codex' ? 'a Codex session' : 'a Claude Code session';
+  const lines: RulePart[][] = [
+    [
+      ...fields,
+      plain(` and the context below go to ${who} `),
+      ...(session.findBy === 'lane'
+        ? [plain('bound to lane '), authored(session.where)]
+        : [plain('in '), authored(session.where)]),
+      plain(`, a coding agent there, which may act: ${SESSION_MODE_WORDS[session.mode]}.`),
+    ],
+    [
+      plain(
+        session.ifNone === 'start'
+          ? session.findBy === 'lane'
+            ? 'If the bound window is not a session claude-stream runs, the match is a lane item in that lane.'
+            : 'If there is no such session, one is started in that folder.'
+          : 'If there is no such session, the match is left in the Queue.',
+      ),
+    ],
+    [
+      plain(
+        session.ifBusy === 'queue'
+          ? 'While the session is busy, the match waits for it, and goes when its run ends.'
+          : 'While the session is busy, the match is left in the Queue.',
+      ),
+    ],
+  ];
+  const parts = Array.isArray(target.context) ? target.context : [];
+  parts.forEach((raw, index) => {
+    const label = plain(`Context part ${index + 1}: `);
+    const part = contextPart(raw);
+    if (part === null) lines.push([label, plain('as written, '), authored(written(raw))]);
+    else if (part.kind === 'fields') lines.push([label, ...fieldList(part.fields), plain(' of the message.')]);
+    else if (part.kind === 'text') lines.push([label, plain('the fixed text '), authored(part.text)]);
+    else if (part.kind === 'file')
+      lines.push([
+        label,
+        plain('the file '),
+        authored(part.path),
+        plain(', read when the match is passed on (at most 64 KB).'),
+      ]);
+    else lines.push([label, ...generated(part), plain('.')]);
+  });
+  if (session.instruction !== null) lines.push([plain('It is told last: '), authored(session.instruction)]);
+  lines.push(...otherFields(target, SESSION_FIELDS));
+  return lines;
+}
+
+function templateLine(name: string, raw: unknown): RulePart[] {
+  const template = templateOf(raw);
+  if (template === null) return [plain(`${name}, as written: `), authored(written(raw))];
+  if (template.kind === 'text') return [plain(`${name}: `), authored(template.text)];
+  return [plain(`${name} is `), ...generated(template), plain('.')];
+}
+
+function linearLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
+  const linear = linearView(target);
+  if (linear === null) return [];
+  const lines: RulePart[][] = [
+    [
+      plain('An issue is added in Linear (api.linear.app), with your Linear key, team '),
+      value(linear.teamKey || linear.teamId || 'its team'),
+      plain(', from '),
+      ...fields,
+      plain('.'),
+    ],
+    templateLine('Its title', target.title),
+    templateLine('Its description', target.description ?? { text: '' }),
+  ];
+  const labels = linear.labels;
+  if (labels === null) lines.push([plain('Its labels, as written: '), authored(written(target.labels))]);
+  else if (labels.length === 0) lines.push([plain('It has no labels.')]);
+  else
+    lines.push([
+      plain(labels.length === 1 ? 'Its label: ' : 'Its labels: '),
+      ...labels.flatMap((label, index) => [...(index === 0 ? [] : [plain(', ')]), authored(label.name)]),
+    ]);
+  const assignee = target.assignee;
+  if (assignee === null) lines.push([plain('It is assigned to nobody.')]);
+  else if (assignee === 'me') lines.push([plain("It is assigned to the Linear key's own user.")]);
+  else if (isObject(assignee) && typeof assignee.id === 'string' && Object.keys(assignee).length === 1)
+    lines.push([plain('It is assigned to the Linear user '), authored(assignee.id), plain('.')]);
+  else lines.push([plain('Its assignee, as written: '), authored(written(assignee))]);
+  lines.push(...otherFields(target, LINEAR_FIELDS));
+  return lines;
 }
 
 function hostOf(url: string): string | null {

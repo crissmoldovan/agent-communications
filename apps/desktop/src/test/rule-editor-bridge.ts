@@ -15,6 +15,7 @@ import rules from './fixtures/events-rules.v032.json';
 import sessions from './fixtures/integration-show-agent-sessions.v033.json';
 import linearConnected from './fixtures/integration-show-linear.connected.v033.json';
 import linearDisconnected from './fixtures/integration-show-linear.disconnected.v033.json';
+import judgeShows from './fixtures/judge-show.v033.json';
 import laneList from './fixtures/lane-list.json';
 
 export const APPROVAL = approval.ruleEnable.approvalId;
@@ -25,6 +26,12 @@ export const JUDGES = [
   { judgeId: 'jev-billing', version: 1, kind: 'typesafe', provider: 'openrouter', model: 'jev-1', revokedAt: null },
   { judgeId: 'jev', version: 4, kind: 'typesafe', provider: 'typesafe', model: 'jev-1.13.0', revokedAt: null },
 ];
+
+/**
+ * `judge show <id> --version <n>`, in the shape of the event service's `JudgeShowResultV1` (its seeded-results vector):
+ * each judge's exact canonical document, its digest and that it is live, by `<id>@<version>`.
+ */
+export const JUDGE_SHOWS = judgeShows as Record<string, { document: Record<string, unknown> }>;
 
 export const LINEAR = { connected: linearConnected, disconnected: linearDisconnected } as const;
 export const SESSIONS = sessions;
@@ -70,6 +77,10 @@ export function editorBridge(
         (shows as Record<string, unknown[]>)[(call as Extract<Call, { kind: 'eventsRuleShow' }>).ruleId] ?? [],
       eventsDeliveries: deliveries,
       judgesList: JUDGES,
+      judgeShow: (call: Call) => {
+        const { judgeId, version } = call as Extract<Call, { kind: 'judgeShow' }>;
+        return JUDGE_SHOWS[`${judgeId}@${version}`];
+      },
       laneList,
       integrationShow: (call: Call) =>
         (call as Extract<Call, { kind: 'integrationShow' }>).integration === 'linear'

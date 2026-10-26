@@ -119,6 +119,9 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
   // origin only; the provider list says only whether each has a key.
   { capabilityOperation: 'judgeSetup', wireOperation: 'judge-setup', desktopCallable: true, family: 'owner' },
+  // A rule's activation, approved by the person in the app after its preview (0.33.0 design §3.1): from the app's
+  // origins only, for exactly the digest the person saw, as judge setup approves its enablements.
+  { capabilityOperation: 'approveRuleFromApp', wireOperation: 'rule-approve', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'providerList', wireOperation: 'provider-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'providerKeySet', wireOperation: 'provider-key-set', desktopCallable: true, family: 'owner' },
   {

@@ -69,8 +69,12 @@ import {
   setSession,
 } from '../../rule-editor/targets.ts';
 import { DAY_MS, HOUR_MS } from '../../rule-editor/time.ts';
+import { AuthorText, Problem } from './parts.tsx';
 
-/** A judge the person may choose: its id and version, and its stored document when the app has a copy of it. */
+/**
+ * A judge the person may choose — every live one `judges list` names — with its document once `judge show` gave it,
+ * or null until then.
+ */
 export interface JudgeChoice {
   judgeId: string;
   version: number;
@@ -83,6 +87,12 @@ export interface JudgeChoice {
 export interface VisualContext {
   names: AccountNames;
   judges: readonly JudgeChoice[];
+  /** Ask `choice` (its document read with `judge show` first, when it is not yet), or no judge. */
+  onChooseJudge: (choice: JudgeChoice | null) => void;
+  /** A judge's document is being read. */
+  judgeReading: boolean;
+  /** Why the judge chosen could not be read, in words to show. */
+  judgeProblem: string | null;
   linear: LinearState | null;
   /** Every target id the event service has, so a new target gets one of its own. */
   takenTargetIds: ReadonlySet<string>;
@@ -333,8 +343,7 @@ function judgeLabel(choice: JudgeChoice): string {
     choice.provider !== choice.kind && choice.provider !== ''
       ? `, through ${PROVIDER_WORDS[choice.provider] ?? choice.provider}`
       : '';
-  const later = choice.document === null ? ` (${COPY.laterRelease.toLowerCase()})` : '';
-  return `${name}${through}, version ${choice.version}${later}`;
+  return `${name}${through}, version ${choice.version}`;
 }
 
 function Judge({
@@ -347,21 +356,24 @@ function Judge({
   context: VisualContext;
 }) {
   const view = judgeView(document);
-  const usable = context.judges.filter((choice) => choice.document !== null);
+  const usable = context.judges;
   const current = view === null ? null : `${view.judgeId}@${view.judgeVersion}`;
   const toggle = (
     <Switch
       aria-label={COPY.askAJudge}
       checked={view !== null}
-      disabled={view === null && usable.length === 0}
+      disabled={view === null && (usable.length === 0 || context.judgeReading)}
       onCheckedChange={(on: boolean) => {
-        const first = usable[0]?.document ?? null;
-        onChange(on ? setJudge(document, first) : setJudge(document, null));
+        const first = usable[0];
+        if (on && first !== undefined) context.onChooseJudge(first);
+        else if (!on) onChange(setJudge(document, null));
       }}
     />
   );
   return (
     <Section number={3} title={COPY.sections.judge} action={toggle}>
+      {context.judgeReading ? <p className="text-fg-muted">{COPY.judgeReading}</p> : null}
+      {context.judgeProblem === null ? null : <Problem message={context.judgeProblem} />}
       {view === null ? (
         usable.length === 0 ? (
           <p className="text-fg-muted">{COPY.noJudgeKnown}</p>
@@ -376,7 +388,7 @@ function Judge({
                 ...context.judges.map((choice) => ({
                   value: `${choice.judgeId}@${choice.version}`,
                   label: judgeLabel(choice),
-                  disabled: choice.document === null,
+                  disabled: context.judgeReading,
                 })),
                 ...(context.judges.some((choice) => `${choice.judgeId}@${choice.version}` === current)
                   ? []
@@ -384,7 +396,7 @@ function Judge({
               ]}
               onValueChange={(value) => {
                 const choice = context.judges.find((each) => `${each.judgeId}@${each.version}` === value);
-                if (choice?.document != null) onChange(setJudge(document, choice.document));
+                if (choice !== undefined && value !== current) context.onChooseJudge(choice);
               }}
             />
           </Line>
@@ -784,6 +796,15 @@ function SessionAction({
               </div>
             )}
           </Line>
+          {view.instruction === null ? null : (
+            // What the session is told last has no control here: shown as its author wrote it, and kept as it was.
+            <Line label={COPY.toldLast}>
+              <div data-slot="instruction" className="flex w-full flex-col gap-(--cue-space-1)">
+                <AuthorText text={view.instruction} />
+                <AsText onEditAsText={onEditAsText} />
+              </div>
+            </Line>
+          )}
         </>
       )}
     </>

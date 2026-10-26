@@ -230,6 +230,12 @@ checked_word!(
     "the relay's home: default, or a whole folder"
 );
 checked_word!(
+    /// A judge's id, as `judge show` names one (0.33.0): a letter or digit, then up to 127 letters, digits and `._:-`.
+    JudgeId,
+    crate::rule_editor::judge_id,
+    "a judge id"
+);
+checked_word!(
     /// The fingerprint of a rule's activation, as `rule enable` binds it and its preview shows it (0.33.0): 64
     /// lowercase hex digits.
     Digest,
@@ -1043,6 +1049,20 @@ pub enum Call {
     /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
     /// to a process the app did not start). The token in that folder is never a call's.
     IntegrationSetAgentSessions { relay_home: RelayHomeSetting },
+    /// The events service's `judge show <judge> [--version <n>]` (0.33.0): one judge version's exact canonical document,
+    /// its digest and whether it is live, which the rule editor embeds in a rule as the event service will approve it.
+    /// Configuration only — a judge's key is a separate secret, never in it — and read-only.
+    JudgeShow {
+        judge_id: JudgeId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        version: Option<RuleVersion>,
+    },
+    /// The events service's `session-queue list` (0.33.0, design §3.5): the matches waiting for a busy agent session,
+    /// oldest first — ids and times, content-free. The person's read, refused inside an MCP server. No argument.
+    SessionQueueList {},
+    /// The events service's `session-queue drop <delivery>` (0.33.0): drops one waiting match — its delivery is
+    /// cancelled and what it held purged — a tightening the app applies itself (DA10), once the person confirms.
+    SessionQueueDrop { delivery_id: DeliveryId },
     /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
     /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
     ActivityItems {
@@ -1538,6 +1558,20 @@ impl Call {
                 "--relay-home",
                 relay_home.as_str(),
             ]),
+            Call::JudgeShow { judge_id, version } => {
+                let mut words = events(&["judge", "show", judge_id.as_str()]);
+                if let Some(version) = version {
+                    words = with(
+                        words,
+                        ["--version".to_owned(), u64::from(*version).to_string()],
+                    );
+                }
+                words
+            }
+            Call::SessionQueueList {} => events(&["session-queue", "list"]),
+            Call::SessionQueueDrop { delivery_id } => {
+                events(&["session-queue", "drop", delivery_id.as_str()])
+            }
         })
     }
 
@@ -1622,7 +1656,10 @@ impl Call {
             | Call::EventsRuleApprove { .. }
             | Call::EventsRuleAnalyse { .. }
             | Call::IntegrationShow { .. }
-            | Call::IntegrationSetAgentSessions { .. } => Some(RULE_EDITOR_VERSION),
+            | Call::IntegrationSetAgentSessions { .. }
+            | Call::JudgeShow { .. }
+            | Call::SessionQueueList {}
+            | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
             _ => None,
         }
     }
@@ -1787,6 +1824,10 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
+        json!({ "kind": "sessionQueueList" }),
+        json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
+        json!({ "kind": "judgeShow", "judgeId": "jev" }),
+        json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 }),
     ];
     values
         .into_iter()
@@ -3667,8 +3708,10 @@ mod tests {
     }
 
     /// Nothing the window sends reaches a rule's or a delivery's words unchecked: each id is a word of the grammar's,
-    /// never an option or two words; each call names exactly its one field; and nothing enables, creates, updates or
-    /// tests a rule, or lists the dry-run log: switching a rule on is the person's approval, at a terminal.
+    /// never an option or two words; and each call names exactly its fields. Since 0.33.0 the rule editor creates and
+    /// updates a rule, but only from one document on stdin, at most `RULE_DOCUMENT_LIMIT` bytes, with no field beside
+    /// it; it prepares an activation, and switching it on stays the person's approval. Nothing tests a rule or lists
+    /// the dry-run log.
     #[test]
     fn rule_and_delivery_calls_refuse_bad_ids_and_extra_fields() {
         let rule_kinds = ["eventsRuleShow", "eventsRuleDisable", "eventsRuleRemove"];
@@ -3770,9 +3813,39 @@ mod tests {
         refused(
             json!({ "kind": "eventsRuleEnable", "ruleId": "mail-subject", "version": 2, "deliveryId": DELIVERY }),
         );
+        // Creating and updating a rule take its one document, and nothing beside it: a document within the cap is taken,
+        // one past it is refused, as is any other field — an id, a version or an argument — next to it.
+        let limit = crate::rule_editor::RULE_DOCUMENT_LIMIT;
+        let padded = |padding: usize| {
+            let mut document = RULE_DOCUMENT.clone();
+            document["padding"] = json!("");
+            let base = serde_json::to_vec(&document).expect("json").len();
+            document["padding"] = json!("x".repeat(padding.saturating_sub(base)));
+            document
+        };
+        for kind in ["eventsRuleCreate", "eventsRuleUpdate"] {
+            let at_cap = padded(limit);
+            assert_eq!(serde_json::to_vec(&at_cap).expect("json").len(), limit);
+            assert!(
+                serde_json::from_value::<Call>(json!({ "kind": kind, "document": at_cap })).is_ok(),
+                "{kind} takes a document of exactly the cap"
+            );
+            refused(json!({ "kind": kind, "document": padded(limit + 1) }));
+            refused(json!({ "kind": kind, "document": padded(limit * 4) }));
+            for (field, value) in [
+                ("ruleId", json!("mail-subject")),
+                ("version", json!(2)),
+                ("approvalId", json!(ID)),
+                ("args", json!(["--force"])),
+                ("json", json!(false)),
+                ("deliveryId", json!(DELIVERY)),
+            ] {
+                let mut given = json!({ "kind": kind, "document": RULE_DOCUMENT.clone() });
+                given[field] = value;
+                refused(given);
+            }
+        }
         for kind in [
-            "eventsRuleCreate",
-            "eventsRuleUpdate",
             "eventsRuleTest",
             "eventsRuleTestRetained",
             "eventsDryrunList",
@@ -4071,6 +4144,9 @@ mod tests {
             "eventsRuleAnalyse",
             "integrationShow",
             "integrationSetAgentSessions",
+            "sessionQueueList",
+            "sessionQueueDrop",
+            "judgeShow",
         ];
         let mut seen = 0;
         for (sample, value) in samples() {
@@ -4083,7 +4159,23 @@ mod tests {
             assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
             assert!(!sample.prepares_change(), "{value}");
         }
-        assert_eq!(seen, 17);
+        assert_eq!(seen, 21);
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "jev" })),
+            ["judge", "show", "jev"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 })),
+            ["judge", "show", "local-model", "--version", "2"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueList" })),
+            ["session-queue", "list"]
+        );
+        assert_eq!(
+            line(json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY })),
+            ["session-queue", "drop", DELIVERY]
+        );
         assert_eq!(
             line(json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" })),
             ["integration", "show", "linear", "--team", "CUE"]
@@ -4185,6 +4277,30 @@ mod tests {
             refused(json!({ "kind": "integrationShow", "integration": "linear", "team": team }));
         }
         refused(json!({ "kind": "integrationSetAgentSessions" }));
+        refused(json!({ "kind": "sessionQueueList", "deliveryId": DELIVERY }));
+        refused(json!({ "kind": "sessionQueueDrop" }));
+        refused(json!({ "kind": "judgeShow" }));
+        for judge in ["", "--json", "-jev", ".jev", "a b", "x/y", "jev\u{202e}"] {
+            refused(json!({ "kind": "judgeShow", "judgeId": judge }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "j".repeat(129) }));
+        assert!(serde_json::from_value::<Call>(
+            json!({ "kind": "judgeShow", "judgeId": "j".repeat(128) })
+        )
+        .is_ok());
+        for version in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("1"),
+            json!(1_000_001),
+        ] {
+            refused(json!({ "kind": "judgeShow", "judgeId": "jev", "version": version }));
+        }
+        refused(json!({ "kind": "judgeShow", "judgeId": "jev", "document": {} }));
+        for delivery in ["", "--json", "a b", "x/y"] {
+            refused(json!({ "kind": "sessionQueueDrop", "deliveryId": delivery }));
+        }
         refused(json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }));
         refused(
             json!({ "kind": "integrationSetAgentSessions", "relayHome": "default", "token": "fake-token" }),

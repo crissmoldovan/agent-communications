@@ -38,10 +38,14 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * document gains its `linear` branch, and a delivery's target kind the value `linear`. The person's `integration-show`
  * owner wire (Settings → Integrations) is added, with its request and result vectors, and a delivery row its optional
  * `linear: { identifier, url }`.
+ *
+ * 0.33.0 (rules edited in the app, design §3.1) is another, also only additive: the schema and vectors gain the person's
+ * `rule-approve` owner wire, which approves a rule's activation from the app after its preview, its arguments (the
+ * approval and the digest the preview showed) and its result. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '65b3c901d256f1a9d266bf364542364a9f7b9db0935577b90f367bd1ccd04a8a',
+    'e5dd746431a31c07916b011de9904571acbeb3aaff01459ac367bbe9f50d4d65',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -53,7 +57,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '730731a6d106fef936c1291861e0b6692b1a9aaeeddc0254d4953162482e5da4',
+    '2f4290e1b4dc7b62d11155fb3bc3c3332f30e650137199af4284ba56851e0bee',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -71,7 +75,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '9f52f08f18b8406dee3e17660d9bded7de8fbd4f0d82222490fa0387d408b7fe',
+    '08e31bb677163a962ed594b720ad6cf9401a66aa1bc616f2a895acfc70be2bac',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':
