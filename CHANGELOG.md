@@ -3,6 +3,29 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**In the desktop app**
+- **The soft look now comes from cue-ui:** its soft preset, with the `soft` style set, the Inter pairing and the
+  `glaze` finish, in place of the app's own copy of it. Its text is set in Inter, with IBM Plex Mono for literal
+  values, both bundled with the app, on every platform; on macOS it was the system's SF Pro. `cue` and `terminal` look
+  as they did.
+- **The marks glide:** the chosen tab, the chosen segment of a switch and the sidebar's current screen slide to the
+  new one, rather than jumping.
+- **Swipe between tabs** with two fingers on a trackpad, or one on a touch screen, over a tab's content: one swipe,
+  one tab, and nothing past the first or the last. A swipe over something that moves sideways itself is left to it:
+  a field, a list that can still scroll that way, and the rule editor's text and JSON.
+
+**Why.** cue-ui 0.34.0 ships what the app drew locally since 0.28.0, and the glide and swipe the redesign waited for
+(CUE-571).
+
+**Impact.** No migration.
+- **A look picked in 0.28 to 0.33 is not carried over:** the app opens once on soft at the normal rung, as 0.28.0 did.
+  Pick cue or terminal, a density or a mode again, and it stays.
+- **Reduced motion is respected:** with it on, the marks jump and a tab's content appears without sliding or fading.
+- **In-progress marks,** such as Sending and Checking…, are the accent's violet-blue, as cue-ui's palette has it,
+  rather than a cyan.
+
 ## 0.33.0
 
 **What.** Rules you can edit, analyse, and have act:

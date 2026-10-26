@@ -152,7 +152,9 @@ launcher's runtime is the verified one. [Upgrading](docs/upgrading.md#the-short-
 
 **Agent Comms is a tray app that shows what agent-communications is doing on this machine — and it never sends,
 posts or approves anything.** From 0.28.0 it has a calm look of its own, `soft`: soft panels, one sans-serif face, and
-tab bars where a screen has distinct views. `cue` and `terminal` remain in its appearance menu. It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
+tab bars where a screen has distinct views. It now comes from cue-ui's soft preset; its tab, switch and sidebar marks
+glide, and a two-finger swipe over a tab's content moves to the next tab. `cue` and `terminal` remain in its
+appearance menu. It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
 policies, label style and what agents may do there; the approvals waiting for you; the agent label, the behaviour
 rules and the standing approvals; updates; the local events service; and every doctor check, with its fix to copy.
 The tray shows how many approvals wait, and closing the window hides it there.
