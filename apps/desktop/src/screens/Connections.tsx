@@ -4,6 +4,7 @@ import { readSessions, type SessionView } from '../activity.ts';
 import { useAppBuild } from '../app-build.ts';
 import { useBridge } from '../bridge-context.tsx';
 import { ChangePreview } from '../components/ChangePreview.tsx';
+import { setupsAtTerminal } from '../components/DoInTerminal.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { SectionPanel } from '../components/SectionPanel.tsx';
@@ -27,7 +28,6 @@ import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { MCP_SERVERS, type McpClient, type McpServer } from '../ipc.ts';
-import { isMac } from '../platform.ts';
 import { ScreenFrame } from './Screen.tsx';
 
 /** The first core with `mcp uninstall` (`connections.rs`, `MCP_UNINSTALL_VERSION`). */
@@ -146,8 +146,9 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
               view={value}
               lastUsed={lastUsed}
               canRemove={atLeast(version, MCP_UNINSTALL_VERSION)}
-              // Only where core can attest the app (macOS): on Windows and Linux the person approves in Terminal.
-              approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION) && isMac()}
+              // Where nothing attests the app as the person's (Windows and Linux), core takes no approval from it (0.33.0):
+              // an install is approved in the terminal there, as before 0.32.0.
+              approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION) && !setupsAtTerminal()}
               readOnly={readOnly}
               installed={version}
               reload={channels.reload}
@@ -202,10 +203,7 @@ function Apps({
   view: ConnectionsView;
   lastUsed: Partial<Record<McpClient, string>>;
   canRemove: boolean;
-  /**
-   * Whether core takes the app's own approval of an install (0.32.0, and only on macOS, where it can attest the app);
-   * before it, and on Windows and Linux, Approve in Terminal.
-   */
+  /** Whether core takes the app's own approval of an install (0.32.0); before it, Approve in Terminal. */
   approveHere: boolean;
   /** The test build: the table only, with nothing to change (0.32.0). */
   readOnly: boolean;
@@ -511,8 +509,7 @@ function Editor({
 /**
  * One server to add, waiting: core's preview of what it lets agents do, with its confirm and Cancel. Approved here, in
  * the app (0.32.0, DA10's note of 2026-10-26): only the person's press of Approve and add answers the approval, through
- * core's app channel, for this install alone. On an older core, on Windows and Linux, and whenever core says it cannot
- * take the approval here (exit 10), it is Approve in Terminal, as before.
+ * core's app channel, for this install alone. On an older core it is Approve in Terminal, as before.
  */
 function AddPreview({
   item,

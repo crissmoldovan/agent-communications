@@ -4,6 +4,7 @@ import { useBridge } from '../bridge-context.tsx';
 import { COPY } from '../copy.ts';
 import type { ChangeOutcome } from '../hooks/use-change.ts';
 import { type Call, type CliResult, errorMessage, type TerminalOutcome } from '../ipc.ts';
+import { refusedAsUnattested } from './DoInTerminal.tsx';
 import { TerminalResult } from './TerminalResult.tsx';
 import { UntrustedText } from './UntrustedText.tsx';
 
@@ -23,8 +24,9 @@ type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
  * `inApp` is the one change the person approves here, in the app (0.32.0, DA10's note of 2026-10-26: adding a server to
  * an app in Connections): the same preview under its own header, and its confirm runs `inApp.call`, which answers this
  * approval through core's app channel and applies the change. Nothing is approved until that button is pressed, and
- * Cancel and leaving revoke it as they do here otherwise. When core will not take the approval here — exit 10,
- * `APPROVAL_REQUIRED`, as on Windows and Linux, which attest nothing — the confirm becomes Approve in Terminal.
+ * Cancel and leaving revoke it as they do here otherwise. When core refuses the app's approval because nothing attests
+ * that the app is the person's (`APPROVAL_REQUIRED`, reason `ORIGIN_UNATTESTED`: Windows and Linux, 0.33.0), the
+ * preview offers Approve in Terminal instead, for the same change.
  */
 export function ChangePreview({
   change,
@@ -50,9 +52,9 @@ export function ChangePreview({
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<TerminalOutcome | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
-  // Core would not take the approval in the app (exit 10): from then on it is the terminal's, as without `inApp`.
-  const [atTerminal, setAtTerminal] = useState(false);
-  const here = atTerminal ? undefined : inApp;
+  // Refused in the app as unattested: the approval is the terminal's from here on.
+  const [refusedHere, setRefusedHere] = useState(false);
+  const here = refusedHere ? undefined : inApp;
   // Whether Approve or Cancel has the approval in hand, or is about to: then leaving revokes nothing.
   const handled = useRef(false);
   const mounted = useRef(false);
@@ -109,8 +111,7 @@ export function ChangePreview({
       // Not applied: the approval is still this preview's to cancel, or to leave behind.
       handled.current = false;
       if (!mounted.current) revokeLeftBehind();
-      if (result.status === 'failed' && (result.exit === 10 || result.code === 'APPROVAL_REQUIRED'))
-        setAtTerminal(true);
+      if (result.status === 'failed' && refusedAsUnattested(result.code)) setRefusedHere(true);
       setProblem(
         result.status === 'failed'
           ? [here.failed(result.message), result.hint].filter(Boolean).join(' ')

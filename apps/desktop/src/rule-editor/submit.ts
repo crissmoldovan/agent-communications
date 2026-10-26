@@ -149,11 +149,126 @@ function fieldList(pointers: readonly string[]): RulePart[] {
   if (pointers.length === 0) return [plain('nothing of the message')];
   return pointers.flatMap((pointer, index) => {
     const name = FIELD_WORDS[pointer];
-    const part = name === undefined ? value(pointer) : plain(name);
+    // A pointer the app has no words for is the author's, boxed as theirs: never set out as the app's own.
+    const part = name === undefined ? authored(pointer) : plain(name);
     const between = index === 0 ? [] : [plain(index === pointers.length - 1 ? ' and ' : ', ')];
     return [...between, part];
   });
 }
+
+/** A message field as the review names it once a mapped field is traced to it. */
+const SOURCE_WORDS: Readonly<Record<string, string>> = {
+  '/from': "the message's sender",
+  '/from/name': "the sender's name",
+  '/from/address': "the sender's address",
+  '/subject': "the message's subject",
+  '/snippet': "the message's first 300 characters",
+  '/messageId': 'a link to the message',
+  '/attachments': "the message's attachments' names",
+};
+
+/**
+ * What a pointer into a rule's mapped data names, traced through the mapping as the event service reads it
+ * (`mappingProduces`): a field of the message a `$path` reference copies (with any path below it); the rule's own
+ * constant; a part of the mapping that holds both, as written; or nothing the mapping writes.
+ */
+export type MappedValue =
+  | { kind: 'source'; pointer: string }
+  | { kind: 'constant'; value: unknown }
+  | { kind: 'template'; value: unknown }
+  | { kind: 'none' };
+
+const isReference = (node: unknown): node is { $path: string } => isObject(node) && typeof node.$path === 'string';
+
+function holdsReference(node: unknown): boolean {
+  if (isReference(node)) return true;
+  if (Array.isArray(node)) return node.some(holdsReference);
+  return isObject(node) && Object.values(node).some(holdsReference);
+}
+
+export function resolveMapped(mapping: unknown, pointer: string): MappedValue {
+  if (!pointer.startsWith('/')) return { kind: 'none' };
+  const tokens = pointer
+    .slice(1)
+    .split('/')
+    .map((token) => token.replaceAll('~1', '/').replaceAll('~0', '~'));
+  let at: unknown = mapping;
+  for (const [index, token] of tokens.entries()) {
+    if (isReference(at)) {
+      const below = tokens
+        .slice(index)
+        .map((each) => each.replaceAll('~', '~0').replaceAll('/', '~1'))
+        .join('/');
+      return { kind: 'source', pointer: `${at.$path}/${below}` };
+    }
+    if (Array.isArray(at)) {
+      if (!/^(?:0|[1-9][0-9]*)$/u.test(token) || Number(token) >= at.length) return { kind: 'none' };
+      at = at[Number(token)];
+    } else if (isObject(at)) {
+      if (!Object.hasOwn(at, token)) return { kind: 'none' };
+      at = at[token];
+    } else return { kind: 'none' };
+  }
+  if (isReference(at)) return { kind: 'source', pointer: at.$path };
+  return holdsReference(at) ? { kind: 'template', value: at } : { kind: 'constant', value: at };
+}
+
+/**
+ * One mapped field, said by where its value comes from: "the message's subject" for a field the message gives; for the
+ * rule's own constant, its text, boxed as the author's — what the mapping's key is called never stands in for it.
+ */
+function mappedRef(mapping: unknown, pointer: string): RulePart[] {
+  const found = resolveMapped(mapping, pointer);
+  switch (found.kind) {
+    case 'source': {
+      const words = SOURCE_WORDS[found.pointer];
+      return words === undefined ? [plain("the message's "), authored(found.pointer)] : [plain(words)];
+    }
+    case 'constant':
+      return [plain('the rule’s own text '), authored(written(found.value))];
+    case 'template':
+      return [plain('the rule’s mapping '), authored(written(found.value))];
+    case 'none':
+      return [authored(pointer), plain(', which the rule does not map')];
+  }
+}
+
+function mappedList(mapping: unknown, pointers: readonly string[]): RulePart[] {
+  if (pointers.length === 0) return [plain('nothing of the message')];
+  return pointers.flatMap((pointer, index) => [
+    ...(index === 0 ? [] : [plain(index === pointers.length - 1 ? ' and ' : '; ')]),
+    ...mappedRef(mapping, pointer),
+  ]);
+}
+
+/** Every constant a mapping writes, as its author wrote it, in the mapping's order: each goes wherever the whole record does. */
+function constantsOf(node: unknown): unknown[] {
+  if (isReference(node)) return [];
+  if (Array.isArray(node)) return node.flatMap(constantsOf);
+  if (isObject(node)) return Object.values(node).flatMap(constantsOf);
+  return [node];
+}
+
+/** The whole mapped record, as a webhook or the live stream gets it: the message's fields and the rule's own text. */
+function wholeRecord(mapping: unknown, fields: RulePart[]): RulePart[] {
+  const constants = constantsOf(isObject(mapping) ? mapping : {});
+  if (constants.length === 0) return fields;
+  return [
+    ...fields,
+    plain(constants.length === 1 ? ', with the rule’s own text ' : ', with the rule’s own texts '),
+    ...constants.flatMap((constant, index) => [...(index === 0 ? [] : [plain(', ')]), authored(written(constant))]),
+    plain(','),
+  ];
+}
+
+/** A Linear slot's mapped field, as the event service reads it (`slotPointer`): `from.address` is `/from/address`. */
+const SLOT = /\{\{\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\s*\}\}/gu;
+
+/** Where a model part's provider sends its fields (`ANALYSE_ROUTES`): the two a context part may name. */
+const MODEL_ROUTES: Readonly<Record<string, string>> = {
+  openrouter: 'OpenRouter (openrouter.ai)',
+  anthropic: 'Anthropic (api.anthropic.com)',
+};
 
 const JEV_ROUTES: Readonly<Record<string, string>> = {
   openrouter: 'OpenRouter (openrouter.ai), which passes it to TypeSafe',
@@ -187,25 +302,17 @@ export function whatLeaves(rule: JsonObject): RulePart[][] {
       case 'dry-run':
       case 'queue':
         break;
-      case 'webhook': {
-        const url = isObject(target.url) ? target.url : {};
-        const host =
-          url.kind === 'secret' && typeof url.host === 'string'
-            ? url.host
-            : typeof url.value === 'string'
-              ? hostOf(url.value)
-              : null;
-        lines.push([...fields, plain(' go to the webhook at '), value(host ?? 'its address'), plain('.')]);
+      case 'webhook':
+        lines.push(...webhookLines(target, wholeRecord(rule.mapping, fields)));
         break;
-      }
       case 'sse':
-        lines.push([...fields, plain(' go to the apps that subscribe to the live stream.')]);
+        lines.push([...wholeRecord(rule.mapping, fields), plain(' go to the apps that subscribe to the live stream.')]);
         break;
       case 'linear':
-        lines.push(...linearLines(target, fields));
+        lines.push(...linearLines(target, rule.mapping));
         break;
       case 'session':
-        lines.push(...sessionLines(target, fields));
+        lines.push(...sessionLines(target, fields, rule.mapping));
         break;
       default:
         lines.push([plain('A target the app cannot describe, as written: '), authored(written(target))]);
@@ -241,21 +348,30 @@ function otherFields(target: JsonObject, known: readonly string[]): RulePart[][]
 }
 
 /** What a model writes for a part, asked by its author, from which fields, through which provider. */
-function generated(part: { provider: string; model: string; instruction: string; from: string[] }): RulePart[] {
+function generated(
+  mapping: unknown,
+  part: { provider: string; model: string; instruction: string; from: string[] },
+): RulePart[] {
   return [
     plain('what '),
     authored(part.model || 'a model'),
     plain(' writes, asked '),
     authored(part.instruction),
     plain(' — it is sent '),
-    ...fieldList(part.from),
+    ...mappedList(mapping, part.from),
     plain(' through '),
-    value(part.provider || 'its provider'),
+    ...(MODEL_ROUTES[part.provider] === undefined
+      ? [authored(part.provider || '(no provider)')]
+      : [plain(MODEL_ROUTES[part.provider] as string)]),
     plain(', on your own key'),
   ];
 }
 
-function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
+/** What the relay keeps, as the terminal's preview says it (`sessionDisclosure`): outside Agent Comms' retention. */
+const JOURNAL =
+  "claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.";
+
+function sessionLines(target: JsonObject, fields: RulePart[], mapping: unknown): RulePart[][] {
   const session = sessionView(target);
   if (session === null) return [];
   if (session.windowOnly)
@@ -266,6 +382,7 @@ function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
         authored(session.where),
         plain(', which reads them.'),
       ],
+      [plain(JOURNAL)],
     ];
   const who = session.provider === 'codex' ? 'a Codex session' : 'a Claude Code session';
   const lines: RulePart[][] = [
@@ -277,6 +394,7 @@ function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
         : [plain('in '), authored(session.where)]),
       plain(`, a coding agent there, which may act: ${SESSION_MODE_WORDS[session.mode]}.`),
     ],
+    [plain(JOURNAL)],
     [
       plain(
         session.ifNone === 'start'
@@ -299,7 +417,7 @@ function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
     const label = plain(`Context part ${index + 1}: `);
     const part = contextPart(raw);
     if (part === null) lines.push([label, plain('as written, '), authored(written(raw))]);
-    else if (part.kind === 'fields') lines.push([label, ...fieldList(part.fields), plain(' of the message.')]);
+    else if (part.kind === 'fields') lines.push([label, ...mappedList(mapping, part.fields), plain('.')]);
     else if (part.kind === 'text') lines.push([label, plain('the fixed text '), authored(part.text)]);
     else if (part.kind === 'file')
       lines.push([
@@ -308,33 +426,55 @@ function sessionLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
         authored(part.path),
         plain(', read when the match is passed on (at most 64 KB).'),
       ]);
-    else lines.push([label, ...generated(part), plain('.')]);
+    else lines.push([label, ...generated(mapping, part), plain('.')]);
   });
   if (session.instruction !== null) lines.push([plain('It is told last: '), authored(session.instruction)]);
   lines.push(...otherFields(target, SESSION_FIELDS));
   return lines;
 }
 
-function templateLine(name: string, raw: unknown): RulePart[] {
+/**
+ * A Linear title or description, as its author wrote it, and what fills each slot. In the description every slot's
+ * value — the message's, and a constant the rule maps — is quoted as text in a code block, never Markdown, so none can
+ * link or mention anything (`renderLinearIssue`, `outsideBlock`); in the title each is one line of plain text.
+ */
+function templateLine(name: string, raw: unknown, mapping: unknown, description: boolean): RulePart[] {
   const template = templateOf(raw);
   if (template === null) return [plain(`${name}, as written: `), authored(written(raw))];
-  if (template.kind === 'text') return [plain(`${name}: `), authored(template.text)];
-  return [plain(`${name} is `), ...generated(template), plain('.')];
+  if (template.kind !== 'text') return [plain(`${name} is `), ...generated(mapping, template), plain('.')];
+  const slots = [
+    ...new Set([...template.text.matchAll(SLOT)].flatMap((match) => (match[1] === undefined ? [] : [match[1]]))),
+  ];
+  return [
+    plain(`${name}: `),
+    authored(template.text),
+    ...slots.flatMap((slot, index) => {
+      const ref = mappedRef(mapping, `/${slot.split('.').join('/')}`);
+      return [
+        plain(index === 0 ? ', where ' : '; '),
+        authored(`{{${slot}}}`),
+        plain(' is '),
+        ...ref,
+        ...(description ? [plain(', quoted in the issue as text, never as Markdown')] : []),
+      ];
+    }),
+  ];
 }
 
-function linearLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
+function linearLines(target: JsonObject, mapping: unknown): RulePart[][] {
   const linear = linearView(target);
   if (linear === null) return [];
   const lines: RulePart[][] = [
     [
-      plain('An issue is added in Linear (api.linear.app), with your Linear key, team '),
-      value(linear.teamKey || linear.teamId || 'its team'),
-      plain(', from '),
-      ...fields,
+      // The issue is made in the team the id names; the key is the author's too, and nothing checks the two agree.
+      plain('An issue is added in Linear (api.linear.app), with your Linear key, in team '),
+      authored(linear.teamKey || '(no key)'),
+      plain(', id '),
+      authored(linear.teamId || '(no id)'),
       plain('.'),
     ],
-    templateLine('Its title', target.title),
-    templateLine('Its description', target.description ?? { text: '' }),
+    templateLine('Its title', target.title, mapping, false),
+    templateLine('Its description', target.description ?? { text: '' }, mapping, true),
   ];
   const labels = linear.labels;
   if (labels === null) lines.push([plain('Its labels, as written: '), authored(written(target.labels))]);
@@ -342,7 +482,12 @@ function linearLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
   else
     lines.push([
       plain(labels.length === 1 ? 'Its label: ' : 'Its labels: '),
-      ...labels.flatMap((label, index) => [...(index === 0 ? [] : [plain(', ')]), authored(label.name)]),
+      ...labels.flatMap((label, index) => [
+        ...(index === 0 ? [] : [plain('; ')]),
+        authored(label.name),
+        plain(', id '),
+        authored(label.id),
+      ]),
     ]);
   const assignee = target.assignee;
   if (assignee === null) lines.push([plain('It is assigned to nobody.')]);
@@ -354,10 +499,65 @@ function linearLines(target: JsonObject, fields: RulePart[]): RulePart[][] {
   return lines;
 }
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname || null;
-  } catch {
-    return null;
-  }
+const WEBHOOK_FIELDS = [
+  'targetId',
+  'version',
+  'kind',
+  'url',
+  'approvedAddressSet',
+  'signing',
+  'ordering',
+  'retryLimit',
+  'representation',
+];
+
+/**
+ * A webhook target (`webhook-target.ts`): its whole address — scheme, host, port and path, as the author wrote it; for
+ * a secret one, the part that is not secret and its fingerprint — the addresses it may reach, and whether the sender's
+ * words go inside the untrusted-content envelope or, in the plain format, as they are.
+ */
+function webhookLines(target: JsonObject, record: RulePart[]): RulePart[][] {
+  const url = isObject(target.url) ? target.url : null;
+  const lines: RulePart[][] = [];
+  if (url?.kind === 'plain' && typeof url.value === 'string')
+    lines.push([...record, plain(' go to the webhook at '), authored(url.value), plain('.')]);
+  else if (
+    url?.kind === 'secret' &&
+    typeof url.scheme === 'string' &&
+    typeof url.host === 'string' &&
+    typeof url.port === 'number'
+  ) {
+    const host = url.host.includes(':') ? `[${url.host}]` : url.host;
+    lines.push([
+      ...record,
+      plain(' go to the webhook at '),
+      authored(`${url.scheme}://${host}:${url.port}`),
+      plain(', the rest of its address kept secret, its fingerprint '),
+      authored(typeof url.sha256 === 'string' ? url.sha256 : '(none)'),
+      plain('.'),
+    ]);
+  } else
+    lines.push([...record, plain(' go to a webhook whose address is, as written: '), authored(written(target.url))]);
+  if (Array.isArray(target.approvedAddressSet) && target.approvedAddressSet.length > 0)
+    lines.push([
+      plain('It may reach only '),
+      ...target.approvedAddressSet.flatMap((address, index) => [
+        ...(index === 0 ? [] : [plain(', ')]),
+        authored(written(address)),
+      ]),
+      plain('.'),
+    ]);
+  if (target.representation === 'plain')
+    lines.push([
+      plain(
+        "The webhook's format is plain: the sender's words go as they are, without the untrusted-content envelope that marks them as the sender's.",
+      ),
+    ]);
+  else if (target.representation === 'enveloped')
+    lines.push([
+      plain("The webhook gets the sender's words inside the untrusted-content envelope, marked as the sender's."),
+    ]);
+  else lines.push([plain("The webhook's format, as written: "), authored(written(target.representation))]);
+  lines.push(...otherFields(target, WEBHOOK_FIELDS));
+  return lines;
 }

@@ -1,5 +1,5 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import judgesContract from '../../../../packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json';
 import { JEV_SETUP_COPY, JUDGE_ROWS_COPY, PROVIDERS_COPY } from '../components/judges/copy.ts';
 import { COPY } from '../copy.ts';
@@ -13,6 +13,14 @@ import { renderApp } from './render.tsx';
  * server set up and turned on in Events → Judges, their keys kept in Settings → AI providers. A key goes to Rust's
  * `provider_key_set` alone, never into a `cli` call, and the field that held it is emptied.
  */
+
+// The app acts as the person only on macOS, which attests it; elsewhere each setup is offered at the terminal. These
+// tests run as macOS unless one says otherwise.
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock('../platform.ts', () => ({ isMac: () => platform.mac }));
+afterEach(() => {
+  platform.mac = true;
+});
 
 const SETUP = '0.32.0';
 const SLOW = 30_000;
@@ -219,6 +227,70 @@ describe('Judges, set up in the app', () => {
     );
   });
 
+  it('on Windows and Linux, Jev and a local model server are set up at the terminal: the app runs no setup', {
+    timeout: SLOW,
+  }, async () => {
+    platform.mac = false;
+    const bridge = setupBridge({ keys: { openrouter: true } });
+    renderApp(bridge, { screen: 'events' });
+    const section = await judges();
+    fireEvent.click(
+      within(row(section, JUDGE_ROWS_COPY.jev.name)).getByRole('button', { name: JUDGE_ROWS_COPY.setUp }),
+    );
+    let dialog = await screen.findByRole('dialog', { name: JEV_SETUP_COPY.title });
+    await within(dialog).findByRole('radio', { name: /OpenRouter/ });
+    expect(within(dialog).queryByRole('button', { name: JEV_SETUP_COPY.turnOn })).toBeNull();
+    const terminal = () => bridge.calls.filter((call) => call.command === 'openInTerminal').map((call) => call.args);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() =>
+      expect(terminal()).toEqual([
+        { kind: 'atTerminal', call: { kind: 'judgeSetup', judgeKind: 'typesafe', provider: 'openrouter' } },
+      ]),
+    );
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: JEV_SETUP_COPY.title })).toBeNull());
+    fireEvent.click(
+      within(row(section, JUDGE_ROWS_COPY.local.name)).getByRole('button', { name: JUDGE_ROWS_COPY.setUp }),
+    );
+    dialog = await screen.findByRole('dialog', { name: 'Set up a local model server' });
+    expect(within(dialog).queryByRole('button', { name: 'Turn on' })).toBeNull();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() =>
+      expect(terminal()).toContainEqual({
+        kind: 'atTerminal',
+        call: { kind: 'judgeSetup', judgeKind: 'local-endpoint', url: 'http://127.0.0.1:11434', model: 'nimble' },
+      }),
+    );
+    expect(cliKinds(bridge)).not.toContain('judgeSetup');
+  });
+
+  it('on macOS, a setup the event service refuses as unattested is offered at the terminal instead', {
+    timeout: SLOW,
+  }, async () => {
+    const bridge = setupBridge({ keys: { openrouter: true } });
+    const cli = bridge.cli.bind(bridge);
+    bridge.cli = async (call) =>
+      call.kind === 'judgeSetup'
+        ? {
+            status: 'failed',
+            exit: 77,
+            code: 'ORIGIN_UNATTESTED',
+            message: 'the app could not be attested as yours',
+            hint: null,
+          }
+        : cli(call);
+    renderApp(bridge, { screen: 'events' });
+    const section = await judges();
+    fireEvent.click(
+      within(row(section, JUDGE_ROWS_COPY.jev.name)).getByRole('button', { name: JUDGE_ROWS_COPY.setUp }),
+    );
+    const dialog = await screen.findByRole('dialog', { name: JEV_SETUP_COPY.title });
+    await within(dialog).findByRole('radio', { name: /OpenRouter/ });
+    fireEvent.click(within(dialog).getByRole('button', { name: JEV_SETUP_COPY.turnOn }));
+    expect(await within(dialog).findByRole('button', { name: 'Do it in Terminal' })).toBeTruthy();
+    expect(within(dialog).queryByRole('button', { name: JEV_SETUP_COPY.turnOn })).toBeNull();
+  });
+
   it('an events service before judge setup keeps Turn on in Terminal', { timeout: SLOW }, async () => {
     renderApp(setupBridge({ version: '0.31.0' }), { screen: 'events' });
     const section = await judges();
@@ -282,6 +354,36 @@ describe('Settings → AI providers', () => {
     expect(within(confirm).getByText(PROVIDERS_COPY.removeBodyUsed('OpenRouter'))).toBeTruthy();
     fireEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
     await waitFor(() => expect(cliCalls(bridge)).toContainEqual({ kind: 'providerKeyRemove', provider: 'openrouter' }));
+  });
+
+  it('on Windows and Linux, a key is added and removed at the terminal, which asks for it: the app never has it', {
+    timeout: SLOW,
+  }, async () => {
+    platform.mac = false;
+    const bridge = setupBridge({ keys: { openrouter: true } });
+    renderApp(bridge, { screen: 'settings' });
+    const section = await providers();
+    const typesafe = await within(section).findByRole('region', { name: 'TypeSafe' });
+    fireEvent.click(within(typesafe).getByRole('button', { name: PROVIDERS_COPY.addKey }));
+    // No field to type a key into: the terminal asks for it.
+    expect(within(typesafe).queryByLabelText('TypeSafe key')).toBeNull();
+    expect(typesafe.textContent).toContain('The terminal asks for the key there, hidden: the app never sees it.');
+    const terminal = () => bridge.calls.filter((call) => call.command === 'openInTerminal').map((call) => call.args);
+    fireEvent.click(within(typesafe).getByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() => expect(terminal()).toEqual([{ kind: 'providerKeySet', provider: 'typesafe' }]));
+    fireEvent.click(await within(typesafe).findByRole('button', { name: 'Done' }));
+    const openrouter = await within(section).findByRole('region', { name: 'OpenRouter' });
+    fireEvent.click(await within(openrouter).findByRole('button', { name: PROVIDERS_COPY.remove }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }));
+    fireEvent.click(await within(openrouter).findByRole('button', { name: 'Do it in Terminal' }));
+    await waitFor(() =>
+      expect(terminal()).toContainEqual({
+        kind: 'atTerminal',
+        call: { kind: 'providerKeyRemove', provider: 'openrouter' },
+      }),
+    );
+    expect(bridge.calls.some((call) => call.command === 'providerKeySet')).toBe(false);
+    expect(cliKinds(bridge)).not.toContain('providerKeyRemove');
   });
 
   it('an events service before provider keys asks for an update and reads nothing', { timeout: SLOW }, async () => {

@@ -707,6 +707,14 @@ async function copyDesktopTree(root: string, options: { readonly dist: boolean }
   await copyFile(root, 'packages/events-daemon/test/fixtures/judges/desktop-contract-v1.json');
   // The Judges section's contract (0.27.1): the app's Rust and Vitest tests read it beside Laya's.
   await copyFile(root, 'packages/events-daemon/test/fixtures/judges/desktop-contract-judges-v1.json');
+  // The rule editor (0.33.0) reads the rule text's printer and parser from the events package's own source, so a
+  // copy of the app carries that source, and the package's installed modules beside it.
+  const events = join(repositoryRoot, 'packages/events');
+  await cp(join(events, 'src'), join(root, 'packages/events/src'), { recursive: true });
+  await copyFile(root, 'packages/events/package.json');
+  const eventsModules = await stat(join(events, 'node_modules')).catch(() => undefined);
+  if (eventsModules?.isDirectory())
+    await symlink(join(events, 'node_modules'), join(root, 'packages/events/node_modules'), 'dir');
   return copied;
 }
 

@@ -51,12 +51,16 @@ together under one version.
   session kind and adds the content-free busy queue.
   - **From the security review:** the control token goes only to a port your own process listens on (checked with
     `lsof` on macOS and `/proc/net/tcp` on Linux; not on Windows), and is read from the opened file itself. Only a live
-    run's 409 is busy; each busy answer is a try, with a growing wait, and a session since watched, fenced or moved is
-    left. The prompt is written once for each match, so a model part runs once. A file part is read only when it is a
-    plain file of yours with no other name, never from Agent Comms' own folders, under a deadline; a relay root of `/`
-    or your home folder is ignored. A file's text goes inside the untrusted-content envelope. A lane session target's
-    counts stay out of an unbound window. The approval preview and the README say that claude-stream journals each
-    prompt, the sender's words included, under its own retention.
+    run's 409 is busy. A busy session never fails a match: it waits until the session is free or the match expires,
+    tried further apart the longer it has waited (at most every five minutes), and only other failures count towards
+    the 12 that fail it. A session since watched, fenced or moved is left, and a match starts at most one session: if
+    the relay fences or moves it, the match fails (`SESSION_FENCED`, `SESSION_MOVED`). The context is resolved once for
+    each match, so a model part runs once; a waiting match sends a file's text only while its folder is still allowed,
+    and a failed one keeps none of it. A record that does not open ends its delivery. A file part is read only when it
+    is a plain file of yours with no other name, never from Agent Comms' own folders, under a deadline; a relay root of
+    `/` or your home folder is ignored. A file's text goes inside the untrusted-content envelope. A lane session
+    target's counts stay out of an unbound window. The approval preview and the README say that claude-stream journals
+    each prompt, the sender's words included, under its own retention.
 - **A judge's exact document** (`@agentcomms/events-daemon`): `agent-events judge show <judgeId> [--version <n>] --json`
   and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
   prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any

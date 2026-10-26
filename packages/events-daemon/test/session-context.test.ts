@@ -7,7 +7,7 @@ import { CONTEXT_LIMITS } from '@agentcomms/events';
 import { ANALYSE_GLOBAL_ONLY_ENDPOINTS, preparePinnedConnection } from '../src/network/pinned-connection.ts';
 import { isTooWideRoot, settingsFrom } from '../src/runtime/agent-sessions.ts';
 import { contextGenerator, generateFailure, generateRequest } from '../src/runtime/context-generate.ts';
-import { readContextFile, resolveContextParts } from '../src/runtime/session-context.ts';
+import { fileStillAllowed, readContextFile, resolveContextParts } from '../src/runtime/session-context.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 
 /**
@@ -252,10 +252,30 @@ test('REVIEW-4c: Agent Comms’ own folders are never read, even under an allowe
 });
 
 test('REVIEW-4d: `/` and the home folder itself confine nothing, so they are never roots', () => {
-  for (const root of ['/', '/example/home', '/example/home/'])
+  for (const root of ['/', '//', '/example/home', '/example/home/'])
     assert.equal(isTooWideRoot(root, '/example/home'), true, root);
   for (const root of ['/example/home/work', '/example'])
     assert.equal(isTooWideRoot(root, '/example/home'), false, root);
+  // Windows' styles, read the same on every platform: a drive's or a share's root, with or without the \\?\ prefix,
+  // and the user profile, compared without case.
+  const profile = 'C:\\Users\\Example';
+  for (const root of [
+    'C:\\',
+    'c:/',
+    'C:',
+    '\\\\?\\C:\\',
+    '\\\\.\\D:\\',
+    '\\\\server\\share',
+    '\\\\server\\share\\',
+    '\\\\?\\UNC\\server\\share\\',
+    profile,
+    'c:\\users\\example\\',
+    'C:/Users/Example',
+    '\\\\?\\C:\\Users\\EXAMPLE',
+  ])
+    assert.equal(isTooWideRoot(root, profile), true, root);
+  for (const root of ['C:\\Users\\Example\\work', 'D:\\data', '\\\\server\\share\\work', '\\\\?\\C:\\Users'])
+    assert.equal(isTooWideRoot(root, profile), false, root);
   assert.throws(
     () =>
       settingsFrom(
@@ -265,4 +285,29 @@ test('REVIEW-4d: `/` and the home folder itself confine nothing, so they are nev
       ),
     /never \/ or your home folder itself/u,
   );
+});
+
+test('REVIEW2-2: a kept file part may still be sent only while its folder is still allowed, even once it is gone', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withFolder(async (root) => {
+    const docs = join(root, 'docs');
+    const state = join(root, 'agent-comms-state');
+    await mkdir(docs);
+    await mkdir(state);
+    await writeFile(join(docs, 'brief.md'), 'brief');
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [docs]), true);
+    assert.equal(
+      await fileStillAllowed(join(docs, 'brief.md'), [join(root, 'other')]),
+      false,
+      'its folder was removed',
+    );
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [root], [docs]), false, 'one of Agent Comms’ own');
+    await rm(join(docs, 'brief.md'));
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [docs]), true, 'a file gone is judged by its folder');
+    // A folder swapped for a link out of the allowed one is judged by where it leads.
+    await rm(docs, { recursive: true });
+    await symlink(state, docs);
+    assert.equal(await fileStillAllowed(join(docs, 'brief.md'), [root], [state]), false);
+  });
 });

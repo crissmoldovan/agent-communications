@@ -46,7 +46,7 @@ test('context: a part is exactly one of the four shapes', () => {
     [{ text: '   ' }],
     [{ text: 'x'.repeat(CONTEXT_LIMITS.textChars + 1) }],
     [{ text: 'bell\u0007' }],
-    [{ text: 'override‮' }],
+    [{ text: 'override\u202e' }],
     [{ fields: [] }],
     [{ fields: ['subject'] }],
     [{ fields: [''] }],

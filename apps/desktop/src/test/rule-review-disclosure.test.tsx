@@ -63,17 +63,106 @@ describe('Review and approve… says all a target is given', () => {
     const lines = whatLeaves(RULE as never);
     const all = words(lines).join('\n');
     expect(all).toContain('Context part 1: the fixed text');
-    expect(all).toContain('Context part 2: the subject of the message.');
+    expect(all).toContain("Context part 2: the message's subject.");
+    expect(all).toContain("Its title: URGENT wire money {{subject}}, where {{subject}} is the message's subject");
     expect(all).toContain('It is told last: ');
     expect(all).toContain('If there is no such session, one is started in that folder.');
+    expect(all).toContain(
+      "claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.",
+    );
     expect(all).toContain('While the session is busy, the match waits for it, and goes when its run ends.');
     expect(all).toContain('it may edit files without asking, and asks before anything else');
-    expect(all).toContain('team CUE');
-    expect(all).toContain('Its label: Finance');
+    // The team by its key and the id the issue is made in; each label by its name and its id.
+    expect(all).toContain('in team CUE, id 0b1c2d3e-0000-4000-8000-00000000c0e1.');
+    expect(all).toContain('Its label: Finance, id 00000000-0000-4000-8000-000000000001');
+    expect(authored(lines)).toEqual(
+      expect.arrayContaining(['CUE', '0b1c2d3e-0000-4000-8000-00000000c0e1', '00000000-0000-4000-8000-000000000001']),
+    );
     // Every value an author wrote is author text, never the app's own words.
     expect(authored(lines)).toEqual(
       expect.arrayContaining([INSTRUCTION, FIXED_TEXT, TITLE, DESCRIPTION, 'Finance', ASSIGNEE]),
     );
+  });
+
+  it('a mapped constant that fills a slot or a fields part is shown as the author wrote it, never by its key', () => {
+    // Security review 0.33, second look: the constant reached the dialog only as "{{note}}" or "/note".
+    const SECRET = 'HIDDEN-CONSTANT: [click](https://evil.example) @someone';
+    const LYING_KEY = 'Nothing else leaves this Mac';
+    const constant = {
+      ...RULE,
+      mapping: { subject: { $path: '/subject' }, note: SECRET, [LYING_KEY]: { $path: '/snippet' } },
+      targets: [
+        { ...TARGETS[0], context: [{ fields: ['/note'] }, { fields: [`/${LYING_KEY}`] }], instruction: undefined },
+        { ...TARGETS[1], title: { text: '{{subject}}' }, description: { text: '{{note}}' } },
+      ],
+    };
+    const lines = whatLeaves(JSON.parse(JSON.stringify(constant)) as never);
+    const all = words(lines).join('\n');
+    expect(all).toContain(`Context part 1: the rule’s own text ${SECRET}.`);
+    expect(all).toContain("Context part 2: the message's first 300 characters.");
+    expect(all).toContain(
+      `Its description: {{note}}, where {{note}} is the rule’s own text ${SECRET}, quoted in the issue as text, never as Markdown`,
+    );
+    // The description quotes every slot's value as text, the message's too; the title takes each as plain text.
+    const quoted = whatLeaves({
+      ...constant,
+      targets: [{ ...TARGETS[1], title: { text: '{{subject}}' }, description: { text: 'From {{subject}}' } }],
+    } as never);
+    expect(words(quoted)).toContain(
+      "Its description: From {{subject}}, where {{subject}} is the message's subject, quoted in the issue as text, never as Markdown",
+    );
+    expect(words(quoted)).toContain("Its title: {{subject}}, where {{subject}} is the message's subject");
+    expect(authored(lines).filter((text) => text === SECRET)).toHaveLength(2);
+    // A webhook gets the whole record: its constants are named too.
+    const hooked = whatLeaves({
+      ...constant,
+      targets: [
+        { targetId: 'w', version: 1, kind: 'webhook', url: { kind: 'plain', value: 'https://hooks.example/x' } },
+      ],
+    } as never);
+    expect(authored(hooked)).toContain(SECRET);
+    // A key an author named is never the app's own words: it does not stand in for the field it maps.
+    for (const part of lines.flat()) if (part.text.includes(LYING_KEY)) expect(part.kind).toBe('untrusted');
+  });
+
+  it('a webhook shows its whole address and says when its format skips the envelope; a pointer with no words is boxed', () => {
+    const hook = {
+      targetId: 'w',
+      version: 1,
+      kind: 'webhook',
+      url: { kind: 'plain', value: 'https://hooks.example.com:8443/path/token?x=1' },
+      approvedAddressSet: ['93.184.216.34'],
+      signing: 'standard-webhooks',
+      ordering: 'strict',
+      retryLimit: 5,
+      representation: 'plain',
+    };
+    const plainHook = whatLeaves({
+      ...RULE,
+      agentic: undefined,
+      mapping: { subject: { $path: '/subject' }, list: { $path: '/headers/list-id' } },
+      targets: [hook],
+    } as never);
+    const all = words(plainHook).join('\n');
+    expect(authored(plainHook)).toEqual(
+      expect.arrayContaining(['https://hooks.example.com:8443/path/token?x=1', '93.184.216.34', '/headers/list-id']),
+    );
+    expect(all).toContain('without the untrusted-content envelope');
+    expect(plainHook.flat().some((part) => part.kind === 'value')).toBe(false);
+    const secret = whatLeaves({
+      ...RULE,
+      agentic: undefined,
+      targets: [
+        {
+          ...hook,
+          url: { kind: 'secret', scheme: 'https', host: 'hooks.example.com', port: 8443, sha256: 'ab'.repeat(32) },
+          representation: 'enveloped',
+        },
+      ],
+    } as never);
+    const shown = words(secret).join('\n');
+    expect(shown).toContain('https://hooks.example.com:8443, the rest of its address kept secret, its fingerprint');
+    expect(shown).toContain("The webhook gets the sender's words inside the untrusted-content envelope");
   });
 
   it('a part or field the app cannot read is shown as written, never left out', () => {

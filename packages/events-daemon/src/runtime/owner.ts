@@ -246,6 +246,12 @@ export interface EventOwnerOptions {
    * under the macOS sandbox.
    */
   /**
+   * The person's home folder, a test seam: a lane binding's folder is shown under it as `~`, and agent sessions find
+   * the relay's default homes under it. A test pins a temp folder, so no real home is read; production finds the
+   * person's own, and only when one of those first needs it.
+   */
+  readonly homeDirectory?: string | undefined;
+  /**
    * Agent sessions (0.33.0 §3.5), test seams only: the home folder the relay's default homes are found under — a test
    * pins a temp folder, so no real relay home is read — a fake model for generate parts, and how often the busy queue
    * asks the relay again. Production uses the person's home, OpenRouter with the person's key, and 30 seconds.
@@ -1159,7 +1165,12 @@ async function startOwnerWithLock(
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
   // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
-  const lanes = new LaneService({ store: database, queue, now });
+  const lanes = new LaneService({
+    store: database,
+    queue,
+    now,
+    ...(options.homeDirectory === undefined ? {} : { home: options.homeDirectory }),
+  });
   // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
   // and each rule version with its times, its plain-words summary and its last 7 days.
   // The Linear target's one client (0.33.0 design §3.4): the integration's read and the Linear dispatcher share it.
@@ -1227,8 +1238,12 @@ async function startOwnerWithLock(
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
   const agentSessions = new AgentSessionService({
     store: database,
-    // Under test the account's real home is refused (`homeForDiscovery`): a test gives the owner a temporary one.
-    homeDirectory: options.agentSessions?.homeDirectory ?? homeForDiscovery(homeDirectory(), 'the claude-stream relay'),
+    // Found only when the relay or a root is first looked at: an owner that never does never reads the environment's home.
+    // Under test the account's real home is refused there (`homeForDiscovery`): a test gives the owner a temporary one.
+    homeDirectory:
+      options.agentSessions?.homeDirectory ??
+      options.homeDirectory ??
+      (() => homeForDiscovery(homeDirectory(), 'the claude-stream relay')),
     // Agent Comms' own folders: no session works in them, and no file part is read from them (review of 0.33.0, 4).
     deniedFolders: [
       ...new Set([

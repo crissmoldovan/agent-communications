@@ -311,7 +311,14 @@ test('REVIEW-8: the control token is read from the opened file itself: a FIFO or
   });
 });
 
-test('REVIEW-8: the token goes only to a port this user’s own process listens on; nothing is sent otherwise', async () => {
+/** Windows has no user id to compare a listener's owner with: there the check is unattested, as the README says. */
+const POSIX_LISTENER_CHECK =
+  process.platform === 'win32' &&
+  'Windows has no user id to compare a listener’s owner with: the listener check is unattested there (README)';
+
+test('REVIEW-8: the token goes only to a port this user’s own process listens on; nothing is sent otherwise', {
+  skip: POSIX_LISTENER_CHECK,
+}, async () => {
   const uid = process.getuid?.();
   await withRelay(async (relay, root) => {
     // Another user's listener holds the port: refused before a byte — the token — is sent.
@@ -354,6 +361,28 @@ test('REVIEW-8: the token goes only to a port this user’s own process listens 
       const free = (closed.address() as { port: number }).port;
       await new Promise((resolve) => closed.close(resolve));
       assert.equal(listenersAreYours(await listenerOwners(free), uid), false);
+    }
+  });
+});
+
+test('REVIEW-8: on Windows the listener is unattested, as documented: the token is sent, unless the lookup fails', async () => {
+  // What the system lookup says on Windows, asked the same way on every platform.
+  assert.deepEqual(await listenerOwners(4318, 'win32'), { kind: 'unattested', platform: 'win32' });
+  assert.equal(listenersAreYours({ kind: 'unattested', platform: 'win32' }, undefined), true);
+  await withRelay(async (relay, root) => {
+    const unattested = await clientFor(relay, root, async () => ({ kind: 'unattested', platform: 'win32' }));
+    assert.equal((await unattested.ready()).protocol, 1, 'an unattested listener is sent the token');
+    // A lookup that fails is a refusal on every platform: nothing is sent.
+    const before = relay.requests.length;
+    const failing = await clientFor(relay, root, async () => {
+      throw new Error('lookup failed');
+    });
+    await assert.rejects(failing.ready(), /could not be checked/u);
+    assert.equal(relay.requests.length, before);
+    // And on Windows itself, the client's own lookup is the unattested one.
+    if (process.platform === 'win32') {
+      const own = await clientFor(relay, root);
+      assert.equal((await own.ready()).protocol, 1);
     }
   });
 });
