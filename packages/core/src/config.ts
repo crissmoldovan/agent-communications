@@ -23,6 +23,7 @@ import {
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { CONVERSION_HOOKS, type ConversionHooks } from './config-hooks.ts';
 import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
+import { changedConnectionSettings, classifyConnectionChange } from './connections.ts';
 import { CommsError } from './errors.ts';
 import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { type CliHandoffs, handoffSentence, requiredHandoffs } from './handoff-text.ts';
@@ -308,6 +309,17 @@ interface ConfigBody {
    * `classifyChange`: recording again and keeping more days are loosenings, off and fewer days tightenings.
    */
   activity?: unknown;
+  /**
+   * The MCP connections (single-server design D9): each place an app uses Agent Comms, by id — its name, app, where its
+   * entry is, its parts and their pins, read-only, and its key's hash.
+   *
+   * `unknown` here, as `agentLabel`, `behaviour` and `activity` are: it is read only through `readConnections`, which
+   * reads what it does not understand as reaching less — a part it cannot read left out, a record it cannot read serving
+   * nothing — so a hand edit or a later release's word can only narrow what a connection reaches. Kept through every
+   * write as the schemas keep every key they do not name, and judged by `classifyChange`: a connection or part added, a
+   * pin taken away or moved, and read-only off are loosenings; the rest apply at once.
+   */
+  connections?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2156,6 +2168,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (activityAfter.retentionDays > activityBefore.retentionDays) {
     loosen('activity.retentionDays', activityBefore.retentionDays, activityAfter.retentionDays);
   }
+  // The MCP connections (single-server design §6.2), read on each side as the gateway reads them: a connection or a
+  // part added, a pin taken away or moved, read-only off. Removing, pinning, read-only on and cutting off apply at once.
+  for (const loosening of classifyConnectionChange(before, after)) {
+    loosen(loosening.path, loosening.before, loosening.after, loosening.id);
+  }
   return { loosened: changes.map((change) => change.path), changes };
 }
 
@@ -2299,6 +2316,7 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
   record('activity.record', storedActivity(before)?.record, storedActivity(after)?.record);
   record('activity.retentionDays', storedActivity(before)?.retentionDays, storedActivity(after)?.retentionDays);
+  for (const change of changedConnectionSettings(before, after)) record(change.path, change.before, change.after);
   return changes;
 }
 

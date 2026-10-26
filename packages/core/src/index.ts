@@ -84,6 +84,11 @@ export * from './cli-runtime.ts';
 export { type ExternalCommand, externalCommand } from './command-brands.ts';
 export * from './compose-profile.ts';
 export * from './config.ts';
+/*
+ * The MCP connections (single-server design §6): each place an app uses Agent Comms, read as reaching less wherever it
+ * cannot be read, its key kept only as a hash, and every change to one judged as `classifyChange` judges it.
+ */
+export * from './connections.ts';
 export * from './core.ts';
 export * from './desktop-origin.ts';
 export * from './digest.ts';
