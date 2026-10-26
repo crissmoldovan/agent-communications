@@ -12,6 +12,7 @@ import {
   type SetupJudgeKind,
   setupBudgetDocument,
   setupJudgeDocument,
+  testBuildElsewhere,
 } from '../domain/judge-setup.ts';
 import {
   type CanonicalJudgeBudgetDocument,
@@ -144,6 +145,7 @@ export class JudgeSetupService {
   readonly #quiescer: WriterQuiescer;
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
   readonly #now: () => number;
+  readonly #testProfile: () => boolean;
 
   constructor(input: {
     readonly store: EventDatabase;
@@ -156,6 +158,11 @@ export class JudgeSetupService {
     readonly quiescer: WriterQuiescer;
     readonly audit?: Pick<AuditLog, 'append'> | undefined;
     readonly now?: (() => number) | undefined;
+    /**
+     * Whether this event service's own state folder is a test profile's (`isTestProfileState`): the only one the local
+     * test build may change. None is, unless the owner says so.
+     */
+    readonly testProfile?: (() => boolean) | undefined;
   }) {
     this.#store = input.store;
     this.#b3 = input.b3;
@@ -164,6 +171,7 @@ export class JudgeSetupService {
     this.#quiescer = input.quiescer;
     this.#audit = input.audit;
     this.#now = input.now ?? Date.now;
+    this.#testProfile = input.testProfile ?? (() => false);
   }
 
   providerList(): ProviderListResultV1 {
@@ -508,6 +516,12 @@ export class JudgeSetupService {
     if (approver === 'desktop-app (unattested)') {
       await record('refused', 'ORIGIN_UNATTESTED');
       throw unattestedChange(operation, ids);
+    }
+    // The local test build changes only its own test profile, whatever folders the CLI was given (security review of
+    // 0.34.0, finding 1): this event service's own state folder must be one.
+    if (approver === 'desktop-app (test build)' && !this.#testProfile()) {
+      await record('refused', 'NOT_A_TEST_PROFILE');
+      throw testBuildElsewhere();
     }
     try {
       const result = await work();

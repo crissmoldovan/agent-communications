@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   type ApprovalStore,
   type AuditLog,
+  accountHome,
   CommsError,
   type ConfigStore,
   homeDirectory,
@@ -145,6 +146,7 @@ import { SessionQueue, SessionQueueFollower } from './session-queue.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
+import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -1018,6 +1020,10 @@ async function startOwnerWithLock(
   onDatabase(database);
   const now = options.now ?? Date.now;
   const lifecycle = new EventLifecycle(database, now);
+  // The only event service the local test build may change is a test profile's (security review of 0.34.0, finding 1):
+  // read when a test build asks, from this owner's own state folder and the account's own home — a test's home seam,
+  // otherwise `os.userInfo()`'s, never the environment's.
+  const testProfile = () => isTestProfileState(stateDir, options.homeDirectory ?? accountHome());
   const core = openCore({
     pathOverrides: {
       stateDir,
@@ -1270,6 +1276,7 @@ async function startOwnerWithLock(
     ],
     audit: core.audit,
     now,
+    testProfile,
   });
   const sessionQueue = new SessionQueue({ store: database, now });
   let tickAfterRelease: () => void = () => undefined;
@@ -1705,6 +1712,7 @@ async function startOwnerWithLock(
     quiescer: writerQuiescer,
     audit: core.audit,
     now,
+    testProfile,
   });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);

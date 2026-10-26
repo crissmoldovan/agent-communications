@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
+import { CommsError, type DesktopOrigin, openCore, TEST_PROFILE_MARKER } from '@agentcomms/core';
 import { run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT } from '../src/domain/lifecycle.ts';
@@ -338,10 +339,21 @@ test('switching on: the attested test build approves as itself; switching off sa
     const { stateDir } = harness;
     await ruleOn(harness);
 
+    // The test build, for its own test profile: its folders together, its event service's state folder marked.
+    await writeFile(join(stateDir, TEST_PROFILE_MARKER), '');
     const first = await prepare(stateDir);
     const fromTestBuild = await cli(
       stateDir,
-      ['--json', 'collection', 'approve', first.approvalId, '--digest', first.binding.digest],
+      [
+        '--config-dir',
+        join(stateDir, '..', 'config'),
+        '--json',
+        'collection',
+        'approve',
+        first.approvalId,
+        '--digest',
+        first.binding.digest,
+      ],
       { desktopOrigin: TEST_BUILD },
     );
     assert.equal(fromTestBuild.code, 0, fromTestBuild.stderr);

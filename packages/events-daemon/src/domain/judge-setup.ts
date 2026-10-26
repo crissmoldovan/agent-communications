@@ -117,6 +117,27 @@ export function enableAllApprovalAtTerminal(approvalId: unknown): CommsError {
   });
 }
 
+/** The test build's request to an event service whose state folder is not a test profile's (0.34.0 review, finding 1). */
+export function testBuildElsewhere(): CommsError {
+  return new CommsError(
+    'APPROVAL_REQUIRED',
+    'the Agent Comms test build changes only its own test profile, and this event service is not one: use Agent Comms itself, or your terminal',
+    { details: { reason: 'NOT_A_TEST_PROFILE' } },
+  );
+}
+
+/**
+ * The CLI's refusal of a test build's command whose config and state folders are not both in one test profile (security
+ * review of 0.34.0, finding 1): the act would reach another event service than the profile's.
+ */
+export function testBuildFoldersApart(): CommsError {
+  return new CommsError(
+    'APPROVAL_REQUIRED',
+    "the Agent Comms test build changes only its own test profile, and this command's config and state folders are not both in one: run it with the test profile's folders, or use Agent Comms itself",
+    { details: { reason: 'TEST_PROFILE_FOLDERS' } },
+  );
+}
+
 /** The two kinds `judge setup` sets up. Laya is not one: no release offers it yet. */
 export type SetupJudgeKind = typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;
 export const SETUP_JUDGE_KINDS: readonly SetupJudgeKind[] = Object.freeze([

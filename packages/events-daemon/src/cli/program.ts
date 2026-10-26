@@ -20,6 +20,7 @@ import {
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
   ruleApprovalWords,
+  testBuildFoldersApart,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
@@ -125,6 +126,7 @@ import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
+import { withinTestProfile } from '../runtime/test-profile.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -851,8 +853,15 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     // marked test profile's.
     const configDir = () => program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
     const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir: configDir() })))();
-    if (origin.ok)
-      return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
+    if (origin.ok && origin.build === 'test') {
+      // The act goes to the event service of the state folder this run names: the test build speaks for it only when
+      // it is in the same test profile as the marked config folder (security review of 0.34.0, finding 1). The event
+      // service checks its own state folder too.
+      const stateDir = program.opts<EventsCliOptions>().stateDir ?? resolvePaths({ env }).stateDir;
+      if (!withinTestProfile(configDir(), stateDir)) throw testBuildFoldersApart();
+      return PERSON_SETUP_ORIGINS.desktopAppTestBuild;
+    }
+    if (origin.ok) return PERSON_SETUP_ORIGINS.desktopApp;
     if (origin.reason === 'unattested-platform') {
       if (options.unattested === 'accept') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
       throw changeAtTerminal(what, options.unattested?.words ?? 'command, with the same words');
