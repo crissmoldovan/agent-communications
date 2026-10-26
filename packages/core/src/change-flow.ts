@@ -24,6 +24,7 @@ import {
 } from './cli-runtime.ts';
 import { type Config, classifyChange, type LooseningConsent } from './config.ts';
 import type { Core } from './core.ts';
+import { type DesktopOrigin, desktopAppOrigin } from './desktop-origin.ts';
 import { CommsError } from './errors.ts';
 import { type CliHandoffs, type Handoff, isCommand, requireHandoffs } from './handoffs.ts';
 
@@ -220,6 +221,8 @@ export async function gatedChangeAtTerminal<T>(
      * to an agent's shell and inside an MCP server's process; never with `approvalId`.
      */
     appApproval?: string | undefined;
+    /** Where an app approval came from (`desktopAppOrigin`); injected by tests only. */
+    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
@@ -388,7 +391,9 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * revoked. A plan that refuses or throws, or an approval for anything else, approves nothing (the release's security
  * review, 2026-10-26).
  *
- * Who may: the person, and only where an agent is not — refused to an agent's shell (its marker) and inside an MCP
+ * Who may: the person, in the Agent Comms app — on macOS a process the app itself started, which its code signature
+ * attests (`desktopAppOrigin`); on Windows and Linux, which attest nothing (a known limit), any process without an
+ * agent's marker, said `desktop-app (unattested)`. Always refused to an agent's shell (its marker) and inside an MCP
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
  * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
  */
@@ -400,6 +405,7 @@ async function appliedFromApp<T>(
     approvalId?: string | undefined;
     env: NodeJS.ProcessEnv;
     output: { platform?: NodeJS.Platform | undefined };
+    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
   },
   approvalId: string,
 ): Promise<T> {
@@ -409,6 +415,7 @@ async function appliedFromApp<T>(
       hint: 'Pass one of them: --app-approval is the app approving its own change.',
     });
   }
+  let origin: DesktopOrigin = { ok: false, reason: 'not-checked' };
   try {
     const marker = agentMarker(options.env);
     if (marker !== null) {
@@ -425,6 +432,19 @@ async function appliedFromApp<T>(
         { details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER } },
       );
     }
+    // On macOS the process that started this one must be Agent Comms itself, verified by its signature; Windows and
+    // Linux attest nothing, and keep the checks above (known limit).
+    origin = await (options.appOrigin ?? (() => desktopAppOrigin()))();
+    if (!origin.ok && origin.reason !== 'unattested-platform') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'only the Agent Comms app can approve a change in the app, and this was not started by it',
+        {
+          hint: 'Approve it in the Agent Comms app, or at your own terminal.',
+          details: { reason: origin.reason },
+        },
+      );
+    }
   } catch (error) {
     await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app' });
     throw error;
@@ -432,7 +452,11 @@ async function appliedFromApp<T>(
   // Planned first, from the configuration as it is now: a plan that refuses or throws approves nothing.
   const request = await change.plan(await core.config.load());
   // Checked against the approval before it is answered: only this exact change, which must need approval.
-  await approveChangeInApp(core, approvalId, request, { surface: 'app', platform, approvedBy: 'desktop-app' });
+  await approveChangeInApp(core, approvalId, request, {
+    surface: 'app',
+    platform,
+    approvedBy: origin.ok ? 'desktop-app' : 'desktop-app (unattested)',
+  });
   try {
     const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });
     return await change.apply(consent, request);

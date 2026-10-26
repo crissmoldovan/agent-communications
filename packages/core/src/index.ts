@@ -85,6 +85,7 @@ export { type ExternalCommand, externalCommand } from './command-brands.ts';
 export * from './compose-profile.ts';
 export * from './config.ts';
 export * from './core.ts';
+export * from './desktop-origin.ts';
 export * from './digest.ts';
 export * from './errors.ts';
 export * from './fs.ts';
