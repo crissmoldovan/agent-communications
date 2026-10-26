@@ -69,7 +69,7 @@ import {
   setSession,
 } from '../../rule-editor/targets.ts';
 import { DAY_MS, HOUR_MS } from '../../rule-editor/time.ts';
-import { Problem } from './parts.tsx';
+import { AuthorText, Problem } from './parts.tsx';
 
 /**
  * A judge the person may choose — every live one `judges list` names — with its document once `judge show` gave it,
@@ -796,6 +796,15 @@ function SessionAction({
               </div>
             )}
           </Line>
+          {view.instruction === null ? null : (
+            // What the session is told last has no control here: shown as its author wrote it, and kept as it was.
+            <Line label={COPY.toldLast}>
+              <div data-slot="instruction" className="flex w-full flex-col gap-(--cue-space-1)">
+                <AuthorText text={view.instruction} />
+                <AsText onEditAsText={onEditAsText} />
+              </div>
+            </Line>
+          )}
         </>
       )}
     </>

@@ -91,6 +91,7 @@ export const EDITOR_COPY = {
   modes: { manual: 'Asks first', acceptEdits: 'May edit files', plan: 'Only plans' },
   windowOnly: 'An agent window you opened, bound to this lane: it is woken through the lane, and given the item there.',
   giveIt: 'Give it',
+  toldLast: 'Told last',
   context: {
     fields: 'From the message',
     text: 'Fixed text',
