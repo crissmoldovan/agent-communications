@@ -283,6 +283,8 @@ function exclusionSuggestion(
     'match',
   );
   if (before === null || after === null) return null;
+  // The whole result travels in one 64 KiB control frame: a condition too long to show twice is not rewritten here.
+  if (before.length + after.length > ANALYSE_MAX_CONDITION_TEXT) return null;
   const calls = refused.reduce((sum, entry) => sum + entry.no, 0);
   return {
     part: 'condition',
@@ -412,6 +414,9 @@ export interface ModelPartRequest {
 
 /** At most this many model calls one Analyse makes. */
 export const ANALYSE_MAX_MODEL_PARTS = 6;
+/** The longest part a model is asked to improve, and the longest condition shown before and after. */
+export const ANALYSE_MAX_PART_TEXT = 2_000;
+export const ANALYSE_MAX_CONDITION_TEXT = 12_000;
 
 /** The output paths a mapping copies a field to, dotted: the names the rule's mapped fields have. */
 export function mappedFieldNames(mapping: unknown): readonly string[] {
@@ -463,7 +468,8 @@ export function modelPartsOf(doc: Doc): readonly ModelPartRequest[] {
         parts.push({ part: 'linear.title', current: title, at: { targetId: entry.targetId }, slots });
     }
   }
-  return parts.slice(0, ANALYSE_MAX_MODEL_PARTS);
+  // A part longer than a model may write back is left as it is: its answer could not replace it within the limit.
+  return parts.filter((part) => part.current.length <= ANALYSE_MAX_PART_TEXT).slice(0, ANALYSE_MAX_MODEL_PARTS);
 }
 
 /** The longest `after` a model may give for each part, and the longest `why`. */

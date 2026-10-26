@@ -162,6 +162,21 @@ test('ANALYSE: a domain the judge always said no to, three times or more, become
     }).some((entry) => entry.part === 'condition'),
     false,
   );
+  // A condition too long to show twice in one control frame is not rewritten.
+  const long = {
+    any: Array.from({ length: 200 }, (_, index) => ({
+      path: '/subject',
+      op: 'contains',
+      value: `invoice number ${index} of a very long list`,
+      caseSensitive: false,
+    })),
+  };
+  assert.equal(
+    deterministicSuggestions(rule({ condition: long }), seeded, { hasHistory: true, wrapDomain: wrap }).some(
+      (entry) => entry.part === 'condition',
+    ),
+    false,
+  );
   // A domain that is not a plain hostname is never counted, so never suggested.
   assert.deepEqual(
     deterministicSuggestions(
@@ -308,6 +323,16 @@ test('ANALYSE: a model improves the judge’s question, each session’s text an
     ],
   );
   assert.deepEqual(modelPartsOf(rule({ agentic: undefined })), []);
+  assert.deepEqual(
+    modelPartsOf(
+      rule({
+        agentic: undefined,
+        targets: [{ targetId: 's', version: 1, kind: 'session', context: [{ text: 'x'.repeat(2001) }] }],
+      }),
+    ),
+    [],
+    'a part longer than a model may write back is left as it is',
+  );
   assert.deepEqual(
     mappedFieldNames({ from: { $path: '/from' }, sender: { name: { $path: '/from/name' } }, kind: 'x' }),
     ['from', 'sender.name'],
