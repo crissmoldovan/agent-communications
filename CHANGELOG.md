@@ -68,6 +68,14 @@ together under one version.
   refuses it too and audits the refusal. The app offers Do it in Terminal. On macOS nothing changes, and
   `approvedVia: app`, judge setup's included, now always means the attested app. `rule analyse` changes nothing and
   keeps its rule.
+- **Adding a server to an app is approved at a terminal on Windows and Linux** (`@agentcomms/core`, the desktop app;
+  the same second look): `mcp install --app-approval` from an origin nothing attests is refused with
+  `APPROVAL_REQUIRED` (exit 10, `ORIGIN_UNATTESTED`), audited, and changes nothing; the approval still waits.
+  Connections there offers Approve in Terminal from the start, and on macOS too whenever core answers exit 10.
+- **Tests never look in your real home** (repository): under the test preload, the event service and core refuse the
+  account's own home wherever they would look for user state — the claude-stream relay, the apps' MCP configs, a
+  client's command, the update job, the managed shims, Agent Comms' own folders — and a test process that caught that
+  refusal fails at exit. Every test that starts the event service gives it a temporary home.
 
 ## 0.32.0
 

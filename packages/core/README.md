@@ -69,9 +69,11 @@ nothing. On macOS core checks that the app started this process: a speed bump ag
 running parent, by its pid: the release, signed by the owner's team, audited `approvedBy: desktop-app`; or the local
 test build, ad-hoc signed, only for a test profile — a config folder holding `.agentcomms-test-profile`, which
 `scripts/local-test-release.sh` writes, and not your real, default one — audited `desktop-app (test build)`. Windows
-and Linux check nothing, a known limit: there it rests on the agent-marker checks, and the audit line says
-`desktop-app (unattested)`. `--app-approval` is always refused to an agent's shell and inside an MCP server's process,
-takes no `--approval`, and no MCP tool has it.
+and Linux check nothing, so there the install is approved at your terminal: `--app-approval` from an origin nothing
+attests is refused with `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), the refusal is audited as
+`desktop-app (unattested)`, the approval still waits, and Connections offers Approve in Terminal instead.
+`approvedVia: app` therefore means the attested app. `--app-approval` is always refused to an agent's shell and
+inside an MCP server's process, takes no `--approval`, and no MCP tool has it.
 
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,

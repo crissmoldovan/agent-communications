@@ -212,9 +212,10 @@ The Windows and Linux files are built by CI and attached to the same release. A 
 updater key, as these are, has its updater off and says so in Settings: install a newer release over it. Start at
 login is off until you switch it on there.
 
-On Windows and Linux nothing attests that the app started a command, so the app's changes to the event service —
-setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent sessions, approving a rule — go
-through a terminal: the app offers Do it in Terminal, with the command to run there.
+On Windows and Linux nothing attests that the app started a command, so the app's person-only changes — adding a
+server to an app in Connections, setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent
+sessions, approving a rule — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the
+command to run there.
 
 ### Or package by package
 
