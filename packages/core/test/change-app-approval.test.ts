@@ -320,6 +320,68 @@ test('on Windows and Linux, where nothing attests the app, the audit says the ap
   );
 });
 
+/*
+ * The second look at the release (2026-10-26, F4): anything that threw after the code was answered — the audit line's
+ * write, say — left the approval approved, for an agent to claim over MCP.
+ */
+test('review regression: an approval answered in the app and then failing on its audit line is revoked, not left approved', async () => {
+  const { core } = coreWith('never');
+  const first = await gatedChange(core, setSendPolicy(core, 'chat'), { surface: 'mcp', channel: 'core' });
+  const approvalId = first.status === 'approval-required' ? first.prepared.approvalId : '';
+  const append = core.audit.append.bind(core.audit);
+  core.audit.append = async (record, options) => {
+    if (record.operation === 'change.approve' && record.outcome === 'ok') throw new Error('EACCES: audit (a stand-in)');
+    return append(record, options);
+  };
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'chat'), { ...APP, appApproval: approvalId }),
+    /EACCES/,
+  );
+  core.audit.append = append;
+  assert.equal((await standing(core)).state, 'revoked');
+  // Claimed over MCP for the very change it was prepared for: refused, and nothing applied.
+  await assert.rejects(
+    gatedChange(core, setSendPolicy(core, 'chat'), { surface: 'mcp', channel: 'core', approvalId }),
+    CommsError,
+  );
+  assert.equal(await policyNow(core), 'never');
+});
+
+test('review regression: a tightening that lands between the answer and the claim leaves the approval spent, nothing applied', async () => {
+  const { core } = coreWith('confirm');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const approve = core.approvals.approve.bind(core.approvals);
+  core.approvals.approve = async (...args: Parameters<typeof approve>) => {
+    const answered = await approve(...args);
+    // A tightening lands before the claim: the account stops sending.
+    await ensureSendEpochConfig(core);
+    await core.config.update((config) => {
+      (config.accounts['acme/slack'] as AccountConfig).sendPolicy = 'never';
+      return config;
+    });
+    return answered;
+  };
+  await assert.rejects(gatedChangeAtTerminal(core, change, { ...APP, appApproval: approvalId }), CommsError);
+  core.approvals.approve = approve;
+  assert.notEqual((await standing(core)).state, 'approved');
+  assert.equal(await policyNow(core), 'never');
+});
+
+test('review regression: anything that throws once the code is being answered revokes the approval', async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const approve = core.approvals.approve.bind(core.approvals);
+  core.approvals.approve = async (...args: Parameters<typeof approve>) => {
+    await approve(...args);
+    throw new Error('the store went away after it wrote');
+  };
+  await assert.rejects(gatedChangeAtTerminal(core, change, { ...APP, appApproval: approvalId }), /went away/);
+  core.approvals.approve = approve;
+  assert.equal((await standing(core)).state, 'revoked');
+});
+
 test('only a change is approved through the app channel: a send is not', async () => {
   const { core } = coreWith('never');
   await assert.rejects(

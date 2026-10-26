@@ -417,6 +417,8 @@ export async function approveChangeInApp(
   options: ChangeOptions & { approvedBy: NonNullable<AuditRecord['approvedBy']> },
 ): Promise<ApprovalRecord> {
   let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
+  // Set once the code is being issued and answered: from then on, anything that throws revokes the approval.
+  let answering = false;
   try {
     const binding = bindChange(request, '');
     if (binding.loosened.length === 0 && binding.effects.length === 0) {
@@ -433,6 +435,7 @@ export async function approveChangeInApp(
         { hint: 'Prepare this change again, and approve the approval it gives.', details: { approvalId } },
       );
     }
+    answering = true;
     const challenge = await core.approvals.issueChallenge(approvalId, 'change', options.platform);
     const approved = await core.approvals.approve(
       approvalId,
@@ -455,6 +458,14 @@ export async function approveChangeInApp(
     });
     return approved;
   } catch (error) {
+    // Never left approved: an answer whose audit line, or anything after it, failed is revoked first (the second look
+    // at the release, 2026-10-26, F4). A record already spent or voided refuses the revoke, which changes nothing.
+    if (answering) {
+      await revokeChange(core, approvalId, 'answered in the desktop app and then not completed', {
+        surface: options.surface,
+        disposition: 'person',
+      }).catch(() => undefined);
+    }
     await auditRefusal(core, 'change.approve', error, {
       surface: options.surface,
       approvalId,
