@@ -167,10 +167,17 @@ test('judge setup carries where the person was: a terminal approves its enableme
     for (const approval of disclosures) assert.equal((approval as { approvedVia?: string }).approvedVia, 'terminal');
     const setups = (await core.audit.tail({ limit: 50 })).filter((line) => line.operation === 'events.judgeSetup');
     assert.equal(setups.at(-1)?.ids?.approvedBy, 'terminal');
-    // From the app: the result says which — the test build, or the app unattested on Windows and Linux.
+    // On Windows and Linux, which attest nothing, a setup is the terminal's: refused, with the words to type there,
+    // before the owner is asked (second look of the 0.33.0 security review).
+    const unattested = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', 'http://[::1]:8081'], {
+      stateDir,
+      desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+    });
+    assert.equal(unattested.code, APPROVAL_EXIT, unattested.stderr);
+    assert.match(unattested.stderr, /at your terminal, with the event service's judge setup local-endpoint/u);
+    // From the attested app: the result says which — the test build or the release — and its enablements are the app's.
     for (const [origin, approvedBy, port] of [
       [{ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }, 'desktop-app (test build)', 8080],
-      [{ ok: false, reason: 'unattested-platform' }, 'desktop-app (unattested)', 8081],
       [{ ok: true, build: 'release', identifier: 'com.cueplusplus.agentcomms' }, 'desktop-app', 8082],
     ] as const) {
       const ran = await cli(['--json', 'judge', 'setup', 'local-endpoint', '--url', `http://[::1]:${port}`], {
@@ -455,12 +462,20 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     });
     assert.equal(typed.code, 0, typed.stderr);
     outputs.push(typed.stdout, typed.stderr);
-    // On Windows and Linux, which attest nothing, the app's own call is said to be unattested.
+    // On Windows and Linux, which attest nothing, removing a key is the terminal's: refused, nothing removed.
     const unattested = await cli(['--json', 'provider', 'key', 'remove', 'typesafe'], {
       stateDir,
       desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
     });
-    assert.equal(unattested.code, 0, unattested.stderr);
+    assert.equal(unattested.code, APPROVAL_EXIT, unattested.stderr);
+    assert.match(unattested.stderr, /at your terminal, with the event service's provider key remove typesafe/u);
+    assert.equal(
+      ((await ok(['provider', 'list'])) as { providers: { id: string; hasKey: boolean }[] }).providers.find(
+        (entry) => entry.id === 'typesafe',
+      )?.hasKey,
+      true,
+      'an unattested removal removed nothing',
+    );
     // The local test build, for its own test profile, is said to be the test build's: never the release app's.
     const typedAgain = await cli(['provider', 'key', 'set', 'typesafe'], {
       stateDir,
@@ -480,8 +495,11 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     assert.equal(lastSet?.ids?.approvedBy, 'terminal');
     assert.equal(lastSet?.surface, 'cli');
     const removes = keyLines.filter((line) => line.operation === 'events.providerKeyRemove');
-    assert.equal(removes.at(-2)?.ids?.approvedBy, 'desktop-app (unattested)');
-    assert.equal(removes.at(-2)?.surface, 'app');
+    assert.equal(
+      removes.some((line) => line.ids?.approvedBy === 'desktop-app (unattested)' && line.outcome === 'ok'),
+      false,
+      'no unattested removal was made',
+    );
     assert.equal(removes.at(-1)?.ids?.approvedBy, 'desktop-app (test build)');
     assert.equal(removes.at(-1)?.surface, 'app');
     // `judge kind disable` stays the off switch.

@@ -13,12 +13,13 @@ import {
 import { Command, CommanderError } from 'commander';
 import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
+  changeAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
-  ruleApprovalAtTerminal,
+  ruleApprovalWords,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
@@ -504,7 +505,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // is, it is taken only from the Agent Comms app (attested on macOS) or an interactive terminal — one whose output
       // the person reads, since a draft may come on stdin — and an agent's shell and the MCP server are refused before
       // anything is read or sent (security review of 0.33.0, finding 10).
-      await personSetupOrigin('analyse a rule', 'Events → Rules, Analyse', 'analyse', 'output');
+      await personSetupOrigin('analyse a rule', {
+        where: 'Events → Rules, Analyse',
+        action: 'analyse',
+        terminal: 'output',
+        // It changes nothing: Windows and Linux keep `provider key set`'s former rule for it (second look of 0.33.0).
+        unattested: 'accept',
+      });
       const provider = options.provider as string | undefined;
       if (provider !== undefined && !isAnalyseProvider(provider))
         throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
@@ -779,11 +786,21 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   };
   const personSetupOrigin = async (
     what: string,
-    where = 'Events → Judges, and Settings → AI providers',
-    action: 'setup' | 'relay' | 'analyse' = 'setup',
-    // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
-    terminal: 'prompt' | 'output' = 'prompt',
+    options: {
+      readonly where?: string;
+      readonly action?: 'setup' | 'relay' | 'analyse';
+      // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
+      readonly terminal?: 'prompt' | 'output';
+      /**
+       * An unattested origin (Windows, Linux): a change is refused there and sent to the terminal, with the event
+       * service's words to type (`words`); only `rule analyse`, which changes nothing, takes it (second look of 0.33.0).
+       */
+      readonly unattested?: { readonly words: string } | 'accept';
+    } = {},
   ): Promise<PersonSetupOrigin> => {
+    const where = options.where ?? 'Events → Judges, and Settings → AI providers';
+    const action = options.action ?? 'setup';
+    const terminal = options.terminal ?? 'prompt';
     assertNotMcpServer(env, action);
     const marker = agentMarker(env);
     if (marker !== null)
@@ -806,7 +823,10 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir })))();
     if (origin.ok)
       return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
-    if (origin.reason === 'unattested-platform') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
+    if (origin.reason === 'unattested-platform') {
+      if (options.unattested === 'accept') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
+      throw changeAtTerminal(what, options.unattested?.words ?? 'command, with the same words');
+    }
     throw new CommsError(
       'APPROVAL_REQUIRED',
       `only a person can ${what}: in the Agent Comms app, or at an interactive terminal`,
@@ -826,7 +846,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--model <name>', "the local model server's model (default nimble)")
     .action(async (kind: string, options: Record<string, unknown>) => {
       ran = true;
-      const origin = await personSetupOrigin('set up a judge');
+      const origin = await personSetupOrigin('set up a judge', {
+        unattested: { words: `judge setup ${isSetupJudgeKind(kind) ? kind : '<kind>'}, with the same options` },
+      });
       if (!isSetupJudgeKind(kind)) throw new CommsError('USAGE', 'judge setup takes typesafe or local-endpoint');
       const provider = options.provider as string | undefined;
       const url = options.url as string | undefined;
@@ -863,7 +885,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .description('store a provider key, read from your hidden input or the app’s stdin, never from argv')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("set a provider's key");
+      const origin = await personSetupOrigin("set a provider's key", {
+        unattested: {
+          words: `provider key set ${isEventSecretProvider(provider) ? provider : '<provider>'}, which asks for the key, hidden`,
+        },
+      });
       if (!isEventSecretProvider(provider))
         throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
@@ -874,7 +900,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .description('remove a provider key, and the copy its Jev judges hold; a Linear target then adds no issue')
     .action(async (provider: string) => {
       ran = true;
-      const origin = await personSetupOrigin("remove a provider's key");
+      const origin = await personSetupOrigin("remove a provider's key", {
+        unattested: { words: `provider key remove ${isEventSecretProvider(provider) ? provider : '<provider>'}` },
+      });
       if (!isEventSecretProvider(provider))
         throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
@@ -888,10 +916,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
     .action(async (approvalId: string, options: { readonly digest: string }) => {
       ran = true;
-      const origin = await personSetupOrigin('approve a rule', 'Events → Rules, Review and approve');
       // Windows and Linux attest nothing: a standing disclosure is approved there at the terminal, never on a missing
       // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
-      if (origin === PERSON_SETUP_ORIGINS.desktopAppUnattested) throw ruleApprovalAtTerminal(approvalId);
+      const origin = await personSetupOrigin('approve a rule', {
+        where: 'Events → Rules, Review and approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
       print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
     });
 
@@ -938,11 +968,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (name: string, options: Record<string, unknown>) => {
       ran = true;
       if (name !== 'agent-sessions') throw new CommsError('USAGE', 'integration set takes agent-sessions');
-      const origin = await personSetupOrigin(
-        'change where Agent Comms finds your claude-stream relay',
-        'Settings → Integrations → Agent sessions',
-        'relay',
-      );
+      const origin = await personSetupOrigin('change where Agent Comms finds your claude-stream relay', {
+        where: 'Settings → Integrations → Agent sessions',
+        action: 'relay',
+        unattested: { words: 'integration set agent-sessions, with the same options' },
+      });
       const port = options.relayPort as string | undefined;
       print(
         await integrationSet(

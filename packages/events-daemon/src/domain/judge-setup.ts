@@ -68,23 +68,39 @@ export function personSetupApprover(origin: string | undefined): PersonSetupAppr
 const APPROVAL_ID_WORD = /^ap_[0-9A-HJKMNP-TV-Z]{26}$/u;
 
 /**
- * Why `rule approve` sends the person to their terminal (security review of 0.33.0, finding 2): on Windows and Linux
- * nothing attests that the Agent Comms app started the command, so a process without an agent's marker is not enough
- * to approve a standing disclosure. The refusal is `APPROVAL_REQUIRED` — the app reads it as "use the terminal" — with
- * its own reason, and names the event service's own words to type there, `approve <approval-id>`, which show the
- * preview and ask for the challenge. (The suite never spells its binary in a runtime message: the app opens the located
- * command itself, as Bind in Terminal does.)
+ * Why a person-only change is sent to the terminal (security reviews of 0.33.0, finding 2 and its second look): on
+ * Windows and Linux nothing attests that the Agent Comms app started the command, so a process without an agent's
+ * marker is not enough to make the person's change — approve a standing disclosure, set up a judge, set or remove a
+ * key, repoint the relay. The refusal is `APPROVAL_REQUIRED` (exit 10) — the app reads it as "do it in the terminal" —
+ * with its own reason, `ORIGIN_UNATTESTED`, and names the event service's own words to type there. (The suite never
+ * spells its binary in a runtime message: the app opens the located command itself, as Bind in Terminal does.)
  */
-export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
-  const id = typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>';
+export function changeAtTerminal(
+  what: string,
+  words: string,
+  details: Readonly<Record<string, string>> = {},
+): CommsError {
   return new CommsError(
     'APPROVAL_REQUIRED',
-    `nothing on this platform attests that the Agent Comms app started this, so approve the rule at your terminal, with the event service's approve ${id}, which shows its preview and asks for its challenge`,
+    `nothing on this platform attests that the Agent Comms app started this, so ${what} at your terminal, with the event service's ${words}`,
     {
-      details: { reason: 'ORIGIN_UNATTESTED', approvalId: id },
-      hint: 'In the app, press Approve in Terminal; or run the event service’s approve command at your own terminal.',
+      details: { reason: 'ORIGIN_UNATTESTED', ...details },
+      hint: 'In the app, press Do it in Terminal; or run the event service’s command at your own terminal.',
     },
   );
+}
+
+/** The words `rule approve` sends the person to type: the approval's own `approve <approval-id>`. */
+export function ruleApprovalWords(approvalId: unknown): string {
+  const id = typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>';
+  return `approve ${id}, which shows its preview and asks for its challenge`;
+}
+
+/** `rule approve`'s refusal of an unattested origin, as the owner gives it. */
+export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
+  return changeAtTerminal('approve a rule', ruleApprovalWords(approvalId), {
+    approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
+  });
 }
 
 /** The two kinds `judge setup` sets up. Laya is not one: no release offers it yet. */
