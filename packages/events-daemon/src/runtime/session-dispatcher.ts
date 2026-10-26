@@ -6,6 +6,7 @@ import type { CanonicalFullRuleDocument } from '../domain/activation-documents.t
 import { newQueueItemId, parseQueueItemContent } from '../domain/queue-target.ts';
 import type { SessionTargetDocument } from '../domain/session-target.ts';
 import type { EventDatabase } from '../store/database.ts';
+import { PackedRecordError } from '../store/crypto.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { queueDeadlines } from '../store/retention.ts';
 import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
@@ -182,7 +183,9 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       try {
         record = sessionRecord(await this.#cipher.decrypt(deliveryLocation(claim.id), claim.encryptedRecord));
       } catch (error) {
-        if (!(error instanceof RecordStorageError)) throw error;
+        // A record that does not open — one byte changed, or bytes that are no record at all — ends its delivery as
+        // content-unreadable; it is never let go only to be claimed again (security review of 0.33.0, second look, 4).
+        if (!(error instanceof RecordStorageError) && !(error instanceof PackedRecordError)) throw error;
         record = null;
       }
       if (record === null) {

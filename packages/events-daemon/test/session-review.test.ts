@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { mkdir, realpath, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -30,7 +31,8 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
  * counts stay out of an unbound window (5); a 409 that is not "busy" never loops the busy queue, and a match's model
  * part runs once (3); a FIFO named by a file part never stalls the event service (4). The second look's, as REVIEW2-n: a
  * delivery starts at most one session (1); a dead letter keeps no record, and a waiting match's kept file part goes only
- * while its folder is still allowed (2); a busy session never fails a match, and other failures still count (3).
+ * while its folder is still allowed (2); a busy session never fails a match, and other failures still count (3); a
+ * record that does not open ends its delivery (4).
  */
 
 const PERSON = 'person-setup:terminal';
@@ -522,5 +524,34 @@ test('REVIEW2-2: a waiting match sends a kept file part only while its folder is
         return { ok: true, text: 'summary' };
       },
     },
+  );
+});
+
+test('REVIEW2-4: a waiting record replaced with bytes that are no record ends as content-unreadable, not claimed again', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withReview(
+    async ({ harness, relay, folder }) => {
+      relay.addSession({ cwd: folder });
+      relay.refuseNextRunAsBusy = true;
+      await approveRule(harness, [queued(folder, false)]);
+      harness.mailbox.send('waits, then its record is replaced');
+      await until(harness, () => sessionDeliveries(harness)[0]?.last_error_code === 'SESSION_BUSY', 'busy');
+      const database = new DatabaseSync(eventPaths(harness.stateDir).database);
+      try {
+        database.exec('PRAGMA busy_timeout = 5000');
+        // Not the packed record format at all (its first byte is the format's version).
+        const bytes = Buffer.concat([Buffer.from([0xff]), randomBytes(95)]);
+        database
+          .prepare("UPDATE deliveries SET encrypted_record = ?, next_at = 0 WHERE target_kind = 'session'")
+          .run(bytes);
+      } finally {
+        database.close();
+      }
+      await until(harness, () => sessionDeliveries(harness)[0]?.state === 'content-unreadable', 'content-unreadable');
+      assert.equal(sessionRecordKept(harness), false);
+      assert.equal(runPosts(relay), 1, 'only the first, refused, start');
+    },
+    { reconcileMs: 100 },
   );
 });
