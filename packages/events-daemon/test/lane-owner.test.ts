@@ -99,6 +99,10 @@ const rule = (version: number, targets: readonly Record<string, unknown>[]) => (
 });
 
 async function cli(stateDir: string, argv: readonly string[], env: NodeJS.ProcessEnv = {}) {
+  // `lane bind` is a person's, at an interactive terminal, who types the lane's name: the test is that person.
+  const binding = argv[0] === 'lane' && argv[1] === 'bind';
+  const stdin = Object.assign(new PassThrough(), { isTTY: binding });
+  if (binding) stdin.write(`${argv[2]}\n`);
   const stdout = new PassThrough();
   const stderr = new PassThrough();
   let out = '';
@@ -112,9 +116,9 @@ async function cli(stateDir: string, argv: readonly string[], env: NodeJS.Proces
   const code = await run(['--state-dir', stateDir, ...argv], {
     env,
     streams: {
-      stdin: Object.assign(new PassThrough(), { isTTY: false }),
-      stdout: Object.assign(stdout, { isTTY: false }),
-      stderr: Object.assign(stderr, { isTTY: false }),
+      stdin,
+      stdout: Object.assign(stdout, { isTTY: binding }),
+      stderr: Object.assign(stderr, { isTTY: binding }),
     },
   });
   await new Promise((resolve) => setImmediate(resolve));

@@ -116,7 +116,7 @@ and hand it to the person:
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
 - Queue item list and show: “Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says.”
 - Queue clear: “an agent must not be able to make the person's queue disappear.”
-- Lane bind: “Binding a lane lets one agent window read what arrives in it, so it is the person's act at a terminal, or from the app through one: no tool binds, and the command refuses inside the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1).”
+- Lane bind: “Binding a lane lets one agent window read what arrives in it, so it is the person's act at an interactive terminal, where they type the lane's name, or from the app through one: no tool binds, and the command refuses an agent's shell and the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1).”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”

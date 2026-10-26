@@ -2690,7 +2690,7 @@
       "operation": "laneBind",
       "argv": ["david", "--window", "0123456789abcdef"],
       "expect": { "lane": "david", "window": "0123456789abcdef" },
-      "reason": "Binding a lane lets one agent window read what arrives in it, so it is the person's act at a terminal, or from the app through one: no tool binds, and the command refuses inside the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1)."
+      "reason": "Binding a lane lets one agent window read what arrives in it, so it is the person's act at an interactive terminal, where they type the lane's name, or from the app through one: no tool binds, and the command refuses an agent's shell and the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1)."
     },
     {
       "id": "events-daemon.lane.unbind",

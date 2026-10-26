@@ -795,7 +795,27 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (name: string, options: Record<string, unknown>) => {
       ran = true;
       assertNotMcpServer(env, 'bind');
-      print(await laneBind(requireLaneName(name), requireLaneWindowId(options.window), controlOptions(program)));
+      const laneName = requireLaneName(name);
+      const window = requireLaneWindowId(options.window);
+      // Binding lets one agent window read a lane, so it is a person's act (B1): an agent's shell is refused, and so
+      // is anything without an interactive terminal, as dryrun show is; then the person types the lane's name. The
+      // prompt goes to stderr, so --json still prints only the result.
+      assertHumanTerminal(env, streams, false, {
+        agent: 'only a person at an interactive terminal can bind a lane, not an agent',
+        terminal: 'binding a lane needs an interactive terminal, where you type the lane’s name',
+      });
+      const terminal = createInterface({ input: streams.stdin, output: streams.stderr, terminal: false });
+      let typed: string;
+      try {
+        typed = await terminal.question(
+          `Binding lane ${laneName} lets the agent window ${window} be woken for, and read, every new item in it.\nType the lane’s name to bind it: `,
+        );
+      } finally {
+        terminal.close();
+      }
+      if (typed.trim() !== laneName)
+        throw new CommsError('APPROVAL_REQUIRED', `the name typed was not ${laneName}, so nothing was bound`);
+      print(await laneBind(laneName, window, controlOptions(program)));
     });
   lane
     .command('unbind <lane>')
