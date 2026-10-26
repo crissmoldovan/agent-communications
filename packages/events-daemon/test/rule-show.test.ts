@@ -180,7 +180,7 @@ test('0.32 B6: rule show entries keep their fields and gain their times, their s
         [null, null, null, null],
       ],
     );
-    assert.deepEqual((entries[1]?.document as { version: number }).version, 2);
+    assert.equal((entries[1]?.document as { version?: number } | undefined)?.version, 2);
     assert.deepEqual(entries[1]?.counts7d, {
       matched: 2 + 1,
       judgedYes: 2,
