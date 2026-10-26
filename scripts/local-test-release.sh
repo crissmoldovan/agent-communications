@@ -102,6 +102,9 @@ osascript -e "quit app \"$app_name\"" >/dev/null 2>&1 || true
 mkdir -p "$home/Applications"
 rm -rf "$app_dest"
 cp -R "$built" "$app_dest"
+# Sealed with an ad-hoc signature, so the test profile's CLIs can verify that their approvals in the app come from this
+# app (core's desktopAppOrigin): an unsealed bundle does not pass codesign --verify --strict.
+codesign --force --deep --sign - "$app_dest" >/dev/null 2>&1 || { echo "the app could not be ad-hoc signed" >&2; exit 1; }
 
 echo "5/5 Pointing Agent Comms Test at the test profile"
 mkdir -p "$app_config"

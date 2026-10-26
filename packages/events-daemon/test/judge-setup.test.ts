@@ -3,7 +3,7 @@ import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { CommsError, openCore } from '@agentcomms/core';
+import { CommsError, type DesktopOrigin, openCore } from '@agentcomms/core';
 import { type EventsCliStreams, run } from '../src/cli/program.ts';
 import { EventControlClient } from '../src/control/client.ts';
 import { localSetupEndpoint } from '../src/domain/judge-setup.ts';
@@ -34,15 +34,36 @@ interface Ran {
   readonly stderr: string;
 }
 
-/** Runs the CLI as the app does: stdin a pipe holding `stdin`, never a TTY. */
+/** The release app, attested as the process that started the CLI (core's `desktopAppOrigin`, injected here). */
+const ATTESTED = async (): Promise<DesktopOrigin> => ({
+  ok: true,
+  build: 'release',
+  identifier: 'com.cueplusplus.agentcomms',
+});
+
+/**
+ * Runs the CLI as the app does: stdin a pipe holding `stdin`, never a TTY, started by the attested app — or, with `tty`,
+ * as a person at an interactive terminal, whose hidden input is `readSecret`.
+ */
 async function cli(
   args: readonly string[],
-  options: { readonly stdin?: string; readonly env?: NodeJS.ProcessEnv; readonly stateDir?: string } = {},
+  options: {
+    readonly stdin?: string;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly stateDir?: string;
+    readonly desktopOrigin?: () => Promise<DesktopOrigin>;
+    readonly tty?: boolean;
+    readonly readSecret?: (prompt: string) => Promise<string>;
+  } = {},
 ): Promise<Ran> {
   const stdin = new PassThrough();
   stdin.end(options.stdin ?? '');
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  if (options.tty === true) {
+    Object.assign(stdin, { isTTY: true });
+    Object.assign(stdout, { isTTY: true });
+  }
   let out = '';
   let err = '';
   stdout.on('data', (chunk) => {
@@ -55,6 +76,8 @@ async function cli(
   const code = await run([...(options.stateDir === undefined ? [] : ['--state-dir', options.stateDir]), ...args], {
     streams,
     env: options.env ?? {},
+    desktopOrigin: options.desktopOrigin ?? ATTESTED,
+    ...(options.readSecret === undefined ? {} : { readSecret: options.readSecret }),
   });
   await new Promise<void>((resolve) => setImmediate(resolve));
   return { code, stdout: out, stderr: err };
@@ -89,6 +112,31 @@ test('judge setup and provider keys refuse every agent marker and the MCP server
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+test('from a pipe, the person’s setup is refused unless Agent Comms started it: a key is read from the app or a terminal only', async () => {
+  for (const reason of [
+    'parent-not-an-app',
+    'not-agent-comms',
+    'signature-not-verified',
+    'test-app-with-release-runtime',
+  ]) {
+    for (const args of PERSON_COMMANDS) {
+      const ran = await cli(args, { stdin: `${OPENROUTER_KEY}\n`, desktopOrigin: async () => ({ ok: false, reason }) });
+      assert.equal(ran.code, APPROVAL_EXIT, `${args.join(' ')} ${reason}: ${ran.stderr}`);
+      assert.match(ran.stderr, /in the Agent Comms app, or at an interactive terminal/u);
+      assert.ok(!ran.stdout.includes(OPENROUTER_KEY) && !ran.stderr.includes(OPENROUTER_KEY));
+    }
+  }
+  // At an interactive terminal the app is never asked about: the person is there.
+  const never = async (): Promise<DesktopOrigin> => {
+    throw new Error('a terminal asks no attestation');
+  };
+  const atTerminal = await cli(['judge', 'setup', 'local-endpoint', '--url', 'http://192.0.2.1:11434'], {
+    tty: true,
+    desktopOrigin: never,
+  });
+  assert.equal(atTerminal.code, USAGE_EXIT, atTerminal.stderr);
 });
 
 test('judge setup refuses a local model server that is not on this machine, before it reaches the owner', async () => {
@@ -323,6 +371,35 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       true,
       'a refused removal removed nothing',
     );
+    // The old label of the person's setup is no origin either.
+    const unlabelled = new EventControlClient({ stateDir, clientName: 'person-setup' });
+    await assert.rejects(unlabelled.request('provider-key-remove', { provider: 'typesafe' }), (error: unknown) => {
+      assert.equal((error as { code?: unknown }).code, 'APPROVAL_REQUIRED');
+      return true;
+    });
+    // At an interactive terminal the key is the person's hidden input, and the audit says it was set at a terminal.
+    const typed = await cli(['provider', 'key', 'set', 'typesafe'], {
+      stateDir,
+      tty: true,
+      readSecret: async () => TYPESAFE_KEY,
+    });
+    assert.equal(typed.code, 0, typed.stderr);
+    outputs.push(typed.stdout, typed.stderr);
+    // On Windows and Linux, which attest nothing, the app's own call is said to be unattested.
+    const unattested = await cli(['--json', 'provider', 'key', 'remove', 'typesafe'], {
+      stateDir,
+      desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+    });
+    assert.equal(unattested.code, 0, unattested.stderr);
+    const keyLines = (await openCore({ pathOverrides: { stateDir, configDir } }).audit.tail({ limit: 100 })).filter(
+      (line) => line.operation === 'events.providerKeySet' || line.operation === 'events.providerKeyRemove',
+    );
+    const lastSet = keyLines.filter((line) => line.operation === 'events.providerKeySet').at(-1);
+    assert.equal(lastSet?.ids?.approvedBy, 'terminal');
+    assert.equal(lastSet?.surface, 'cli');
+    const lastRemove = keyLines.filter((line) => line.operation === 'events.providerKeyRemove').at(-1);
+    assert.equal(lastRemove?.ids?.approvedBy, 'desktop-app (unattested)');
+    assert.equal(lastRemove?.surface, 'app');
     // `judge kind disable` stays the off switch.
     await ok(['judge', 'kind', 'disable', 'typesafe']);
     assert.equal((await kinds()).typesafe, 'disabled');

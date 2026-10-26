@@ -3,13 +3,21 @@ import {
   agentMarker,
   CommsError,
   canPrompt,
+  type DesktopOrigin,
+  desktopAppOrigin,
   escapeForDisplay,
   isCommsError,
   isDangerous,
   resolvePaths,
 } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
-import { isSetupJudgeKind, localSetupEndpoint, localSetupModel } from '../domain/judge-setup.ts';
+import {
+  isSetupJudgeKind,
+  localSetupEndpoint,
+  localSetupModel,
+  PERSON_SETUP_ORIGINS,
+  type PersonSetupOrigin,
+} from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
@@ -123,6 +131,8 @@ export interface EventsCliDeps {
   readonly readSecret?: ((prompt: string) => Promise<string>) | undefined;
   /** Tests supply an isolated marker environment; production uses the process environment. */
   readonly env?: NodeJS.ProcessEnv | undefined;
+  /** Test-only: where this process came from (core's `desktopAppOrigin`), which production always asks. */
+  readonly desktopOrigin?: (() => Promise<DesktopOrigin>) | undefined;
 }
 
 interface EventsCliOptions {
@@ -687,9 +697,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
 
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step,
-  // and the AI provider keys Jev uses. The app runs these; a person may run them at a terminal. An agent's shell and the
-  // event service's MCP server are refused before anything is read or sent, and no MCP tool performs them.
-  const assertPersonSetup = (what: string): void => {
+  // and the AI provider keys Jev uses. The app runs these; a person may run them at a terminal. After the release's
+  // security review (2026-10-26) each is taken only from where the person is: an interactive terminal, or the Agent
+  // Comms app — on macOS one whose code signature core's `desktopAppOrigin` attests as this process's parent; on
+  // Windows and Linux, which attest nothing (a known limit), a process without an agent's marker, said to be unattested.
+  // An agent's shell, the event service's MCP server, and on macOS a pipe the app did not start are refused before
+  // anything is read or sent, and no MCP tool performs them.
+  const personSetupOrigin = async (what: string): Promise<PersonSetupOrigin> => {
     assertNotMcpServer(env, 'setup');
     const marker = agentMarker(env);
     if (marker !== null)
@@ -701,6 +715,19 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           hint: 'Ask the person to do it in the app: Events → Judges, and Settings → AI providers.',
         },
       );
+    if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
+      return PERSON_SETUP_ORIGINS.terminal;
+    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin()))();
+    if (origin.ok) return PERSON_SETUP_ORIGINS.desktopApp;
+    if (origin.reason === 'unattested-platform') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
+    throw new CommsError(
+      'APPROVAL_REQUIRED',
+      `only a person can ${what}: in the Agent Comms app, or at an interactive terminal`,
+      {
+        details: { reason: origin.reason },
+        hint: 'Do it in the app: Events → Judges, and Settings → AI providers; or run this at your own terminal.',
+      },
+    );
   };
   judge
     .command('setup <kind>')
@@ -712,7 +739,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--model <name>', "the local model server's model (default nimble)")
     .action(async (kind: string, options: Record<string, unknown>) => {
       ran = true;
-      assertPersonSetup('set up a judge');
+      const origin = await personSetupOrigin('set up a judge');
       if (!isSetupJudgeKind(kind)) throw new CommsError('USAGE', 'judge setup takes typesafe or local-endpoint');
       const provider = options.provider as string | undefined;
       const url = options.url as string | undefined;
@@ -728,7 +755,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         localSetupEndpoint(url);
         localSetupModel(model);
       }
-      print(await judgeSetup(kind, { provider, url, model }, controlOptions(program)));
+      print(await judgeSetup(kind, { provider, url, model }, { ...controlOptions(program), origin }));
     });
 
   const providers = program
@@ -747,21 +774,21 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .description('store a provider key, read from your hidden input or the app’s stdin, never from argv')
     .action(async (provider: string) => {
       ran = true;
-      assertPersonSetup("set an AI provider's key");
+      const origin = await personSetupOrigin("set an AI provider's key");
       if (provider !== 'typesafe' && provider !== 'openrouter')
         throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
-      const value = await providerKeyInput(streams, deps.readSecret);
-      print(await providerKeySet(provider, { ...controlOptions(program), hidden: value }));
+      const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
+      print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
     });
   providerKey
     .command('remove <provider>')
     .description('remove a provider key, and the copy its Jev judges hold')
     .action(async (provider: string) => {
       ran = true;
-      assertPersonSetup("remove an AI provider's key");
+      const origin = await personSetupOrigin("remove an AI provider's key");
       if (provider !== 'typesafe' && provider !== 'openrouter')
         throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
-      print(await providerKeyRemove(provider, controlOptions(program)));
+      print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });
 
   const deliveries = program.command('deliveries').description('inspect content-free delivery metadata');
@@ -1148,15 +1175,16 @@ function isTerminalSecretReveal(
 const PROVIDER_KEY_MAX_BYTES = 4096;
 
 /**
- * A provider key, from the person (owner decision 2026-10-26): their hidden input at a terminal, or, from the desktop
- * app, its stdin — one line, at most 4 KiB, its line ending dropped. Never argv, and never echoed.
+ * A provider key, from the person (owner decision 2026-10-26): at an interactive terminal their hidden input, exactly
+ * as `judge key set` reads one, and never a pipe; from the desktop app, which `personSetupOrigin` found started this
+ * process, its stdin — one line, at most 4 KiB, its line ending dropped. Never argv, and never echoed.
  */
 async function providerKeyInput(
   streams: EventsCliStreams,
   readSecret: ((prompt: string) => Promise<string>) | undefined,
+  atTerminal: boolean,
 ): Promise<string> {
-  if (readSecret !== undefined) return readSecret('API key');
-  if (streams.stdin.isTTY === true) return readHiddenTerminal(streams, 'API key');
+  if (atTerminal) return readSecret !== undefined ? readSecret('API key') : readHiddenTerminal(streams, 'API key');
   const chunks: Buffer[] = [];
   let total = 0;
   for await (const chunk of streams.stdin) {

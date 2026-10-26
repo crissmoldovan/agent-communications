@@ -5,9 +5,10 @@ import { delimiter, dirname, join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { stateOf } from '../src/approval-stored.ts';
-import { type GatedChange, gatedChangeAtTerminal } from '../src/change-flow.ts';
+import { type GatedChange, gatedChange, gatedChangeAtTerminal } from '../src/change-flow.ts';
 import type { AccountConfig, SendPolicy } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
+import type { DesktopOrigin } from '../src/desktop-origin.ts';
 import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { ensureSendEpochConfig } from '../src/send-epoch.ts';
@@ -74,7 +75,21 @@ function setSendPolicy(core: Core, to: SendPolicy): GatedChange<SendPolicy> {
 const policyNow = async (core: Core) => ((await core.config.load()).accounts['acme/slack'] as AccountConfig).sendPolicy;
 
 /** The words the desktop app runs a change with: `--json`, no terminal, and no agent's marker. */
-const APP = { channel: 'core', env: {}, output: { json: true, color: false }, rerun: ['policy', 'chat'] };
+/** The release app, attested as the process that started this one (`desktopAppOrigin`, injected here). */
+const ATTESTED = async (): Promise<DesktopOrigin> => ({
+  ok: true,
+  build: 'release',
+  identifier: 'com.cueplusplus.agentcomms',
+});
+
+/** The words the desktop app runs a change with: `--json`, no terminal, no agent's marker, and the app attested. */
+const APP = {
+  channel: 'core',
+  env: {},
+  output: { json: true, color: false },
+  rerun: ['policy', 'chat'],
+  appOrigin: ATTESTED,
+};
 
 /** Prepares `change` as the desktop app does, and gives back the approval it is waiting on. */
 async function prepared(core: Core, change: GatedChange<SendPolicy>): Promise<string> {
@@ -150,16 +165,145 @@ test("an app approval is refused to an agent's shell and inside an MCP server's 
   );
 });
 
-test('an app approval spends only the change it was prepared for: another change voids it, and writes nothing', async () => {
+/** Where an approval stands, read from the store: its state, and how it was approved, if it was. */
+async function standing(core: Core): Promise<{ state: string; via: string | undefined }> {
+  const [record] = await core.approvals.list();
+  assert.ok(record, 'the approval is there');
+  return { state: stateOf(record), via: record.form === 'v2' ? record.record.approvedVia : undefined };
+}
+
+test('an app approval is checked against this exact change before it is answered: another change leaves it untouched', async () => {
   const { core } = coreWith('never');
   const approvalId = await prepared(core, setSendPolicy(core, 'chat'));
   await assert.rejects(
     gatedChangeAtTerminal(core, setSendPolicy(core, 'confirm'), { ...APP, appApproval: approvalId }),
-    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_REQUIRED',
   );
   assert.equal(await policyNow(core), 'never');
-  const [record] = await core.approvals.list();
-  assert.equal(record && stateOf(record), 'revoked');
+  assert.deepEqual(await standing(core), { state: 'pending', via: undefined }, 'never answered');
+});
+
+/*
+ * The release's security review (2026-10-26): `--app-approval` answered any pending change's code first, and planned and
+ * claimed after. A call whose plan then refused — a change that needs no approval, `--print`, a plan that throws — left
+ * that approval approved, for anything to claim: an agent prepared a loosening over MCP, ran the app's command with its
+ * id on a no-op, and claimed it over MCP. Each of these must leave the approval untouched, never approved.
+ */
+test('review regression: an approval prepared over MCP is not approved by an app call for a change that needs none', async () => {
+  const { core } = coreWith('never');
+  const first = await gatedChange(core, setSendPolicy(core, 'chat'), { surface: 'mcp', channel: 'core' });
+  assert.equal(first.status, 'approval-required');
+  const approvalId = first.status === 'approval-required' ? first.prepared.approvalId : '';
+  // The no-op: moving the send policy to where it already is.
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'never'), { ...APP, appApproval: approvalId }),
+    CommsError,
+  );
+  assert.deepEqual(await standing(core), { state: 'pending', via: undefined });
+  // Claimed over MCP, under confirm: refused, since nobody approved it.
+  await assert.rejects(
+    gatedChange(core, setSendPolicy(core, 'chat'), { surface: 'mcp', channel: 'core', approvalId }),
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_PENDING',
+  );
+  assert.equal(await policyNow(core), 'never');
+});
+
+test('review regression: a plan that throws, or one with nothing to approve, never approves the approval it names', async () => {
+  const { core } = coreWith('never');
+  const approvalId = await prepared(core, setSendPolicy(core, 'chat'));
+  const throwing: GatedChange<SendPolicy> = {
+    plan: () => {
+      throw new CommsError('USAGE', 'a print is not a change');
+    },
+    apply: async () => 'chat',
+  };
+  await assert.rejects(
+    gatedChangeAtTerminal(core, throwing, { ...APP, appApproval: approvalId }),
+    /a print is not a change/,
+  );
+  assert.deepEqual(await standing(core), { state: 'pending', via: undefined });
+  // A plan that changes nothing at all, as `mcp install --print` plans.
+  const nothing: GatedChange<SendPolicy> = {
+    plan: (config) => ({ account: 'acme/slack', before: config, after: structuredClone(config), summary: 'prints' }),
+    apply: async () => 'never',
+  };
+  await assert.rejects(
+    gatedChangeAtTerminal(core, nothing, { ...APP, appApproval: approvalId }),
+    (error: unknown) => error instanceof CommsError && error.code === 'USAGE',
+  );
+  assert.deepEqual(await standing(core), { state: 'pending', via: undefined });
+});
+
+test('an app approval that is answered and then not applied is revoked, never left approved', async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const failing: GatedChange<SendPolicy> = {
+    plan: change.plan,
+    apply: async () => {
+      throw new CommsError('CONFIG', 'the client could not be written');
+    },
+  };
+  await assert.rejects(
+    gatedChangeAtTerminal(core, failing, { ...APP, appApproval: approvalId }),
+    /the client could not be written/,
+  );
+  // Claimed for the change and then not applied: spent, and so not usable again.
+  assert.notEqual((await standing(core)).state, 'approved');
+});
+
+test('on macOS a process the app did not start cannot approve in the app: refused, audited, and nothing approved', async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  for (const reason of [
+    'parent-not-an-app',
+    'not-agent-comms',
+    'signature-not-verified',
+    'test-app-with-release-runtime',
+  ]) {
+    await assert.rejects(
+      gatedChangeAtTerminal(core, change, {
+        ...APP,
+        appOrigin: async () => ({ ok: false, reason }),
+        appApproval: approvalId,
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof CommsError);
+        assert.equal(error.code, 'APPROVAL_REQUIRED', reason);
+        assert.equal((error.details as { reason?: string }).reason, reason);
+        return true;
+      },
+    );
+  }
+  assert.deepEqual(await standing(core), { state: 'pending', via: undefined });
+  assert.equal(await policyNow(core), 'never');
+});
+
+test('on Windows and Linux, where nothing attests the app, the audit says the approval was unattested', async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const applied = await gatedChangeAtTerminal(core, change, {
+    ...APP,
+    appOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+    appApproval: approvalId,
+  });
+  assert.equal(applied, 'chat');
+  const approve = (await auditLines(core)).find((line) => line.operation === 'change.approve' && line.outcome === 'ok');
+  assert.equal(approve?.approvedBy, 'desktop-app (unattested)');
+  // Even there, an agent's marker is refused.
+  const { core: other } = coreWith('never');
+  const again = await prepared(other, setSendPolicy(other, 'chat'));
+  await assert.rejects(
+    gatedChangeAtTerminal(other, setSendPolicy(other, 'chat'), {
+      ...APP,
+      env: { CLAUDECODE: '1' },
+      appOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
+      appApproval: again,
+    }),
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_REQUIRED',
+  );
 });
 
 test('only a change is approved through the app channel: a send is not', async () => {
@@ -214,7 +358,7 @@ function machine() {
 }
 
 test(
-  '`mcp install --app-approval <id>` approves the install the app prepared, in the app, and registers it',
+  '`mcp install --app-approval <id>` is refused unless the app started it (macOS), and registers the install otherwise',
   NOT_ON_WINDOWS,
   async () => {
     const m = machine();
@@ -234,11 +378,25 @@ test(
     assert.deepEqual(m.asked(), []);
 
     const done = m.run([...words, '--app-approval', approvalId, '--json']);
-    assert.equal(done.status, 0, done.stdout + done.stderr);
-    assert.equal(done.json().data.applied, true);
-    assert.equal(m.asked().length, 1, 'registered once');
-    const [record] = await m.core().approvals.list();
-    assert.equal(record?.form === 'v2' ? record.record.approvedVia : undefined, 'app');
+    if (process.platform === 'darwin') {
+      // Here the command's parent is this test, not Agent Comms: on macOS that is refused, and nothing is approved.
+      assert.equal(done.status, 10, done.stdout + done.stderr);
+      assert.equal(done.json().error.details.reason, 'parent-not-an-app');
+      assert.deepEqual(m.asked(), []);
+      const [record] = await m.core().approvals.list();
+      assert.equal(record?.form === 'v2' ? record.record.state : undefined, 'pending');
+    } else {
+      // Linux attests nothing: the marker checks hold, and the approval is said to be the app's, unattested.
+      assert.equal(done.status, 0, done.stdout + done.stderr);
+      assert.equal(done.json().data.applied, true);
+      assert.equal(m.asked().length, 1, 'registered once');
+      const [record] = await m.core().approvals.list();
+      assert.equal(record?.form === 'v2' ? record.record.approvedVia : undefined, 'app');
+      const approve = (await m.core().audit.tail({ limit: 100 })).find(
+        (line) => line.operation === 'change.approve' && line.outcome === 'ok',
+      );
+      assert.equal(approve?.approvedBy, 'desktop-app (unattested)');
+    }
 
     // Never alongside --approval.
     const both = m.run([...words, '--app-approval', approvalId, '--approval', approvalId, '--json']);

@@ -10,12 +10,46 @@ import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from './lifecycle.ts';
  */
 
 /**
- * The origin the person's own setup commands carry (owner decision 2026-10-26): `judge setup`, `provider key set` and
- * `provider key remove`. The CLI refuses an agent's shell and the event service's MCP server before it ever sends
- * one; the owner accepts these operations from no other origin. Like every client name it is a caller's label, not a
- * capability: same-user token holders stay inside the owner's trust boundary.
+ * The origins the person's own setup commands carry (owner decision 2026-10-26): `judge setup`, `provider key set` and
+ * `provider key remove`, each saying where the CLI found the person (after the release's security review, 2026-10-26):
+ * - `desktop-app`: started by the Agent Comms app, which core's `desktopAppOrigin` attested (macOS);
+ * - `desktop-app-unattested`: on Windows and Linux, which attest nothing — a process without an agent's marker;
+ * - `terminal`: an interactive terminal, where a key is the person's hidden input.
+ * The CLI refuses an agent's shell, the event service's MCP server, and on macOS a pipe the app did not start, before it
+ * ever sends one; the owner accepts these operations from no other origin, and audits which it was. Like every client
+ * name it is a caller's label, not a capability: same-user token holders stay inside the owner's trust boundary.
  */
-export const PERSON_SETUP_ORIGIN = 'person-setup';
+export type PersonSetupOrigin =
+  | 'person-setup:desktop-app'
+  | 'person-setup:desktop-app-unattested'
+  | 'person-setup:terminal';
+
+export const PERSON_SETUP_ORIGINS: Readonly<{
+  desktopApp: 'person-setup:desktop-app';
+  desktopAppUnattested: 'person-setup:desktop-app-unattested';
+  terminal: 'person-setup:terminal';
+}> = Object.freeze({
+  desktopApp: 'person-setup:desktop-app',
+  desktopAppUnattested: 'person-setup:desktop-app-unattested',
+  terminal: 'person-setup:terminal',
+} as const);
+
+/** Who the person's setup was approved by, as its audit line says: the attested app, the app unattested, or a terminal. */
+export type PersonSetupApprover = 'desktop-app' | 'desktop-app (unattested)' | 'terminal';
+
+/** The approver an origin names, or null for any other client. */
+export function personSetupApprover(origin: string | undefined): PersonSetupApprover | null {
+  switch (origin) {
+    case PERSON_SETUP_ORIGINS.desktopApp:
+      return 'desktop-app';
+    case PERSON_SETUP_ORIGINS.desktopAppUnattested:
+      return 'desktop-app (unattested)';
+    case PERSON_SETUP_ORIGINS.terminal:
+      return 'terminal';
+    default:
+      return null;
+  }
+}
 
 /** The two kinds `judge setup` sets up. Laya is not one: no release offers it yet. */
 export type SetupJudgeKind = typeof JUDGE_KIND_TYPESAFE | typeof JUDGE_KIND_LOCAL_ENDPOINT;

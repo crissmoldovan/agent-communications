@@ -62,10 +62,14 @@ Every channel CLI, and the declared events service through core, registers and p
 request, and the other way round.
 
 `mcp install` is also approved in the desktop app, as Connections adds a server to an app (0.32.0): the app shows
-core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`, which
-approves that change through the app channel (`approvedVia: app`, and `approvedBy: desktop-app` on its audit line) and
-applies it. `--app-approval` is refused to an agent's shell and inside an MCP server's process, takes no
-`--approval`, and spends only the change it was prepared for; no MCP tool has it.
+core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`. That plans
+the install first, checks the approval is a waiting one for exactly that install, and only then approves it through
+the app channel (`approvedVia: app`) and applies it; an approval for anything else, or a plan that refuses, approves
+nothing. On macOS the command must have been started by Agent Comms itself, which its code signature attests
+(`desktopAppOrigin`: the release, signed by the owner's team, or the local test build, ad-hoc signed, beside a local
+build of the CLI), and its audit line says `approvedBy: desktop-app`. Windows and Linux attest nothing, a known limit:
+there it rests on the agent-marker checks, and the audit line says `desktop-app (unattested)`. `--app-approval` is
+always refused to an agent's shell and inside an MCP server's process, takes no `--approval`, and no MCP tool has it.
 
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,

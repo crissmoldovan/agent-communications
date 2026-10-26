@@ -4,7 +4,7 @@ import {
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
-  PERSON_SETUP_ORIGIN,
+  personSetupApprover,
   type SetupJudgeKind,
   setupBudgetDocument,
   setupJudgeDocument,
@@ -26,7 +26,7 @@ import type { ActivationRuntime, PreparedActivation } from './activations.ts';
 import type { B3SecretControl } from './b3-secret-control.ts';
 import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
-export { PERSON_SETUP_ORIGIN } from '../domain/judge-setup.ts';
+export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
 
 /** Who approved a setup's enablements: the person, through the desktop app or the CLI command it runs. */
 export const SETUP_APPROVED_BY = 'desktop-app';
@@ -180,11 +180,11 @@ export class JudgeSetupService {
         throw new CommsError('USAGE', 'a local model server takes --url and --model, not a provider');
       wanted = setupJudgeDocument({ kind, endpoint: localSetupEndpoint(args.url), model: localSetupModel(args.model) });
     }
+    // The command is the person's approval of the enablements it makes (owner decision 2026-10-26); its audit line says
+    // where they made it (`#audited`).
     const ids: Record<string, string> = {
       kind,
       ...(jevProvider === undefined ? {} : { provider: jevProvider }),
-      // The command is the person's approval of the enablements it makes (owner decision 2026-10-26).
-      approvedBy: SETUP_APPROVED_BY,
     };
     return this.#audited('judgeSetup', origin, ids, async () => {
       if (
@@ -298,24 +298,29 @@ export class JudgeSetupService {
     );
   }
 
-  /** The person's origin only, and an audit line of its outcome: ids and the outcome, never a key. */
+  /**
+   * The person's origins only, and an audit line of its outcome: ids, the outcome, and where the person was — the
+   * attested app, the app unattested (Windows, Linux), or a terminal — never a key.
+   */
   async #audited<T>(
     operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove',
     origin: string | undefined,
     ids: Record<string, string>,
     work: () => Promise<T>,
   ): Promise<T> {
+    const approver = personSetupApprover(origin);
+    const surface = approver === 'terminal' ? ('cli' as const) : ('app' as const);
     const record = async (outcome: 'ok' | 'refused' | 'failed', reason?: string) =>
       this.#audit?.append({
         inboxId: '',
         operation: `events.${operation}`,
         outcome,
-        surface: 'app',
-        origin: 'app',
-        ids: { ...ids },
+        surface,
+        origin: surface,
+        ids: { ...ids, ...(approver === null ? {} : { approvedBy: approver }) },
         ...(reason === undefined ? {} : { reason }),
       });
-    if (origin !== PERSON_SETUP_ORIGIN) {
+    if (approver === null) {
       await record('refused', 'PERSON_SETUP_ONLY');
       throw new CommsError('APPROVAL_REQUIRED', 'this is the person’s own setup, from the app or their terminal');
     }
