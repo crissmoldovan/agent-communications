@@ -101,8 +101,17 @@ describe('Review and approve… says all a target is given', () => {
     expect(all).toContain(`Context part 1: the rule’s own text ${SECRET}.`);
     expect(all).toContain("Context part 2: the message's first 300 characters.");
     expect(all).toContain(
-      `Its description: {{note}}, where {{note}} is the rule’s own text ${SECRET}, written into the issue as it is, as Markdown`,
+      `Its description: {{note}}, where {{note}} is the rule’s own text ${SECRET}, quoted in the issue as text, never as Markdown`,
     );
+    // The description quotes every slot's value as text, the message's too; the title takes each as plain text.
+    const quoted = whatLeaves({
+      ...constant,
+      targets: [{ ...TARGETS[1], title: { text: '{{subject}}' }, description: { text: 'From {{subject}}' } }],
+    } as never);
+    expect(words(quoted)).toContain(
+      "Its description: From {{subject}}, where {{subject}} is the message's subject, quoted in the issue as text, never as Markdown",
+    );
+    expect(words(quoted)).toContain("Its title: {{subject}}, where {{subject}} is the message's subject");
     expect(authored(lines).filter((text) => text === SECRET)).toHaveLength(2);
     // A webhook gets the whole record: its constants are named too.
     const hooked = whatLeaves({
