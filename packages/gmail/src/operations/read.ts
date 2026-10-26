@@ -7,6 +7,7 @@ import {
   parseAddressList,
   type SanitizeReport,
   TaintCollector,
+  type TakenView,
   wrapUntrusted,
 } from '@agentcomms/core';
 import { itemOf, recorded } from '../activity.ts';
@@ -15,6 +16,7 @@ import { type AuthResults, readAuthResults, readSenderWarnings, type SenderWarni
 import { type BodyOptions, buildBody, DEFAULT_MAX_CHARS, type MessageBody } from '../domain/body.ts';
 import { type GmailPart, headerValue, readParts } from '../domain/mime.ts';
 import { type FieldEnvelope, filenameField, mimeTypeField } from '../domain/untrusted-fields.ts';
+import { gmailTaken } from '../takes.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
 
 /**
@@ -66,6 +68,11 @@ export interface ReadMessageResult {
     quotedLinesOmitted: number;
   };
   webLink: string;
+  /**
+   * Who has the message (design 2026-10-26-taking-messages §6), for a read of the message or its thread: null when
+   * nobody has taken, offered or handed it back; otherwise closed words, never another session's folder or client.
+   */
+  taken?: TakenView | undefined;
 }
 
 /**
@@ -334,6 +341,13 @@ async function readWholeThread(
 
   await collector.flush(context.core.taint, await taintExclusions(context, alias));
   await context.core.states.update(resolved.inbox.id, { lastUsedAt: context.now().toISOString() });
+  // Who has each message (design 2026-10-26-taking-messages §6): one file look each, in closed words.
+  const taken = await gmailTaken(
+    context,
+    resolved.inbox.id,
+    messages.map((message) => message.messageId),
+  );
+  for (const message of messages) message.taken = taken.get(message.messageId) ?? null;
 
   const participants = [
     ...new Set(
@@ -398,5 +412,7 @@ async function readOneMessage(
   });
   await collector.flush(context.core.taint, await taintExclusions(context, alias));
   await context.core.states.update(resolved.inbox.id, { lastUsedAt: context.now().toISOString() });
+  // Who has it (design 2026-10-26-taking-messages §6): one file look, in closed words.
+  result.taken = (await gmailTaken(context, resolved.inbox.id, [result.messageId])).get(result.messageId) ?? null;
   return result;
 }

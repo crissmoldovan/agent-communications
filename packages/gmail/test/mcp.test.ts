@@ -110,6 +110,9 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_send_wait',
     'gmail_sendas_list',
     'gmail_setup',
+    // Taking messages (design 2026-10-26-taking-messages §5): a take is a write; who has a message, a look.
+    'gmail_take',
+    'gmail_taken',
     'gmail_thread_get',
     'gmail_thread_timeline',
     'gmail_trash',
@@ -183,9 +186,12 @@ test('a read-only server does not offer the tools that would write', async () =>
       'gmail_inbox_remove',
       'gmail_client_add',
       'gmail_client_remove',
+      // A take is a session's claim to act on a message, which a read-only server cannot do; who has one is a look.
+      'gmail_take',
     ]) {
       assert.ok(!names.includes(withheld), `${withheld} must not be offered by a read-only server`);
     }
+    assert.ok(names.includes('gmail_taken'));
     // A tool that was not registered is not there to be called: the protocol itself refuses, before any handler runs.
     await assert.rejects(
       client.callTool({ name: 'gmail_organise', arguments: { inbox: 'work', messageIds: ['m1'], archive: true } }),

@@ -8,6 +8,7 @@ import {
   newBoundary,
   parseAddressList,
   TaintCollector,
+  type TakenView,
   wrapUntrusted,
 } from '@agentcomms/core';
 import { itemOf, recorded } from '../activity.ts';
@@ -15,6 +16,7 @@ import type { GmailContext } from '../context.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import { compileQuery } from '../domain/query.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
+import { gmailTaken } from '../takes.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
 import { taintExclusions } from './read.ts';
 import { oneOf } from './words.ts';
@@ -48,6 +50,11 @@ export interface SearchRow {
   attachmentCount: number;
   unread: boolean;
   webLink: string;
+  /**
+   * Who has the message (design 2026-10-26-taking-messages §6): null when nobody has taken, offered or handed it back;
+   * otherwise closed words — `you`, `another session`, `the person` — and never another session's folder or client.
+   */
+  taken?: TakenView | undefined;
 }
 
 export interface SearchError {
@@ -437,6 +444,18 @@ async function searchMailboxes(context: GmailContext, options: SearchOptions): P
 
   for (const [alias, collector] of collectors) {
     await collector.flush(context.core.taint, await taintExclusions(context, alias));
+  }
+
+  // Who has each message (design 2026-10-26-taking-messages §6): one file look per row, in closed words.
+  for (const alias of new Set(rows.map((row) => row.inbox))) {
+    const resolved = await context.inbox(alias);
+    const own = rows.filter((row) => row.inbox === alias);
+    const views = await gmailTaken(
+      context,
+      resolved.inbox.id,
+      own.map((row) => row.messageId),
+    );
+    for (const row of own) row.taken = views.get(row.messageId) ?? null;
   }
 
   const per: CursorState['per'] = {};

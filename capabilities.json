@@ -1197,6 +1197,66 @@
       "operation": "trash"
     },
     {
+      "id": "gmail.take",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "args": {
+        "step": "take"
+      },
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "This session takes a message before it replies, so no other session does (design 2026-10-26-taking-messages §5). The session is the server's or the command's own, never an argument; at the person's own terminal a command takes nothing."
+    },
+    {
+      "id": "gmail.take.hand-back",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back with a closed reason other sessions see, and a note for the person alone (T8)."
+    },
+    {
+      "id": "gmail.take.done",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "gmail.taken",
+      "package": "gmail",
+      "cli": "taken",
+      "mcp": "gmail_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has these messages, in closed words — never another session's folder, client or key (T7); with none named, this session's own takes."
+    },
+    {
       "id": "gmail.label.create",
       "package": "gmail",
       "cli": "label",
