@@ -13,8 +13,6 @@ import { RefreshCw } from 'lucide-react';
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
-import { OutsideText } from '../components/OutsideText.tsx';
-import { UntrustedText } from '../components/UntrustedText.tsx';
 import { COPY, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { supports } from '../gates.ts';
@@ -36,9 +34,10 @@ import {
   type Millis,
   readActivityItems,
   readMessagesPage,
-  type SenderView,
 } from '../messages/read.ts';
-import { cardSteps, type Part, type StoryContext, statusLabel, unknownSender, whereWords } from '../messages/story.ts';
+import { cardSteps, type StoryContext, whereWords } from '../messages/story.ts';
+import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
+import { MessageStory } from './MessageStory.tsx';
 
 /** The screen's words (spec 2026-10-26-owner-feedback-0320 §3.6, prototype row 4). */
 export const MESSAGES_COPY = {
@@ -275,15 +274,6 @@ function useMessagesReads(eventsOn: boolean) {
 
 // ── The screen ─────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** What went wrong, as text. */
-export function Problem({ message }: { message: string }) {
-  return (
-    <p role="alert" className="text-danger">
-      <UntrustedText text={message} />
-    </p>
-  );
-}
-
 /** A quiet line of the screen's own. */
 function Note({ children }: { children: ReactNode }) {
   return (
@@ -310,7 +300,7 @@ function useEventsMode(): EventsMode {
  * who it is from (the sender's words, From outside), how far it got and the steps on the way. Read from core's
  * `activity items`, and from the event service's `messages list` once it is 0.32.0 or later; joined here, in the app.
  */
-export function Messages(_props: { onScreen?: (screen: Screen) => void }) {
+export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) {
   const { installation } = useAppData();
   const core = installation.state === 'ready' ? installation.value.version : null;
   const mode = useEventsMode();
@@ -328,7 +318,7 @@ export function Messages(_props: { onScreen?: (screen: Screen) => void }) {
       </Frame>
     );
   }
-  return <MessagesView key={mode === 'on' ? 'on' : 'off'} mode={mode} />;
+  return <MessagesView key={mode === 'on' ? 'on' : 'off'} mode={mode} onScreen={onScreen} />;
 }
 
 function Frame({ children }: { children: ReactNode }) {
@@ -341,12 +331,20 @@ function Frame({ children }: { children: ReactNode }) {
 
 const ALL = 'all';
 
-function MessagesView({ mode }: { mode: Exclude<EventsMode, 'loading'> }) {
+function MessagesView({
+  mode,
+  onScreen,
+}: {
+  mode: Exclude<EventsMode, 'loading'>;
+  onScreen?: ((screen: Screen) => void) | undefined;
+}) {
   const { installation } = useAppData();
   const home = installation.state === 'ready' ? (installation.value.home ?? null) : null;
   const { reads, reload, older, olderBusy, olderProblem } = useMessagesReads(mode === 'on');
   const [show, setShow] = useState<Show>('all');
   const [account, setAccount] = useState<string | null>(null);
+  // The message whose story is open, by its key; the list keeps its filters while it is.
+  const [open, setOpen] = useState<string | null>(null);
   const context: StoryContext = useMemo(() => ({ time: timeWords, home }), [home]);
   const { events, activity, accounts } = reads;
   const joined = useMemo(() => {
@@ -374,7 +372,13 @@ function MessagesView({ mode }: { mode: Exclude<EventsMode, 'loading'> }) {
   const shown = joined === null ? [] : filterMessages(joined, { show, account });
   const page = events !== 'off' && events.state === 'ready' ? events.value : null;
   const pageable = page?.more === true && page.before !== null && page.before > reads.since;
+  const opened = open === null ? undefined : joined?.find((message) => message.key === open);
 
+  if (opened !== undefined) {
+    return (
+      <MessageStory listed={opened} reads={reads} context={context} onBack={() => setOpen(null)} onScreen={onScreen} />
+    );
+  }
   return (
     <Frame>
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
@@ -427,7 +431,7 @@ function MessagesView({ mode }: { mode: Exclude<EventsMode, 'loading'> }) {
       ) : (
         <ul className="flex flex-col gap-(--cue-space-3)">
           {shown.map((message) => (
-            <MessageCard key={message.key} message={message} context={context} />
+            <MessageCard key={message.key} message={message} context={context} onOpen={() => setOpen(message.key)} />
           ))}
         </ul>
       )}
@@ -449,97 +453,60 @@ function MessagesView({ mode }: { mode: Exclude<EventsMode, 'loading'> }) {
 
 // ── One message ────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** A run of the app's words and the rule author's, which are shown as text and nothing else. */
-export function Said({ parts }: { parts: readonly Part[] }) {
-  return (
-    <>
-      {parts.map((part, index) =>
-        'untrusted' in part ? (
-          // biome-ignore lint/suspicious/noArrayIndexKey: the parts come in their order and never move.
-          <UntrustedText key={index} text={part.untrusted} />
-        ) : (
-          // biome-ignore lint/suspicious/noArrayIndexKey: the parts come in their order and never move.
-          <span key={index}>{part.text}</span>
-        ),
-      )}
-    </>
-  );
-}
-
-/** Who a message is from and what it is about, each the sender's words, boxed From outside; or what it is, unkept. */
-export function Sender({ sender, channel }: { sender: SenderView | null; channel: string }) {
-  if (sender === null) return <span className="text-fg-muted">{unknownSender(channel)}</span>;
-  return (
-    <span className="flex min-w-0 flex-wrap items-baseline gap-x-(--cue-space-2) gap-y-(--cue-space-1)">
-      {sender.name === null ? null : (
-        <span className="font-medium text-fg" data-slot="message-from">
-          <OutsideText text={sender.name} />
-        </span>
-      )}
-      {sender.address === null ? null : (
-        <span className="text-(length:--cue-text-ui) text-fg-muted">
-          <OutsideText text={sender.address} />
-        </span>
-      )}
-      {sender.subject === null ? null : (
-        <span className="text-fg" data-slot="message-subject">
-          <OutsideText text={sender.subject} />
-        </span>
-      )}
-    </span>
-  );
-}
-
-/** The status chip: Replied, Acknowledged, Done or Dismissed with who, Read by an agent, Waiting for you, Not seen. */
-export function StatusChip({ message }: { message: JoinedMessage }) {
-  const { label, tone } = statusLabel(message.status);
-  return (
-    <Chip tone={tone} variant="tinted" data-slot="message-status">
-      {label}
-    </Chip>
-  );
-}
-
 /**
- * One message, as a card in the soft look: where it came in and when, its status; who it is from and what about, a
- * sender's words marked From outside; and its line of steps.
+ * One message, as a card in the soft look that opens its story: where it came in and when, its status; who it is from
+ * and what about, a sender's words marked From outside; and its line of steps.
  */
-function MessageCard({ message, context }: { message: JoinedMessage; context: StoryContext }) {
+function MessageCard({
+  message,
+  context,
+  onOpen,
+}: {
+  message: JoinedMessage;
+  context: StoryContext;
+  onOpen: () => void;
+}) {
   const steps = cardSteps(message, context);
   return (
     <li data-message={message.key} data-status={message.status.kind} data-channel={message.channel}>
-      <Panel className="flex flex-col gap-(--cue-space-2) p-(--cue-space-4)">
-        <span className="flex items-center gap-(--cue-space-2) text-(length:--cue-text-label) text-fg-subtle">
-          <span data-slot="message-where">{whereWords(message)}</span>
-          {message.sender === null ? null : (
-            <Chip tone="warn" variant="tag" data-slot="from-outside-label">
-              {COPY.fromOutside}
-            </Chip>
-          )}
-          <span className="ml-auto flex items-center gap-(--cue-space-2)">
-            <StatusChip message={message} />
-            <When at={message.at} />
-          </span>
-        </span>
-        <Sender sender={message.sender} channel={message.channel} />
-        <span
-          className="flex flex-wrap items-center gap-x-(--cue-space-2) gap-y-(--cue-space-1) text-(length:--cue-text-ui) text-fg-muted"
-          data-slot="message-steps"
+      <Panel>
+        <button
+          type="button"
+          onClick={onOpen}
+          className="flex w-full cursor-pointer flex-col gap-(--cue-space-2) p-(--cue-space-4) text-left transition-colors duration-fast hover:bg-surface-2 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-focus"
         >
-          {steps.map((step, index) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: the steps come in their order and never move.
-            <span key={index} className="contents">
-              {index === 0 ? null : (
-                <span aria-hidden="true" className="text-fg-subtle">
-                  ›
-                </span>
-              )}
-              <span className="rounded-control bg-surface-2 px-(--cue-space-2)" data-slot="message-step">
-                <Said parts={step} />
-              </span>
+          <span className="flex items-center gap-(--cue-space-2) text-(length:--cue-text-label) text-fg-subtle">
+            <span data-slot="message-where">{whereWords(message)}</span>
+            {message.sender === null ? null : (
+              <Chip tone="warn" variant="tag" data-slot="from-outside-label">
+                {COPY.fromOutside}
+              </Chip>
+            )}
+            <span className="ml-auto flex items-center gap-(--cue-space-2)">
+              <StatusChip message={message} />
+              <When at={message.at} />
             </span>
-          ))}
-        </span>
+          </span>
+          <Sender sender={message.sender} channel={message.channel} />
+          <span
+            className="flex flex-wrap items-center gap-x-(--cue-space-2) gap-y-(--cue-space-1) text-(length:--cue-text-ui) text-fg-muted"
+            data-slot="message-steps"
+          >
+            {steps.map((step, index) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: the steps come in their order and never move.
+              <span key={index} className="contents">
+                {index === 0 ? null : (
+                  <span aria-hidden="true" className="text-fg-subtle">
+                    ›
+                  </span>
+                )}
+                <span className="rounded-control bg-surface-2 px-(--cue-space-2)" data-slot="message-step">
+                  <Said parts={step} />
+                </span>
+              </span>
+            ))}
+          </span>
+        </button>
       </Panel>
     </li>
   );
