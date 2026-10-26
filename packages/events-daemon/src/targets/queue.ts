@@ -23,7 +23,7 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' = 'read',
+  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' | 'analyse' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -67,6 +67,12 @@ export function assertNotMcpServer(
       message:
         "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
       hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
+    },
+    // Analyse (0.33.0 §3.3): what a rule did and the suggestions for it are the person's, when they ask for them.
+    analyse: {
+      message:
+        "analysing a rule is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to press Analyse on the rule in the app: Events → Rules.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

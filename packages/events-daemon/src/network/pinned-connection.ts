@@ -27,6 +27,15 @@ const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
  * which serves TypeSafe's Jev. Exactly this URL — scheme, host `openrouter.ai`, port and path — and nothing else there.
  */
 const OPENROUTER_GLOBAL_ONLY_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
+/**
+ * Analyse's model endpoints (0.33.0 design §3.3): OpenRouter's chat completions and Anthropic's Messages API. They are
+ * admitted only to a caller that names Analyse's purpose, and that purpose admits nothing else: a judge never reaches
+ * them, and Analyse never reaches a judge's endpoint.
+ */
+export const ANALYSE_GLOBAL_ONLY_ENDPOINTS: readonly [
+  'https://openrouter.ai/api/v1/chat/completions',
+  'https://api.anthropic.com/v1/messages',
+] = ['https://openrouter.ai/api/v1/chat/completions', 'https://api.anthropic.com/v1/messages'];
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -34,6 +43,8 @@ export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly approvedAddressSetDigest?: string;
   /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
   readonly signal?: AbortSignal;
+  /** Global-only only: `analyse` admits Analyse's model endpoints, and only them; omitted, a judge's two. */
+  readonly hostedPurpose?: 'analyse' | undefined;
 };
 
 export interface PinnedTcpOptions {
@@ -130,8 +141,14 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   const url = typeof options.url === 'string' ? new URL(options.url) : new URL(options.url.href);
   assertPinnedUrl(url);
   const globalOnly = options.addressMode === 'global-only';
+  if (options.hostedPurpose !== undefined && !globalOnly)
+    throw new AddressPolicyError('a hosted purpose is for global-only address mode');
   if (globalOnly) {
-    if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
+    if (options.hostedPurpose === 'analyse') {
+      // Analyse's model: exactly its fixed endpoints, and never a judge's.
+      if (!(ANALYSE_GLOBAL_ONLY_ENDPOINTS as readonly string[]).includes(url.href))
+        throw new AddressPolicyError('global-only address mode for Analyse is reserved for its fixed model endpoints');
+    } else if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
       // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
     } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
       throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');

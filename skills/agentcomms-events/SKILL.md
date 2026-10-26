@@ -133,8 +133,9 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 ## Human-only boundaries
 
 Do not invoke dry-run record reads, delivery details, queue item reads, clearing the queue, binding a lane, message
-stories, judge setup, AI provider keys, approving a rule in the app, retained rule tests, target resume, held decisions,
-standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it to the person:
+stories, judge setup, AI provider keys, approving a rule in the app, rule analysis, retained rule tests, target resume,
+held decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand
+it to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
@@ -146,6 +147,7 @@ standing approval, or daemon secret operations. State the relevant human-only ou
 - Judge setup: “Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2).”
 - AI provider keys: “An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26).”
 - Rule approval in the app: “A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; at a terminal the person types the challenge with approve, and no tool performs either.”
+- Rule analysis: “Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, at a terminal or in the app, on the model provider they picked with their own key. No tool runs it: an agent never reads those counts and never spends the person's key, and only the person applies a suggestion (0.33.0 design §3.3, §3.7).”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”

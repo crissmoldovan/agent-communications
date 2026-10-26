@@ -466,7 +466,7 @@ function buildEventsMcpServer(
   strictControlTool(
     'events_provider_list',
     'List AI providers',
-    'Lists TypeSafe and OpenRouter, the providers Jev can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
+    'Lists TypeSafe, OpenRouter and Anthropic, the providers Jev and Analyse can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
     {},
     () => providerList(options),
   );

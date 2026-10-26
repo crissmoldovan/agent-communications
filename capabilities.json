@@ -2843,6 +2843,17 @@
       "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; at a terminal the person types the challenge with approve, and no tool performs either."
     },
     {
+      "id": "events-daemon.rule.analyse",
+      "package": "events-daemon",
+      "cli": "rule analyse",
+      "mcp": null,
+      "status": "exception",
+      "operation": "ruleAnalyse",
+      "argv": ["parity"],
+      "expect": { "ruleId": "parity" },
+      "reason": "Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, at a terminal or in the app, on the model provider they picked with their own key. No tool runs it: an agent never reads those counts and never spends the person's key, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

@@ -15,9 +15,11 @@ export function readProviders(value: unknown): Record<AiProvider, boolean> | nul
   for (const entry of providers) {
     if (typeof entry !== 'object' || entry === null) return null;
     const { id, hasKey } = entry as { id?: unknown; hasKey?: unknown };
-    if (typeof hasKey !== 'boolean' || typeof id !== 'string') return null;
-    // Since 0.33.0 the list names Anthropic and Linear too: Linear's key is Settings → Integrations' to show.
-    if ((AI_PROVIDERS as readonly unknown[]).includes(id)) found[id as AiProvider] = hasKey;
+    if (typeof id !== 'string' || typeof hasKey !== 'boolean') return null;
+    // A provider this screen has no row for — Anthropic's key, which Analyse uses (0.33.0) — is passed over, so a newer
+    // event service still reads; the two Jev providers must each be there.
+    if (!(AI_PROVIDERS as readonly string[]).includes(id)) continue;
+    found[id as AiProvider] = hasKey;
   }
   if (AI_PROVIDERS.some((provider) => found[provider] === undefined)) return null;
   return found as Record<AiProvider, boolean>;

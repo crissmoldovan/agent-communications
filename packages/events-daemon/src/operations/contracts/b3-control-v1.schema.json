@@ -943,7 +943,7 @@
               "required": ["kind"],
               "properties": {
                 "kind": { "enum": ["typesafe", "local-endpoint"] },
-                "provider": { "$ref": "#/$defs/aiProvider" },
+                "provider": { "$ref": "#/$defs/jevProvider" },
                 "url": { "type": "string", "minLength": 1, "maxLength": 256 },
                 "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" }
               }
@@ -972,6 +972,25 @@
               "additionalProperties": false,
               "required": ["provider"],
               "properties": { "provider": { "$ref": "#/$defs/aiProvider" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "rule-analyse" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ruleId"],
+              "properties": {
+                "ruleId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+                "draft": { "type": "object" },
+                "provider": { "$ref": "#/$defs/analyseProvider" }
+              }
             },
             "origin": { "$ref": "#/$defs/id" }
           }
@@ -1251,7 +1270,10 @@
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
-    "aiProvider": { "enum": ["typesafe", "openrouter"] },
+    "aiProvider": { "enum": ["typesafe", "openrouter", "anthropic"] },
+    "jevProvider": { "enum": ["typesafe", "openrouter"] },
+    "analyseProvider": { "enum": ["openrouter", "anthropic"] },
+    "nullableNumber": { "type": ["number", "null"] },
     "judgeLimits": {
       "type": "object",
       "additionalProperties": false,
@@ -2324,6 +2346,160 @@
         },
         "provider-key-set": { "$ref": "#/$defs/providerKeyResult" },
         "provider-key-remove": { "$ref": "#/$defs/providerKeyResult" },
+        "rule-analyse": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["ruleId", "analysed", "counts", "suggestions", "model"],
+          "properties": {
+            "ruleId": { "$ref": "#/$defs/id" },
+            "analysed": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source", "version"],
+                  "properties": { "source": { "const": "stored" }, "version": { "$ref": "#/$defs/positive" } }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["source"],
+                  "properties": { "source": { "const": "draft" } }
+                }
+              ]
+            },
+            "counts": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["windowDays", "since", "decisions", "outcomes", "judge", "domainsKnown", "domains", "queue"],
+              "properties": {
+                "windowDays": { "const": 30 },
+                "since": { "type": "integer", "minimum": 0 },
+                "decisions": { "type": "integer", "minimum": 0 },
+                "outcomes": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["matched", "no-match", "mapping-rejected", "retention-expired", "hold"],
+                  "properties": {
+                    "matched": { "type": "integer", "minimum": 0 },
+                    "no-match": { "type": "integer", "minimum": 0 },
+                    "mapping-rejected": { "type": "integer", "minimum": 0 },
+                    "retention-expired": { "type": "integer", "minimum": 0 },
+                    "hold": { "type": "integer", "minimum": 0 }
+                  }
+                },
+                "judge": {
+                  "oneOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["answered", "yes", "no", "held", "spread", "lowest", "highest"],
+                      "properties": {
+                        "answered": { "type": "integer", "minimum": 0 },
+                        "yes": { "type": "integer", "minimum": 0 },
+                        "no": { "type": "integer", "minimum": 0 },
+                        "held": { "type": "integer", "minimum": 0 },
+                        "spread": {
+                          "type": "array",
+                          "minItems": 10,
+                          "maxItems": 10,
+                          "items": { "type": "integer", "minimum": 0 }
+                        },
+                        "lowest": { "$ref": "#/$defs/nullableNumber" },
+                        "highest": { "$ref": "#/$defs/nullableNumber" }
+                      }
+                    }
+                  ]
+                },
+                "domainsKnown": { "type": "integer", "minimum": 0 },
+                "domains": {
+                  "type": "array",
+                  "maxItems": 10,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["domain", "judged", "yes", "no"],
+                    "properties": {
+                      "domain": { "$ref": "#/$defs/untrustedText" },
+                      "judged": { "type": "integer", "minimum": 0 },
+                      "yes": { "type": "integer", "minimum": 0 },
+                      "no": { "type": "integer", "minimum": 0 }
+                    }
+                  }
+                },
+                "queue": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["open", "done", "dismissed", "lowestDone", "highestDismissed"],
+                  "properties": {
+                    "open": { "type": "integer", "minimum": 0 },
+                    "done": { "type": "integer", "minimum": 0 },
+                    "dismissed": { "type": "integer", "minimum": 0 },
+                    "lowestDone": { "$ref": "#/$defs/nullableNumber" },
+                    "highestDismissed": { "$ref": "#/$defs/nullableNumber" }
+                  }
+                }
+              }
+            },
+            "suggestions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["part", "before", "after", "why", "evidence"],
+                "properties": {
+                  "part": {
+                    "enum": [
+                      "judge.question",
+                      "judge.inputs",
+                      "judge.threshold",
+                      "condition",
+                      "session.context",
+                      "linear.title",
+                      "general"
+                    ]
+                  },
+                  "before": { "type": ["string", "null"] },
+                  "after": { "type": ["string", "null"] },
+                  "why": { "type": "string", "minLength": 1 },
+                  "evidence": {
+                    "type": "object",
+                    "required": ["by"],
+                    "properties": { "by": { "enum": ["counts", "model"] } }
+                  }
+                }
+              }
+            },
+            "model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provider", "name", "model", "ran", "reason", "noKey", "sent", "parts"],
+              "properties": {
+                "provider": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/analyseProvider" }] },
+                "name": { "type": ["string", "null"] },
+                "model": { "type": ["string", "null"] },
+                "ran": { "type": "boolean" },
+                "reason": { "enum": [null, "NO_KEY", "NO_MODEL_PARTS"] },
+                "noKey": { "type": "array", "items": { "$ref": "#/$defs/analyseProvider" } },
+                "sent": { "type": "string", "minLength": 1 },
+                "parts": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["part", "at", "outcome"],
+                    "properties": {
+                      "part": { "enum": ["judge.question", "session.context", "linear.title"] },
+                      "at": { "type": "object" },
+                      "outcome": { "type": "string", "pattern": "^[A-Za-z_-]{1,40}$" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -2432,7 +2608,8 @@
                     "judge-setup",
                     "provider-list",
                     "provider-key-set",
-                    "provider-key-remove"
+                    "provider-key-remove",
+                    "rule-analyse"
                   ]
                 }
               }
@@ -2652,6 +2829,10 @@
                 "properties": { "request": { "properties": { "operation": { "const": "provider-key-remove" } } } }
               },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-key-remove" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-analyse" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-analyse" } } }
             }
           ]
         },
