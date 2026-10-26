@@ -1,4 +1,4 @@
-import { isAbsolute, normalize, relative, sep } from 'node:path';
+import { isAbsolute, normalize, posix, relative, sep, win32 } from 'node:path';
 import { type AuditLog, CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { changeAtTerminal, personSetupApprover } from '../domain/judge-setup.ts';
@@ -55,10 +55,41 @@ export function isSettingsFolder(value: unknown): value is string {
   return isSessionFolder(value);
 }
 
-/** A root that confines nothing: `/`, or the person's home folder itself. */
+/**
+ * A folder as a too-wide-root check reads it, in either style on any platform: a POSIX path, normal and without its
+ * trailing `/`; or a Windows one — a drive letter, a `\\server\share`, or either behind the `\\?\` or `\\.\` prefix —
+ * normal, without its trailing `\`, and lower-cased, since Windows compares paths without case. `root` when it is a
+ * file system's root.
+ */
+function folderKey(path: string): { readonly key: string; readonly root: boolean } {
+  let value = path;
+  // `\\?\C:\…` and `\\.\C:\…` name `C:\…`; `\\?\UNC\server\share\…` names `\\server\share\…`.
+  if (/^[\\/]{2}[?.][\\/]/u.test(value)) {
+    value = value.slice(4);
+    if (/^UNC[\\/]/iu.test(value)) value = `\\\\${value.slice(4)}`;
+  }
+  const windows = /^[a-z]:(?:[\\/]|$)/iu.test(value) || /^[\\/]{2}[^\\/]/u.test(value) || value.includes('\\');
+  if (!windows) {
+    const key = posix.normalize(value).replace(/\/+$/u, '') || '/';
+    return { key, root: key === '/' };
+  }
+  const normal = win32.normalize(value).toLowerCase();
+  const key = /^[a-z]:\\$/u.test(normal) ? normal : normal.replace(/\\+$/u, '');
+  return {
+    key,
+    // A drive's root (`c:\`, or `c:` alone, which normalises to `c:.`), a share's (`\\server\share`), or the current
+    // drive's (`\`).
+    root: /^[a-z]:(?:\\|\.)?$/u.test(key) || /^\\\\[^\\]+\\[^\\]+$/u.test(key) || key === '' || key === '\\',
+  };
+}
+
+/**
+ * A root that confines nothing: a file system's root — `/`; a Windows drive's, `C:\`, or share's, `\\server\share`,
+ * with or without the `\\?\` prefix — or the person's home folder itself, their user profile on Windows.
+ */
 export function isTooWideRoot(root: string, homeDirectory: string): boolean {
-  const normal = normalize(root).replace(/\/+$/u, '') || '/';
-  return normal === '/' || normal === normalize(homeDirectory).replace(/\/+$/u, '');
+  const folder = folderKey(root);
+  return folder.root || folder.key === folderKey(homeDirectory).key;
 }
 
 /** Whether `path` is `folder` or inside it, comparing normal absolute paths segment by segment. */
