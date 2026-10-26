@@ -769,10 +769,17 @@ test('0.32 B4: dryrun list and show --json give the app the log as data; the ter
     ]);
     assert.equal(record.deliveryId, deliveryId);
     assert.equal(record.ruleId, RULE);
-    assert.equal(record.record.data.subject, 'Dry-run subject the app shows as outside text');
-    assert.equal(record.record.data.messageId, messageId);
+    // Review of 0.32.0, finding 2: an agent's shell runs as the person, so each sender-written field leaves enveloped,
+    // as `queue show --json` gives it; the app unwraps the envelope into its From outside box.
+    const subject = String(record.record.data.subject);
+    assert.match(
+      subject,
+      /^<untrusted-content boundary="[^"]+" field="event" id="[^"]+">\nDry-run subject the app shows as outside text\n<\/untrusted-content boundary="[^"]+">$/u,
+    );
+    assert.match(String((record.record.data.from as { name: unknown }).name), /^<untrusted-content /u);
+    assert.match(String(record.record.data.snippet), /^<untrusted-content /u);
+    assert.equal(record.record.data.messageId, messageId, 'an id the sender did not write is left as it is');
     assert.ok(record.record.agentcommsuntrusted !== undefined, 'the event names its sender-written fields');
-    assert.doesNotMatch(shown.out, /<untrusted-content/u, 'data, not a terminal envelope: the app renders OutsideText');
 
     const terminal = await cli(harness.stateDir, ['dryrun', 'show', deliveryId]);
     assert.equal(terminal.code, 0, terminal.err);

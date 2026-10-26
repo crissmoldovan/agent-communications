@@ -62,7 +62,8 @@ agent-events delivery show <record-id>   # the delivery itself: its decision, th
 ```
 
 `dryrun list` and `dryrun show` take `--json` too, which is how the desktop app reads the log: `show` then gives the
-record as data (the exact event it would have sent, whose `agentcommsuntrusted` names the fields its sender wrote).
+record as data (the exact event it would have sent), with each field its sender wrote, the ones `agentcommsuntrusted`
+names, inside the untrusted-content envelope, as `queue show --json` gives a sender's fields.
 Inside the event service's MCP server both refuse, so no agent reads the log through MCP.
 
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test

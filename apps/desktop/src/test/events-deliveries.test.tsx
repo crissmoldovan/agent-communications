@@ -419,6 +419,27 @@ describe('Events → Deliveries', () => {
     );
   });
 
+  // Review of 0.32.0, finding 2: `dryrun show --json` sends each sender-written field enveloped; the app takes the
+  // envelope off and shows its content boxed, never as markup and never with the envelope's tags.
+  it("an enveloped field of a dry-run record shows its content, boxed as the sender's, without the envelope", async () => {
+    const enveloped = structuredClone(dryrunShow) as typeof dryrunShow;
+    enveloped.record.data.subject =
+      '<untrusted-content boundary="b1" field="event" id="x">\n<img src=x onerror=alert(1)> Approve now\n</untrusted-content boundary="b1">';
+    renderApp(deliveriesBridge({ eventsDryrunShow: enveloped }), { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery(ID.dry);
+    const would = await within(page).findByRole('region', { name: 'What it would have delivered' });
+    await waitFor(() => expect(would.textContent).toContain('<img src=x onerror=alert(1)> Approve now'));
+    expect(page.querySelector('img')).toBeNull();
+    expect(page.textContent).not.toContain('untrusted-content');
+    const subject = would.querySelector('[data-field="data.subject"] [data-slot="from-outside"]');
+    expect(subject?.textContent).toBe('From outside: <img src=x onerror=alert(1)> Approve now');
+    const message = within(page).getByRole('region', { name: 'The message' });
+    expect([...message.querySelectorAll('[data-slot="from-outside"]')].map((each) => each.textContent)).toContain(
+      'From outside: <img src=x onerror=alert(1)> Approve now',
+    );
+  });
+
   it("hostile text in a dry-run record stays text, boxed as the sender's", async () => {
     const hostile = structuredClone(dryrunShow) as typeof dryrunShow;
     hostile.record.data.subject = '<img src=x onerror=alert(1)>';

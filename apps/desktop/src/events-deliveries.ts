@@ -8,6 +8,7 @@
  * 1 January 1970. Nothing here makes markup: a dry-run record's fields stay strings, which the screen shows as text a
  * sender wrote.
  */
+import { splitEnvelopes } from './envelope.ts';
 import { isDeliveryId } from './grammar.ts';
 import { openableLink } from './queue.ts';
 
@@ -387,18 +388,34 @@ export function readDryrunShow(
   };
 }
 
+/**
+ * A sender-written field as the person reads it in a line: the CLI sends it inside the untrusted-content envelope
+ * (`dryrun show --json`, review of 0.32.0, finding 2), so the envelope's content is taken out, to be boxed once, whole,
+ * as From outside with the rest of the line it makes. Text with no envelope is as it came.
+ */
+const unwrapped = (value: unknown): string | null => {
+  const raw = text(value);
+  return raw === null
+    ? null
+    : text(
+        splitEnvelopes(raw)
+          .map((part) => part.text)
+          .join(''),
+      );
+};
+
 /** A sender's name and address, and the subject, where a dry-run record kept them. */
 export function keptMessage(record: unknown): { from: string | null; subject: string | null } {
   const data = isRecord(record) && isRecord(record.data) ? record.data : isRecord(record) ? record : {};
   const from = data.from;
   let sender: string | null = null;
-  if (typeof from === 'string') sender = text(from);
+  if (typeof from === 'string') sender = unwrapped(from);
   else if (isRecord(from)) {
-    const name = text(from.name);
-    const address = text(from.address);
+    const name = unwrapped(from.name);
+    const address = unwrapped(from.address);
     sender = name !== null && address !== null ? `${name} <${address}>` : (name ?? address);
   }
-  return { from: sender, subject: text(data.subject) };
+  return { from: sender, subject: unwrapped(data.subject) };
 }
 
 /**
