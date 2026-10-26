@@ -19,6 +19,7 @@ const QUEUE_ITEM_ID = new RegExp(grammar.queueItemId, 'u');
 const RULE_ID = new RegExp(grammar.ruleId, 'u');
 const LANE_NAME = new RegExp(grammar.laneName, 'u');
 const WINDOW_ID = new RegExp(grammar.windowId, 'u');
+const DELIVERY_ID = new RegExp(grammar.deliveryId, 'u');
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -84,6 +85,14 @@ export function isLaneName(value: string): boolean {
  */
 export function isWindowId(value: string): boolean {
   return isPlainValue(value) && WINDOW_ID.test(value);
+}
+
+/**
+ * A delivery's id, as the Deliveries screen names one (0.32.0): a letter or digit, then up to 127 letters, digits, `_`
+ * or `-`. The event service makes each a lowercase UUID; a delivery whose id is outside it is shown, and never opened.
+ */
+export function isDeliveryId(value: string): boolean {
+  return isPlainValue(value) && DELIVERY_ID.test(value);
 }
 
 /** The acts a rule can allow, in the order the form shows them. */

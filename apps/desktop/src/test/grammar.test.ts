@@ -12,6 +12,7 @@ import {
   isActs,
   isApprovalId,
   isConversation,
+  isDeliveryId,
   isLaneName,
   isPlainValue,
   isQueueItemId,
@@ -285,6 +286,36 @@ describe('the grammars', () => {
     const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
     expect(rust).toContain('pub fn lane_name(value: &str) -> bool');
     expect(rust).toContain('pub fn window_id(value: &str) -> bool');
+  });
+
+  it("a delivery's id is a word of letters, digits, _ and -: the event service's UUIDs, never an option", () => {
+    for (const good of ['0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70', 'dlv_example_1', 'D', '7', 'd'.repeat(128)]) {
+      expect(isDeliveryId(good), good).toBe(true);
+    }
+    for (const bad of [
+      '',
+      '-dlv',
+      '--json',
+      '_dlv',
+      'dlv.1',
+      'dlv:1',
+      'dlv@1',
+      'dlv/1',
+      '../dlv',
+      'dlv 1',
+      'dlv_1 --json',
+      'dlv_1\n',
+      'dlv_1‮',
+      'dlv_1​',
+      ' dlv_1',
+      'délivery',
+      'd'.repeat(129),
+    ]) {
+      expect(isDeliveryId(bad), JSON.stringify(bad)).toBe(false);
+    }
+    // The Rust side tries the same words (`grammar.rs`, `delivery_ids_are_a_word_of_letters_digits_underscores_…`).
+    const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
+    expect(rust).toContain('pub fn delivery_id(value: &str) -> bool');
   });
 
   it('the Rust side reads the same file', () => {
