@@ -58,10 +58,10 @@ Doctor's layout is not new: it is in the 0.34 test build already (ec814382), and
 
 ## Where it differs from the brief
 
-- The brief's Deliveries line said "Agents can read that log." They can't, by design: `dryrun list` and `dryrun show`
-  have no MCP tool, and `capabilities.json` gives the reason ("never in model context"). The board says "Only you can
-  read that log, here or in Terminal. Agents can't.", and its side note says which two of the three places reach an
-  agent.
+- The brief's Deliveries line said "Agents can read that log." Through their MCP tools they can't: `dryrun list` and
+  `dryrun show` have no MCP tool ("never in model context", `capabilities.json`). But the commands refuse only inside
+  an MCP server's process, so an agent with a terminal, such as Claude Code, runs them as the person and can. The board
+  says both, and its side note says which places are meant for an agent and which for the person.
 
 All names, addresses, messages and numbers are made up, apart from the owner's own counts on Deliveries (one rule in
 dry-run, 10 entries removed after 24 hours). None of it is real data.

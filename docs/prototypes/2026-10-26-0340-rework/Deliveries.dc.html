@@ -151,7 +151,7 @@ a{color:inherit}a:hover{color:inherit}
       <div class="dry" role="note">
         <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"></path><path d="M9 11h7M9 15h5"></path></svg></span>
         <div class="grow" style="display: flex; flex-direction: column; gap: 6px">
-          <span><span style="font-weight: 600">mail-subjects is in dry-run:</span> each match is written to the dry-run log instead of being sent anywhere. Only you can read that log, here or in Terminal. Agents can't.</span>
+          <span><span style="font-weight: 600">mail-subjects is in dry-run:</span> each match is written to the dry-run log instead of being sent anywhere. Agents can't read it through their tools; one with a terminal, such as Claude Code, runs commands as you and can.</span>
           <div class="row"><button type="button" class="link" onClick="{{toggleLog}}">{{logWord}}</button><span class="new" title="Not in the app yet">new</span></div>
         </div>
       </div>
@@ -202,7 +202,7 @@ a{color:inherit}a:hover{color:inherit}
 
     <aside class="card aside" aria-labelledby="reach">
       <h2 id="reach" class="h2">Something reached your agent?</h2>
-      <p class="muted p0">A rule's match goes to one of these. Two of them reach an agent; the dry-run log doesn't.</p>
+      <p class="muted p0">A rule's match goes to one of these. Two are meant for an agent; the dry-run log is meant for you.</p>
       <div class="way">
         <div class="row"><span class="grow" style="font-weight: 500">The Queue</span><span class="chip c-ok">An agent sees it</span></div>
         <span class="muted">Items an agent works through, one at a time.</span>
@@ -214,8 +214,8 @@ a{color:inherit}a:hover{color:inherit}
         <a class="link" href="#">Settings → Integrations ›</a>
       </div>
       <div class="way">
-        <div class="row"><span class="grow" style="font-weight: 500">The dry-run log</span><span class="chip c-n">Only you</span></div>
-        <span class="muted">For trying a rule out. Nothing is sent, and no agent can read it.</span>
+        <div class="row"><span class="grow" style="font-weight: 500">The dry-run log</span><span class="chip c-n">For you</span></div>
+        <span class="muted">For trying a rule out. Nothing is sent. An agent with a terminal can read it as you can; its tools can't.</span>
         <button type="button" class="link" style="align-self: flex-start" onClick="{{openLog}}">Open the dry-run log ›</button>
       </div>
       <span class="faint">A rule can also add a Linear issue or call a webhook. Neither reaches an agent here.</span>
