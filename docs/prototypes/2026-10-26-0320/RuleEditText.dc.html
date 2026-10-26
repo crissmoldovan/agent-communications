@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edit a rule as text</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--str:#9A3412;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--str:#FDBA74;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1100px}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.wide{max-width:1040px;margin:0 auto}
+.cols{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.ed{flex:999 1 520px;min-width:0;background:var(--s1);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.aside{flex:1 1 260px;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sec{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.code{margin:0;padding:16px 18px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.75;white-space:pre-wrap;overflow-x:auto;outline:none;counter-reset:ln}
+.k{color:var(--accent);font-weight:600}
+.v{color:var(--ok)}
+.s{color:var(--str)}
+.c{color:var(--text3)}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--s2);font-size:12px;color:var(--text3)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.seg{display:inline-flex;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.sg{height:28px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.chk{display:flex;gap:8px;align-items:flex-start;padding:4px 0}
+.ok{color:var(--ok);font-weight:600;width:14px;flex:none}
+.wn{color:var(--warn);font-weight:600;width:14px;flex:none}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="wide">
+  <a href="RuleDetail.dc.html" class="faint" style="text-decoration: none">‹ Events · Rules · invoices</a>
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 16px">
+    <h1 class="h1">Edit invoices</h1><span class="chip c-n">Version 3, not saved</span>
+    <span style="margin-left: auto; display: flex; gap: 8px; align-items: center">
+      <nav class="seg" aria-label="Edit as"><a class="sg" href="RuleEdit.dc.html">Visual</a><a class="sg on" href="RuleEditText.dc.html" aria-current="page">Text</a></nav>
+      <a class="btn" href="RuleAnalyse.dc.html">Analyse</a>
+    </span>
+  </div>
+
+  <div class="cols">
+    <div class="ed">
+      <div class="bar"><span>Plain text. Each line is one part of the rule; the visual editor shows the same rule.</span></div>
+<pre class="code" contenteditable="true" spellcheck="false" aria-label="The rule as text"><span class="k">when</span> a new message arrives in <span class="v">cue/gmail</span>, in the inbox
+<span class="k">match any</span>
+  subject mentions <span class="s">"invoice"</span>
+  subject mentions <span class="s">"payment"</span>
+
+<span class="k">ask</span> <span class="v">jev</span> via <span class="v">openrouter</span>
+  question <span class="s">"Is this asking me to pay or send something?"</span>
+  looking at sender, subject, first 300 characters
+  yes at <span class="v">0.70</span>, if unsure <span class="k">drop</span>
+
+<span class="k">then</span>
+  <span class="k">queue</span> in lane <span class="v">billing</span>, keep <span class="v">7 days</span>
+
+  <span class="k">session</span> working in <span class="v">~/work/cue++/acme</span>
+    if none <span class="k">start</span> with <span class="v">claude-code</span>
+    if busy <span class="k">wait</span>
+    give
+      the message's sender, subject, first 300 characters
+      text <span class="s">"Check the invoice against Stripe before replying. Never pay anything."</span>
+      written by <span class="v">claude</span> <span class="s">"Say in one line what the sender wants, and by when."</span>
+      file <span class="v">~/work/cue++/acme/billing/HOW-WE-INVOICE.md</span>
+
+  <span class="k">linear issue</span> in team <span class="v">CUE</span>, label <span class="v">Billing</span>, assigned to <span class="v">me</span>
+    title written by <span class="v">claude</span> <span class="s">"Invoice request from {sender's company}"</span>
+    description: the session's context
+
+<span class="k">keep</span> sender, subject, first 300 characters
+<span class="k">at most</span> <span class="v">60</span> an hour</pre>
+    </div>
+
+    <aside class="aside" aria-label="Checks">
+      <section class="sec">
+        <h2 style="margin: 0 0 8px; font-size: 13px; font-weight: 600">Checks, as you type</h2>
+        <div class="chk"><span class="ok">✓</span><span>Understood: 1 account, 2 conditions, a judge and 3 actions.</span></div>
+        <div class="chk"><span class="ok">✓</span><span>“billing” is a lane that exists.</span></div>
+        <div class="chk"><span class="wn">!</span><span>Linear isn't connected. <a href="Integrations.dc.html">Connect it</a> before you approve.</span></div>
+        <div class="chk"><span class="wn">!</span><span>The file is read when the session starts, so changes to it reach later sessions.</span></div>
+      </section>
+      <section class="sec">
+        <h2 style="margin: 0 0 8px; font-size: 13px; font-weight: 600">Analyse</h2>
+        <p class="muted" style="margin: 0 0 10px">Suggests a sharper question for the judge and clearer context for the session. You choose what to keep.</p>
+        <a class="btn" href="RuleAnalyse.dc.html">Analyse this rule</a>
+      </section>
+      <div style="display: flex; gap: 8px; justify-content: flex-end"><a class="btn" href="RuleDetail.dc.html">Cancel</a><a class="btn p" href="RuleEdit.dc.html">Review and approve…</a></div>
+    </aside>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1100}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

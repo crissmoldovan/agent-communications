@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Analyse a rule</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--del:#B93E0B;--delSoft:rgba(194,65,12,.08);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--del:#F87171;--delSoft:rgba(248,113,113,.10);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1500px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sec{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.sg{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);border:2px solid transparent}
+.sg.on{border-color:var(--accentSoft)}
+.where{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.02em}
+.before{background:var(--delSoft);border-radius:8px;padding:6px 10px;color:var(--text2);text-decoration:line-through;text-decoration-color:var(--del)}
+.after{background:var(--okSoft);border-radius:8px;padding:6px 10px}
+.why{color:var(--text2);margin:8px 0 0}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.tog{display:inline-flex;background:var(--s2);border-radius:9px;padding:2px;gap:2px}
+.tb{height:26px;padding:0 10px;border:0;border-radius:7px;background:transparent;cursor:pointer;font-weight:500;color:var(--text2)}
+.tb.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.pre{white-space:pre-line}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <a href="RuleEdit.dc.html" class="faint" style="text-decoration: none">‹ Edit invoices</a>
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px">
+    <h1 class="h1">Analyse invoices</h1><span class="chip c-acc">6 suggestions</span>
+  </div>
+  <section class="sec" aria-label="How this was made">
+    <p class="muted" style="margin: 0">Analyse read the rule and its last 30 days on this Mac: counts, the judge's answers and what you dismissed, never the messages themselves. A model tuned for each part then rewrote it: Jev's question guide for the judge, and a prompt optimiser for what a session is told.</p>
+    <p class="faint" style="margin: 8px 0 0">Ran on Claude, through your Anthropic key · sent the rule only · 11:03</p>
+  </section>
+
+  <sc-for list="{{items}}" as="s" hint-placeholder-count="6">
+    <section class="sg {{s.cls}}" aria-label="{{s.where}}">
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px">
+        <span class="where">{{s.where}}</span>
+        <span class="tog" role="group" aria-label="Keep this change" style="margin-left: auto">
+          <button type="button" class="tb {{s.applyCls}}" aria-pressed="{{s.on}}" onClick="{{s.apply}}">Apply</button>
+          <button type="button" class="tb {{s.skipCls}}" aria-pressed="{{s.off}}" onClick="{{s.skip}}">Skip</button>
+        </span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px">
+        <div class="before pre">{{s.before}}</div>
+        <div class="after pre">{{s.after}}</div>
+      </div>
+      <p class="why">{{s.why}}</p>
+    </section>
+  </sc-for>
+
+  <div style="display: flex; flex-wrap: wrap; gap: 8px; align-items: center; position: sticky; bottom: 0; background: var(--bg); padding: 12px 0">
+    <span class="faint" style="flex: 1">{{count}} of 6 will be applied. Nothing changes until you approve the new version.</span>
+    <a class="btn" href="RuleEdit.dc.html">Back to editing</a>
+    <a class="btn p" href="RuleEdit.dc.html">Apply and review…</a>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1500}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { skip: { 3: true } }; }
+renderVals() {
+const base = [
+{ where: 'THE JUDGE’S QUESTION · for Jev', before: 'Is this asking me to pay or send something?', after: 'Is the sender asking me to pay them, or to send them an invoice?', why: 'Jev answers one yes-or-no question best when it names who asks and for what. “Something” let 4 receipts through last month.' },
+{ where: 'WHAT THE JUDGE LOOKS AT', before: 'Sender, subject, first 300 characters', after: 'Sender, sender’s address, subject, first 300 characters', why: 'Real invoice requests came from 5 addresses. The address helps Jev tell a supplier from a newsletter.' },
+{ where: 'WHICH MESSAGES', before: 'Subject mentions “invoice” or “payment”', after: 'Subject mentions “invoice” or “payment”,\nand the sender isn’t receipts@shop.example or no-reply@bank.example', why: '6 of 14 matches in 30 days came from these two senders, and Jev said no to every one. Leaving them out saves 6 judge calls a month.' },
+{ where: 'THE JUDGE’S BAR', before: 'Yes at 0.70', after: 'Yes at 0.75', why: 'Every yes you kept was above 0.85. The two you dismissed were 0.71 and 0.73.' },
+{ where: 'WHAT THE SESSION IS TOLD · prompt optimiser', before: 'Check the invoice against Stripe before replying. Never pay anything.', after: 'Task: answer an invoice request.\n1. Find the invoice in Stripe by the sender’s company.\n2. Draft a reply with it attached, and wait for my approval.\nNever pay, and never change bank details. If unsure, ask me.', why: 'A session acts more reliably on a task with steps and limits than on a note. The limits now say what to do when unsure.' },
+{ where: 'THE LINEAR ISSUE’S TITLE', before: 'Written by a model: “Invoice request from {sender’s company}”', after: 'Written by a model: “Invoice request: {company}, {amount if given}, due {date if given}”', why: 'Subjects like “Re: Fwd: March” make poor titles. Amount and date make the issue useful without opening it.' }
+];
+const skip = this.state.skip;
+const items = base.map((b, i) => {
+const on = !skip[i];
+return { ...b, on: on, off: !on, cls: on ? 'on' : '', applyCls: on ? 'on' : '', skipCls: on ? '' : 'on',
+apply: () => this.setState({ skip: { ...this.state.skip, [i]: false } }),
+skip: () => this.setState({ skip: { ...this.state.skip, [i]: true } }) };
+});
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+items: items,
+count: items.filter((x) => x.on).length
+};
+}
+}
+</script>
+</body>
+</html>

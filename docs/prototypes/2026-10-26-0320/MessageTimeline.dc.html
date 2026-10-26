@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>One message's story</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1180px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h3{margin:0 0 10px;font-size:12px;font-weight:500;color:var(--text3)}
+.card{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-out{background:var(--warnSoft);color:var(--warn)}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:1px 7px}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:64px 18px minmax(0,1fr);gap:0 10px;position:relative;padding-bottom:14px}
+.ev .t{color:var(--text3);font-size:12px;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin:4px auto 0;position:relative;z-index:1}
+.ev .ln{position:absolute;left:83px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.who{display:flex;align-items:center;gap:10px;padding:8px 0}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni on" href="Messages.dc.html" aria-current="page">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <a href="Messages.dc.html" class="faint" style="text-decoration: none">‹ Messages</a>
+  <div class="row" style="flex-wrap: wrap; gap: 10px">
+    <h1 class="h1">A message from <span class="ext" style="font-weight: 600">David Example</span></h1><span class="chip c-ok">Replied</span>
+    <span style="margin-left: auto; display: flex; gap: 6px"><a class="btn" href="#">Open in Gmail</a></span>
+  </div>
+
+  <section class="card" aria-label="The message">
+    <div class="row" style="flex-wrap: wrap"><span class="faint">Gmail · cue/gmail · Oct 26, 11:40</span><span class="chip c-out">From outside</span></div>
+    <div style="margin-top: 8px"><span class="ext">Can you send the March invoice?</span></div>
+    <p class="muted" style="margin: 10px 0 0">An agent read it and replied in the same thread at 11:45, after you approved the reply. It's done in the Queue.</p>
+  </section>
+
+  <section class="card" aria-labelledby="story">
+    <h2 id="story" class="h3">What happened</h2>
+    <div class="tl">
+      <sc-for list="{{events}}" as="e" hint-placeholder-count="10">
+        <div class="ev">
+          <span class="t">{{e.at}}</span>
+          <span class="d" aria-hidden="true" style="background: {{e.dot}}"></span>
+          <div><div style="font-weight: 500">{{e.what}}</div><div class="faint">{{e.sub}}</div></div>
+          <sc-if value="{{e.more}}" hint-placeholder-val="{{ true }}"><span class="ln" aria-hidden="true"></span></sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="who">
+    <h2 id="who" class="h3">Agent windows that touched it</h2>
+    <div class="who">
+      <span aria-hidden="true" style="width: 30px; height: 30px; border-radius: 9px; background: var(--accentSoft); color: var(--accent); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">C</span>
+      <div style="flex: 1"><div style="font-weight: 500">~/work/cue++/acme</div><div class="faint">Claude Code · bound to lane billing · read it once, sent one reply</div></div>
+      <a class="btn" href="#">See in Activity</a>
+    </div>
+  </section>
+
+  <p class="faint" style="margin: 0">Built from what Agent Comms saw. Anything an agent did outside Agent Comms, such as in Gmail's website, isn't here.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+renderVals() {
+const g = 'var(--text3)', a = 'var(--accent)', o = 'var(--ok)', w = 'var(--warn)';
+const ev = [
+{ at: '11:40:02', what: 'Arrived in cue/gmail', sub: 'Seen by the event service', dot: g },
+{ at: '11:40:03', what: 'Matched the rule invoices', sub: 'The subject contains “invoice”', dot: a },
+{ at: '11:40:04', what: 'Jev said yes, 0.86 sure', sub: '“Is this asking me to pay or send something?”', dot: a },
+{ at: '11:40:04', what: 'Put in the Queue, lane billing', sub: 'Waiting for the agent bound to billing', dot: a },
+{ at: '11:40:05', what: 'Woke the agent window bound to billing', sub: '~/work/cue++/acme · Claude Code', dot: a },
+{ at: '11:41:10', what: 'That window read the message', sub: 'Through Agent Comms Gmail', dot: a },
+{ at: '11:43:30', what: 'It prepared a reply', sub: 'Waiting for your approval', dot: w },
+{ at: '11:45:12', what: 'You approved the reply', sub: 'In this app', dot: o },
+{ at: '11:45:13', what: 'The reply was sent', sub: 'In the same thread, labelled as sent by an agent', dot: o },
+{ at: '11:45:20', what: 'The agent marked it done in the Queue', sub: '', dot: o }
+];
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+events: ev.map((e, i) => ({ ...e, more: i < ev.length - 1 }))
+};
+}
+}
+</script>
+</body>
+</html>

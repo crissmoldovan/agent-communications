@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your agent</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1100px}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;align-self:flex-start}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+.h2{margin:0 0 10px;font-size:14px;font-weight:600}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.li{display:flex;align-items:center;gap:12px;padding:10px 0;border-top:1px solid var(--s2)}
+.li:first-of-type{border-top:0}
+.sw{width:34px;height:20px;border-radius:10px;position:relative;flex:none;border:0;cursor:pointer;padding:0}
+.sw::after{content:"";position:absolute;top:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left 180ms ease}
+.sw.on{background:var(--accent)}.sw.on::after{left:16px}
+.sw.off{background:var(--s3)}.sw.off::after{left:2px}
+.f{height:32px;border:0;border-radius:8px;background:var(--s2);padding:0 10px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.no{display:flex;gap:8px;padding:4px 0}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div><h1 class="h1">Agents</h1><p class="muted" style="margin: 0">Your own agent, and the agent sessions on this Mac.</p></div>
+  <nav aria-label="Agents" class="tabs">
+    <a class="tab on" href="Twin.dc.html" aria-current="page">Your agent</a>
+    <a class="tab" href="TwinRules.dc.html">Its rules</a>
+    <a class="tab" href="TwinConversations.dc.html">What it was asked</a>
+    <a class="tab" href="Playground.dc.html">Playground</a>
+    <a class="tab" href="AgentSessions.dc.html">Sessions</a>
+    <a class="tab" href="AgentProviders.dc.html">Providers</a>
+  </nav>
+
+  <section class="card" aria-label="Who it is">
+    <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+      <span aria-hidden="true" style="width: 48px; height: 48px; border-radius: 14px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 16px">CM</span>
+      <div style="flex: 1; min-width: 200px">
+        <label for="nm" class="faint" style="display: block">Its name</label>
+        <input id="nm" class="f" value="Criss's minion" style="font-size: 15px; font-weight: 600; width: 100%; box-sizing: border-box">
+      </div>
+      <span class="chip c-ok">On · answering in 2 places</span>
+    </div>
+    <p class="muted" style="margin: 12px 0 0">Colleagues add it to a chat or message it directly. It answers simple things on its own, hands the rest to you or to a session, and always says it's an agent.</p>
+  </section>
+
+  <section class="card" aria-labelledby="where">
+    <h2 id="where" class="h2">Where people can reach it</h2>
+    <div class="li"><div style="flex: 1"><div style="font-weight: 500">Slack · cue/slack</div><div class="faint">@criss-minion: add it to a channel, mention it, or message it directly</div></div><button type="button" class="sw on" aria-label="Slack cue/slack" aria-pressed="true"></button></div>
+    <div class="li"><div style="flex: 1"><div style="font-weight: 500">Slack · rgc/slack</div><div class="faint">Not added to this workspace yet</div></div><button type="button" class="btn">Add…</button></div>
+    <div class="li"><div style="flex: 1"><div style="font-weight: 500">Email</div><div class="faint">An address that forwards to it, such as minion@example.com</div></div><button type="button" class="sw off" aria-label="Email" aria-pressed="false"></button></div>
+    <div class="li"><div style="flex: 1"><div style="font-weight: 500">Colleagues' agents</div><div class="faint">3 colleagues' agents may ask it things, in the <a href="Playground.dc.html">playground</a></div></div><button type="button" class="sw on" aria-label="Colleagues' agents" aria-pressed="true"></button></div>
+  </section>
+
+  <section class="card" aria-labelledby="alone">
+    <h2 id="alone" class="h2">What it may answer on its own</h2>
+    <sc-for list="{{know}}" as="k" hint-placeholder-count="4">
+      <div class="li"><div style="flex: 1"><div style="font-weight: 500">{{k.name}}</div><div class="faint">{{k.from}}</div></div><button type="button" class="sw {{k.cls}}" aria-label="{{k.name}}" aria-pressed="{{k.on}}" onClick="{{k.flip}}"></button></div>
+    </sc-for>
+  </section>
+
+  <section class="card" aria-labelledby="never">
+    <h2 id="never" class="h2">What it always hands to you</h2>
+    <div class="no"><span aria-hidden="true">–</span><span>Agreeing to a date, a price or a piece of work</span></div>
+    <div class="no"><span aria-hidden="true">–</span><span>Sending a file, or anything about a client</span></div>
+    <div class="no"><span aria-hidden="true">–</span><span>Anything it isn't sure of</span></div>
+    <p class="faint" style="margin: 8px 0 0">It tells the person it has passed the question to you. Set exactly how in <a href="TwinRules.dc.html">its rules</a>.</p>
+  </section>
+
+  <section class="card" aria-labelledby="voice">
+    <h2 id="voice" class="h2">How it talks</h2>
+    <div style="display: flex; gap: 10px; flex-wrap: wrap; align-items: center"><select class="f" aria-label="Tone"><option>Short and friendly</option><option>Formal</option></select><span class="faint">Every answer starts “Criss's agent here:”, so no one mistakes it for you.</span></div>
+  </section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1100}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { off: { 3: true } }; }
+renderVals() {
+const base = [
+{ name: 'When you are free', from: 'From your calendar: free or busy only, never what the meeting is' },
+{ name: 'Where your Linear issues stand', from: 'Titles and states of issues in CUE and RGC' },
+{ name: 'Your notes for colleagues', from: '~/work/notes/for-colleagues.md' },
+{ name: 'Where a document lives', from: 'An index of ~/work/docs: names and places, not contents' }
+];
+const off = this.state.off;
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+know: base.map((b, i) => ({ ...b, on: !off[i], cls: off[i] ? 'off' : 'on', flip: () => this.setState({ off: { ...this.state.off, [i]: !this.state.off[i] } }) }))
+};
+}
+}
+</script>
+</body>
+</html>

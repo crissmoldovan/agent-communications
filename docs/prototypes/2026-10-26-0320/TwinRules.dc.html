@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Your agent's rules</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--info:#2F5BD3;--infoSoft:rgba(47,91,211,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--info:#7FA8F8;--infoSoft:rgba(127,168,248,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1200px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.wide{max-width:1040px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;align-self:flex-start}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.two{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.side{flex:1 1 380px;min-width:0;display:flex;flex-direction:column;gap:10px}
+.sh{display:flex;align-items:center;gap:10px;padding:4px 2px}
+.sh h2{margin:0;font-size:15px;font-weight:600}
+.r{display:block;text-decoration:none;background:var(--s1);border-radius:14px;padding:12px 16px;box-shadow:var(--shadow)}
+.r:hover{background:var(--s2)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.k-alone{background:var(--okSoft);color:var(--ok)}
+.k-me{background:var(--warnSoft);color:var(--warn)}
+.k-session{background:var(--accentSoft);color:var(--accent)}
+.k-queue{background:var(--infoSoft);color:var(--info)}
+.say{margin:6px 0 0;color:var(--text2)}
+.say b{color:var(--text);font-weight:500}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.reply{margin:8px 0 0;background:var(--s2);border-radius:8px;padding:6px 10px;font-size:12.5px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="wide">
+  <div><h1 class="h1">Agents</h1><p class="muted" style="margin: 0">Two sets of rules: one for messages people send you, one for messages they send your agent.</p></div>
+  <nav aria-label="Agents" class="tabs">
+    <a class="tab" href="Twin.dc.html">Your agent</a>
+    <a class="tab on" href="TwinRules.dc.html" aria-current="page">Its rules</a>
+    <a class="tab" href="TwinConversations.dc.html">What it was asked</a>
+    <a class="tab" href="Playground.dc.html">Playground</a>
+    <a class="tab" href="AgentSessions.dc.html">Sessions</a>
+    <a class="tab" href="AgentProviders.dc.html">Providers</a>
+  </nav>
+
+  <div class="two">
+    <section class="side" aria-labelledby="tome">
+      <div class="sh"><h2 id="tome">When someone messages you</h2><a class="btn" href="RuleEdit.dc.html" style="margin-left: auto">Add a rule</a></div>
+      <a class="r" href="RuleDetail.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">invoices</strong><span class="chip k-session">To a session</span></div><p class="say">Mail in <b>cue/gmail</b> asking to pay or send an invoice goes to the <b>session in ~/work/cue++/acme</b>, and to Linear.</p></a>
+      <a class="r" href="RuleDetail.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">david-on-slack</strong><span class="chip k-queue">To the Queue</span></div><p class="say">Anything from <b>David Example</b> in <b>cue/slack</b> goes in the Queue, lane <b>david</b>.</p></a>
+      <a class="r" href="RuleDetail.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">family-chat</strong><span class="chip k-queue">To the Queue</span></div><p class="say">WhatsApp messages from <b>Family</b> go in the Queue. No agent reads them.</p></a>
+      <p class="faint" style="margin: 0 4px">These are the event service's rules, as in Events → Rules.</p>
+    </section>
+
+    <section class="side" aria-labelledby="toagent">
+      <div class="sh"><h2 id="toagent">When someone messages your agent</h2><a class="btn" href="RuleEdit.dc.html" style="margin-left: auto">Add a rule</a></div>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">am-i-free</strong><span class="chip k-alone">Answers alone</span></div><p class="say">“Is Criss free…?”, “When can we meet?”: answers from your <b>calendar</b>, free or busy only.</p><div class="reply">Criss's agent here: Criss is free Thursday 10:00–12:00 and after 15:00.</div></a>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">issue-status</strong><span class="chip k-alone">Answers alone</span></div><p class="say">“Where is X?”, “Is Y done?” about your work: answers from <b>Linear</b>, title and state only.</p></a>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">asks-for-a-commitment</strong><span class="chip k-me">Hands to you</span></div><p class="say">Asking you to agree to a date, a price or a piece of work: goes in your <b>Queue</b>, and the agent says it has passed it on.</p><div class="reply">Criss's agent here: I've passed this to Criss. You'll hear back by tomorrow.</div></a>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">code-questions</strong><span class="chip k-session">To a session</span></div><p class="say">A question about <b>agent-communications</b> code goes to the <b>session in that folder</b>, queued if it's busy. Its answer is sent back after you approve it.</p></a>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">from-other-agents</strong><span class="chip k-alone">Answers alone</span></div><p class="say">A colleague's agent may ask only about your <b>free time</b> and your <b>notes for colleagues</b>. Anything else is handed to you.</p></a>
+      <a class="r" href="RuleEdit.dc.html"><div style="display: flex; gap: 8px; align-items: center"><strong style="font-weight: 600">everything-else</strong><span class="chip k-me">Hands to you</span></div><p class="say">Whatever no rule above matches goes in your Queue, and the agent says so.</p></a>
+    </section>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1200}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

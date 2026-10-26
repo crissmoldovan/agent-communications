@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Rule, invoices</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1300px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h3{margin:0 0 6px;font-size:12px;font-weight:500;color:var(--text3)}
+.card{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s2)}
+.btn.d{background:transparent;color:var(--danger)}
+.btn.d:hover{background:var(--dangerSoft)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.say b{font-weight:500}
+.num{font-size:20px;font-weight:600;letter-spacing:-0.02em}
+.kv{display:grid;grid-template-columns:150px minmax(0,1fr);gap:6px 12px}
+details summary{cursor:pointer;font-weight:500;list-style:none}
+details summary::-webkit-details-marker{display:none}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col" style="display: flex; flex-direction: column; gap: 14px">
+  <a href="Rules.dc.html" class="faint" style="text-decoration: none">‹ Events · Rules</a>
+  <div class="row" style="flex-wrap: wrap; gap: 10px">
+    <h1 class="h1">invoices</h1><span class="chip c-ok">On</span>
+    <span style="margin-left: auto; display: flex; gap: 6px">
+      <a class="btn" href="RuleEdit.dc.html">Edit…</a><button type="button" class="btn">Try it on a recent message…</button>
+      <button type="button" class="btn q">Turn off</button>
+      <button type="button" class="btn d">Remove…</button>
+    </span>
+  </div>
+
+  <section class="card" aria-label="In plain words">
+    <p class="say" style="margin: 0; font-size: 14px; line-height: 1.55">When <b>mail</b> arrives in <b>cue/gmail</b> with “invoice” or “payment” in the subject, ask <b>Jev</b> “Is this asking me to pay or send something?”. If it says yes, put it in the <b>Queue</b>, lane <b>billing</b>, and wake the agent window bound to that lane.</p>
+  </section>
+
+  <div class="grid">
+    <section class="card"><h2 class="h3">What it watches</h2><div>Gmail · <strong style="font-weight: 500">cue/gmail</strong></div><div class="faint">New mail in the inbox</div></section>
+    <section class="card"><h2 class="h3">Which messages</h2><div>Subject contains “invoice” or “payment”</div><div class="faint">From anyone · not mail you sent</div></section>
+    <section class="card"><h2 class="h3">The judge</h2><div>Jev, through OpenRouter</div><div class="faint">Asks: “Is this asking me to pay or send something?” · yes when 0.70 sure or more</div></section>
+    <section class="card"><h2 class="h3">Where they go</h2><div>Queue, lane <strong style="font-weight: 500">billing</strong></div><div class="faint">Bound to the agent window in ~/work/cue++/acme (Claude Code)</div></section>
+    <section class="card"><h2 class="h3">What's kept</h2><div>Sender, subject and the first 300 characters</div><div class="faint">The rest of the mail stays in Gmail · kept 30 days, then deleted</div></section>
+    <section class="card"><h2 class="h3">Limits</h2><div>At most 60 an hour</div><div class="faint">The limit you approved with the rule</div></section>
+  </div>
+
+  <section class="card" aria-labelledby="week">
+    <div class="row" style="margin-bottom: 10px"><h2 id="week" class="h3" style="margin: 0">The last 7 days</h2><a href="Deliveries.dc.html" class="faint" style="margin-left: auto">See its deliveries ›</a></div>
+    <div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px">
+      <div><div class="num">12</div><div class="faint">matched</div></div>
+      <div><div class="num">8</div><div class="faint">Jev said yes</div></div>
+      <div><div class="num">8</div><div class="faint">put in the Queue</div></div>
+      <div><div class="num">0</div><div class="faint">problems</div></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="ver">
+    <h2 id="ver" class="h3">Versions</h2>
+    <div style="display: flex; flex-direction: column; gap: 10px">
+      <div class="row" style="align-items: flex-start"><span class="chip c-ok">Version 2 · on</span><div><div>Since Oct 25 at 10:14. An agent asked for it from ~/work/cue++/acme; you approved it at the Terminal.</div><div class="faint">Changed from version 1: added “payment” to the subject words.</div></div></div>
+      <div class="row" style="align-items: flex-start"><span class="chip c-n">Version 1 · replaced</span><div>On from Oct 24 to Oct 25. You approved it in this app.</div></div>
+    </div>
+    <p class="faint" style="margin: 10px 0 0">Edit it here, or ask an agent to. Either way the new version waits for your approval, and this one keeps running until then.</p>
+  </section>
+
+  <details class="card">
+    <summary>Technical details</summary>
+    <div class="kv" style="margin-top: 12px">
+      <span class="faint">Rule id</span><span class="mono">rule_invoices</span>
+      <span class="faint">Version</span><span>2</span>
+      <span class="faint">Fingerprint</span><span><span class="mono">0f1e2d3c4b5a…</span> <span class="faint">· identifies this exact version</span></span>
+      <span class="faint">Approval</span><span><span class="mono">ap_1A2B3C4D5E6F…</span> <span class="faint">· the record of your yes to this exact version</span></span>
+      <span class="faint">Activation</span><span><span class="mono">act_7G8H9J0K…</span> <span class="faint">· when the event service started using it</span></span>
+    </div>
+  </details>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1300}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>
