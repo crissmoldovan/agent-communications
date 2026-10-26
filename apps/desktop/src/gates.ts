@@ -12,6 +12,9 @@
  * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
  * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`. `ruleEditor` is the events
  * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations.
+ * `severalServers` and `bringUpToDate` are core's (0.34.0, `connections.rs`): several servers added to an app in one
+ * approval (`MCP_SEVERAL_VERSION`), and `update --check` read and `update` approved in the app
+ * (`UPDATE_APP_APPROVAL_VERSION`).
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -26,6 +29,8 @@ export const GATES = {
   judgeSetup: '0.32.0',
   messages: '0.32.0',
   ruleEditor: '0.33.0',
+  severalServers: '0.34.0',
+  bringUpToDate: '0.34.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

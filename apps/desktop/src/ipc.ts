@@ -125,6 +125,12 @@ export type McpClient = (typeof MCP_CLIENTS)[number];
 export const MCP_SERVERS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
 export type McpServer = (typeof MCP_SERVERS)[number];
 
+/**
+ * The servers one `mcp install` registers with one app (`connections.rs`, `McpServers`): one, as every core takes it, or
+ * (core 0.34.0) two or more in core's order, each once, registered in one approval. `installServers` builds it.
+ */
+export type McpServers = McpServer | McpServer[];
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -210,13 +216,13 @@ export type Call =
   | { kind: 'providerList' }
   | { kind: 'providerKeyRemove'; provider: KeyProvider }
   | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
-  // Connections (0.32.0): core's channels, read; adding one server to one app, prepared, then approved by the person in
-  // the app with `mcpInstallApproved`, only for the approval the app prepared for that install (DA10's note of
-  // 2026-10-26), and taking one away, a tightening core applies at once.
+  // Connections (0.32.0): core's channels, read; adding servers to one app — one, or from core 0.34.0 several in one
+  // approval — prepared, then approved by the person in the app with `mcpInstallApproved`, only for the approval the app
+  // prepared for that install (DA10's note of 2026-10-26), and taking one away, a tightening core applies at once.
   | { kind: 'channels' }
-  | { kind: 'mcpInstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpInstall'; client: McpClient; server: McpServers }
   | { kind: 'mcpUninstall'; client: McpClient; server: McpServer }
-  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServer; approvalId: string }
+  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServers; approvalId: string }
   // The Messages screen (0.32.0, spec §3.6): the event service's messages and one message, and core's activity by
   // message, each the person's read. Times are whole milliseconds, a page's `before` a time or the cursor the last page
   // gave, the event 32 hex digits, each id a Gmail message's or a Slack `<channel>/<ts>`, all checked in Rust.
@@ -240,6 +246,11 @@ export type Call =
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
   | { kind: 'judgeShow'; judgeId: string; version?: number }
+  // Connections' Bring everything up to date (0.34.0): what is behind npm's latest release, read; `update` prepared, then
+  // approved by the person in the app with `updateApproved`, only for the approval the app prepared for it.
+  | { kind: 'updateCheck' }
+  | { kind: 'update' }
+  | { kind: 'updateApproved'; approvalId: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
