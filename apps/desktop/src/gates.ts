@@ -10,7 +10,8 @@
  * (`JUDGE_KINDS_VERSION`), `queue`, the first with the action queue (`QUEUE_VERSION`), and `lanes`, the first with
  * lanes (`LANES_VERSION`), and `judgeSetup`, the first with judge setup and AI provider keys (`JUDGE_SETUP_VERSION`). The
  * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
- * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`.
+ * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`. `ruleEditor` is the events
+ * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -24,6 +25,7 @@ export const GATES = {
   lanes: '0.31.0',
   judgeSetup: '0.32.0',
   messages: '0.32.0',
+  ruleEditor: '0.33.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

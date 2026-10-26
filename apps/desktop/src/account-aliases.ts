@@ -16,6 +16,8 @@ export interface AccountName {
   email: string | null;
   /** A Slack workspace's team id, for an Open in Slack link. */
   team: string | null;
+  /** The channel whose list named it, as a rule's source names it (0.33.0's rule editor). */
+  channel: AccountsProduct;
 }
 
 export type AccountNames = ReadonlyMap<string, AccountName>;
@@ -43,6 +45,7 @@ export function readAccountNames(product: AccountsProduct, value: unknown): [str
           alias,
           email: product === 'gmail' ? text(row.email) : null,
           team: product === 'slack' ? text(row.workspaceId) : null,
+          channel: product,
         },
       ],
     ];

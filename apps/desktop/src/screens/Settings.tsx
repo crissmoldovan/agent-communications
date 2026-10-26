@@ -17,6 +17,7 @@ import { Fragment, type ReactNode, useEffect, useId, useState } from 'react';
 import { z } from 'zod';
 import { useBridge } from '../bridge-context.tsx';
 import { AiProviders } from '../components/AiProviders.tsx';
+import { Integrations } from '../components/Integrations.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import type { Screen } from '../copy.ts';
@@ -474,6 +475,8 @@ export function Settings({ onScreen }: { onScreen?: ((screen: Screen) => void) |
         <NavigationProvider onScreen={onScreen}>
           <AiProviders />
         </NavigationProvider>
+        {/* Integrations (0.33.0): Linear and agent sessions, the tools a rule can act in. */}
+        <Integrations />
       </div>
     </ScreenFrame>
   );

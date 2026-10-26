@@ -59,6 +59,8 @@ export const DELIVERY_COPY = {
     'Only the parts the rule keeps. Text the sender wrote is shown as plain text, never as links or formatting.',
   wouldGone: 'The dry-run log no longer has this entry: each is deleted after 24 hours.',
   sends: 'Where it sends',
+  linearAdded: (identifier: string) => `Added ${identifier} in Linear.`,
+  openInLinear: 'Open in Linear',
   signed: 'Signed with the target’s key',
   tries: 'Tries',
   counted: 'Earlier tries are counted, not kept one by one.',
@@ -526,6 +528,40 @@ function Tries({
   );
 }
 
+/** The Linear issue a delivery added (0.33.0): its identifier, and its page, opened in the person's browser. */
+function LinearIssue({
+  issue,
+  onProblem,
+}: {
+  issue: NonNullable<DeliveryRow['linear']>;
+  onProblem: (problem: string | null) => void;
+}) {
+  const bridge = useBridge();
+  const { url } = issue;
+  return (
+    <Part title={DELIVERY_COPY.sends}>
+      <p className="text-fg">
+        <UntrustedText text={DELIVERY_COPY.linearAdded(issue.identifier)} />
+      </p>
+      {url === null ? null : (
+        <p>
+          <Link
+            href={url}
+            external
+            onClick={(event) => {
+              // The window never leaves the app: the issue opens in the browser, through `open_link`.
+              event.preventDefault();
+              bridge.openLink(url).catch((error: unknown) => onProblem(errorMessage(error)));
+            }}
+          >
+            {DELIVERY_COPY.openInLinear}
+          </Link>
+        </p>
+      )}
+    </Part>
+  );
+}
+
 export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLists; nav: EventsNav }) {
   const { eventsVersion } = useAppData();
   const [problem, setProblem] = useState<string | null>(null);
@@ -602,6 +638,7 @@ export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLi
       {detail !== null && kind === 'dry-run' ? (
         <WouldHave dryRun={detail.dryRun} read={dryRunKept ? dry.read : null} />
       ) : null}
+      {row.linear === null ? null : <LinearIssue issue={row.linear} onProblem={setProblem} />}
       {kind === 'webhook' && host !== null ? (
         <Part title={DELIVERY_COPY.sends}>
           <p className="text-fg">

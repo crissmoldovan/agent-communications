@@ -20,7 +20,7 @@ import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { AI_PROVIDERS, type AiProvider, type Call, errorMessage } from '../ipc.ts';
 import { takeDestination, useNavigate } from '../navigation.tsx';
-import { type ListedJudge, providerInUse, readProviders } from '../providers.ts';
+import { keyOf, providerInUse, readListedJudges, readProviders } from '../providers.ts';
 import { keyLabel, keyPlaceholder, PROVIDERS_COPY, removeKeyTitle } from './judges/copy.ts';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
@@ -40,18 +40,6 @@ const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 const PROVIDER_LIST: Call = { kind: 'providerList' };
 const JUDGES: Call = { kind: 'judgesList' };
 
-/** `judges list`, read leniently: only to say whether Jev uses a key. Anything else claims nothing. */
-function readListedJudges(value: unknown): ListedJudge[] | null {
-  if (!Array.isArray(value)) return null;
-  return value.filter(
-    (entry): entry is ListedJudge =>
-      typeof entry === 'object' &&
-      entry !== null &&
-      typeof (entry as ListedJudge).kind === 'string' &&
-      typeof (entry as ListedJudge).provider === 'string',
-  );
-}
-
 /** The section, once the events service is one with provider keys; otherwise what it needs first, or nothing. */
 export function AiProviders() {
   const { installation } = useAppData();
@@ -59,7 +47,7 @@ export function AiProviders() {
   const sectionRef = useRef<HTMLElement>(null);
   // A link from Events → Judges lands here: the section is scrolled to, and focus moves to it.
   useEffect(() => {
-    if (takeDestination('settings') === null) return;
+    if (takeDestination('settings', (destination) => destination.section === 'ai-providers') === null) return;
     sectionRef.current?.scrollIntoView?.({ block: 'start' });
     sectionRef.current?.focus();
   }, []);
@@ -132,6 +120,15 @@ function Providers() {
                     reload={reload}
                   />
                 ))}
+                {/* Anthropic's key (0.33.0), for Analyse: a row once the event service keeps one. */}
+                {listsAnthropic(keys.result) ? (
+                  <ProviderRow
+                    provider="anthropic"
+                    hasKey={keys.result.state === 'ready' && keyOf(keys.result.value, 'anthropic')}
+                    used={null}
+                    reload={reload}
+                  />
+                ) : null}
               </div>
             )
           }
@@ -159,6 +156,13 @@ function Providers() {
   );
 }
 
+/** Whether `provider list` names Anthropic: an event service of 0.33.0 or later. */
+function listsAnthropic(result: { state: string; value?: unknown }): boolean {
+  if (result.state !== 'ready') return false;
+  const providers = (result.value as { providers?: unknown } | null)?.providers;
+  return Array.isArray(providers) && providers.some((entry) => (entry as { id?: unknown })?.id === 'anthropic');
+}
+
 /** One provider: its name and whether it has a key; Add key… when not, Replace… and Remove… when it has. */
 function ProviderRow({
   provider,
@@ -166,7 +170,7 @@ function ProviderRow({
   used,
   reload,
 }: {
-  provider: AiProvider;
+  provider: AiProvider | 'anthropic';
   hasKey: boolean;
   used: boolean | null;
   reload: () => Promise<void>;
@@ -233,11 +237,15 @@ function ProviderRow({
             </span>
             <span className="text-fg-muted">{where}</span>
           </div>
-          {hasKey ? (
+          {provider === 'anthropic' ? (
+            hasKey ? (
+              <p className="text-fg-muted">{PROVIDERS_COPY.usedByAnalyse}</p>
+            ) : null
+          ) : hasKey ? (
             used === null ? null : (
               <p className="text-fg-muted">{used ? PROVIDERS_COPY.usedByJev : PROVIDERS_COPY.notUsed}</p>
             )
-          ) : (
+          ) : keys === null ? null : (
             <p className="text-fg-muted">
               {PROVIDERS_COPY.noAccount}
               <Link

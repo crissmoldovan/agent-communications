@@ -3,8 +3,22 @@
  * stands, its sentence in plain words, and a line of facts — filtered by All, On, Not switched on and Off. A card opens
  * the rule's page (`RuleDetail`). Everything shown is read: nothing here changes a rule.
  */
-import { Chip, EmptyState, Panel, Row, SegmentedControl, Spinner } from '@cueplusplus/ui';
-import { ChevronRight } from 'lucide-react';
+import {
+  Button,
+  Chip,
+  Dialog,
+  EmptyState,
+  Field,
+  FieldDescription,
+  FieldError,
+  FieldLabel,
+  Input,
+  Panel,
+  Row,
+  SegmentedControl,
+  Spinner,
+} from '@cueplusplus/ui';
+import { ChevronRight, Plus } from 'lucide-react';
 import { type ReactNode, useState } from 'react';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY, type Screen } from '../../copy.ts';
@@ -19,14 +33,83 @@ import {
   watches,
   weekCounts,
 } from '../../events-rules.ts';
+import { supports } from '../../gates.ts';
+import { isRuleId } from '../../grammar.ts';
+import { useCall } from '../../hooks/use-call.ts';
+import type { Call } from '../../ipc.ts';
+import { EDITOR_COPY } from '../../rule-editor/copy.ts';
 import { type EventsLists, type EventsNav, readVersions } from './lists.ts';
 import { Day, DRY_RUN, FactsLine, Problem, Sentence, Short, STATUS_WORDS, StatusChip, statusOf } from './parts.tsx';
 import { RuleDetail } from './RuleDetail.tsx';
+import { RuleEditor } from './RuleEditor.tsx';
+
+const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
+
+/** Whether this machine's event service has the rule editor's commands (0.33.0): only then is a rule edited here. */
+function useRuleEditor(): boolean {
+  const { result } = useCall<string>(EVENTS_VERSION);
+  return result.state === 'ready' && supports(result.value, 'ruleEditor');
+}
+
+/** New rule…: its name first, which the rule keeps for good; then the editor. */
+function NewRule({ taken, onStart }: { taken: ReadonlySet<string>; onStart: (ruleId: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState('');
+  const id = name.trim();
+  const wrong = id !== '' && !isRuleId(id);
+  const used = taken.has(id);
+  return (
+    <Dialog.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (next) setName('');
+      }}
+    >
+      <Dialog.Trigger
+        render={
+          <Button size="sm" icon={Plus}>
+            {EDITOR_COPY.newRule}
+          </Button>
+        }
+      />
+      <Dialog.Content width="sm" showCloseButton={false}>
+        <Dialog.Title>{EDITOR_COPY.newRuleTitle}</Dialog.Title>
+        <Dialog.Description>{EDITOR_COPY.newRuleBody}</Dialog.Description>
+        <Field name="rule-name" invalid={wrong || used}>
+          <FieldLabel>{EDITOR_COPY.ruleName}</FieldLabel>
+          <Input value={name} spellCheck={false} autoComplete="off" onValueChange={(value: string) => setName(value)} />
+          <FieldDescription>{EDITOR_COPY.newRuleBody.split('.')[0]}.</FieldDescription>
+          <FieldError
+            issues={
+              wrong ? [{ message: EDITOR_COPY.ruleNameWrong }] : used ? [{ message: EDITOR_COPY.ruleNameTaken }] : []
+            }
+          />
+        </Field>
+        <Dialog.Footer>
+          <Dialog.Close render={<Button variant="ghost">{COPY.cancel}</Button>} />
+          <Button
+            variant="primary"
+            disabled={id === '' || wrong || used}
+            onClick={() => {
+              setOpen(false);
+              onStart(id);
+            }}
+          >
+            {EDITOR_COPY.start}
+          </Button>
+        </Dialog.Footer>
+      </Dialog.Content>
+    </Dialog.Root>
+  );
+}
 
 /** The tab's words (the approved prototype, row 2), in sentence case. */
 export const RULES_COPY = {
   intro:
     'A rule watches one account, picks out the messages it cares about, and passes them on. An agent writes a rule when you ask it to; you approve each one before it starts. Open a rule to see everything about it.',
+  introEditing:
+    'A rule watches one account, picks out the messages it cares about, and passes them on. Write one here, or ask an agent to; you approve each one before it starts. Open a rule to see everything about it, or edit it.',
   show: 'Show',
   all: 'All',
   status: STATUS_WORDS,
@@ -162,11 +245,45 @@ export function RulesTab({
   onScreen?: ((screen: Screen) => void) | undefined;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
-  if (nav.rule !== null) return <RuleDetail id={nav.rule} lists={lists} nav={nav} onScreen={onScreen} />;
+  const canEdit = useRuleEditor();
+  const editing = nav.editing;
+  if (editing !== null)
+    return (
+      <RuleEditor
+        key={`${editing.kind}:${editing.ruleId}`}
+        target={editing}
+        lists={lists}
+        onClose={() => {
+          nav.edit(null);
+          if (editing.kind === 'edit') nav.openRule(editing.ruleId);
+        }}
+        onApproved={(ruleId) => {
+          nav.edit(null);
+          nav.openRule(ruleId);
+          void lists.reloadRules();
+        }}
+      />
+    );
+  if (nav.rule !== null) {
+    const ruleId = nav.rule;
+    return (
+      <RuleDetail
+        id={ruleId}
+        lists={lists}
+        nav={nav}
+        onScreen={onScreen}
+        {...(canEdit ? { onEdit: () => nav.edit({ kind: 'edit', ruleId }) } : {})}
+      />
+    );
+  }
   const { rules } = lists;
+  const taken = new Set(rules.state === 'ready' ? rules.value.map((rule) => rule.id) : []);
   return (
     <section aria-label="Rules" className="flex flex-col gap-(--cue-space-4)">
-      <p className="text-fg-muted">{RULES_COPY.intro}</p>
+      <div className="flex flex-wrap items-start gap-(--cue-space-3)">
+        <p className="min-w-60 flex-1 text-fg-muted">{canEdit ? RULES_COPY.introEditing : RULES_COPY.intro}</p>
+        {canEdit ? <NewRule taken={taken} onStart={(ruleId) => nav.edit({ kind: 'new', ruleId })} /> : null}
+      </div>
       {rules.state === 'loading' ? (
         <Spinner label={COPY.loading} />
       ) : rules.state === 'error' ? (
