@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { CommsError, homeDirectory, shortenHome } from '@agentcomms/core';
+import { type TargetDocument, targetLane } from '../domain/activation-documents.ts';
 import {
   isActivityKey,
   isClaudeCodeSessionId,
@@ -220,6 +221,21 @@ function bindingView(row: BindingRow, home: string): LaneBindingV1 {
     },
     since: iso(row.since),
   };
+}
+
+/** The lane a stored target document carries, read defensively: `targetLane`'s answer for any JSON value. */
+function storedTargetLane(target: unknown): string | undefined {
+  if (typeof target !== 'object' || target === null) return undefined;
+  const record = target as { readonly kind?: unknown; readonly lane?: unknown; readonly find?: unknown };
+  if (record.kind === 'queue' || record.kind === 'session') {
+    try {
+      const lane = targetLane(record as TargetDocument);
+      return typeof lane === 'string' ? lane : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
 }
 
 /** Every lane an active rule's queue target carries, with the rule and its source channel (B5). */
@@ -511,8 +527,9 @@ export class LaneService {
       const foreign =
         Array.isArray(targets) &&
         targets.some((target) => {
-          const lane = (target as { readonly lane?: { readonly name?: unknown } } | null)?.lane?.name;
-          return typeof lane === 'string' && lane !== mine;
+          // A queue's lane, or the lane a session target finds its session by (0.33.0 §3.5): the same rule (B5).
+          const lane = storedTargetLane(target);
+          return lane !== undefined && lane !== mine;
         });
       if (!foreign) return entry;
       const { counts7d: _hidden, ...rest } = entry;
