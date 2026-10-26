@@ -445,13 +445,13 @@ test('LANE-E: a bound window is woken by a new item with a pointer and no sender
 
     // A wait the client cancels stops its heartbeat and ends its wait in the owner, so it takes no item with it.
     const cancelledId = david.nextId();
-    const cancelled = tool(david, 'events_wait', { lane: 'david', seconds: 30 }, { progressToken: 'wait-cancel' });
+    const cancelled = tool(david, 'events_wait', { lane: 'david', seconds: 30 }, { progressToken: 'wait-2' });
     await new Promise((resolve) => setTimeout(resolve, 300));
     const beatsFor = () =>
       david.notifications.filter(
         (message) =>
           message.method === 'notifications/progress' &&
-          (message.params as { progressToken?: unknown }).progressToken === 'wait-cancel',
+          (message.params as { progressToken?: unknown }).progressToken === 'wait-2',
       ).length;
     assert.ok(beatsFor() >= 1, 'it was beating while it waited');
     await david.notify('notifications/cancelled', { requestId: cancelledId, reason: 'the person moved on' });
