@@ -825,3 +825,86 @@ test('0.32 B7: over MCP, a window not bound to a lane cannot drop its deliveries
     assert.match(resultText(outside), /can be dropped/u);
   });
 });
+
+// Review of 0.32.0, finding 4: stopping a delivery that will be tried again is the person's — CLI and app — like
+// `queue clear`. Over MCP a window may stop only a delivery in the lane it is bound to; a dead letter's payload can be
+// dropped as before. A cap of one delivery an hour keeps each rule's second delivery queued, to be stopped.
+test('0.32 R4: over MCP only the bound window stops its lane’s queued delivery; every other stop is the person’s', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    const capped = (ruleId: string, targets: readonly Record<string, unknown>[]) => ({
+      ...rule(1, targets),
+      ruleId,
+      deliveryRateCap: 1,
+    });
+    for (const target of [dryRun, lane(1)]) await harness.control.request('target-add', { document: target });
+    for (const [ruleId, targets] of [
+      ['lane-capped', [lane(1)]],
+      ['dry-capped', [dryRun]],
+    ] as const) {
+      await harness.control.request('rule-create', { document: capped(ruleId, targets) });
+      const planned = (await harness.control.request('rule-enable', { ruleId, version: 1 })) as { approvalId: string };
+      const challenge = (await harness.control.request('approve-challenge', {
+        approvalId: planned.approvalId,
+      })) as string;
+      await harness.control.request('approve', { approvalId: planned.approvalId, answer: challenge });
+    }
+    const enabled = (await harness.control.request('enable-all')) as { approvalId: string };
+    const challenge = (await harness.control.request('approve-challenge', {
+      approvalId: enabled.approvalId,
+    })) as string;
+    await harness.control.request('approve', { approvalId: enabled.approvalId, answer: challenge });
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    harness.mailbox.send('First: delivered within the cap');
+    harness.mailbox.send('Second: waits for the cap');
+    type Row = { deliveryId: string; ruleId: string; state: string };
+    const list = async () => JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Row[];
+    for (let index = 0; index < 10 && (await list()).filter((row) => row.state === 'queued').length < 2; index += 1)
+      await harness.tick();
+    const queued = (ruleId: string) =>
+      list().then((rows) => rows.find((row) => row.ruleId === ruleId && row.state === 'queued')?.deliveryId as string);
+    const laneQueued = await queued('lane-capped');
+    const dryQueued = await queued('dry-capped');
+    assert.ok(laneQueued && dryQueued, 'each rule has a delivery waiting for its cap');
+    const stateOf = async (id: string) => (await list()).find((row) => row.deliveryId === id)?.state;
+
+    // A delivery outside any lane: no window may stop it, and the CLI inside an MCP server's process may not either.
+    for (const window of [david, other]) {
+      const refused = await tool(window, 'events_delivery_drop', { deliveryId: dryQueued });
+      assert.equal(refused.result?.isError, true);
+      assert.match(resultText(refused), /for a person, at a terminal or in the app/u);
+    }
+    const marked = await cli(harness.stateDir, ['delivery', 'drop', dryQueued, '--json'], {
+      AGENTCOMMS_MCP_SERVER: 'events',
+    });
+    assert.equal(marked.code, 10, marked.err);
+    assert.match(marked.err, /for a person, at a terminal or in the app/u);
+    assert.equal(await stateOf(dryQueued), 'queued', 'no refused stop changed it');
+    // The person stops it, at a terminal or in the app.
+    const person = await cli(harness.stateDir, ['delivery', 'drop', dryQueued, '--json']);
+    assert.equal(person.code, 0, person.err);
+    assert.equal(await stateOf(dryQueued), 'cancelled');
+
+    // A lane's delivery: the other window learns nothing of it; the bound window may stop it.
+    assert.match(
+      resultText(await tool(other, 'events_delivery_drop', { deliveryId: laneQueued })),
+      /the delivery does not exist/u,
+    );
+    const bound = structured(await tool(david, 'events_delivery_drop', { deliveryId: laneQueued }));
+    assert.deepEqual(bound, { kind: 'delivery-dropped', deliveryId: laneQueued });
+    assert.equal(await stateOf(laneQueued), 'cancelled');
+
+    // A finished delivery outside a lane is not a stop: every window gets the drop's own answer, as before.
+    const delivered = (await list()).find((row) => row.ruleId === 'dry-capped' && row.state === 'delivered');
+    const finished = await tool(other, 'events_delivery_drop', { deliveryId: delivered?.deliveryId as string });
+    assert.match(resultText(finished), /can be dropped/u);
+    assert.doesNotMatch(resultText(finished), /for a person/u);
+  });
+});

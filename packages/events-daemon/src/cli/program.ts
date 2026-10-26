@@ -105,7 +105,13 @@ import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
-import { assertNotMcpServer, markMcpServerProcess, renderQueueItem, renderQueueList } from '../targets/queue.ts';
+import {
+  assertNotMcpServer,
+  MCP_SERVER_MARKER,
+  markMcpServerProcess,
+  renderQueueItem,
+  renderQueueList,
+} from '../targets/queue.ts';
 import { VERSION } from '../version.ts';
 
 export interface EventsCliStreams {
@@ -785,7 +791,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   delivery.command('drop <delivery-id>').action(async (deliveryId: string) => {
     ran = true;
-    print(await dropDelivery(deliveryId, controlOptions(program)));
+    // Stopping a delivery that will be tried again is the person's: inside an MCP server's process the owner refuses it.
+    const insideMcpServer = (env[MCP_SERVER_MARKER] ?? '') !== '';
+    print(await dropDelivery(deliveryId, { ...controlOptions(program), insideMcpServer }));
   });
   const held = program.command('held').description('inspect typed held decisions');
   held.command('list').action(async () => {

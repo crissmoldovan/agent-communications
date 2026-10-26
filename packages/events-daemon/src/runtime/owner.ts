@@ -1743,9 +1743,14 @@ async function handleControl(
     const windowScoped =
       request.operation === OWNER_CONTROL_WIRES.deliveriesList ||
       request.operation === OWNER_CONTROL_WIRES.dropDelivery;
-    const { caller, args } = windowScoped ? splitCaller(request.args) : { caller: undefined, args: request.args };
+    const split = windowScoped ? splitCaller(request.args) : { caller: undefined, args: request.args };
+    const { caller } = split;
+    // Review of 0.32.0, finding 4: the CLI says when it runs inside an MCP server's process; the flag only narrows.
+    const { insideMcpServer, ...args } = split.args;
     if (caller !== undefined && request.operation === OWNER_CONTROL_WIRES.dropDelivery)
       assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
+    if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
+      lanes.assertAgentMayStop(args.deliveryId, caller);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);

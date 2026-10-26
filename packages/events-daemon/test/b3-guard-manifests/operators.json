@@ -110,6 +110,18 @@
       "loadedMarker": "drop-reaches-no-lane-delivery-for-an-unbound-window"
     },
     {
+      "case": "agent-stops-only-its-own-lane-delivery",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      lanes.assertAgentMayStop(args.deliveryId, caller);\n",
+        "to": "      void caller;\n"
+      },
+      "mutationTest": "0.32 R4: over MCP only the bound window stops its lane’s queued delivery; every other stop is the person’s",
+      "loadedMarker": "agent-stops-only-its-own-lane-delivery"
+    },
+    {
       "case": "retry-delegates-account-identity-fence",
       "operation": "retryDelivery",
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",

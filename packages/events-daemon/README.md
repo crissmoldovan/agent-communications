@@ -232,7 +232,9 @@ agent-events message show <event-id> --json          # one message, with every l
   - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
     is signed (Standard Webhooks). A delivery that will be tried again can be tried now (`delivery retry`) or
     stopped at once (`delivery drop`, from 0.32.0), and a dead letter's kept payload dropped (`delivery drop`). One
-    being sent right now can't be stopped mid-try: the refusal says so (`DELIVERY_IN_FLIGHT`).
+    being sent right now can't be stopped mid-try: the refusal says so (`DELIVERY_IN_FLIGHT`). Stopping is yours, at
+    your terminal or in the app, like clearing the queue: over MCP a window may stop only a delivery in the lane it is
+    bound to, and `delivery drop` inside the event service's MCP server stops none.
   - **A live stream:** one listener on the loopback address, for tools on this machine. Each subscriber has its own
     token, and its origin is checked.
   - **A queue** you work through ([A queue](#a-queue)), or a lane of it that wakes one agent window

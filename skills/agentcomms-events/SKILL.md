@@ -115,10 +115,11 @@ One delivery's details are the person's: they read them at their terminal (`deli
 in the app, and so is the dry-run log, which keeps each entry 24 hours at most. After that a dry-run delivery is still
 listed, without what it held.
 
-When the person asks you to stop a delivery that will be tried again, `events_delivery_drop` cancels it at once; for a
-dead letter it drops the kept payload instead. A delivery being sent right now is refused with the reason
-`DELIVERY_IN_FLIGHT`: say so, and offer to try again once that try ends. A lane's deliveries are not there for a window
-that is not bound to that lane.
+In a window bound to a lane, when the person asks, `events_delivery_drop` stops a delivery of that lane that will be
+tried again: it is cancelled at once. Every other stop is the person's, in the app or at their terminal, and the tool
+refuses it: say so. For a dead letter, the tool drops the kept payload, as before. A delivery being sent right now is
+refused with the reason `DELIVERY_IN_FLIGHT`. A lane's deliveries are not there for a window that is not bound to that
+lane.
 
 ## Approval handoff
 

@@ -467,6 +467,37 @@ export class LaneService {
     });
   }
 
+  /**
+   * Whether an agent may stop this delivery (review of 0.32.0, finding 4). Stopping a delivery that will be tried again
+   * is the person's, as `queue clear` is: an agent window may stop only one in the lane it is bound to, and the CLI
+   * inside an MCP server's process (no window) none. A finished delivery stays finished, so its drop — a dead letter's
+   * payload — goes on to the operation's own answer, as before; one being sent may still turn into one that will be
+   * tried again, so it is refused here too.
+   */
+  assertAgentMayStop(deliveryId: unknown, caller: LaneWindowIdentity | undefined): void {
+    if (typeof deliveryId !== 'string') return;
+    const row = this.#store.database
+      .prepare(
+        `SELECT delivery.state, json_extract(target.document, '$.lane.name') AS lane
+           FROM deliveries AS delivery
+           LEFT JOIN target_versions AS target
+             ON target.target_id = delivery.target_id AND target.version = delivery.target_version
+          WHERE delivery.id = ?`,
+      )
+      .get(deliveryId) as { state: string; lane: string | null } | undefined;
+    if (row === undefined || !['queued', 'retryable', 'disclosing'].includes(row.state)) return;
+    const mine = caller === undefined ? null : (this.#bindingFor(caller)?.lane ?? null);
+    if (row.lane !== null && row.lane === mine) return;
+    throw new CommsError(
+      'APPROVAL_REQUIRED',
+      'stopping a delivery that will be tried again is for a person, at a terminal or in the app — an agent window may stop one only in the lane it is bound to',
+      {
+        hint: 'The person stops it in the app (Events → Deliveries) or at their terminal.',
+        details: { reason: 'PERSON_ONLY_STOP' },
+      },
+    );
+  }
+
   /** What an MCP caller may see of the queue (B3, B4): items outside lanes, and its own lane's since it was bound. */
   scopeFor(window: LaneWindowIdentity): QueueScope {
     const binding = this.#bindingFor(window);

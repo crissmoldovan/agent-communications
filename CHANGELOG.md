@@ -142,8 +142,9 @@ subject version 1 state active and approval and activation", and a next try "alw
 - **Stop trying.** `agent-events delivery drop <delivery-id>` (and `events_delivery_drop`) now also stops a delivery
   that is waiting or will be tried again: it is cancelled at once, its payload and next try gone, and no later tick
   tries it. A dead letter's drop is unchanged. One being sent right now is refused with the reason
-  `DELIVERY_IN_FLIGHT`. Over MCP, a window not bound to a lane can't reach that lane's deliveries, as the list
-  already hides them from it.
+  `DELIVERY_IN_FLIGHT`. Stopping is yours, at a terminal or in the app, like clearing the queue: over MCP a window
+  may stop only a delivery in the lane it is bound to (it can't even see another lane's), and `delivery drop` inside
+  the event service's MCP server stops none. A dead letter's drop works over MCP as before.
 - **The dry-run log in the app.** `dryrun list` and `dryrun show` worked only at an interactive terminal, so the app,
   which reads with `--json`, could not open the log the design gives it. They now refuse only inside the event
   service's MCP server, like the queue's own content reads; `dryrun show --json` gives the record as data, each field

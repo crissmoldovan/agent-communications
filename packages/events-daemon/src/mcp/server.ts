@@ -529,7 +529,7 @@ function buildEventsMcpServer(
     {
       title: 'Drop delivery',
       description:
-        'Stops one exact delivery that will be tried again, or drops one dead-letter delivery and its retained payload.',
+        "Stops one exact delivery that will be tried again in the lane this window is bound to, or drops one dead-letter delivery and its retained payload. Every other stop is the person's.",
       inputSchema: z.strictObject({ deliveryId: z.string().min(1) }),
       annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
     },
