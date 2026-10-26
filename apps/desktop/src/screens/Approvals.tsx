@@ -48,6 +48,7 @@ export function Approvals() {
             Waiting <WaitingCount approvals={approvals} />
           </Tabs.Tab>
           <Tabs.Tab value="recent">Recent</Tabs.Tab>
+          <Tabs.Indicator />
         </Tabs.List>
         <Tabs.Panel value="waiting" keepMounted>
           <Waiting target={target} />

@@ -414,6 +414,7 @@ function MessagesView({
     <Frame>
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <SegmentedControl
+          indicator
           aria-label={MESSAGES_COPY.show}
           size="sm"
           items={SHOWS.map((each) => ({

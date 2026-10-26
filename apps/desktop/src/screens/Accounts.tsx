@@ -185,6 +185,7 @@ function ChannelTabs({
               </Tabs.Tab>
             );
           })}
+          <Tabs.Indicator />
         </Tabs.List>
         {current === 'whatsapp' ? null : <AddAccount key={current} product={current} />}
       </div>

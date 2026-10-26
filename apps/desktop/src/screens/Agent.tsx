@@ -68,6 +68,7 @@ export function Agent() {
             Standing approvals{' '}
             {supports(installed, 'standing') ? <StandingCount result={standing.result} /> : <TabNeedsUpdate />}
           </Tabs.Tab>
+          <Tabs.Indicator />
         </Tabs.List>
         <Tabs.Panel value="label" keepMounted>
           <section aria-label="The label">

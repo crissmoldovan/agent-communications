@@ -223,6 +223,7 @@ function Level({ status }: { status: UpdateStatus }) {
     <Part title="Level">
       <div className="flex flex-col gap-(--cue-space-2)">
         <SegmentedControl
+          indicator
           aria-label="Update level"
           className="self-start"
           items={LEVELS.map(({ value, label }) => ({ value, label }))}

@@ -55,6 +55,7 @@ function SuggestionCard({
           {suggestion.evidence.by === 'model' ? <Chip tone="accent">{COPY.byModel}</Chip> : null}
           {canApply ? (
             <SegmentedControl
+              indicator
               aria-label={COPY.keepThis}
               size="sm"
               className="ml-auto"
@@ -136,6 +137,7 @@ function HowMade({ result, onProvider }: { result: AnalyseResult; onProvider: (p
           <div className="flex flex-wrap items-center gap-(--cue-space-2)">
             <span className="text-(length:--cue-text-label) text-fg-muted">{COPY.runOn}</span>
             <SegmentedControl
+              indicator
               aria-label={COPY.runOn}
               size="sm"
               value={model.provider ?? ''}

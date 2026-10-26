@@ -88,6 +88,7 @@ export function LocalModelDialog({
           <div className="flex flex-col gap-(--cue-space-2)">
             <span className="font-medium text-fg">{LOCAL_SETUP_COPY.whatYouRun}</span>
             <SegmentedControl
+              indicator
               aria-label={LOCAL_SETUP_COPY.whatYouRun}
               value={kind}
               onValueChange={(value) => {

@@ -1479,6 +1479,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
             <Count count={deliveries.state === 'ready' ? deliveries.value.length : null} />
           ),
         )}
+        <Tabs.Indicator />
       </Tabs.List>
       <Tabs.Panel value={'service' satisfies EventsTab} keepMounted>
         <div className="flex flex-col gap-(--cue-space-6)">

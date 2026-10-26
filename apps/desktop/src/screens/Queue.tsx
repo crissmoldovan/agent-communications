@@ -326,6 +326,7 @@ function QueueViews() {
               {LANES_COPY.tab}
               <QuietCount count={known.length} />
             </Tabs.Tab>
+            <Tabs.Indicator />
           </Tabs.List>
           {view === 'lanes' ? (
             <InfoTip label="About lanes" text={LANES_COPY.about} />

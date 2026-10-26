@@ -210,6 +210,7 @@ function DeliveryLines({
     <>
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <SegmentedControl
+          indicator
           aria-label={DELIVERIES_COPY.show}
           size="sm"
           items={FILTERS

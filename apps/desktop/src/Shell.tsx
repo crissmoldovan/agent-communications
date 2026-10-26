@@ -107,10 +107,13 @@ export function Shell({
         actions={<AppearanceMenu />}
       />
       <AppShell.Body>
+        {/* One ground per section glides to the screen that opens (cue-ui 0.34.0). The narrow window's drawer draws each
+            item's own: the shell keeps the glide to the column. */}
         <AppShell.Sidebar
           aria-label="Sections"
           drawerTitle="Sections"
           collapsible={false}
+          indicator
           className={test === null ? 'bg-sunken' : 'bg-sunken shadow-[inset_3px_0_0_var(--cue-warn)]'}
         >
           <Sidebar.Section>

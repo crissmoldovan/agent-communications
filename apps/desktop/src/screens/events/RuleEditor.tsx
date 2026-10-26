@@ -362,6 +362,7 @@ export function RuleEditor({
         <Chip tone="neutral">{COPY.notSaved(version)}</Chip>
         <span className="ml-auto flex flex-wrap items-center gap-(--cue-space-2)">
           <SegmentedControl
+            indicator
             aria-label={COPY.editAs}
             size="sm"
             value={mode}
