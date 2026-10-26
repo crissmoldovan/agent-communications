@@ -6,6 +6,7 @@
 export { UNICODE_VERSION } from '../vendor/unicode-15.1.0/generated/version.ts';
 export * from './catalogue/index.ts';
 export * from './conditions/index.ts';
+export * from './context/index.ts';
 export * from './formats/index.ts';
 export * from './identity/event-id.ts';
 export * from './idna/domain.ts';
@@ -14,6 +15,8 @@ export * from './mapping/index.ts';
 export { expandPattern, matchesPattern, type PointerPattern, type PointerPatternToken } from './pattern.ts';
 export { formatPointer, getPointer, parsePointer, relatePointers } from './pointer.ts';
 export * from './result.ts';
+export * from './retention.ts';
+export * from './rule-text/index.ts';
 export {
   type DescribableRuleDocument,
   type DescribableTarget,
@@ -21,8 +24,6 @@ export {
   type FieldLabels,
   type RulePart,
 } from './rules/describe-rule.ts';
-export * from './retention.ts';
-export * from './rule-text/index.ts';
 export type { JsonSchema } from './schema/to-json-schema.ts';
 export * from './text.ts';
 export * from './unicode/fold.ts';
