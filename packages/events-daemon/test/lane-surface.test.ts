@@ -122,6 +122,18 @@ test('LANE-D: lane bind is a person’s, at an interactive terminal, who types t
     assert.equal(wrong.out, '');
     const empty = await cli(bind, {}, { typed: '' });
     assert.equal(empty.code, 10, 'an empty answer binds nothing');
+    // A terminal that closes before the person types a line binds nothing, and does not wait for ever.
+    const closedStdin = Object.assign(new PassThrough(), { isTTY: true });
+    closedStdin.end();
+    const silent = await run(bind, {
+      env: {},
+      streams: {
+        stdin: closedStdin,
+        stdout: Object.assign(new PassThrough(), { isTTY: true }),
+        stderr: Object.assign(new PassThrough(), { isTTY: true }),
+      },
+    });
+    assert.equal(silent, 10);
     const typed = await cli(bind, {}, { typed: '  david  ' });
     assert.equal(typed.code, 66, `the lane's name, typed, reaches the owner: ${typed.err}`);
     assert.match(typed.err, /not running/u);

@@ -807,9 +807,15 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       const terminal = createInterface({ input: streams.stdin, output: streams.stderr, terminal: false });
       let typed: string;
       try {
-        typed = await terminal.question(
-          `Binding lane ${laneName} lets the agent window ${window} be woken for, and read, every new item in it.\nType the lane’s name to bind it: `,
-        );
+        // The first line typed is the answer; a terminal that closes before one is typed answers nothing, which binds
+        // nothing. A line typed ahead of the prompt is read too: 'line' comes before 'close'.
+        typed = await new Promise<string>((resolve) => {
+          terminal.once('line', resolve);
+          terminal.once('close', () => resolve(''));
+          streams.stderr.write(
+            `Binding lane ${laneName} lets the agent window ${window} be woken for, and read, every new item in it.\nType the lane’s name to bind it: `,
+          );
+        });
       } finally {
         terminal.close();
       }
