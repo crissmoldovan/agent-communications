@@ -217,6 +217,12 @@ checked_word!(
     "a local model's name"
 );
 checked_word!(
+    /// A Linear team whose labels `integration show linear --team` lists (0.33.0): its key, or its id.
+    LinearTeam,
+    crate::rule_editor::linear_team,
+    "a Linear team's key or id"
+);
+checked_word!(
     /// Where the event service finds the person's claude-stream relay (0.33.0, design §3.5): `default`, or the relay's
     /// home folder, whole and normal (`rule_editor::relay_home_setting`).
     RelayHomeSetting,
@@ -1025,10 +1031,14 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider: Option<AnalyseProvider>,
     },
-    /// The events service's `integration show <linear|agent-sessions>` (0.33.0, design §3.4, §3.5): whether Linear is
-    /// connected and the workspace and teams its key sees, or the relay the agent-session target reaches and how it
-    /// answers. Never a key or a token.
-    IntegrationShow { integration: Integration },
+    /// The events service's `integration show <linear|agent-sessions> [--team <team>]` (0.33.0, design §3.4, §3.5):
+    /// whether Linear is connected, the workspace and teams its key sees, and with a team that team's labels; or the
+    /// relay the agent-session target reaches and how it answers. Never a key or a token. Only Linear takes a team.
+    IntegrationShow {
+        integration: Integration,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        team: Option<LinearTeam>,
+    },
     /// The events service's `integration set agent-sessions --relay-home <default|folder>` (0.33.0, design §3.5): where
     /// the agent-session target finds the person's relay, the person's own setting (refused to an agent and, on macOS,
     /// to a process the app did not start). The token in that folder is never a call's.
@@ -1509,8 +1519,17 @@ impl Call {
                         })),
                 )
             },
-            Call::IntegrationShow { integration } => {
-                events(&["integration", "show", integration.word()])
+            Call::IntegrationShow { integration, team } => {
+                if team.is_some() && *integration != Integration::Linear {
+                    return Err(AppError::refused(
+                        "only Linear's integration lists a team's labels",
+                    ));
+                }
+                with(
+                    events(&["integration", "show", integration.word()]),
+                    team.iter()
+                        .flat_map(|team| ["--team".to_string(), team.as_str().to_string()]),
+                )
             }
             Call::IntegrationSetAgentSessions { relay_home } => events(&[
                 "integration",
@@ -1765,6 +1784,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         }),
         json!({ "kind": "integrationShow", "integration": "linear" }),
         json!({ "kind": "integrationShow", "integration": "agent-sessions" }),
+        json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
         json!({ "kind": "integrationSetAgentSessions", "relayHome": "/example/home/.local/state/agent-relay" }),
     ];
@@ -4063,7 +4083,20 @@ mod tests {
             assert_eq!(sample.needs(), Some(RULE_EDITOR_VERSION), "{value}");
             assert!(!sample.prepares_change(), "{value}");
         }
-        assert_eq!(seen, 16);
+        assert_eq!(seen, 17);
+        assert_eq!(
+            line(json!({ "kind": "integrationShow", "integration": "linear", "team": "CUE" })),
+            ["integration", "show", "linear", "--team", "CUE"]
+        );
+        assert_eq!(
+            call(
+                json!({ "kind": "integrationShow", "integration": "agent-sessions", "team": "CUE" })
+            )
+            .words()
+            .expect_err("refused")
+            .code,
+            "APP_REFUSED"
+        );
         assert_eq!(RULE_EDITOR_VERSION, "0.33.0");
         assert!(!crate::version::at_least("0.32.0", RULE_EDITOR_VERSION));
         assert!(crate::version::at_least(
@@ -4147,6 +4180,9 @@ mod tests {
             "/example/home/",
         ] {
             refused(json!({ "kind": "integrationSetAgentSessions", "relayHome": home }));
+        }
+        for team in ["", "--json", "CUE OPS", "CUE-1"] {
+            refused(json!({ "kind": "integrationShow", "integration": "linear", "team": team }));
         }
         refused(json!({ "kind": "integrationSetAgentSessions" }));
         refused(json!({ "kind": "integrationSetAgentSessions", "home": "pilot" }));

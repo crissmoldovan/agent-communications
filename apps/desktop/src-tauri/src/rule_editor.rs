@@ -248,6 +248,25 @@ fn is_format(character: char) -> bool {
     )
 }
 
+/// A Linear team, as `integration show linear --team` takes one (design §3.4, `linear-target.ts`): its key — 1 to 32
+/// letters, digits and `_` — or its id, a lowercase UUID.
+pub fn linear_team(value: &str) -> bool {
+    let key = !value.is_empty()
+        && value.len() <= 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_');
+    let id = value.len() == 36
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if [8, 13, 18, 23].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)
+            }
+        });
+    key || id
+}
+
 /// Whether `value` is a digest as the event service makes them: 64 lowercase hex digits.
 pub fn digest(value: &str) -> bool {
     value.len() == 64
@@ -376,6 +395,24 @@ mod tests {
             json!([]),
         ] {
             assert_eq!(prepared_activation(&bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_linear_team_is_its_key_or_its_id() {
+        for good in ["CUE", "ops_2", "0b1c2d3e-0000-4000-8000-00000000c0e1"] {
+            assert!(linear_team(good), "{good}");
+        }
+        for bad in [
+            "",
+            "--json",
+            "CUE OPS",
+            "CUE-1",
+            &"A".repeat(33),
+            "0B1C2D3E-0000-4000-8000-00000000C0E1",
+            "0b1c2d3e00000-4000-8000-00000000c0e1",
+        ] {
+            assert!(!linear_team(bad), "{bad:?}");
         }
     }
 

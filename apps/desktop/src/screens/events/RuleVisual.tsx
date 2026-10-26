@@ -24,6 +24,7 @@ import type { AccountNames } from '../../account-aliases.ts';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { judgeName } from '../../events-rules.ts';
 import { isLaneName } from '../../grammar.ts';
+import { useCall } from '../../hooks/use-call.ts';
 import type { LinearState } from '../../integrations.ts';
 import { EDITOR_COPY as COPY } from '../../rule-editor/copy.ts';
 import {
@@ -789,6 +790,53 @@ function SessionAction({
   );
 }
 
+/**
+ * A Linear issue's labels: the team's own and the workspace's, as `integration show linear --team` lists them, each to
+ * set or not; the ones the target names already are kept, read or not. A label's name is Linear's text: text only.
+ */
+function LinearLabels({
+  team,
+  chosen,
+  onChosen,
+}: {
+  team: string | null;
+  chosen: readonly { id: string; name: string }[];
+  onChosen: (labels: { id: string; name: string }[]) => void;
+}) {
+  const read = useCall<unknown>(team === null ? null : { kind: 'integrationShow', integration: 'linear', team }).result;
+  const listed =
+    read.state === 'ready' && isObject(read.value) && Array.isArray(read.value.labels)
+      ? read.value.labels.flatMap((label) =>
+          isObject(label) && typeof label.id === 'string' && typeof label.name === 'string'
+            ? [{ id: label.id, name: label.name }]
+            : [],
+        )
+      : [];
+  const all = [...listed, ...chosen.filter((label) => !listed.some((each) => each.id === label.id))];
+  if (all.length === 0) return <span className="text-fg-muted">{COPY.noLabels}</span>;
+  return (
+    <>
+      {all.map((label) => {
+        const on = chosen.some((each) => each.id === label.id);
+        return (
+          <Toggle
+            key={label.id}
+            size="sm"
+            pressed={on}
+            onPressedChange={(pressed: boolean) => {
+              const next = pressed ? [...chosen, label] : chosen.filter((each) => each.id !== label.id);
+              // As the Linear target keeps them: each once, sorted by id.
+              onChosen([...next].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)));
+            }}
+          >
+            <UntrustedText text={label.name} />
+          </Toggle>
+        );
+      })}
+    </>
+  );
+}
+
 function LinearAction({
   target,
   linear,
@@ -865,11 +913,11 @@ function LinearAction({
         {view.labels === null ? (
           <AsText onEditAsText={onEditAsText} />
         ) : (
-          <span className="text-fg-muted">
-            <UntrustedText
-              text={view.labels.length === 0 ? COPY.noLabels : view.labels.map((label) => label.name).join(', ')}
-            />
-          </span>
+          <LinearLabels
+            team={linear?.connected === true && view.teamKey !== '' ? view.teamKey : null}
+            chosen={view.labels}
+            onChosen={(labels) => onTarget(setLinear(target, { ...view, labels }))}
+          />
         )}
       </Line>
       <Line label={COPY.assignee}>

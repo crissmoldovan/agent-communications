@@ -235,7 +235,7 @@ export type Call =
   | { kind: 'eventsApprovalView'; approvalId: string; digest: string }
   | { kind: 'eventsRuleApprove'; approvalId: string; digest: string }
   | { kind: 'eventsRuleAnalyse'; ruleId: string; draft?: JsonDocument; provider?: AnalyseProvider }
-  | { kind: 'integrationShow'; integration: Integration }
+  | { kind: 'integrationShow'; integration: Integration; team?: string }
   | { kind: 'integrationSetAgentSessions'; relayHome: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }

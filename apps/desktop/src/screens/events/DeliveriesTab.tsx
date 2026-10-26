@@ -7,7 +7,7 @@
  * "next try 1970" on every delivered row, where the event service had left 0.
  */
 import { Button, Chip, EmptyState, InfoTip, Panel, Row, SegmentedControl, Spinner } from '@cueplusplus/ui';
-import { ChevronRight, FileText, Inbox, Link2, Radio } from 'lucide-react';
+import { Bot, ChevronRight, FileText, Inbox, Link2, ListTodo, Radio } from 'lucide-react';
 import { type ComponentType, type ReactNode, useState } from 'react';
 import { aliasOf } from '../../account-aliases.ts';
 import { productLabel } from '../../components/ApprovalCard.tsx';
@@ -52,6 +52,8 @@ const ICONS: Readonly<Record<string, ComponentType<{ className?: string; 'aria-h
   'dry-run': FileText,
   webhook: Link2,
   sse: Radio,
+  linear: ListTodo,
+  session: Bot,
 };
 
 /** The facts beneath a row's title: its channel and account, then what its tries came to, in a few words. */
