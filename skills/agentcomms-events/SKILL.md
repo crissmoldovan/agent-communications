@@ -113,7 +113,7 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 
 ## Human-only boundaries
 
-Do not invoke dry-run record reads, queue item reads, clearing the queue, binding a lane, judge setup, AI provider keys,
+Do not invoke dry-run record reads, queue item reads, clearing the queue, binding a lane, message stories, judge setup, AI provider keys,
 retained rule tests, target resume, held decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly
 and hand it to the person:
 
@@ -122,6 +122,7 @@ and hand it to the person:
 - Queue item list and show: “Queue item content is the person's own read, at a terminal or in the app; no MCP tool, and no agent through MCP, reads what an item says.”
 - Queue clear: “an agent must not be able to make the person's queue disappear.”
 - Lane bind: “Binding a lane lets one agent window read what arrives in it, so it is the person's act at an interactive terminal, where they type the lane's name, or from the app through one: no tool binds, and the command refuses an agent's shell and the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1).”
+- Message list and show: “What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4).”
 - Judge setup: “Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2).”
 - AI provider keys: “An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26).”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”

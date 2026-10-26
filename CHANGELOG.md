@@ -34,6 +34,27 @@ screen).
   - The client keeps the server running until it restarts. `agentcomms mcp prune` is unchanged: it removes
     runtimes, never a registration.
 
+**What happened to a message, in the event service.** The owner asked: "something has come in. Did we acknowledge it?
+Did we reply to it? Is it something that has been passed over to a session, or was it proactively read by a session?"
+The event service now keeps and gives the part it sees; the app's Messages screen comes after the owner's feedback on
+its prototype.
+
+- **`agent-events messages list --json`** gives each message the event service observed, newest first: what each rule
+  decided and what its judge answered, where each delivery went, the queue item it became and what happened to that
+  item. It looks back 30 days and gives 100 at a time by default (`--since`, `--before`, `--limit`), with a `next` to
+  pass back for the page after.
+- **`agent-events message show <event-id> --json`** gives one of them, with every line of its queue item's history.
+- **Each message carries its source's own ids:** a Gmail message id, a Slack channel and ts, a WhatsApp chat and
+  message id, a Resend email id. These are what the app joins a message to its Gmail or Slack link and to the activity
+  log with. When the queue kept a summary, it also carries the sender and subject, marked as from outside.
+- **Queue items keep a history:** woken (a lane's bound window was woken for it), read (that window read it), done,
+  dismissed and reopened, each saying whether an agent window did it, and which, or you did, at the terminal or in the
+  app. It goes when the item goes.
+- **Only you see it.** Both commands refuse inside the event service's MCP server, and no MCP tool returns a message's
+  story or an item's history. The history never enters the activity log, so no agent's activity view can name an item
+  in a lane bound to another window.
+- **One automatic database change** adds the history table and two indexes. Nothing is asked of you.
+
 ## 0.31.0
 
 **Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the

@@ -32,6 +32,16 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import {
+  isEventId,
+  isMessagesCursor,
+  MESSAGE_DECISION_OUTCOMES,
+  MESSAGE_DELIVERY_STATES,
+  MESSAGE_TARGET_KINDS,
+  MESSAGES_LIST_MAX_LIMIT,
+  type MessageShowResultV1,
+  type MessagesListResultV1,
+} from '../domain/messages.ts';
+import {
   isQueueItemId,
   QUEUE_CHANNELS,
   QUEUE_JUDGE_ANSWERS,
@@ -552,6 +562,8 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'lane-list': LaneListResultV1;
   readonly 'lane-bind': LaneBindResultV1;
   readonly 'lane-unbind': LaneUnbindResultV1;
+  readonly 'messages-list': MessagesListResultV1;
+  readonly 'message-show': MessageShowResultV1;
   readonly 'judge-setup': JudgeSetupResultV1;
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
@@ -704,6 +716,9 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'lane-list': Record<string, never>;
   readonly 'lane-bind': { readonly lane: string; readonly window: string };
   readonly 'lane-unbind': { readonly lane: string };
+  /** A story per message (0.32.0): the person's read, at a terminal or in the app. */
+  readonly 'messages-list': B3MessagesListArgumentsV1;
+  readonly 'message-show': { readonly eventId: string };
   /**
    * The person's own setup (owner decision 2026-10-26). A provider key travels on the wire beside these arguments,
    * from the person's hidden input, and is no part of the contract: no vector, result or audit line holds it.
@@ -717,6 +732,16 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+}
+
+/** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
+export interface B3MessagesListArgumentsV1 {
+  /** Whole milliseconds since 1970; 30 days back by default. */
+  readonly since?: number | undefined;
+  /** Whole milliseconds since 1970, or a page's `next` cursor (`<ms>:<eventId>`). */
+  readonly before?: number | string | undefined;
+  /** 1 to 500; 100 by default. */
+  readonly limit?: number | undefined;
 }
 
 /** `queue list`'s closed filter shape (action queue design §8); every field is optional. */
@@ -971,6 +996,106 @@ function assertLaneBinding(value: unknown, name: string): void {
   assertIsoTime(value.since, `${name} since`);
 }
 
+const MESSAGE_SOURCE_FIELDS: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  gmail: ['channel', 'messageId'],
+  slack: ['channel', 'channelId', 'ts'],
+  whatsapp: ['channel', 'chatId', 'messageId'],
+  resend: ['channel', 'emailId'],
+});
+const MESSAGE_HISTORY_KINDS = ['woken', 'read', 'done', 'dismissed', 'reopened'];
+
+/**
+ * One message's story (0.32.0 spec §3.6): ids, times in milliseconds and closed words; `kept` is the only sender text,
+ * and each of its strings is an untrusted-content envelope.
+ */
+function assertMessageEntry(value: unknown, name: string): void {
+  assertClosedRecord(
+    value,
+    [
+      'eventId',
+      'type',
+      'channel',
+      'accountId',
+      'occurredAt',
+      'observedAt',
+      'source',
+      'decisions',
+      'deliveries',
+      'queueItem',
+      'kept',
+    ],
+    name,
+  );
+  if (!isEventId(value.eventId)) throw new TypeError(`${name} has a malformed event id`);
+  for (const field of ['type', 'channel', 'accountId']) assertText(value[field], `${name} ${field}`);
+  for (const field of ['occurredAt', 'observedAt']) assertNonNegativeInteger(value[field], `${name} ${field}`);
+  if (value.source !== null) {
+    if (!isRecord(value.source) || typeof value.source.channel !== 'string')
+      throw new TypeError(`${name} source must be a closed object`);
+    const fields = MESSAGE_SOURCE_FIELDS[value.source.channel];
+    if (fields === undefined) throw new TypeError(`${name} source has an unknown channel`);
+    assertClosedRecord(value.source, fields, `${name} source`);
+    for (const field of fields.slice(1)) assertText(value.source[field], `${name} source ${field}`);
+  }
+  if (!Array.isArray(value.decisions)) throw new TypeError(`${name} needs its decisions`);
+  for (const decision of value.decisions) {
+    assertClosedRecord(decision, ['ruleId', 'ruleVersion', 'outcome', 'judge'], `${name} decision`);
+    assertText(decision.ruleId, `${name} decision rule id`);
+    assertPositiveInteger(decision.ruleVersion, `${name} decision rule version`);
+    if (!MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never))
+      throw new TypeError(`${name} decision has an unknown outcome`);
+    if (decision.judge !== null) {
+      assertClosedRecord(decision.judge, ['kind', 'answer', 'confidence', 'calibrated'], `${name} judge`);
+      assertText(decision.judge.kind, `${name} judge kind`);
+      if (!QUEUE_JUDGE_ANSWERS.includes(decision.judge.answer as never))
+        throw new TypeError(`${name} judge has an unknown answer`);
+      if (typeof decision.judge.confidence !== 'number' || !Number.isFinite(decision.judge.confidence))
+        throw new TypeError(`${name} judge confidence must be a finite number`);
+      if (typeof decision.judge.calibrated !== 'boolean') throw new TypeError(`${name} judge calibrated is a boolean`);
+    }
+  }
+  if (!Array.isArray(value.deliveries)) throw new TypeError(`${name} needs its deliveries`);
+  for (const delivery of value.deliveries) {
+    assertClosedRecord(delivery, ['deliveryId', 'targetKind', 'targetId', 'lane', 'state'], `${name} delivery`);
+    assertText(delivery.deliveryId, `${name} delivery id`);
+    if (!MESSAGE_TARGET_KINDS.includes(delivery.targetKind as never))
+      throw new TypeError(`${name} delivery has an unknown target kind`);
+    assertText(delivery.targetId, `${name} delivery target id`);
+    if (delivery.lane !== null && !isLaneName(delivery.lane)) throw new TypeError(`${name} delivery has a bad lane`);
+    if (!MESSAGE_DELIVERY_STATES.includes(delivery.state as never))
+      throw new TypeError(`${name} delivery has an unknown state`);
+  }
+  if (value.queueItem !== null) {
+    const item = value.queueItem;
+    assertClosedRecord(item, ['itemId', 'state', 'stateAt', 'lane', 'history'], `${name} queue item`);
+    if (!isQueueItemId(item.itemId)) throw new TypeError(`${name} queue item has a malformed id`);
+    if (!QUEUE_STATES.includes(item.state as never)) throw new TypeError(`${name} queue item has an unknown state`);
+    assertNonNegativeInteger(item.stateAt, `${name} queue item stateAt`);
+    if (item.lane !== null && !isLaneName(item.lane)) throw new TypeError(`${name} queue item has a bad lane`);
+    if (!Array.isArray(item.history)) throw new TypeError(`${name} queue item needs its history`);
+    for (const line of item.history) {
+      assertClosedRecord(line, ['at', 'kind', 'actor', 'windowKey'], `${name} history line`);
+      assertNonNegativeInteger(line.at, `${name} history time`);
+      if (!MESSAGE_HISTORY_KINDS.includes(line.kind as string))
+        throw new TypeError(`${name} history line has an unknown kind`);
+      if (line.actor === 'window') {
+        if (!isActivityKey(line.windowKey)) throw new TypeError(`${name} history line names no window`);
+      } else if (line.actor !== 'person' || line.windowKey !== null)
+        throw new TypeError(`${name} history line has an unknown actor`);
+    }
+  }
+  if (value.kept !== null) {
+    const kept = value.kept;
+    if (!isRecord(kept)) throw new TypeError(`${name} kept must be a closed object`);
+    assertClosedRecord(kept, Object.hasOwn(kept, 'subject') ? ['from', 'subject'] : ['from'], `${name} kept`);
+    if (!isRecord(kept.from) || Object.keys(kept.from).some((key) => key !== 'name' && key !== 'address'))
+      throw new TypeError(`${name} kept from must be a closed object`);
+    for (const field of [kept.from.name, kept.from.address, kept.subject])
+      if (field !== undefined && (typeof field !== 'string' || !field.startsWith('<untrusted-content ')))
+        throw new TypeError(`${name} kept sender text must be enveloped`);
+  }
+}
+
 function assertTighteningPreview(value: unknown): void {
   if (!isRecord(value)) throw new TypeError('a tightening preview must be a closed object');
   assertClosedRecord(
@@ -1022,6 +1147,8 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'lane-list': ['lanes'],
   'lane-bind': ['lane', 'binding'],
   'lane-unbind': ['lane', 'unbound'],
+  'messages-list': ['messages', 'next'],
+  'message-show': ['message'],
   'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
@@ -1270,6 +1397,16 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'lane-unbind':
       if (!isLaneName(value.lane)) throw new TypeError('a lane unbind result has a malformed lane name');
       if (value.unbound !== true) throw new TypeError('a lane unbind result says it unbound');
+      return;
+    case 'messages-list':
+      if (!Array.isArray(value.messages)) throw new TypeError('a messages list result needs its messages');
+      if (value.messages.length > MESSAGES_LIST_MAX_LIMIT) throw new TypeError('a messages list page is too long');
+      for (const entry of value.messages) assertMessageEntry(entry, 'a listed message');
+      if (value.next !== null && !isMessagesCursor(value.next))
+        throw new TypeError('a messages list result has a malformed next cursor');
+      return;
+    case 'message-show':
+      assertMessageEntry(value.message, 'a shown message');
       return;
     case 'judge-setup':
       assertJudgeSetupResult(value);

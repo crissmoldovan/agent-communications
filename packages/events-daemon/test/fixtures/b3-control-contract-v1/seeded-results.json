@@ -347,6 +347,209 @@
     }
   },
   {
+    "name": "messages-list-page-result",
+    "request": {
+      "operation": "messages-list",
+      "args": {
+        "limit": 2
+      }
+    },
+    "result": {
+      "messages": [
+        {
+          "eventId": "6b8502ee16adfda7d4608c3868750e08",
+          "type": "gmail.message.received",
+          "channel": "gmail",
+          "accountId": "ibx_AAAAAAAAAAAAAAAA",
+          "occurredAt": 1792985903504,
+          "observedAt": 1792985903635,
+          "source": {
+            "channel": "gmail",
+            "messageId": "18c2f0a1b2c3d4e5"
+          },
+          "decisions": [
+            {
+              "ruleId": "invoices",
+              "ruleVersion": 1,
+              "outcome": "matched",
+              "judge": {
+                "kind": "typesafe",
+                "answer": "yes",
+                "confidence": 0.92,
+                "calibrated": true
+              }
+            }
+          ],
+          "deliveries": [
+            {
+              "deliveryId": "42fb0bb9-88f5-45a9-b521-d67ef6189824",
+              "targetKind": "queue",
+              "targetId": "billing-lane",
+              "lane": "billing",
+              "state": "delivered"
+            },
+            {
+              "deliveryId": "9738d762-56cf-471c-944c-7f92a2b6dda0",
+              "targetKind": "dry-run",
+              "targetId": "dry-log",
+              "lane": null,
+              "state": "delivered"
+            }
+          ],
+          "queueItem": {
+            "itemId": "qi_01M5V4KCS9R0NG0EKG64C57E3G",
+            "state": "done",
+            "stateAt": 1792985904098,
+            "lane": "billing",
+            "history": [
+              {
+                "at": 1792985903918,
+                "kind": "woken",
+                "actor": "window",
+                "windowKey": "0123456789abcdef"
+              },
+              {
+                "at": 1792985904091,
+                "kind": "read",
+                "actor": "window",
+                "windowKey": "0123456789abcdef"
+              },
+              {
+                "at": 1792985904098,
+                "kind": "done",
+                "actor": "person",
+                "windowKey": null
+              }
+            ]
+          },
+          "kept": {
+            "from": {
+              "name": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-name\">\nA Sender\n</untrusted-content boundary=\"BOUNDARY\">",
+              "address": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-address\">\nsender@example.test\n</untrusted-content boundary=\"BOUNDARY\">"
+            },
+            "subject": "<untrusted-content boundary=\"BOUNDARY\" field=\"subject\">\nInvoice 42\n</untrusted-content boundary=\"BOUNDARY\">"
+          }
+        },
+        {
+          "eventId": "6fa2acae9bfb2d4bb509dd2a69db999b",
+          "type": "slack.message.posted",
+          "channel": "slack",
+          "accountId": "acc_AAAAAAAAAAAAAAAA",
+          "occurredAt": 1792985903367,
+          "observedAt": 1792985903423,
+          "source": {
+            "channel": "slack",
+            "channelId": "C0123ABCD",
+            "ts": "1792985903.367000"
+          },
+          "decisions": [
+            {
+              "ruleId": "david-on-slack",
+              "ruleVersion": 2,
+              "outcome": "no-match",
+              "judge": null
+            }
+          ],
+          "deliveries": [],
+          "queueItem": null,
+          "kept": null
+        }
+      ],
+      "next": "1792985903423:6fa2acae9bfb2d4bb509dd2a69db999b"
+    }
+  },
+  {
+    "name": "message-show-result",
+    "request": {
+      "operation": "message-show",
+      "args": {
+        "eventId": "6b8502ee16adfda7d4608c3868750e08"
+      }
+    },
+    "result": {
+      "message": {
+        "eventId": "6b8502ee16adfda7d4608c3868750e08",
+        "type": "gmail.message.received",
+        "channel": "gmail",
+        "accountId": "ibx_AAAAAAAAAAAAAAAA",
+        "occurredAt": 1792985903504,
+        "observedAt": 1792985903635,
+        "source": {
+          "channel": "gmail",
+          "messageId": "18c2f0a1b2c3d4e5"
+        },
+        "decisions": [
+          {
+            "ruleId": "invoices",
+            "ruleVersion": 1,
+            "outcome": "matched",
+            "judge": {
+              "kind": "typesafe",
+              "answer": "yes",
+              "confidence": 0.92,
+              "calibrated": true
+            }
+          }
+        ],
+        "deliveries": [
+          {
+            "deliveryId": "42fb0bb9-88f5-45a9-b521-d67ef6189824",
+            "targetKind": "queue",
+            "targetId": "billing-lane",
+            "lane": "billing",
+            "state": "delivered"
+          },
+          {
+            "deliveryId": "9738d762-56cf-471c-944c-7f92a2b6dda0",
+            "targetKind": "dry-run",
+            "targetId": "dry-log",
+            "lane": null,
+            "state": "delivered"
+          }
+        ],
+        "queueItem": {
+          "itemId": "qi_01M5V4KCS9R0NG0EKG64C57E3G",
+          "state": "done",
+          "stateAt": 1792985904098,
+          "lane": "billing",
+          "history": [
+            {
+              "at": 1792985903918,
+              "kind": "woken",
+              "actor": "window",
+              "windowKey": "0123456789abcdef"
+            },
+            {
+              "at": 1792985904010,
+              "kind": "read",
+              "actor": "window",
+              "windowKey": "0123456789abcdef"
+            },
+            {
+              "at": 1792985904091,
+              "kind": "read",
+              "actor": "window",
+              "windowKey": "0123456789abcdef"
+            },
+            {
+              "at": 1792985904098,
+              "kind": "done",
+              "actor": "person",
+              "windowKey": null
+            }
+          ]
+        },
+        "kept": {
+          "from": {
+            "name": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-name\">\nA Sender\n</untrusted-content boundary=\"BOUNDARY\">",
+            "address": "<untrusted-content boundary=\"BOUNDARY\" field=\"from-address\">\nsender@example.test\n</untrusted-content boundary=\"BOUNDARY\">"
+          },
+          "subject": "<untrusted-content boundary=\"BOUNDARY\" field=\"subject\">\nInvoice 42\n</untrusted-content boundary=\"BOUNDARY\">"
+        }
+      }
+    }
+  },
+  {
     "name": "judge-setup-result",
     "request": {
       "operation": "judge-setup",
