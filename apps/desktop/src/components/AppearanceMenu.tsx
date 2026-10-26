@@ -3,13 +3,24 @@ import { DropdownMenu, IconButton } from '@cueplusplus/ui';
 import { useTheme } from '@cueplusplus/ui/system';
 import { Palette } from 'lucide-react';
 import { COPY } from '../copy.ts';
-import { THEME_NAMES } from '../theme.ts';
+import { type AppTheme, LOOKS, THEME_NAMES } from '../theme.ts';
 
 const MODES = ['dark', 'light', 'system'] as const;
 
-/** The appearance menu (DA3): the theme, the density and the mode, each kept in local storage by the provider. */
+/**
+ * The appearance menu (DA3): the theme, the density and the mode, each kept in local storage by the provider. A theme
+ * is picked with its look (`theme.ts`, `LOOKS`), so soft brings its set, pairing and pack, and cue and terminal put
+ * theirs back.
+ */
 export function AppearanceMenu() {
-  const { theme, setTheme, density, setDensity, mode, setMode } = useTheme();
+  const { theme, setTheme, setStyleSet, setFont, setPaint, density, setDensity, mode, setMode } = useTheme();
+  const pick = (name: AppTheme) => {
+    const look = LOOKS[name];
+    setTheme(name);
+    setStyleSet(look.styleSet);
+    setFont(look.font);
+    setPaint(look.paint);
+  };
   return (
     <DropdownMenu.Root>
       <DropdownMenu.Trigger render={<IconButton icon={Palette} aria-label={COPY.appearance} />} />
@@ -17,7 +28,7 @@ export function AppearanceMenu() {
         <DropdownMenu.Group>
           <DropdownMenu.Label>Theme</DropdownMenu.Label>
           {THEME_NAMES.map((name) => (
-            <DropdownMenu.CheckboxItem key={name} checked={theme === name} onCheckedChange={() => setTheme(name)}>
+            <DropdownMenu.CheckboxItem key={name} checked={theme === name} onCheckedChange={() => pick(name)}>
               {name}
             </DropdownMenu.CheckboxItem>
           ))}
