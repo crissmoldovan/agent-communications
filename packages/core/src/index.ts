@@ -250,6 +250,14 @@ export {
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';
+/*
+ * Taking messages (design 2026-10-26-taking-messages): the take store — one record per message, the first take winning
+ * under its lock — who a caller is (`takerIdentity`, never an argument), the gate every act that answers a message
+ * passes, the two refusals, and the closed words an agent sees.
+ */
+export * from './takes.ts';
+// Their settings per account, read fail-closed: a take required, a 👀 on taking, when a message nobody took is reminded of.
+export * from './taking.ts';
 export * from './tool-arguments.ts';
 /*
  * The unsent report (design 2026-10-05 §D9): drafts grouped by each channel's declared rule, worded to the evidence the

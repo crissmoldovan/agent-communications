@@ -38,6 +38,8 @@ export type ErrorCode =
   | 'ACT_NOT_ALLOWED'
   | 'STANDING_REFUSED'
   | 'STANDING_LIMIT'
+  | 'TAKE_REQUIRED'
+  | 'TAKEN_ELSEWHERE'
   | 'RATE_CAPPED'
   | 'UNSENDABLE_HTML'
   | 'LOOSENING_REFUSED'
@@ -120,6 +122,26 @@ export const ERROR_REGISTRY: Readonly<Record<ErrorCode, ErrorSpec>> = {
     exit: EXIT_CODES.APPROVAL,
     retryable: false,
     summary: "a standing approval's limit is reached",
+  },
+  /*
+   * Taking messages (design 2026-10-26-taking-messages, §6): the account asks a session to take a message before it
+   * acts on it, and this session has not — `details.reason` is `NOT_TAKEN`, with the act and the message. Refused at
+   * prepare, before any preview or approval, and again at the claim. Not retryable: the session takes the message
+   * first, if it is its own, or leaves it.
+   */
+  TAKE_REQUIRED: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'this account asks a session to take a message before acting on it',
+  },
+  /*
+   * Another session has the message (§6, T7): `details.reason` is `HELD`, `OFFERED` (with `until`), `DONE` or `PERSON`.
+   * It never names the other session. Not retryable: the agent leaves it, and the person can give it to this session.
+   */
+  TAKEN_ELSEWHERE: {
+    exit: EXIT_CODES.APPROVAL,
+    retryable: false,
+    summary: 'another session, or the person, has this message',
   },
   RATE_CAPPED: { exit: EXIT_CODES.APPROVAL, retryable: true, summary: 'the send limit for this inbox is reached' },
   UNSENDABLE_HTML: { exit: EXIT_CODES.APPROVAL, retryable: false, summary: 'the draft has HTML an agent may not send' },
