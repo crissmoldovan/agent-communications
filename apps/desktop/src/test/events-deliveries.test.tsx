@@ -75,7 +75,8 @@ const rawWordsIn = (element: HTMLElement) =>
 /** No time on the page is the epoch, and no line says 1970: the owner's bug (§3.5). */
 function noEpoch(element: HTMLElement) {
   for (const time of element.querySelectorAll('time')) {
-    expect(new Date(time.getAttribute('datetime') ?? '').getTime(), time.outerHTML).toBeGreaterThan(0);
+    const at = time.getAttribute('datetime') ?? '';
+    expect(new Date(at).getTime(), at).toBeGreaterThan(0);
   }
   expect(element.textContent).not.toContain('1970');
 }

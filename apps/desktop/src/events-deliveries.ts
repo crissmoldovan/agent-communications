@@ -162,7 +162,7 @@ export function lastAnswer(row: Pick<DeliveryRow, 'lastErrorCode' | 'lastStatus'
 // ── One delivery ───────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A message's ids at its source, as `delivery show` reads them from the event (never any sender text). */
-export type EventSource =
+export type MessageSource =
   | { channel: 'gmail'; messageId: string }
   | { channel: 'slack'; channelId: string; ts: string }
   | { channel: 'whatsapp'; chatId: string; messageId: string }
@@ -184,7 +184,7 @@ export interface DeliveryDetail {
     accountId: string | null;
     occurredAt: number | null;
     observedAt: number | null;
-    source: EventSource | null;
+    source: MessageSource | null;
   } | null;
   target: { kind: string | null; id: string | null; version: number | null; host: string | null; lane: string | null };
   /** A dry run's log entry and when it goes; null for any other target. Its `expiresAt` is null once it has gone. */
@@ -192,7 +192,7 @@ export interface DeliveryDetail {
 }
 
 /** An event's source ids, read from `{ channel, … }` (or by its event type's channel when no channel is given). */
-function sourceOf(value: unknown, type: string | null): EventSource | null {
+function sourceOf(value: unknown, type: string | null): MessageSource | null {
   if (!isRecord(value)) return null;
   const channel = text(value.channel) ?? type?.slice(0, type.indexOf('.')) ?? null;
   switch (channel) {
@@ -361,7 +361,7 @@ export function keptMessage(record: unknown): { from: string | null; subject: st
  * (`links.rs`, `queue_link`). Null for any other channel, or when the address or the team is not known.
  */
 export function messageLink(
-  source: EventSource | null,
+  source: MessageSource | null,
   account: { email: string | null; team: string | null } | undefined,
 ): { label: string; url: string } | null {
   if (source === null || account === undefined) return null;
