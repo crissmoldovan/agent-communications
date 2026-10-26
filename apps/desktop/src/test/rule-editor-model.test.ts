@@ -184,8 +184,8 @@ describe('the rule editor model', () => {
     } as unknown as JsonObject;
     const lines = text(whatLeaves(acting));
     expect(lines.slice(0, 5)).toEqual([
-      'An issue is added in Linear (api.linear.app), with your Linear key, team CUE, from the sender, the subject, the first 300 characters and a link to the message.',
-      'Its title: {{subject}}',
+      'An issue is added in Linear (api.linear.app), with your Linear key, team CUE.',
+      "Its title: {{subject}}, where {{subject}} is the message's subject",
       'Its description: ',
       'It has no labels.',
       "It is assigned to the Linear key's own user.",

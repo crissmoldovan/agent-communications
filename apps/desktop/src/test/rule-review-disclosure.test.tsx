@@ -63,7 +63,8 @@ describe('Review and approve… says all a target is given', () => {
     const lines = whatLeaves(RULE as never);
     const all = words(lines).join('\n');
     expect(all).toContain('Context part 1: the fixed text');
-    expect(all).toContain('Context part 2: the subject of the message.');
+    expect(all).toContain("Context part 2: the message's subject.");
+    expect(all).toContain("Its title: URGENT wire money {{subject}}, where {{subject}} is the message's subject");
     expect(all).toContain('It is told last: ');
     expect(all).toContain('If there is no such session, one is started in that folder.');
     expect(all).toContain('While the session is busy, the match waits for it, and goes when its run ends.');
@@ -74,6 +75,38 @@ describe('Review and approve… says all a target is given', () => {
     expect(authored(lines)).toEqual(
       expect.arrayContaining([INSTRUCTION, FIXED_TEXT, TITLE, DESCRIPTION, 'Finance', ASSIGNEE]),
     );
+  });
+
+  it('a mapped constant that fills a slot or a fields part is shown as the author wrote it, never by its key', () => {
+    // Security review 0.33, second look: the constant reached the dialog only as "{{note}}" or "/note".
+    const SECRET = 'HIDDEN-CONSTANT: [click](https://evil.example) @someone';
+    const LYING_KEY = 'Nothing else leaves this Mac';
+    const constant = {
+      ...RULE,
+      mapping: { subject: { $path: '/subject' }, note: SECRET, [LYING_KEY]: { $path: '/snippet' } },
+      targets: [
+        { ...TARGETS[0], context: [{ fields: ['/note'] }, { fields: [`/${LYING_KEY}`] }], instruction: undefined },
+        { ...TARGETS[1], title: { text: '{{subject}}' }, description: { text: '{{note}}' } },
+      ],
+    };
+    const lines = whatLeaves(JSON.parse(JSON.stringify(constant)) as never);
+    const all = words(lines).join('\n');
+    expect(all).toContain(`Context part 1: the rule’s own text ${SECRET}.`);
+    expect(all).toContain("Context part 2: the message's first 300 characters.");
+    expect(all).toContain(
+      `Its description: {{note}}, where {{note}} is the rule’s own text ${SECRET}, written into the issue as it is, as Markdown`,
+    );
+    expect(authored(lines).filter((text) => text === SECRET)).toHaveLength(2);
+    // A webhook gets the whole record: its constants are named too.
+    const hooked = whatLeaves({
+      ...constant,
+      targets: [
+        { targetId: 'w', version: 1, kind: 'webhook', url: { kind: 'plain', value: 'https://hooks.example/x' } },
+      ],
+    } as never);
+    expect(authored(hooked)).toContain(SECRET);
+    // A key an author named is never the app's own words: it does not stand in for the field it maps.
+    for (const part of lines.flat()) if (part.text.includes(LYING_KEY)) expect(part.kind).toBe('untrusted');
   });
 
   it('a part or field the app cannot read is shown as written, never left out', () => {
