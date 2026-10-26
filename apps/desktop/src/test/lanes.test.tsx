@@ -11,6 +11,7 @@ import {
   pickerWindows,
   readLaneList,
   readUnbound,
+  shortWindowId,
   shownFolder,
 } from '../lanes.ts';
 import { readQueueList } from '../queue.ts';
@@ -192,6 +193,11 @@ describe('Lanes: what the app reads', () => {
     expect(shownFolder('/example/home/work', '')).toBe('/example/home/work');
   });
 
+  it("a window's id in short: its first eight characters", () => {
+    expect(shortWindowId('0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90')).toBe('0f8b5c3e');
+    expect(shortWindowId('3f9a1c2e7b4d5a60')).toBe('3f9a1c2e');
+  });
+
   it("reads `lane unbind`'s answer: the lane it unbound", () => {
     expect(readUnbound({ lane: 'david', unbound: true })).toBe('david');
     expect(readUnbound({ lane: 'david', unbound: false })).toBeNull();
@@ -313,6 +319,10 @@ describe('Lanes: the panel', () => {
       expect(david.querySelector('[data-slot="lane-since"] time')?.getAttribute('datetime')).toBe(
         '2026-10-25T09:12:03.000Z',
       );
+      // Its session id, short and in mono, so two windows in one folder are told apart.
+      const id = david.querySelector<HTMLElement>('[data-slot="lane-window-id"]');
+      expect(id?.textContent).toBe('0f8b5c3e');
+      expect(id?.className).toContain('font-mono');
       expect(within(david).getByRole('button', { name: LANES_COPY.unbind })).toBeTruthy();
       expect(within(david).queryByRole('button', { name: LANES_COPY.bind })).toBeNull();
       // An unbound lane: Not bound, and Bind a window….
@@ -363,6 +373,29 @@ describe('Lanes: the panel', () => {
     const view = await openLanes(bridgeAt());
     await hint(await laneRow(view, 'david'), 'About the client', LANES_COPY.clientHint);
   });
+
+  it("a bound window's full session id, and its activity key, stay reachable beside its short id", SLOW, async () => {
+    const view = await openLanes(bridgeAt());
+    await hint(
+      await laneRow(view, 'david'),
+      LANES_COPY.windowIdLabel,
+      'Session id 0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90. Activity key 3f9a1c2e7b4d5a60.',
+    );
+  });
+
+  it(
+    'a window bound by its activity key alone shows that key, short, with the whole key in the hint',
+    SLOW,
+    async () => {
+      const byKey = structuredClone(LANE_LIST);
+      const window = byKey.lanes[0]?.binding?.window as { sessionId: string | null };
+      window.sessionId = null;
+      const view = await openLanes(bridgeAt('0.31.0', { laneList: byKey }));
+      const david = await laneRow(view, 'david');
+      await waitFor(() => expect(david.querySelector('[data-slot="lane-window-id"]')?.textContent).toBe('3f9a1c2e'));
+      await hint(david, LANES_COPY.windowIdLabel, 'Activity key 3f9a1c2e7b4d5a60.');
+    },
+  );
 
   it('with no lane, it says so and how to make one', SLOW, async () => {
     const view = await openLanes(bridgeAt('0.31.0', { laneList: { lanes: [] } }));
@@ -486,6 +519,23 @@ describe('Lanes: Bind a window…', () => {
       const free = windows[0] as HTMLElement;
       expect(within(free).getByText('~/work/billing-tool').closest('.font-mono')).not.toBeNull();
       expect(free.textContent).toContain(`cursor 1.9.2, ${LANES_COPY.asTheClientSays}`);
+      // Each window's id, short and in mono — the one the bind command names — with the whole of it in a hint.
+      const id = free.querySelector<HTMLElement>('[data-slot="window-id"]');
+      expect(id?.textContent).toBe('7c1e5b9a');
+      expect(id?.className).toContain('font-mono');
+      expect((windows[1] as HTMLElement).querySelector('[data-slot="window-id"]')?.textContent).toBe('3f9a1c2e');
+      const whole = within(free).getByRole('button', { name: LANES_COPY.windowIdLabel });
+      await act(async () => {
+        whole.focus();
+      });
+      await waitFor(async () =>
+        expect((await screen.findAllByRole('tooltip')).map((tip) => tip.textContent)).toContain(
+          'Activity key 7c1e5b9a0d2f4e68.',
+        ),
+      );
+      await act(async () => {
+        whole.blur();
+      });
       const taken = windows[1] as HTMLElement;
       expect(within(taken).queryByRole('button', { name: LANES_COPY.bindInTerminal })).toBeNull();
       expect(within(taken).getByText('Bound to david')).toBeTruthy();

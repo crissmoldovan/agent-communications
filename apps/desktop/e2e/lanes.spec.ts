@@ -133,6 +133,12 @@ test('Lanes lists each lane with its binding; Unbind asks first and runs exactly
   await expect(david.locator('[data-slot="lane-folder"]')).toHaveText('~/work/acme-site');
   await expect(david.locator('[data-slot="lane-client"]')).toContainText('claude-code 2.1.0, as the client says');
   await expect(david.locator('[data-slot="lane-since"] time')).toHaveAttribute('datetime', '2026-10-25T09:12:03.000Z');
+  // Its session id, short and in mono, with the whole of it and the activity key in the hint beside it.
+  await expect(david.locator('[data-slot="lane-window-id"]')).toHaveText('0f8b5c3e');
+  await david.getByRole('button', { name: "This window's whole id" }).hover();
+  await expect(page.getByRole('tooltip')).toHaveText(
+    'Session id 0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90. Activity key 3f9a1c2e7b4d5a60.',
+  );
   const billing = page.locator('[data-lane="billing"]');
   await expect(billing.locator('[data-slot="lane-binding"]')).toHaveText('Not bound');
   await expect(billing.getByRole('button', { name: 'Bind a window…' })).toBeVisible();
@@ -167,6 +173,8 @@ test('Bind a window… offers the grouped windows only, and Bind in Terminal ope
   await expect(picker.locator('[data-window="0c0ffee000000001"]')).toHaveCount(0);
   await expect(picker.locator('[data-slot="picker-hidden"]')).toContainText('2 more not listed');
   await expect(picker.locator('[data-window="3f9a1c2e7b4d5a60"]')).toContainText('Bound to david');
+  await expect(picker.locator('[data-window="7c1e5b9a0d2f4e68"] [data-slot="window-id"]')).toHaveText('7c1e5b9a');
+  await expect(picker.locator('[data-window="3f9a1c2e7b4d5a60"] [data-slot="window-id"]')).toHaveText('3f9a1c2e');
   await expect(
     picker.locator('[data-window="3f9a1c2e7b4d5a60"]').getByRole('button', { name: 'Bind in Terminal' }),
   ).toHaveCount(0);

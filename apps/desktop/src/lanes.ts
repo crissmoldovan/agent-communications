@@ -147,6 +147,11 @@ export function itemLane(item: QueueItem, lanes: readonly LaneView[]): string | 
   return feeding.length === 1 ? (feeding[0] as LaneView).name : null;
 }
 
+/** A window's id in short, as the screen shows it: its first eight characters (a UUID's first group). */
+export function shortWindowId(id: string): string {
+  return id.slice(0, 8);
+}
+
 /** The lanes the screen offers as a filter: those with a name the allow-list takes. */
 export function filterLanes(lanes: readonly LaneView[]): LaneView[] {
   return lanes.filter((lane) => lane.actionable);
