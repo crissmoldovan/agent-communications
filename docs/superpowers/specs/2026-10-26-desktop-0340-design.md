@@ -132,8 +132,9 @@ one thing, Agent Comms, per app. **Proposed, awaiting the owner's yes:**
   what the person wants. The test build keeps a banner: "Your apps start your real Agent Comms (0.30.0), not this test,
   and nothing can be changed here."
 - **New behind it:**
-  - core `mcp install --client <c> --server <a,b,c>`: one plan, one preview naming every server, one approval, applied
-    server by server, the approval revoked if any fails (as `appliedFromApp` does for one);
+  - core `mcp install --client <c> --server <a,b,c>`: one plan, one preview naming every server, one approval bound to
+    that exact list and order, applied server by server and stopped at the first that fails; the approval is spent when
+    it is claimed, so it is never used again, and the result names what was and was not registered;
   - core `--app-approval` on `update`, and a desktop `update`/`updateCheck` pair of calls;
   - capabilities rows for the new option (CLI and MCP parity: `comms_server_install` takes the same list).
 
