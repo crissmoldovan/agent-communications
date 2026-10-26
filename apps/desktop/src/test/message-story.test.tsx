@@ -1,6 +1,7 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import type { Call, Installation } from '../ipc.ts';
+import { NavigationProvider, useNavigate } from '../navigation.tsx';
 import { STORY_COPY } from '../screens/MessageStory.tsx';
 import { createFakeBridge, EXAMPLE_INSTALLATION, type FakeBridge, type Fixture, failed } from './fake-bridge.ts';
 import activityItems from './fixtures/activity-items.json';
@@ -237,5 +238,89 @@ describe('a message’s story', () => {
     await story(bridge, 'event:e1');
     expect(await within(main()).findByText('The event service is not running.')).toBeTruthy();
     expect(within(main()).getByRole('region', { name: STORY_COPY.happened })).toBeTruthy();
+  });
+
+  /**
+   * Another screen opens a message's story as Deliveries does: `navigate({ screen: 'messages', eventId })`, from inside
+   * its `NavigationProvider`. Here a button in a provider of its own asks, and the sidebar opens Messages, as the shell's
+   * `onScreen` would.
+   */
+  async function openFromElsewhere(bridge: FakeBridge, eventId: string): Promise<void> {
+    function Asker() {
+      const navigate = useNavigate();
+      return (
+        <button type="button" onClick={() => navigate?.({ screen: 'messages', eventId })}>
+          See everything that happened to this message
+        </button>
+      );
+    }
+    renderApp(bridge, { screen: 'overview' });
+    const navigation = await screen.findByRole('navigation', { name: 'Sections' });
+    const asker = render(
+      <NavigationProvider onScreen={() => undefined}>
+        <Asker />
+      </NavigationProvider>,
+    );
+    fireEvent.click(asker.getByRole('button', { name: 'See everything that happened to this message' }));
+    asker.unmount();
+    fireEvent.click(within(navigation).getByRole('button', { name: /^Messages/ }));
+  }
+
+  it('another screen opens a message’s story by its event id, and Back goes to the list', SLOW, async () => {
+    const bridge = bridgeAt();
+    await openFromElsewhere(bridge, 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1');
+    const heading = await screen.findByRole('heading', { level: 1, name: /^A message from/ });
+    expect(heading.textContent).toBe('A message from From outside: David Example');
+    expect(await within(main()).findByRole('region', { name: STORY_COPY.happened })).toBeTruthy();
+    // It is in the list's page: one `message show`, for the story's whole history.
+    await waitFor(() => expect(cliCalls(bridge, 'eventsMessageShow')).toHaveLength(1));
+    fireEvent.click(within(main()).getByRole('button', { name: STORY_COPY.back }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Messages' })).toBeTruthy();
+    await waitFor(() => expect(main().querySelector('li[data-message]')).not.toBeNull());
+    // The destination was read once: opening Messages again shows the list.
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('button', { name: 'Overview' }),
+    );
+    fireEvent.click(
+      within(screen.getByRole('navigation', { name: 'Sections' })).getByRole('button', { name: /^Messages/ }),
+    );
+    expect(await screen.findByRole('heading', { level: 1, name: 'Messages' })).toBeTruthy();
+  });
+
+  it('a message older than the list’s page opens from `message show` alone', SLOW, async () => {
+    const bridge = bridgeAt({ eventsMessagesList: { messages: messagesList.messages.slice(1), next: null } });
+    await openFromElsewhere(bridge, 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1');
+    expect(await screen.findByRole('heading', { level: 1, name: /^A message from/ })).toBeTruthy();
+    const happened = await within(main()).findByRole('region', { name: STORY_COPY.happened });
+    // Joined with the activity the list read: the reply is there, and the full history.
+    expect(entries(happened)).toContain('The reply was sent');
+    expect(entries(happened).filter((each) => each === 'An agent read it from the Queue')).toHaveLength(2);
+    expect(cliCalls(bridge, 'eventsMessageShow')).toEqual([
+      { kind: 'eventsMessageShow', eventId: 'e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1' },
+    ]);
+  });
+
+  it('a message the event service no longer keeps says so, with the way back to the list', SLOW, async () => {
+    const bridge = bridgeAt(
+      { eventsMessagesList: { messages: [], next: null } },
+      {
+        cli: async (call) =>
+          call.kind === 'eventsMessageShow'
+            ? failed('NOT_FOUND', 'No event f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0.', null, 66)
+            : bridgeAt({ eventsMessagesList: { messages: [], next: null } }).cli(call),
+      },
+    );
+    await openFromElsewhere(bridge, 'f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0');
+    expect(await within(main()).findByText(STORY_COPY.notKept)).toBeTruthy();
+    fireEvent.click(within(main()).getByRole('button', { name: STORY_COPY.back }));
+    expect(await screen.findByRole('heading', { level: 1, name: 'Messages' })).toBeTruthy();
+  });
+
+  it('an id that is not an event’s opens the list, and asks nothing for it', SLOW, async () => {
+    const bridge = bridgeAt();
+    await openFromElsewhere(bridge, 'not-an-event');
+    expect(await screen.findByRole('heading', { level: 1, name: 'Messages' })).toBeTruthy();
+    await waitFor(() => expect(main().querySelector('li[data-message]')).not.toBeNull());
+    expect(cliCalls(bridge, 'eventsMessageShow')).toEqual([]);
   });
 });

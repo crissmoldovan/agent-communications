@@ -30,6 +30,7 @@ import {
 import {
   type ActivityItems,
   cursorMillis,
+  isEventId,
   type MessageEvent,
   type MessagesPage,
   type Millis,
@@ -37,8 +38,9 @@ import {
   readMessagesPage,
 } from '../messages/read.ts';
 import { cardSteps, type StoryContext, whereWords } from '../messages/story.ts';
+import { takeDestination } from '../navigation.tsx';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
-import { MessageStory } from './MessageStory.tsx';
+import { MessageByEvent, MessageStory } from './MessageStory.tsx';
 
 /** The screen's words (spec 2026-10-26-owner-feedback-0320 §3.6, prototype row 4). */
 export const MESSAGES_COPY = {
@@ -302,6 +304,11 @@ function useEventsMode(): EventsMode {
  * `activity items`, and from the event service's `messages list` once it is 0.32.0 or later; joined here, in the app.
  */
 export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) {
+  // A message another screen asked for, by its event id (`navigation.tsx`): read once, as the screen opens.
+  const [requested] = useState(() => {
+    const eventId = takeDestination('messages')?.eventId ?? null;
+    return eventId !== null && isEventId(eventId) ? eventId : null;
+  });
   const { installation } = useAppData();
   const core = installation.state === 'ready' ? installation.value.version : null;
   const mode = useEventsMode();
@@ -319,7 +326,14 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
       </Frame>
     );
   }
-  return <MessagesView key={mode === 'on' ? 'on' : 'off'} mode={mode} onScreen={onScreen} />;
+  return (
+    <MessagesView
+      key={mode === 'on' ? 'on' : 'off'}
+      mode={mode}
+      onScreen={onScreen}
+      requested={mode === 'on' ? requested : null}
+    />
+  );
 }
 
 function Frame({ children }: { children: ReactNode }) {
@@ -335,9 +349,12 @@ const ALL = 'all';
 function MessagesView({
   mode,
   onScreen,
+  requested = null,
 }: {
   mode: Exclude<EventsMode, 'loading'>;
   onScreen?: ((screen: Screen) => void) | undefined;
+  /** An event whose story opens first, as another screen asked. */
+  requested?: string | null;
 }) {
   const { installation } = useAppData();
   const home = installation.state === 'ready' ? (installation.value.home ?? null) : null;
@@ -345,7 +362,7 @@ function MessagesView({
   const [show, setShow] = useState<Show>('all');
   const [account, setAccount] = useState<string | null>(null);
   // The message whose story is open, by its key; the list keeps its filters while it is.
-  const [open, setOpen] = useState<string | null>(null);
+  const [open, setOpen] = useState<string | null>(requested === null ? null : `event:${requested}`);
   const context: StoryContext = useMemo(() => ({ time: timeWords, home }), [home]);
   const { events, activity, accounts } = reads;
   const joined = useMemo(() => {
@@ -379,6 +396,18 @@ function MessagesView({
   if (opened !== undefined) {
     return (
       <MessageStory listed={opened} reads={reads} context={context} onBack={() => setOpen(null)} onScreen={onScreen} />
+    );
+  }
+  // An event another screen asked for that the list's page does not hold: its story from `message show` alone.
+  if (open?.startsWith('event:') && joined !== null && mode === 'on') {
+    return (
+      <MessageByEvent
+        eventId={open.slice('event:'.length)}
+        reads={reads}
+        context={context}
+        onBack={() => setOpen(null)}
+        onScreen={onScreen}
+      />
     );
   }
   return (

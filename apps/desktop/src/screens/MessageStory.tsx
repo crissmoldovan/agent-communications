@@ -1,4 +1,4 @@
-import { Button, Chip, PageShell, Panel, Timeline } from '@cueplusplus/ui';
+import { Button, Chip, PageShell, Panel, Spinner, Timeline } from '@cueplusplus/ui';
 import { ChevronLeft, ExternalLink, History } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
@@ -33,6 +33,7 @@ export const STORY_COPY = {
   seeInActivity: 'See in Activity',
   honest: "Built from what Agent Comms saw. Anything an agent did outside Agent Comms isn't here.",
   gone: 'The event service no longer keeps this message’s details, so this is what the list read.',
+  notKept: 'The event service no longer keeps this message.',
 } as const;
 
 /** The exit the event service answers for an event it does not have. */
@@ -126,10 +127,10 @@ type Shown =
  * The message with its event as `message show` gives it — every line of its queue item's history — joined again with
  * the activity the list read; the list's own while it reads, and when it cannot.
  */
-function useShown(listed: JoinedMessage, reads: MessagesReads): Shown {
+function useShown(listed: JoinedMessage, reads: MessagesReads, read: boolean): Shown {
   const bridge = useBridge();
   const event = listed.event;
-  const eventId = event?.openable ? event.eventId : null;
+  const eventId = !read && event?.openable ? event.eventId : null;
   const [shown, setShown] = useState<Shown>({ state: 'list' });
   useEffect(() => {
     if (eventId === null || reads.activity.state !== 'ready') return;
@@ -170,15 +171,18 @@ export function MessageStory({
   context,
   onBack,
   onScreen,
+  read = false,
 }: {
   listed: JoinedMessage;
   reads: MessagesReads;
   context: StoryContext;
   onBack: () => void;
   onScreen?: ((screen: Screen) => void) | undefined;
+  /** The message is already `message show`'s: it is not asked for again. */
+  read?: boolean;
 }) {
   const bridge = useBridge();
-  const shown = useShown(listed, reads);
+  const shown = useShown(listed, reads, read);
   const message = shown.state === 'shown' ? shown.message : listed;
   const approvedAt = useApprovedAt(message);
   const storyContext = useMemo(() => ({ ...context, approvedAt }), [context, approvedAt]);
@@ -311,6 +315,87 @@ export function MessageStory({
         </SectionPanel>
         <p className="text-(length:--cue-text-label) text-fg-subtle">{STORY_COPY.honest}</p>
       </div>
+    </PageShell>
+  );
+}
+
+type ByEvent =
+  | { state: 'loading' }
+  | { state: 'ready'; message: JoinedMessage }
+  | { state: 'gone' }
+  | { state: 'failed'; problem: string };
+
+/**
+ * One message's story by its event id alone (`navigation.tsx`, a destination another screen asked for), when the list's
+ * page does not hold it: read with `message show`, and joined with the activity the list read. An event the event
+ * service no longer keeps says so; Back goes to the list either way.
+ */
+export function MessageByEvent({
+  eventId,
+  reads,
+  context,
+  onBack,
+  onScreen,
+}: {
+  eventId: string;
+  reads: MessagesReads;
+  context: StoryContext;
+  onBack: () => void;
+  onScreen?: ((screen: Screen) => void) | undefined;
+}) {
+  const bridge = useBridge();
+  const [found, setFound] = useState<ByEvent>({ state: 'loading' });
+  useEffect(() => {
+    const activity = reads.activity.state === 'ready' ? reads.activity.value : new Map();
+    let current = true;
+    bridge
+      .cli({ kind: 'eventsMessageShow', eventId })
+      .then((result) => {
+        if (!current) return;
+        if (result.status === 'failed') {
+          setFound(result.exit === NO_SUCH_EVENT ? { state: 'gone' } : { state: 'failed', problem: result.message });
+          return;
+        }
+        const read = result.status === 'ok' ? readMessageShow(result.data) : null;
+        const message =
+          read === null
+            ? undefined
+            : join([read], activity, { aliases: reads.accounts.aliases }).find(
+                (each) => each.key === `event:${read.eventId}`,
+              );
+        setFound(message === undefined ? { state: 'gone' } : { state: 'ready', message });
+      })
+      .catch((error: unknown) => {
+        if (current) setFound({ state: 'failed', problem: errorMessage(error) });
+      });
+    return () => {
+      current = false;
+    };
+  }, [bridge, eventId, reads]);
+  if (found.state === 'ready') {
+    return (
+      <MessageStory listed={found.message} reads={reads} context={context} onBack={onBack} onScreen={onScreen} read />
+    );
+  }
+  return (
+    <PageShell
+      width="wide"
+      eyebrow={
+        <Button variant="ghost" size="sm" icon={ChevronLeft} onClick={onBack} className="self-start">
+          {STORY_COPY.back}
+        </Button>
+      }
+      title={STORY_COPY.message}
+    >
+      {found.state === 'loading' ? (
+        <Spinner label={COPY.loading} />
+      ) : found.state === 'gone' ? (
+        <p role="status" className="text-fg-muted">
+          {STORY_COPY.notKept}
+        </p>
+      ) : (
+        <Problem message={found.problem} />
+      )}
     </PageShell>
   );
 }

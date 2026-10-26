@@ -2,12 +2,19 @@ import { createContext, type ReactNode, useContext, useMemo } from 'react';
 import type { Screen } from './copy.ts';
 
 /**
- * Where a link inside a screen takes the person (0.32.0): Settings at its AI providers, from Events → Judges; and Events
- * at its Judges, from Settings. The screen that opens reads its destination once, as it mounts.
+ * Where a link inside a screen takes the person (0.32.0): Settings at its AI providers, from Events → Judges; Events
+ * at its Judges, from Settings; and Messages at one message's story, by its event id, from anywhere — Events →
+ * Deliveries' "See everything that happened to this message" calls `navigate({ screen: 'messages', eventId })` from
+ * inside its `NavigationProvider`. The screen that opens reads its destination once, as it mounts.
+ *
+ * Messages opens the story whether or not the event is on the list's first page (it reads `message show` for it); an
+ * event the event service no longer keeps says so, and an id that is no event id opens the list. Back goes to the
+ * Messages list.
  */
 export type Destination =
   | { readonly screen: 'settings'; readonly section: 'ai-providers' }
-  | { readonly screen: 'events'; readonly tab: 'judges' };
+  | { readonly screen: 'events'; readonly tab: 'judges' }
+  | { readonly screen: 'messages'; readonly eventId: string };
 
 /** The destination asked for, until the screen it names reads it. */
 let pending: Destination | null = null;
