@@ -23,7 +23,8 @@ type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
  * `inApp` is the one change the person approves here, in the app (0.32.0, DA10's note of 2026-10-26: adding a server to
  * an app in Connections): the same preview under its own header, and its confirm runs `inApp.call`, which answers this
  * approval through core's app channel and applies the change. Nothing is approved until that button is pressed, and
- * Cancel and leaving revoke it as they do here otherwise.
+ * Cancel and leaving revoke it as they do here otherwise. When core will not take the approval here — exit 10,
+ * `APPROVAL_REQUIRED`, as on Windows and Linux, which attest nothing — the confirm becomes Approve in Terminal.
  */
 export function ChangePreview({
   change,
@@ -49,6 +50,9 @@ export function ChangePreview({
   const [busy, setBusy] = useState(false);
   const [opened, setOpened] = useState<TerminalOutcome | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
+  // Core would not take the approval in the app (exit 10): from then on it is the terminal's, as without `inApp`.
+  const [atTerminal, setAtTerminal] = useState(false);
+  const here = atTerminal ? undefined : inApp;
   // Whether Approve or Cancel has the approval in hand, or is about to: then leaving revokes nothing.
   const handled = useRef(false);
   const mounted = useRef(false);
@@ -105,6 +109,8 @@ export function ChangePreview({
       // Not applied: the approval is still this preview's to cancel, or to leave behind.
       handled.current = false;
       if (!mounted.current) revokeLeftBehind();
+      if (result.status === 'failed' && (result.exit === 10 || result.code === 'APPROVAL_REQUIRED'))
+        setAtTerminal(true);
       setProblem(
         result.status === 'failed'
           ? [here.failed(result.message), result.hint].filter(Boolean).join(' ')
@@ -146,20 +152,20 @@ export function ChangePreview({
 
   return (
     <Panel>
-      <PanelHeader title={inApp === undefined ? COPY.approveThisInTerminal : inApp.title} />
+      <PanelHeader title={here === undefined ? COPY.approveThisInTerminal : here.title} />
       <div className="flex flex-col gap-(--cue-space-3) p-(--cue-space-4)">
         <div className="font-mono text-fg">
           <UntrustedText text={change.preview} />
         </div>
         {opened === null ? (
           <div className="flex gap-(--cue-space-2)">
-            {inApp === undefined ? (
+            {here === undefined ? (
               <Button variant="primary" loading={busy} onClick={() => void approve()}>
                 {COPY.approveInTerminal}
               </Button>
             ) : (
-              <Button variant="primary" loading={busy} onClick={() => void approveHere(inApp)}>
-                {inApp.approve}
+              <Button variant="primary" loading={busy} onClick={() => void approveHere(here)}>
+                {here.approve}
               </Button>
             )}
             <Button variant="ghost" disabled={busy} onClick={() => void cancel()}>

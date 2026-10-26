@@ -1,11 +1,18 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Call, CliResult, Installation, McpServer, TerminalCommand } from '../ipc.ts';
 import { CONNECTIONS_COPY } from '../screens/Connections.tsx';
 import { createFakeBridge, EXAMPLE_INSTALLATION, type FakeBridge, failed, ok } from './fake-bridge.ts';
 import sessions from './fixtures/activity-sessions-clients.json';
 import channels from './fixtures/channels.json';
 import { renderApp } from './render.tsx';
+
+// macOS unless a test says otherwise: there core can attest that the app started its `mcp install`.
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock('../platform.ts', () => ({ isMac: () => platform.mac }));
+beforeEach(() => {
+  platform.mac = true;
+});
 
 /** A screen that reads under a loaded machine: each test is given room. */
 const SLOW = { timeout: 30_000 };
@@ -427,6 +434,66 @@ describe('Connections (spec §3.3)', () => {
       expect(approvedInApp(bridge)).toEqual([]);
     },
   );
+
+  it('on Windows and Linux, where nothing attests the app, adding is approved in Terminal', SLOW, async () => {
+    platform.mac = false;
+    const bridge = bridgeAt('0.33.0');
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Gmail' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const preview = await view.findByRole('region', { name: 'Add Gmail to Claude Desktop' });
+    // Core's preview, and the person approves it at their own terminal: no confirm here, nothing answered in the app.
+    expect(preview.textContent).toContain('Agents there could send mail <b>through Resend</b>.');
+    expect(within(preview).queryByRole('button', { name: CONNECTIONS_COPY.approveAndAdd })).toBeNull();
+    fireEvent.click(within(preview).getByRole('button', { name: 'Approve in Terminal' }));
+    await waitFor(() =>
+      expect(terminals(bridge)).toEqual([
+        { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-desktop', server: 'gmail' }, revoke: ID },
+      ]),
+    );
+    expect(await view.findByText('Confirm it in Terminal, then restart Claude Desktop to use it.')).toBeTruthy();
+    expect(approvedInApp(bridge)).toEqual([]);
+  });
+
+  it('when core will not take the approval here (exit 10), it is offered in Terminal instead', SLOW, async () => {
+    // Core's refusal of an approval from a process nothing attests as the app (0.33.0, the second look).
+    const bridge = bridgeAt('0.33.0', {
+      approved: () => ({
+        status: 'failed',
+        exit: 10,
+        code: 'APPROVAL_REQUIRED',
+        message:
+          'nothing on this platform attests that the Agent Comms app started this, so approve the change at your terminal',
+        hint: null,
+      }),
+    });
+    const view = await openConnections(bridge);
+    fireEvent.click(within((await rowOf('Claude Desktop')).row).getByRole('button', { name: 'Add…' }));
+    const editor = await view.findByRole('group', { name: 'Claude Desktop: which parts?' });
+    fireEvent.click(within(editor).getByRole('checkbox', { name: 'Slack' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Save' }));
+    const preview = await view.findByRole('region', { name: 'Add Slack to Claude Desktop' });
+    fireEvent.click(within(preview).getByRole('button', { name: CONNECTIONS_COPY.approveAndAdd }));
+    // Said, and the confirm becomes Approve in Terminal; the approval is still this preview's, and not revoked yet.
+    expect((await within(preview).findByRole('alert')).textContent).toContain(
+      'Slack was not added to Claude Desktop: nothing on this platform attests',
+    );
+    const terminal = await within(preview).findByRole('button', { name: 'Approve in Terminal' });
+    expect(within(preview).queryByRole('button', { name: CONNECTIONS_COPY.approveAndAdd })).toBeNull();
+    expect(bridge.calls.some((call) => call.command === 'revokePreview')).toBe(false);
+    fireEvent.click(terminal);
+    await waitFor(() =>
+      expect(terminals(bridge)).toEqual([
+        { kind: 'change', call: { kind: 'mcpInstall', client: 'claude-desktop', server: 'slack' }, revoke: ID },
+      ]),
+    );
+    expect(await view.findByText('Confirm it in Terminal, then restart Claude Desktop to use it.')).toBeTruthy();
+    expect(approvedInApp(bridge)).toEqual([
+      { kind: 'mcpInstallApproved', client: 'claude-desktop', server: 'slack', approvalId: ID },
+    ]);
+  });
 
   it(
     'on a core before 0.29.0 there is no activity to read: no "used", and Used recently says to update',
