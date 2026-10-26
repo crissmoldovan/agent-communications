@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflows</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.av{width:28px;height:28px;border-radius:8px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11.5px;flex:none}
+.av.lg{width:44px;height:44px;border-radius:12px;font-size:15px}
+.av.out{background:var(--warnSoft);color:var(--warn)}
+.av.n{background:var(--s2);color:var(--text2)}
+.quote{margin:0;border-radius:10px;padding:10px 12px;background:var(--s2);overflow-wrap:anywhere}
+.back{align-self:flex-start;text-decoration:none;color:var(--text2);font-weight:500}
+.back:hover{color:var(--text)}
+.words{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 14px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:150px;flex:none;color:var(--text2)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.arrow{color:var(--text3)}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--s2)}
+.setrow.first{border-top:0;padding-top:2px}
+.setrow .grow{display:flex;flex-direction:column;gap:3px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:0;background:var(--s2);text-align:left;cursor:pointer;width:100%;box-sizing:border-box;transition:background-color 160ms ease}
+.opt:hover{background:var(--s3)}
+.opt[aria-checked="true"]{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.opt .grow{display:flex;flex-direction:column;gap:2px}
+.rb{width:14px;height:14px;border-radius:50%;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .rb{border:4px solid var(--accent)}
+.cb{width:14px;height:14px;border-radius:4px;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .cb{border:0;background:var(--accent)}
+.sel{height:30px;border-radius:8px;border:0;background:var(--s2);padding:0 8px;cursor:pointer}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:62px 14px minmax(0,1fr);column-gap:10px;position:relative;padding-bottom:13px}
+.ev .t{color:var(--text3);font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin-top:4px;position:relative;z-index:1;justify-self:center;box-shadow:0 0 0 3px var(--s1)}
+.ev .ln{position:absolute;left:78px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.ev .w{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500}
+.d-grey{background:var(--text3)}
+.d-acc{background:var(--accent)}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+.note{background:var(--s2);border-radius:10px;padding:10px 12px;color:var(--text2);display:flex;gap:8px;align-items:flex-start}
+.ta{width:100%;box-sizing:border-box;min-height:84px;border-radius:10px;border:0;background:var(--s2);padding:10px 12px;resize:vertical;line-height:1.5}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.app textarea{font:inherit;color:inherit}
+.app .link{color:var(--accent)}
+.ni.sub{margin-left:14px}
+.t-light{--scrim:rgba(24,24,27,.32);--str:#9A3412}
+.t-dark{--scrim:rgba(0,0,0,.55);--str:#FDBA74}
+.app{position:relative}
+.main.tight{padding:24px 24px 56px}
+.wide{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.seg{display:inline-flex;background:var(--s2);border-radius:10px;padding:3px;gap:2px;flex:none}
+.sg{height:28px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.sg:hover{color:var(--text)}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.gl{width:20px;height:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex:none;line-height:1}
+.k-start{background:var(--accentSoft);color:var(--accent)}
+.k-logic{background:var(--s3);color:var(--text2)}
+.k-act{background:var(--warnSoft);color:var(--warn)}
+.fx{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--accent)}
+.new.xs{height:15px;font-size:9.5px;padding:0 4px;border-radius:5px;vertical-align:1px;margin-left:4px}
+.tag{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:7px;border:0;background:var(--s2);font-size:12px;font-weight:500;cursor:pointer;color:var(--text2)}
+.tag.on{background:var(--accentSoft);color:var(--accent)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.wl{display:flex;align-items:center;gap:12px;padding:12px 0;border-top:1px solid var(--s2)}
+.wl:first-of-type{border-top:0;padding-top:4px}
+.shape{width:44px;height:44px;border-radius:10px;background:var(--s2);display:flex;align-items:center;justify-content:center;flex:none;color:var(--text3)}
+.shape.on{color:var(--accent)}
+.wl .grow{display:flex;flex-direction:column;gap:2px}
+.wl .nm{font-weight:600;text-decoration:none}
+.wl .nm:hover{text-decoration:underline}
+.runs{width:80px;flex:none;display:flex;flex-direction:column;gap:0}
+.runs b{font-weight:600;font-size:15px}
+.last{width:170px;flex:none;display:flex;flex-direction:column;gap:2px}
+.pills{display:flex;flex-wrap:wrap;gap:6px}
+.pill{height:28px;padding:0 11px;border-radius:14px;border:0;background:var(--s2);font-weight:500;color:var(--text2);cursor:pointer}
+.pill[aria-pressed="true"]{background:var(--accentSoft);color:var(--accent)}
+.stat a{text-decoration:none}
+.optl{display:flex;gap:10px;align-items:flex-start;padding:10px 12px;border-radius:10px;background:var(--s1);text-decoration:none;color:inherit}
+.optl:hover{box-shadow:0 0 0 2px var(--ring)}
+.optl .grow{display:flex;flex-direction:column;gap:2px}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1600px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.9-3.6 3.6-5.5 7-5.5s6.1 1.9 7 5.5"></path></svg><span>People</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg><span>Projects</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni sub on" href="Workflows.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="14" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="8.5" y="15.5" width="7" height="5" rx="1.5"></rect><path d="M6.5 8.5v2a2 2 0 0 0 2 2H12v3M17.5 8.5v2a2 2 0 0 1-2 2H12"></path></svg><span>Workflows</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div class="row" style="align-items: flex-start; gap: 12px">
+    <div class="grow">
+      <div class="row"><h1 class="h1">Workflows</h1><span class="new">new</span></div>
+      <p class="sub">What happens when a message arrives: a rule, or a graph of steps with branches that finds the right session, starts one, files the issue and closes it. Each version runs only after you approve it.</p>
+      <span class="was">Was Events → Rules. Your rules are here too, each as a straight-line workflow.</span>
+    </div>
+    <a class="btn" href="Describe.dc.html">Describe one…</a>
+    <button type="button" class="btn p" onClick="{{openNew}}">New workflow…</button>
+  </div>
+  <sc-if value="{{said}}" hint-placeholder-val="{{ false }}"><p role="status" class="said">{{said}}</p></sc-if>
+
+  <sc-if value="{{choosing}}" hint-placeholder-val="{{ false }}">
+    <div class="ask" role="group" aria-labelledby="nw">
+      <h2 id="nw" class="t">Start a new workflow from</h2>
+      <a class="optl" href="Describe.dc.html"><span aria-hidden="true" class="gl k-start">✎</span><span class="grow"><span style="font-weight: 500">Your own words <span class="new">new</span></span><span class="faint">Describe what should happen; your Claude drafts the steps and asks what it can’t tell.</span></span></a>
+      <a class="optl" href="WorkflowDesigner.dc.html?show=blank"><span aria-hidden="true" class="gl k-logic">＋</span><span class="grow"><span style="font-weight: 500">An empty canvas</span><span class="faint">Drag steps on, and connect them.</span></span></a>
+      <a class="optl" href="WorkflowDesigner.dc.html"><span aria-hidden="true" class="gl k-logic">⧉</span><span class="grow"><span style="font-weight: 500">A copy of Client asks → the right session</span><span class="faint">Change its trigger and its projects.</span></span></a>
+      <a class="optl" href="WorkflowDesigner.dc.html?show=rule"><span aria-hidden="true" class="gl k-logic">≡</span><span class="grow"><span style="font-weight: 500">One of your rules</span><span class="faint">It opens as a straight line; add steps and branches from there.</span></span></a>
+      <div class="row"><button type="button" class="btn q" onClick="{{closeNew}}">Cancel</button></div>
+    </div>
+  </sc-if>
+
+  <div class="stats">
+    <a class="stat" href="WorkflowRun.dc.html" style="text-decoration: none"><b>54</b><span class="faint">runs this week</span></a>
+    <a class="stat" href="WorkflowRun.dc.html?run=waiting" style="text-decoration: none"><b>1</b><span class="faint">waiting for a session now</span></a>
+    <div class="stat"><b>0</b><span class="faint">failed this week</span></div>
+    <a class="stat" href="WorkflowApprove.dc.html" style="text-decoration: none"><b>{{toApprove}}</b><span class="faint">{{toApproveWord}}</span></a>
+  </div>
+
+  <div class="pills" role="group" aria-label="Show">
+    <sc-for list="{{pills}}" as="p" hint-placeholder-count="4"><button type="button" class="pill" aria-pressed="{{p.on}}" onClick="{{p.pick}}">{{p.t}}</button></sc-for>
+  </div>
+
+  <section class="card" aria-labelledby="wfs">
+    <div class="row"><h2 id="wfs" class="h2 grow">Workflows</h2><span class="faint">with branches</span></div>
+    <div>
+      <sc-for list="{{flows}}" as="w" hint-placeholder-count="3">
+        <div class="wl">
+          <span class="{{w.shapeCls}}"><sc-if value="{{w.branchy}}" hint-placeholder-val="{{ true }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="4" r="2.2" fill="currentColor"></circle><path d="M8 6.2v4.6"></path><circle cx="8" cy="13" r="2.2" fill="currentColor"></circle><path d="M10.2 13H15a3 3 0 0 1 3 3v1.8"></path><circle cx="18" cy="20" r="2.2" fill="currentColor"></circle><path d="M8 15.2v4.6"></path><circle cx="8" cy="22" r="2.2" fill="currentColor"></circle></svg></sc-if><sc-if value="{{w.line}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="13" cy="4" r="2.2" fill="currentColor"></circle><path d="M13 6.2v4.6"></path><circle cx="13" cy="13" r="2.2" fill="currentColor"></circle><path d="M13 15.2v4.6"></path><circle cx="13" cy="22" r="2.2" fill="currentColor"></circle></svg></sc-if></span>
+          <div class="grow">
+            <div class="row wrap"><a class="nm" href="{{w.href}}">{{w.name}}</a><sc-if value="{{w.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if></div>
+            <span class="faint">{{w.trigger}}</span>
+            <span class="faint">{{w.steps}}</span>
+          </div>
+          <span class="chip {{w.stateCls}}">{{w.state}}</span>
+          <span class="runs"><b>{{w.runs}}</b><span class="faint">{{w.runsWord}}</span></span>
+          <span class="last"><span class="faint">Last run</span><sc-if value="{{w.lastHref}}" hint-placeholder-val="{{ true }}"><a class="link" style="white-space: normal" href="{{w.lastHref}}">{{w.last}}</a></sc-if><sc-if value="{{w.noLink}}" hint-placeholder-val="{{ false }}"><span class="muted">{{w.last}}</span></sc-if></span>
+          <a class="btn sm q" href="{{w.href}}">Open ›</a>
+        </div>
+      </sc-for>
+      <sc-if value="{{noFlows}}" hint-placeholder-val="{{ false }}"><div class="empty">None in this state.</div></sc-if>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="rls">
+    <div class="row"><h2 id="rls" class="h2 grow">Rules, as simple workflows</h2><span class="faint">one straight line each</span></div>
+    <div>
+      <sc-for list="{{rules}}" as="w" hint-placeholder-count="3">
+        <div class="wl">
+          <span class="{{w.shapeCls}}"><sc-if value="{{w.branchy}}" hint-placeholder-val="{{ true }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="8" cy="4" r="2.2" fill="currentColor"></circle><path d="M8 6.2v4.6"></path><circle cx="8" cy="13" r="2.2" fill="currentColor"></circle><path d="M10.2 13H15a3 3 0 0 1 3 3v1.8"></path><circle cx="18" cy="20" r="2.2" fill="currentColor"></circle><path d="M8 15.2v4.6"></path><circle cx="8" cy="22" r="2.2" fill="currentColor"></circle></svg></sc-if><sc-if value="{{w.line}}" hint-placeholder-val="{{ false }}"><svg aria-hidden="true" width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><circle cx="13" cy="4" r="2.2" fill="currentColor"></circle><path d="M13 6.2v4.6"></path><circle cx="13" cy="13" r="2.2" fill="currentColor"></circle><path d="M13 15.2v4.6"></path><circle cx="13" cy="22" r="2.2" fill="currentColor"></circle></svg></sc-if></span>
+          <div class="grow">
+            <div class="row wrap"><a class="nm" href="{{w.href}}">{{w.name}}</a><sc-if value="{{w.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if></div>
+            <span class="faint">{{w.trigger}}</span>
+            <span class="faint">{{w.steps}}</span>
+          </div>
+          <span class="chip {{w.stateCls}}">{{w.state}}</span>
+          <span class="runs"><b>{{w.runs}}</b><span class="faint">{{w.runsWord}}</span></span>
+          <span class="last"><span class="faint">Last run</span><sc-if value="{{w.lastHref}}" hint-placeholder-val="{{ true }}"><a class="link" style="white-space: normal" href="{{w.lastHref}}">{{w.last}}</a></sc-if><sc-if value="{{w.noLink}}" hint-placeholder-val="{{ false }}"><span class="muted">{{w.last}}</span></sc-if></span>
+          <a class="btn sm q" href="{{w.href}}">Open ›</a>
+        </div>
+      </sc-for>
+      <sc-if value="{{noRules}}" hint-placeholder-val="{{ false }}"><div class="empty">None in this state.</div></sc-if>
+    </div>
+    <div class="note"><span class="new">new</span><span class="grow">Every rule opens here as a straight-line workflow: When, Which messages, Ask a judge, Then do. It keeps its name, its version and its approval. Add a step or a branch, and its next version is a workflow, approved like any other.</span></div>
+  </section>
+
+  <p class="faint p0">A run is one message’s path through a workflow. Agents can draft a workflow through Agent Comms’ tools; only you approve one, in this app.</p>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"approved":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":1600}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { show: 'all', choosing: false };
+}
+renderVals() {
+const s = this.state;
+const approved = this.props.approved === true;
+const W = [
+{ group: 'flow', st: 'on', name: 'Client asks → the right session', href: 'WorkflowDesigner.dc.html', trigger: 'New Slack message · acme/slack, #client-requests', steps: approved ? '14 steps, 4 branches · version 2 is on' : '14 steps, 4 branches · version 2 is a draft', state: approved ? 'On · version 2' : 'On · version 1', stateCls: 'c-ok', runs: '9', runsWord: 'runs this week', last: 'Today 10:14 · ACME-142 closed', lastHref: 'WorkflowRun.dc.html', branchy: true, isNew: true },
+{ group: 'flow', st: 'dry', name: 'Invoices → Linear', href: 'Main.dc.html', trigger: 'New email · acme/gmail, the inbox', steps: '6 steps, 1 branch', state: 'Dry-run', stateCls: 'c-warn', runs: '4', runsWord: 'written this week', last: 'Yesterday 16:40 · to the dry-run log', lastHref: 'Main.dc.html', branchy: true, isNew: true },
+{ group: 'flow', st: 'draft', name: 'Staging is down → acme-site', href: 'Main.dc.html', trigger: 'New Slack message · acme/slack, #acme-site', steps: '5 steps, 1 branch', state: 'Draft', stateCls: 'c-n', runs: '0', runsWord: 'never run', last: 'Never run', lastHref: null, branchy: true, isNew: true },
+{ group: 'rule', st: 'on', name: 'client-asks', href: 'WorkflowDesigner.dc.html?show=rule&rule=client-asks', trigger: 'New Slack message · acme/slack, 3 client channels', steps: '4 steps in a line · version 4', state: 'On', stateCls: 'c-ok', runs: '22', runsWord: 'runs this week', last: 'Today 11:20 · lane acme-site', lastHref: 'Main.dc.html', branchy: false },
+{ group: 'rule', st: 'on', name: 'invoices', href: 'WorkflowDesigner.dc.html?show=rule&rule=invoices', trigger: 'New Slack message · acme/slack, #acme-site', steps: '4 steps in a line · version 2', state: 'On', stateCls: 'c-ok', runs: '6', runsWord: 'runs this week', last: 'Yesterday 16:40 · lane billing', lastHref: 'Main.dc.html', branchy: false },
+{ group: 'rule', st: 'dry', name: 'mail-subjects', href: 'WorkflowDesigner.dc.html?show=rule&rule=mail-subjects', trigger: 'New email · acme/gmail, the inbox', steps: '3 steps in a line · version 1', state: 'Dry-run', stateCls: 'c-warn', runs: '13', runsWord: 'written this week', last: 'Today 09:12 · to the dry-run log', lastHref: 'Main.dc.html', branchy: false }
+].map((w) => Object.assign(w, { line: !w.branchy, noLink: !w.lastHref, shapeCls: 'shape' + (w.st === 'on' ? ' on' : '') }));
+const count = (st) => W.filter((w) => st === 'all' || w.st === st).length;
+const PILLS = [['all', 'All'], ['on', 'On'], ['dry', 'Dry-run'], ['draft', 'Draft']];
+const vis = W.filter((w) => s.show === 'all' || w.st === s.show);
+const flows = vis.filter((w) => w.group === 'flow');
+const rules = vis.filter((w) => w.group === 'rule');
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+said: approved ? 'Approved. Client asks → the right session runs version 2 from the next message.' : null,
+choosing: s.choosing,
+openNew: () => this.setState({ choosing: true }),
+closeNew: () => this.setState({ choosing: false }),
+toApprove: approved ? '0' : '1', toApproveWord: approved ? 'waiting for your approval' : 'version waiting for your approval',
+pills: PILLS.map(([k, t]) => ({ t: t + ' ' + count(k), on: s.show === k, pick: () => this.setState({ show: k }) })),
+flows, rules, noFlows: flows.length === 0, noRules: rules.length === 0
+};
+}
+}
+</script>
+</body>
+</html>

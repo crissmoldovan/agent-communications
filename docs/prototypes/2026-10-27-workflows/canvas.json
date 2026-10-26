@@ -1,0 +1,138 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-27T01:30:00Z"
+  },
+  "title": "Agent Comms: workflows, from a message to the right session",
+  "launch": {
+    "view": "focused",
+    "file": "Main.dc.html"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": -2920,
+      "w": 1280,
+      "h": 2400,
+      "title": "Start here: workflows, from your words to a closed issue",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Workflows.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 1600,
+      "title": "Workflows: your workflows, and your rules as straight lines (approved=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowDesigner.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 2040,
+      "title": "The designer: your example as a node canvas (show=, rule=, selected=, stage=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowDrag.dc.html": {
+      "x": 2720,
+      "y": 0,
+      "w": 1280,
+      "h": 2040,
+      "title": "Building it by drag and drop: a step dropped, a wire half-drawn (stage=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Describe.dc.html": {
+      "x": 0,
+      "y": 2560,
+      "w": 1280,
+      "h": 1820,
+      "title": "Describe a workflow: your words, drafted as steps (drafted=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowText.dc.html": {
+      "x": 1360,
+      "y": 2560,
+      "w": 1280,
+      "h": 1820,
+      "title": "The same workflow as text, beside the canvas",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowStep.dc.html": {
+      "x": 0,
+      "y": 4900,
+      "w": 1280,
+      "h": 1980,
+      "title": "Editing a step: Create a Linear issue, with a live preview",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowRun.dc.html": {
+      "x": 1360,
+      "y": 4900,
+      "w": 1280,
+      "h": 1940,
+      "title": "A run: one message’s path through the graph (run=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "WorkflowApprove.dc.html": {
+      "x": 2720,
+      "y": 4900,
+      "w": 1280,
+      "h": 1940,
+      "title": "Review and approve version 2",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "Workflows.dc.html",
+    "WorkflowDesigner.dc.html",
+    "WorkflowDrag.dc.html",
+    "Describe.dc.html",
+    "WorkflowText.dc.html",
+    "WorkflowStep.dc.html",
+    "WorkflowRun.dc.html",
+    "WorkflowApprove.dc.html"
+  ],
+  "notes": {
+    "row0": {
+      "x": 0,
+      "y": -3180,
+      "text": "0 · Start here",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · Workflows, and building one by dragging",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "row2": {
+      "x": 0,
+      "y": 2300,
+      "text": "2 · Building one by describing it, or as text",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "row3": {
+      "x": 0,
+      "y": 4640,
+      "text": "3 · A step in full, a run, and approving",
+      "kind": "title1",
+      "maxW": 4000
+    }
+  },
+  "designSystems": []
+}
