@@ -101,6 +101,23 @@ test("Queue shows each item's lane as a quiet chip, and filters by lane", async 
     .toContainEqual({ kind: 'queueList', state: 'open', rule: 'david-on-slack', limit: 100 });
 });
 
+test("a plain queue's item from a rule that sends to a lane too shows no lane, and no lane filter keeps it", async ({
+  page,
+}) => {
+  const david = queueOpen.items.find((item) => item.rule.id === 'david-on-slack') as (typeof queueOpen.items)[number];
+  const plain = { ...david, id: 'qi_01JBH7Z3K9000000000000000P', lane: null };
+  await installMockIpc(page, scenario('0.31.0', { queueList: { open: { items: [david, plain], more: false } } }));
+  await openQueue(page);
+  const open = page.getByRole('region', { name: 'Open' });
+  await expect(open.locator('li[data-item]')).toHaveCount(2);
+  await expect(open.locator(`li[data-item="${david.id}"] [data-slot="queue-lane"]`)).toHaveText('Lane david');
+  await expect(open.locator(`li[data-item="${plain.id}"] [data-slot="queue-lane"]`)).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Lane' }).click();
+  await page.getByRole('option', { name: 'david' }).click();
+  await expect(open.locator('li[data-item]')).toHaveCount(1);
+  await expect(open.locator(`li[data-item="${david.id}"]`)).toBeVisible();
+});
+
 test('Lanes lists each lane with its binding; Unbind asks first and runs exactly its call', async ({ page }) => {
   const dialogs: string[] = [];
   page.on('dialog', (dialog) => {

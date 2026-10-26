@@ -38,6 +38,17 @@ const main = (): HTMLElement => screen.getByRole('main');
 /** The open fixture's items, by the rule each matched. */
 const OPEN_BY_RULE = Object.fromEntries(QUEUE_LISTS.open.items.map((item) => [item.rule.id, item.id]));
 
+/** The open item David's rule sent to his lane. */
+const DAVID_ITEM = QUEUE_LISTS.open.items.find(
+  (item) => item.rule.id === 'david-on-slack',
+) as (typeof QUEUE_LISTS.open.items)[number];
+
+/** Another item of David's rule, which it also sent to a plain queue: the event service says it is in no lane. */
+const PLAIN_DAVID = 'qi_01JBH7Z3K9000000000000000P';
+
+/** The open items as an events service older than 0.31.0 lists them: with no `lane` at all. */
+const OLDER_OPEN = QUEUE_LISTS.open.items.map(({ lane: _lane, ...rest }) => rest);
+
 /**
  * A bridge with core and the events service at `events` (0.31.0 by default, the first with lanes), answering from the
  * queue's and the lanes' fixtures over `fixtures`, with any command replaced by `handlers`.
@@ -188,8 +199,31 @@ describe('Lanes: what the app reads', () => {
     expect(readUnbound(null)).toBeNull();
   });
 
-  it("tells an item's lane: the event service's word first, else the one lane its rule sends to, never a guess", () => {
+  it("an item's lane is the event service's word: a lane's name, or null for a plain queue's, never guessed", () => {
     const items = readQueueList(QUEUE_LISTS.open)?.items ?? [];
+    expect(items.map((item) => [item.rule.id, item.lane])).toEqual([
+      ['mail-asks', null],
+      ['david-on-slack', 'david'],
+      ['invoices', 'billing'],
+      ['family-chat', null],
+      ['receipts', 'billing'],
+    ]);
+    for (const item of items) expect(itemLane(item, lanes()), item.rule.id).toBe(item.lane);
+    // A plain queue's item from a rule that sends to a lane too: null says it is in no lane, whatever its rule.
+    const plain = readQueueList({ items: [{ ...DAVID_ITEM, id: PLAIN_DAVID, lane: null }] })?.items[0];
+    expect(plain?.lane).toBeNull();
+    expect(itemLane(plain as never, lanes())).toBeNull();
+    // A lane's name, bare or as `{ name }`; a word that is no lane's name is no lane.
+    const named = readQueueList({ items: [{ ...DAVID_ITEM, lane: { name: 'billing' } }] })?.items[0];
+    expect(itemLane(named as never, lanes())).toBe('billing');
+    const bad = readQueueList({ items: [{ ...DAVID_ITEM, lane: 'Not A Lane' }] })?.items[0];
+    expect(bad?.lane).toBeNull();
+    expect(itemLane(bad as never, lanes())).toBeNull();
+  });
+
+  it("an older service's item, which says nothing of a lane, is told from the one lane its rule sends to, never a guess between two", () => {
+    const items = readQueueList({ items: OLDER_OPEN })?.items ?? [];
+    expect(items.every((item) => item.lane === undefined)).toBe(true);
     const byRule = (rule: string) => items.find((item) => item.rule.id === rule);
     expect(itemLane(byRule('david-on-slack') as never, lanes())).toBe('david');
     expect(itemLane(byRule('invoices') as never, lanes())).toBe('billing');
@@ -198,14 +232,6 @@ describe('Lanes: what the app reads', () => {
     // Two lanes that a rule sends to: which one an item is in cannot be told from the rule.
     const both = [...lanes(), { ...(lanes()[0] as LaneView), name: 'david-too' }];
     expect(itemLane(byRule('david-on-slack') as never, both)).toBeNull();
-    // The item's own word wins, when it is a lane's name.
-    const named = readQueueList({ items: [{ ...QUEUE_LISTS.open.items[0], lane: { name: 'billing' } }] })?.items[0];
-    expect(named?.lane).toBe('billing');
-    expect(itemLane(named as never, lanes())).toBe('billing');
-    const bare = readQueueList({ items: [{ ...QUEUE_LISTS.open.items[0], lane: 'david' }] })?.items[0];
-    expect(bare?.lane).toBe('david');
-    const bad = readQueueList({ items: [{ ...QUEUE_LISTS.open.items[0], lane: 'Not A Lane' }] })?.items[0];
-    expect(bad?.lane).toBeNull();
   });
 
   it('a lane narrows the list by its one rule; a lane of two rules narrows nothing', () => {
@@ -361,11 +387,13 @@ describe('Lanes: the panel', () => {
       call.kind === 'laneList' ? failed('EVENTS_NOT_RUNNING', 'The event service is not running.') : cli(call);
     const view = await openLanes(bridge);
     expect((await within(view).findByRole('alert')).textContent).toBe('The event service is not running.');
-    // No lane is known, so no filter and no chip; the queue's items are as they were.
+    // No lane is listed, so no filter; the items are as they were, each with the lane the event service says it is in.
     fireEvent.click(await within(main()).findByRole('tab', { name: /^Open\b/ }));
     const open = await within(main()).findByRole('region', { name: 'Open' });
     await waitFor(() => expect(shown(open)).toHaveLength(QUEUE_LISTS.open.items.length));
-    expect(open.querySelector('[data-slot="queue-lane"]')).toBeNull();
+    expect(
+      Array.from(open.querySelectorAll<HTMLElement>('[data-slot="queue-lane"]')).map((chip) => chip.dataset.itemLane),
+    ).toEqual(['david', 'billing', 'billing']);
     expect(within(main()).queryByRole('combobox', { name: LANES_COPY.lane })).toBeNull();
   });
 });
@@ -514,6 +542,32 @@ describe('Lanes: the Queue screen', () => {
     expect(chip('receipts')?.textContent).toBe(`${LANES_COPY.lane} billing`);
     expect(chip('mail-asks')).toBeNull();
     expect(chip('family-chat')).toBeNull();
+  });
+
+  it(
+    "a plain queue's item says it is in no lane though its rule sends to one too: no chip, and not under that lane's filter",
+    SLOW,
+    async () => {
+      const plain = { ...DAVID_ITEM, id: PLAIN_DAVID, lane: null };
+      const view = await openQueue(bridgeAt('0.31.0', { queueList: { items: [DAVID_ITEM, plain], more: false } }));
+      const chip = (id: string) => view.querySelector(`li[data-item="${id}"] [data-slot="queue-lane"]`);
+      await waitFor(() => expect(chip(DAVID_ITEM.id)?.textContent).toBe(`${LANES_COPY.lane} david`));
+      expect(view.querySelector(`li[data-item="${PLAIN_DAVID}"]`)).not.toBeNull();
+      expect(chip(PLAIN_DAVID)).toBeNull();
+      await choose(LANES_COPY.lane, 'david');
+      await waitFor(() => expect(shown(view)).toEqual([DAVID_ITEM.id]));
+    },
+  );
+
+  it("an older service's items, which say nothing of a lane, show the one lane their rule sends to", SLOW, async () => {
+    const view = await openQueue(bridgeAt('0.31.0', { queueList: { items: OLDER_OPEN, more: false } }));
+    const chip = (rule: string) =>
+      view.querySelector<HTMLElement>(`li[data-item="${OPEN_BY_RULE[rule]}"] [data-slot="queue-lane"]`);
+    await waitFor(() => expect(chip('david-on-slack')?.textContent).toBe(`${LANES_COPY.lane} david`));
+    expect(chip('invoices')?.textContent).toBe(`${LANES_COPY.lane} billing`);
+    expect(chip('mail-asks')).toBeNull();
+    await choose(LANES_COPY.lane, 'billing');
+    await waitFor(() => expect(shown(view)).toEqual([OPEN_BY_RULE.invoices, OPEN_BY_RULE.receipts]));
   });
 
   it(
