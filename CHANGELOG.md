@@ -9,6 +9,13 @@ together under one version.
   shows (`when a new message arrives in cue/gmail, in the inbox`, `match any`, `ask`, `then`, `keep`, `at most`), and
   `parseRuleText` reads it back to the same document, with each mistake's line and column. Anything the text has no
   words for is kept as `raw` JSON, so nothing is dropped. The grammar is in `packages/events/src/rule-text/GRAMMAR.md`.
+- **Analyse** (`@agentcomms/events-daemon`): `agent-events rule analyse <ruleId> [--draft -] --json` suggests how to
+  improve a rule part by part — from its own text and content-free counts of its last 30 days (a sending domain the
+  judge always refused, a bar between kept and dismissed scores, a rule that never matched), and from a model on your
+  own OpenRouter or Anthropic key for the judge's question, a session's text and a Linear title — and never applies
+  one. It reads and sends no message content, and runs only at your terminal or in the app. `provider key set` takes
+  `anthropic`; a judged decision now keeps its sender's domain, never the address, in its encrypted metadata (one
+  automatic migration, 29, gives Anthropic a key slot).
 
 ## 0.32.0
 

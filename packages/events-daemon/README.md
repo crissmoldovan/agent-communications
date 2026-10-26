@@ -217,6 +217,53 @@ agent-events message show <event-id> --json          # one message, with every l
   did in Gmail or Slack yourself is in neither. `--since` and `--before` take milliseconds since 1970, and `--limit`
   is 1 to 500.
 
+## Analyse a rule
+
+From 0.33.0 the event service suggests how to improve a rule, or a draft of it, part by part: each suggestion says what
+the part says now, what it could say, why, and what that rests on. It never applies one. The desktop app puts the one
+you choose into the editor, and you approve the new version as any other. At a terminal:
+
+```bash
+agent-events rule analyse invoices --json                        # the rule's active version, else its newest
+agent-events rule analyse invoices --draft - --json < draft.json # a draft: one JSON rule document on stdin
+agent-events rule analyse invoices --provider anthropic --json   # the model on your Anthropic key
+```
+
+- **What it reads.** The rule, or the draft, and content-free counts of what the rule did on this Mac in the last 30
+  days:
+  - its decisions, and their outcomes;
+  - the judge's answers, and their spread;
+  - per sending domain, what the judge said;
+  - the queue items you marked done or dismissed, against the judge's number for each.
+
+  It reads no subject, body, snippet or address. A domain is counted only when a judged decision kept it: from 0.33.0
+  a judged decision keeps its sender's domain (never the address) in its encrypted judge metadata, when the rule tests
+  or keeps `from.address` and the domain is a plain ASCII hostname. Decisions made before 0.33.0 have none.
+- **What it suggests from the counts alone:**
+  - a sending domain the judge said no to three times or more, and never yes: the condition, with that domain left out
+    before the judge is asked;
+  - when every message you kept scored above every one you dismissed: a judge bar between them;
+  - when nothing passed in 30 days: a note that says so.
+- **What a model suggests,** each through its own fixed brief (`src/domain/analyse-prompts.ts`):
+  - the judge's question, as TypeSafe advises for System One questions: one yes-or-no about one fact, naming who asks
+    for what;
+  - a session's context text, as a task, steps, limits and what to do when unsure;
+  - a Linear issue's title template, using only the rule's mapped fields.
+- **Where the model runs.** On the provider you name, or else the first with a key: OpenRouter
+  (`anthropic/claude-sonnet-5.5`, the key Jev may already use), then Anthropic's own API (`claude-sonnet-5-5`, with
+  `agent-events provider key set anthropic`). The result's `model` names the provider and the model, or why it did not
+  run — `NO_KEY`, with `noKey` listing the providers that have none. The suggestions from the counts come either way.
+- **What it sends.** The rule's own text around each part, and the counts without any domain: never a message, a
+  sender, a subject, a body or an address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
+  `https://api.anthropic.com/v1/messages`, through the same pinned path as the judges, with a 64 KiB request, a 256 KiB
+  answer and a 60-second deadline.
+- **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
+  refused with a closed reason (`MODEL_OUTPUT_NOT_JSON`, `MODEL_OUTPUT_SLOTS`, …), and the provider's own words are
+  never kept. A suggestion you apply is your rule's text from then on, and you approve it with the rule.
+- **Who can run it: you.** It runs when you press Analyse in the app or run it at your terminal. `rule analyse`
+  refuses inside the event service's MCP server and in an agent's shell (an agent's marker, as for `judge setup`), and
+  no MCP tool runs it, so an agent never reads a rule's counts and never spends your key.
+
 ## What you can do with it
 
 - **Sources:**
@@ -283,6 +330,7 @@ channel servers applies, and the result tells you to restart the client. The
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
+  - analyse a rule (`rule analyse`);
   - resume a target;
   - decide a held event.
 

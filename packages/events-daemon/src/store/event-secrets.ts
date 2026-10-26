@@ -14,7 +14,7 @@ import {
   sha256Hex,
   withFileLock,
 } from '@agentcomms/core';
-import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDERS, type EventSecretProvider } from '../domain/providers.ts';
 import { canonicalSecretWebhookUrl, type WebhookTargetDocument } from '../domain/webhook-target.ts';
 import type { EventPaths } from '../runtime/paths.ts';
 import type { WriterQuiescer } from '../runtime/writer-quiescer.ts';
@@ -73,12 +73,12 @@ export interface EventSecretMigrationResult {
 export type EventSecretOwnerKind = 'target' | 'subscriber' | 'judge' | 'provider';
 export type EventSecretPurpose = 'secret-url' | 'webhook-signing' | 'sse-bearer' | 'judge-key' | 'provider-key';
 
-/** The AI providers a person keeps a key for (owner decision 2026-10-26): each slot's owner is the provider itself. */
-export const EVENT_SECRET_PROVIDERS: readonly [typeof JUDGE_KIND_TYPESAFE, 'openrouter'] = [
-  JUDGE_KIND_TYPESAFE,
-  'openrouter',
-];
-export type EventSecretProvider = (typeof EVENT_SECRET_PROVIDERS)[number];
+export {
+  EVENT_SECRET_PROVIDER_WORDS,
+  EVENT_SECRET_PROVIDERS,
+  type EventSecretProvider,
+  isEventSecretProvider,
+} from '../domain/providers.ts';
 
 /**
  * A provider slot's exact owner. A provider has no immutable document row, so its owner is version 1 and its digest is

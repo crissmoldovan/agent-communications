@@ -20,6 +20,7 @@ import {
   type TargetDocument,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { ANALYSE_PROVIDERS, type AnalyseProvider } from '../domain/analyse-model.ts';
 import { PERSON_SETUP_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
 import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
@@ -42,6 +43,7 @@ import {
   type MessageShowResultV1,
   type MessagesListResultV1,
 } from '../domain/messages.ts';
+import { type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import {
   isQueueItemId,
   QUEUE_CHANNELS,
@@ -52,6 +54,7 @@ import {
   type QueueChannel,
   type QueueStateFilter,
 } from '../domain/queue-target.ts';
+import { ANALYSE_WINDOW_DAYS, RULE_ANALYSE_PARTS, type RuleAnalyseResultV1 } from '../domain/rule-analyse.ts';
 import {
   type B3ControlWireOperation,
   type DesktopControlWireOperation,
@@ -70,7 +73,6 @@ import type {
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
-import type { EventSecretProvider } from '../store/event-secrets.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -571,6 +573,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
+  readonly 'rule-analyse': RuleAnalyseResultV1;
 };
 
 /**
@@ -737,6 +740,15 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
+  /**
+   * Analyse (0.33.0 design §3.3): the person's view of one rule, or a draft of it from the editor, and the provider its
+   * model runs on when they pick one. It writes nothing.
+   */
+  readonly 'rule-analyse': {
+    readonly ruleId: string;
+    readonly draft?: Readonly<Record<string, JsonValue>> | undefined;
+    readonly provider?: AnalyseProvider | undefined;
+  };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -1270,6 +1282,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
+  'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1283,6 +1296,90 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
     'record',
   ],
 });
+
+function assertNullableNumber(value: unknown, name: string): void {
+  if (value !== null && (typeof value !== 'number' || !Number.isFinite(value)))
+    throw new TypeError(`${name} must be a number or null`);
+}
+
+/**
+ * Analyse's result (0.33.0 design §3.3): what was analysed, the counts — numbers, closed words and, for each listed
+ * sending domain, the domain inside the untrusted-content envelope — the suggestions and what the model did.
+ */
+function assertRuleAnalyseResult(value: Readonly<Record<string, unknown>>): void {
+  assertText(value.ruleId, 'an analysed rule id');
+  if (!isRecord(value.analysed)) throw new TypeError('an analysis says what it analysed');
+  if (value.analysed.source === 'stored') {
+    assertClosedRecord(value.analysed, ['source', 'version'], 'an analysed stored version');
+    assertPositiveInteger(value.analysed.version, 'an analysed version');
+  } else assertClosedRecord(value.analysed, ['source'], 'an analysed draft');
+  if (value.analysed.source !== 'stored' && value.analysed.source !== 'draft')
+    throw new TypeError('an analysis analysed a stored version or a draft');
+  const counts = value.counts;
+  assertClosedRecord(
+    counts,
+    ['windowDays', 'since', 'decisions', 'outcomes', 'judge', 'domainsKnown', 'domains', 'queue'],
+    'analysed counts',
+  );
+  if (counts.windowDays !== ANALYSE_WINDOW_DAYS) throw new TypeError('analysed counts cover 30 days');
+  for (const field of ['since', 'decisions', 'domainsKnown']) assertNonNegativeInteger(counts[field], field);
+  assertClosedRecord(counts.outcomes, MESSAGE_DECISION_OUTCOMES, 'analysed outcomes');
+  for (const outcome of MESSAGE_DECISION_OUTCOMES) assertNonNegativeInteger(counts.outcomes[outcome], outcome);
+  if (counts.judge !== null) {
+    assertClosedRecord(
+      counts.judge,
+      ['answered', 'yes', 'no', 'held', 'spread', 'lowest', 'highest'],
+      "analysed judge's answers",
+    );
+    for (const field of ['answered', 'yes', 'no', 'held']) assertNonNegativeInteger(counts.judge[field], field);
+    if (!Array.isArray(counts.judge.spread) || counts.judge.spread.length !== 10)
+      throw new TypeError("the judge's spread is ten bands");
+    for (const band of counts.judge.spread) assertNonNegativeInteger(band, 'a spread band');
+    assertNullableNumber(counts.judge.lowest, 'the lowest answer');
+    assertNullableNumber(counts.judge.highest, 'the highest answer');
+  }
+  if (!Array.isArray(counts.domains)) throw new TypeError('analysed domains are a list');
+  for (const entry of counts.domains) {
+    assertClosedRecord(entry, ['domain', 'judged', 'yes', 'no'], 'an analysed domain');
+    if (typeof entry.domain !== 'string' || !entry.domain.startsWith('<untrusted-content '))
+      throw new TypeError('a sending domain is inside the untrusted-content envelope');
+    for (const field of ['judged', 'yes', 'no']) assertNonNegativeInteger(entry[field], field);
+  }
+  assertClosedRecord(counts.queue, ['open', 'done', 'dismissed', 'lowestDone', 'highestDismissed'], 'analysed queue');
+  for (const field of ['open', 'done', 'dismissed']) assertNonNegativeInteger(counts.queue[field], field);
+  assertNullableNumber(counts.queue.lowestDone, 'the lowest kept score');
+  assertNullableNumber(counts.queue.highestDismissed, 'the highest dismissed score');
+  if (!Array.isArray(value.suggestions)) throw new TypeError('suggestions are a list');
+  for (const suggestion of value.suggestions) {
+    assertClosedRecord(suggestion, ['part', 'before', 'after', 'why', 'evidence'], 'a suggestion');
+    if (!(RULE_ANALYSE_PARTS as readonly unknown[]).includes(suggestion.part))
+      throw new TypeError('a suggestion names a part of the rule');
+    for (const field of ['before', 'after'])
+      if (suggestion[field] !== null && typeof suggestion[field] !== 'string')
+        throw new TypeError(`a suggestion's ${field} is text or null`);
+    assertText(suggestion.why, "a suggestion's why");
+    if (!isRecord(suggestion.evidence) || (suggestion.evidence.by !== 'counts' && suggestion.evidence.by !== 'model'))
+      throw new TypeError('a suggestion says what it rests on');
+  }
+  const model = value.model;
+  assertClosedRecord(model, ['provider', 'name', 'model', 'ran', 'reason', 'noKey', 'sent', 'parts'], 'the model part');
+  if (model.provider !== null && !(ANALYSE_PROVIDERS as readonly unknown[]).includes(model.provider))
+    throw new TypeError("the model's provider is one of Analyse's");
+  if (typeof model.ran !== 'boolean') throw new TypeError('the model part says whether it ran');
+  if (model.reason !== null && model.reason !== 'NO_KEY' && model.reason !== 'NO_MODEL_PARTS')
+    throw new TypeError('the model part says why it did not run in closed words');
+  if (
+    !Array.isArray(model.noKey) ||
+    model.noKey.some((entry) => !(ANALYSE_PROVIDERS as readonly unknown[]).includes(entry))
+  )
+    throw new TypeError('the providers without a key are Analyse providers');
+  assertText(model.sent, 'what the model was sent');
+  if (!Array.isArray(model.parts)) throw new TypeError("the model's parts are a list");
+  for (const part of model.parts) {
+    assertClosedRecord(part, ['part', 'at', 'outcome'], "a model's part");
+    assertText(part.outcome, "a model part's outcome");
+  }
+}
 
 function assertText(value: unknown, name: string): asserts value is string {
   if (typeof value !== 'string' || value.length === 0) throw new TypeError(`${name} must be a non-empty string`);
@@ -1535,16 +1632,17 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
       for (const entry of value.providers) {
         assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
-        if (entry.id !== JUDGE_KIND_TYPESAFE && entry.id !== 'openrouter')
-          throw new TypeError('a listed provider is unknown');
+        if (!isEventSecretProvider(entry.id)) throw new TypeError('a listed provider is unknown');
         assertText(entry.name, 'a listed provider name');
         if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
       }
       return;
+    case 'rule-analyse':
+      assertRuleAnalyseResult(value);
+      return;
     case 'provider-key-set':
     case 'provider-key-remove':
-      if (value.provider !== JUDGE_KIND_TYPESAFE && value.provider !== 'openrouter')
-        throw new TypeError('a provider key result names a known provider');
+      if (!isEventSecretProvider(value.provider)) throw new TypeError('a provider key result names a known provider');
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');

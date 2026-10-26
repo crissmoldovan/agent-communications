@@ -181,5 +181,15 @@
   {
     "name": "provider-key-remove-request",
     "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+  },
+  {
+    "name": "rule-analyse-request",
+    "request": {
+      "operation": "rule-analyse",
+      "args": {
+        "ruleId": "invoices",
+        "provider": "openrouter"
+      }
+    }
   }
 ]

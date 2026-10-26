@@ -3,7 +3,54 @@ import { JUDGE_KIND_TYPESAFE, JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
 const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
-const PROVIDER_KEY_SQL_VALUES = [JUDGE_KIND_TYPESAFE, 'openrouter'].map((id) => `'${id}'`).join(', ');
+/**
+ * The providers each migration's key-slot CHECK admits, frozen per migration: a migration's statements never change
+ * once released, so a later release widens the list with a migration of its own.
+ */
+const providerKeySqlValues = (providers: readonly string[]): string => providers.map((id) => `'${id}'`).join(', ');
+const PROVIDER_KEY_SQL_VALUES = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter']);
+/** 0.33.0 (design §3.3): Analyse's model runs on OpenRouter or Anthropic, so Anthropic gains a key slot. */
+const PROVIDER_KEY_SQL_VALUES_V29 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic']);
+
+/** The key-slot table's statements, with the providers its CHECK admits (v26, and its widenings since). */
+function providerSlotTableStatements(version: number, providers: string): readonly string[] {
+  const table = `event_secret_generations_v${version}`;
+  return [
+    'DROP INDEX event_secret_generations_current',
+    `CREATE TABLE ${table} (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${providers}))
+        )
+      ) STRICT`,
+    `INSERT INTO ${table}
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+    'DROP TABLE event_secret_generations',
+    `ALTER TABLE ${table} RENAME TO event_secret_generations`,
+    `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+    `UPDATE meta SET value = '${version}' WHERE key = 'schema_version'`,
+  ];
+}
 
 export interface EventMigration {
   readonly version: number;
@@ -989,6 +1036,14 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
       "UPDATE meta SET value = '28' WHERE key = 'schema_version'",
     ],
+  },
+  {
+    // 0.33.0 (design §3.3): Analyse's model runs on the provider the person picks among those with keys — OpenRouter,
+    // or Anthropic's own Messages API — so Anthropic gains a key slot beside TypeSafe's and OpenRouter's. The table is
+    // rebuilt as v26 built it, with the wider CHECK; every row is copied as it is.
+    version: 29,
+    name: 'event-secret-provider-slot-anthropic-v1',
+    statements: providerSlotTableStatements(29, PROVIDER_KEY_SQL_VALUES_V29),
   },
 ];
 

@@ -19,10 +19,10 @@ import {
   JUDGE_BUDGET_ID,
 } from '../domain/judges.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerService } from '../operations/b3-contract.ts';
 import type { EventDatabase } from '../store/database.ts';
-import { EVENT_SECRET_PROVIDERS, type EventSecretProvider } from '../store/event-secrets.ts';
 import type { ActivationRuntime, PreparedActivation } from './activations.ts';
 import type { B3SecretControl } from './b3-secret-control.ts';
 import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -33,6 +33,7 @@ export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
 export const PROVIDER_NAMES: Readonly<Record<EventSecretProvider, string>> = Object.freeze({
   typesafe: 'TypeSafe',
   openrouter: 'OpenRouter',
+  anthropic: 'Anthropic',
 });
 
 export interface ProviderListResultV1 {
@@ -88,9 +89,8 @@ export function judgeDestination(kind: SetupJudgeKind, provider: string): string
 }
 
 function provider(value: unknown): EventSecretProvider {
-  if (typeof value !== 'string' || !(EVENT_SECRET_PROVIDERS as readonly string[]).includes(value))
-    throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
-  return value as EventSecretProvider;
+  if (!isEventSecretProvider(value)) throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
+  return value;
 }
 
 /**
