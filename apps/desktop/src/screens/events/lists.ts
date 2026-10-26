@@ -30,8 +30,6 @@ export interface EventsLists {
   /** Each openable rule's versions, by id, as `rule show` read them; a rule not read yet is loading. */
   versions: ReadonlyMap<string, Loadable<RuleVersionView[]>>;
   deliveries: Loadable<DeliveryRow[]>;
-  /** The deliveries list as it came, for the table that shows it until the Deliveries tab reads it itself. */
-  deliveriesRaw: Loadable<unknown>;
   names: AccountNames;
   reloadRules(): Promise<void>;
   reloadDeliveries(): Promise<void>;
@@ -92,7 +90,6 @@ export function useEventsLists(): EventsLists {
     rules,
     versions,
     deliveries,
-    deliveriesRaw: deliveriesCall.result,
     names,
     reloadRules: rulesCall.reload,
     reloadDeliveries: deliveriesCall.reload,

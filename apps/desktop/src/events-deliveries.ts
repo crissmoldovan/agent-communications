@@ -147,9 +147,9 @@ export function madeAt(row: Pick<DeliveryRow, 'deliveredAt' | 'expiresAt'>, rete
   return made > 0 ? made : null;
 }
 
-/** What a delivery's last try got, in words, or null when nothing is recorded. */
+/** What a delivery's last try got, in words to follow "Its last try:", or null when nothing is recorded. */
 export function lastAnswer(row: Pick<DeliveryRow, 'lastErrorCode' | 'lastStatus' | 'targetKind'>): string | null {
-  const who = row.targetKind === 'webhook' ? 'The webhook' : 'The target';
+  const who = row.targetKind === 'webhook' ? 'the webhook' : 'the target';
   if (row.lastErrorCode === 'NETWORK') return `${who} could not be reached`;
   if (row.lastStatus !== null) {
     const unavailable = row.lastStatus === 503 ? ', it is unavailable' : '';

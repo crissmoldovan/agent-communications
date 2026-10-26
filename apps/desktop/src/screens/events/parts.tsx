@@ -5,7 +5,7 @@
  */
 import { Button, Chip } from '@cueplusplus/ui';
 import { ArrowLeft } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { Fragment, type ReactNode } from 'react';
 import { type AccountNames, aliasOf } from '../../account-aliases.ts';
 import { OutsideText } from '../../components/OutsideText.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
@@ -130,13 +130,13 @@ export function FactsLine({ facts }: { facts: readonly ReactNode[] }) {
   const shown = facts.filter((fact) => fact !== null && fact !== false);
   if (shown.length === 0) return null;
   return (
-    <span className="flex flex-wrap gap-x-(--cue-space-2) text-(length:--cue-text-label) text-fg-muted">
+    <span className="text-(length:--cue-text-label) text-fg-muted">
       {shown.map((fact, index) => (
         // biome-ignore lint/suspicious/noArrayIndexKey: the facts come in a fixed order and never move.
-        <span key={index} className="flex gap-x-(--cue-space-2)">
-          {index === 0 ? null : <span aria-hidden="true">·</span>}
-          <span>{fact}</span>
-        </span>
+        <Fragment key={index}>
+          {index === 0 ? null : ' · '}
+          {fact}
+        </Fragment>
       ))}
     </span>
   );

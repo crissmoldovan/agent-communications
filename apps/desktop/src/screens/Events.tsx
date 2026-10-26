@@ -4,7 +4,6 @@ import {
   Chip,
   DescriptionList,
   EmptyState,
-  InfoTip,
   Row as Line,
   Link,
   Panel,
@@ -13,7 +12,6 @@ import {
   StatusDot,
   Switch,
   Table,
-  TableScrollRegion,
   Tabs,
 } from '@cueplusplus/ui';
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
@@ -36,6 +34,7 @@ import {
   errorMessage,
   type TerminalOutcome,
 } from '../ipc.ts';
+import { DeliveriesTab } from './events/DeliveriesTab.tsx';
 import { useEventsLists, useEventsNav } from './events/lists.ts';
 import { RulesTab } from './events/RulesTab.tsx';
 import { ScreenFrame } from './Screen.tsx';
@@ -44,7 +43,7 @@ import { ScreenFrame } from './Screen.tsx';
  * What this screen reads of the events service's bare JSON, field by field (DA13: its CLI keeps its own shape).
  *   status          `packages/events-daemon/src/operations/status.ts`, `EventsDaemonStatus`
  *   rules list, rule show  `events/lists.ts` and `src/events-rules.ts` (0.32.0's Rules tab)
- *   deliveries list `runtime/b3-operator-control.ts`, `deliveriesList`: content-free metadata, times in epoch ms
+ *   deliveries list, delivery show, dryrun show  `events/lists.ts` and `src/events-deliveries.ts` (0.32.0's tab)
  *   judge model status  `operations/contracts/laya-model-status-v1.schema.json`: Laya's closed status (E2)
  *   judge kinds list    `operations/contracts/b3-control-v2.schema.json`, `judgeKindEntry`: each kind's state
  *   judges list         `operations/contracts/b3-control-v3.schema.json`, `judgeInventoryEntry`: content-free judges
@@ -58,17 +57,6 @@ interface EventsStatus {
 }
 
 type Row = Record<string, unknown>;
-
-/** A column of a list: its heading, what a row shows under it, and whether that is a literal value, set in mono. */
-interface Column {
-  label: string;
-  show: (row: Row) => ReactNode;
-  numeric?: boolean;
-  literal?: boolean;
-}
-
-/** The most deliveries the table shows; the CLI and MCP list every one. */
-const DELIVERIES_SHOWN = 100;
 
 /** The padding of what a panel holds that is not one of its rows: a spinner, an error, a line, so it lines up with them. */
 const INSET = 'px-(--cue-pad-row-x) py-(--cue-space-3)';
@@ -85,122 +73,12 @@ function InPanel<T>({ value, children }: { value: Loadable<T>; children: (value:
 
 const isRecord = (value: unknown): value is Row => typeof value === 'object' && value !== null && !Array.isArray(value);
 
-/** A value as text and only text: nothing in it is read as markup. A missing one is a dash. */
-function plain(value: unknown): ReactNode {
-  if (value === null || value === undefined || value === '') return '-';
-  if (typeof value === 'string') return <UntrustedText text={value} />;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return <UntrustedText text={JSON.stringify(value)} />;
-}
-
-/** An id and its version, as `rule_x v2`. */
-function versioned(id: unknown, version: unknown): ReactNode {
-  if (typeof id !== 'string') return '-';
-  return <UntrustedText text={typeof version === 'number' ? `${id} v${version}` : id} />;
-}
-
-/** A time in epoch milliseconds, or a dash. */
-function moment(value: unknown): ReactNode {
-  return typeof value === 'number' ? <When at={value} /> : '-';
-}
-
-const DELIVERY_COLUMNS: readonly Column[] = [
-  { label: 'Delivery', show: (row) => plain(row.deliveryId), literal: true },
-  { label: 'Rule', show: (row) => versioned(row.ruleId, row.ruleVersion), literal: true },
-  { label: 'Target', show: (row) => versioned(row.targetId, row.targetVersion), literal: true },
-  { label: 'Account', show: (row) => plain(row.accountId), literal: true },
-  { label: 'State', show: (row) => plain(row.state) },
-  { label: 'Attempts', show: (row) => plain(row.attempts), numeric: true },
-  { label: 'Next try', show: (row) => moment(row.nextAt) },
-  { label: 'Expires', show: (row) => moment(row.expiresAt) },
-];
-
-/**
- * The most recent deliveries first. The list comes in id order; a delivery's expiry is its creation plus the time it
- * is kept, so the latest to expire are the latest made.
- */
-function recentFirst(rows: Row[]): Row[] {
-  const expires = (row: Row) => (typeof row.expiresAt === 'number' ? row.expiresAt : Number.NEGATIVE_INFINITY);
-  return [...rows].sort((a, b) => expires(b) - expires(a));
-}
-
-/** A list from the events service as a table of its own fields, or what it came to when it is empty or unreadable. */
-function ListTable({
-  caption,
-  columns,
-  value,
-  empty,
-  arrange = (rows) => rows,
-  limit,
-}: {
-  caption: string;
-  columns: readonly Column[];
-  value: unknown;
-  empty: string;
-  arrange?: (rows: Row[]) => Row[];
-  limit?: number;
-}) {
-  if (!Array.isArray(value)) {
-    return (
-      <p role="alert" className={`${INSET} text-danger`}>
-        The list could not be read.
-      </p>
-    );
-  }
-  const rows = arrange(value.filter(isRecord));
-  if (rows.length === 0) return <EmptyState title={empty} />;
-  const shown = limit === undefined ? rows : rows.slice(0, limit);
-  return (
-    <>
-      {/* Wider than the panel with long ids and times: it scrolls sideways on its own, never the page. */}
-      <TableScrollRegion aria-label={`${caption} table`}>
-        {/* Each row stays on one line, the region scrolling, rather than a column of ids wrapping into a tall row. */}
-        <Table.Root className="min-w-max">
-          <Table.Caption className="sr-only">{caption}</Table.Caption>
-          <Table.Header>
-            <Table.Row>
-              {columns.map((column) => (
-                <Table.Head key={column.label} numeric={column.numeric ?? false}>
-                  {column.label}
-                </Table.Head>
-              ))}
-            </Table.Row>
-          </Table.Header>
-          <Table.Body>
-            {shown.map((row, index) => (
-              // Rows have no id of their own across both lists; their place in this read is what keys them.
-              // biome-ignore lint/suspicious/noArrayIndexKey: a read's rows are replaced whole, never reordered in place
-              <Table.Row key={index}>
-                {columns.map((column) => (
-                  <Table.Cell key={column.label} numeric={column.numeric ?? false}>
-                    {column.literal === true ? <span className="font-mono">{column.show(row)}</span> : column.show(row)}
-                  </Table.Cell>
-                ))}
-              </Table.Row>
-            ))}
-          </Table.Body>
-        </Table.Root>
-      </TableScrollRegion>
-      {shown.length < rows.length ? (
-        <p className={`${INSET} flex items-center gap-(--cue-space-2) text-fg-muted`}>
-          <span>
-            The {shown.length} most recent of {rows.length}.
-          </span>
-          <InfoTip text={EVENTS_COPY.everyOne} label={EVENTS_COPY.everyOneLabel} />
-        </p>
-      ) : null}
-    </>
-  );
-}
-
 /** The screen's own words beside the event service's and the judges' (below): its tabs, and the hints it moved. */
 export const EVENTS_COPY = {
   tabs: { service: 'Service', judges: 'Judges', rules: 'Rules', deliveries: 'Deliveries' },
   toLookAt: 'to look at',
   failed: 'could not be read',
   needsUpdate: 'needs an update',
-  everyOne: 'The events CLI and MCP list every one.',
-  everyOneLabel: 'Where every one is listed',
 } as const;
 
 /** A fact about the status: what it is, then what it says, at the far end, as Overview's rows say theirs. */
@@ -584,42 +462,6 @@ function serviceAttention(eventService: Loadable<EventServiceState> | 'absent', 
       state.wanted && state.status === 'stopped' && !state.firstStartQuestion,
       state.fullDiskAccess === 'missing',
     ].filter(Boolean).length
-  );
-}
-
-/**
- * How many rows a list's table has, as `ListTable` reads them: for the deliveries, every one, and not only the most
- * recent it shows. Nothing while it is unread or unreadable.
- */
-function listCount(result: Loadable<unknown>): number | null {
-  if (result.state !== 'ready' || !Array.isArray(result.value)) return null;
-  return result.value.filter(isRecord).length;
-}
-
-/** Whether a list's read failed, or came back as something `ListTable` cannot read: its view then says so. */
-function listFailed(result: Loadable<unknown>): boolean {
-  return result.state === 'error' || (result.state === 'ready' && !Array.isArray(result.value));
-}
-
-/** The recent deliveries, read as the rules are. */
-function Deliveries({ result }: { result: Loadable<unknown> }) {
-  return (
-    <section aria-label="Recent deliveries">
-      <Panel>
-        <InPanel value={result}>
-          {(value) => (
-            <ListTable
-              caption="Recent deliveries"
-              columns={DELIVERY_COLUMNS}
-              value={value}
-              empty="No deliveries yet."
-              arrange={recentFirst}
-              limit={DELIVERIES_SHOWN}
-            />
-          )}
-        </InPanel>
-      </Panel>
-    </section>
   );
 }
 
@@ -1539,8 +1381,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
   const [selected, setSelected] = useState<EventsTab>('service');
   const lists = useEventsLists();
   const nav = useEventsNav(setSelected);
-  const { rules } = lists;
-  const deliveries = { result: lists.deliveriesRaw };
+  const { rules, deliveries } = lists;
   const { tabs } = EVENTS_COPY;
   const tab = (value: EventsTab, badge: ReactNode) => (
     <Tabs.Tab value={value}>
@@ -1581,10 +1422,10 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
         )}
         {tab(
           'deliveries',
-          listFailed(deliveries.result) ? (
+          deliveries.state === 'error' ? (
             <Mark tone="danger" says={EVENTS_COPY.failed} />
           ) : (
-            <Count count={listCount(deliveries.result)} />
+            <Count count={deliveries.state === 'ready' ? deliveries.value.length : null} />
           ),
         )}
       </Tabs.List>
@@ -1601,7 +1442,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
         <RulesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
       <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
-        <Deliveries result={deliveries.result} />
+        <DeliveriesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
     </Tabs.Root>
   );

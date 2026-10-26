@@ -168,11 +168,15 @@ describe('Events', () => {
     expect(within(region('Rules')).getByText('On')).toBeTruthy();
 
     await openTab('Deliveries');
-    const deliveryTable = await screen.findByRole('table', { name: 'Recent deliveries' });
-    expect(within(deliveryTable).getAllByRole('row')).toHaveLength(1 + deliveries.length);
-    expect(within(deliveryTable).getByText('dlv_example_1')).toBeTruthy();
-    expect(within(deliveryTable).getByText('retryable')).toBeTruthy();
-    expect(deliveryTable.querySelector(`time[datetime="${new Date(1760950800000).toISOString()}"]`)).not.toBeNull();
+    // The deliveries as rows (0.32.0), each in plain words, its next try a time while it waits
+    // (`events-deliveries.test.tsx`).
+    const deliveryView = region('Deliveries');
+    await waitFor(() => expect(deliveryView.querySelectorAll('[data-delivery]')).toHaveLength(deliveries.length));
+    expect(deliveryView.querySelector('[data-delivery="dlv_example_1"]')).not.toBeNull();
+    expect(within(deliveryView).getByText('Will try again')).toBeTruthy();
+    expect(
+      deliveryView.querySelector(`[data-slot="next-try"] time[datetime="${new Date(1760864400000).toISOString()}"]`),
+    ).not.toBeNull();
 
     // Pause runs `eventsPause`, the status is read again, and Resume runs `eventsResume`.
     await openTab('Service');
@@ -201,7 +205,7 @@ describe('Events', () => {
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
     await openTab('Deliveries');
-    expect(await within(region('Recent deliveries')).findByText('No deliveries yet.')).toBeTruthy();
+    expect(await within(region('Deliveries')).findByText('No deliveries yet.')).toBeTruthy();
   });
 
   it('a list in a shape the app does not know says so, and hostile text stays text', async () => {
@@ -209,17 +213,19 @@ describe('Events', () => {
       {},
       {
         eventsRules: { rules: 'not a list' },
-        eventsDeliveries: [{ deliveryId: '<img src=x onerror=alert(1)>', state: '</untrusted-content>' }],
+        eventsDeliveries: [
+          { deliveryId: 'dlv_hostile', ruleId: '<img src=x onerror=alert(1)>', state: '</untrusted-content>' },
+        ],
       },
     );
     renderApp(bridge, { screen: 'events' });
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('The list could not be read.')).toBeTruthy();
     await openTab('Deliveries');
-    const deliveryTable = await screen.findByRole('table', { name: 'Recent deliveries' });
-    expect(within(deliveryTable).getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
-    expect(within(deliveryTable).getByText('</untrusted-content>')).toBeTruthy();
-    expect(deliveryTable.querySelector('img')).toBeNull();
+    const deliveryView = region('Deliveries');
+    await waitFor(() => expect(deliveryView.textContent).toContain('<img src=x onerror=alert(1)>'));
+    expect(within(deliveryView).getByText('</untrusted-content>')).toBeTruthy();
+    expect(deliveryView.querySelector('img')).toBeNull();
   });
 
   it('Events: four tabs, Service first; each shows its own view, and every view is read when the screen opens', async () => {
@@ -238,7 +244,7 @@ describe('Events', () => {
     expect(await screen.findByRole('region', { name: 'Event service' })).toBeTruthy();
     expect(screen.getByRole('region', { name: 'Status' })).toBeTruthy();
     // The others wait behind their tabs, and are read all the same, as the screen always read them.
-    for (const name of ['Judges', 'Rules', 'Recent deliveries']) {
+    for (const name of ['Judges', 'Rules', 'Deliveries']) {
       expect(screen.queryByRole('region', { name }), name).toBeNull();
     }
     await waitFor(() =>
@@ -254,7 +260,7 @@ describe('Events', () => {
       Service: ['Event service', 'Status'],
       Judges: ['Judges'],
       Rules: ['Rules'],
-      Deliveries: ['Recent deliveries'],
+      Deliveries: ['Deliveries'],
     };
     for (const tab of ['Judges', 'Rules', 'Deliveries', 'Service'] as const) {
       await openTab(tab);
@@ -284,7 +290,7 @@ describe('Events', () => {
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
     await openTab('Deliveries');
-    expect(await within(region('Recent deliveries')).findByText('No deliveries yet.')).toBeTruthy();
+    expect(await within(region('Deliveries')).findByText('No deliveries yet.')).toBeTruthy();
     for (const name of ['Rules', 'Deliveries'] as const) {
       expect(screen.getByRole('tab', { name }), name).toBeTruthy();
       expect(markOf(await findTab(name)), name).toBeNull();
@@ -320,7 +326,7 @@ describe('Events', () => {
       await openTab('Rules');
       expect(await within(region('Rules')).findByText(rulesSay), what).toBeTruthy();
       await openTab('Deliveries');
-      expect(await within(region('Recent deliveries')).findByText(deliveriesSay), what).toBeTruthy();
+      expect(await within(region('Deliveries')).findByText(deliveriesSay), what).toBeTruthy();
       view.unmount();
     }
   });
@@ -334,12 +340,12 @@ describe('Events', () => {
     renderApp(bridgeWith({}, { eventsRules: [], eventsDeliveries: many }), { screen: 'events' });
     expect(await screen.findByRole('tab', { name: 'Deliveries 120' })).toBeTruthy();
     await openTab('Deliveries');
-    const view = region('Recent deliveries');
+    const view = region('Deliveries');
     expect(await within(view).findByText('The 100 most recent of 120.')).toBeTruthy();
-    expect(within(within(view).getByRole('table')).getAllByRole('row')).toHaveLength(101);
+    expect(view.querySelectorAll('[data-delivery]')).toHaveLength(100);
     // The newest first: the last made is the first shown.
-    expect(within(view).getByText('dlv_119')).toBeTruthy();
-    expect(within(view).queryByText('dlv_0')).toBeNull();
+    expect(view.querySelector('[data-delivery="dlv_119"]')).not.toBeNull();
+    expect(view.querySelector('[data-delivery="dlv_0"]')).toBeNull();
     expect(await hint(within(view).getByRole('button', { name: 'Where every one is listed' }))).toBe(
       'The events CLI and MCP list every one.',
     );
@@ -593,12 +599,12 @@ describe('The event service', () => {
     );
     await openTab('Deliveries');
     await waitFor(() =>
-      expect(within(region('Recent deliveries')).getByText('the local event service is not running')).toBeTruthy(),
+      expect(within(region('Deliveries')).getByText('the local event service is not running')).toBeTruthy(),
     );
 
     up = true;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
-    expect(await screen.findByRole('table', { name: 'Recent deliveries' })).toBeTruthy();
+    await waitFor(() => expect(region('Deliveries').querySelectorAll('[data-delivery]').length).toBeGreaterThan(0));
     await openTab('Rules');
     expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
     await openTab('Service');
