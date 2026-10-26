@@ -1964,6 +1964,63 @@
       "reason": "Needs an app configuration token, which must never pass through chat. From chat, slack_manifest returns the manifest to create the app from on api.slack.com (design §4, §6.4)."
     },
     {
+      "id": "slack.take",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "Takes a message for the session the server or command runs in — never one an argument names — after reading it from Slack to check it is someone else's (design 2026-10-26-taking-messages T2, T5). `slack_take` with no step is a take."
+    },
+    {
+      "id": "slack.take.hand-back",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back, with a closed reason others may see and a note for the person alone (T8): `take --hand-back` at a terminal, `step: \"hand-back\"` over MCP."
+    },
+    {
+      "id": "slack.take.done",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done, and other sessions stay refused it (T3): `take --done` at a terminal, `step: \"done\"` over MCP."
+    },
+    {
+      "id": "slack.taken",
+      "package": "slack",
+      "cli": "taken",
+      "mcp": "slack_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each message, in closed words — never which session (T7): reads only this machine's records."
+    },
+    {
       "id": "whatsapp.status",
       "package": "whatsapp",
       "cli": "status",

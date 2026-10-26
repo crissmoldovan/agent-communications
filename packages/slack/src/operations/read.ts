@@ -1,5 +1,6 @@
-import { newBoundary } from '@agentcomms/core';
+import { newBoundary, type TakenView } from '@agentcomms/core';
 import { callSlack, paginate, type SlackCall } from '../api/call.ts';
+import type { TakenLookup } from '../taken-lookup.ts';
 import { senderField } from '../text/field.ts';
 import { type ReadMessage, readMessage } from '../text/message.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
@@ -61,6 +62,29 @@ export async function listChannels(call: SlackCall, options: ChannelsOptions = {
 export interface ReadRow {
   readonly message: ReadMessage;
   readonly author?: Person | undefined;
+  /**
+   * Who has the message (design 2026-10-26-taking-messages §6), in closed words — `you`, `another session`, `the
+   * person` — or null when nobody has taken, been offered or handed it back. Never another session's folder or client.
+   */
+  readonly taken?: TakenView | undefined;
+}
+
+/** Each row with who has its message, when a lookup is given: one file look per message, never failing the read. */
+async function withTaken<R extends ReadRow>(
+  rows: readonly R[],
+  conversationOf: (row: R) => string | undefined,
+  lookup: TakenLookup | undefined,
+): Promise<R[]> {
+  if (lookup === undefined) return [...rows];
+  const asked = rows.flatMap((row) => {
+    const channel = conversationOf(row);
+    return channel === undefined ? [] : [{ channel, ts: row.message.ts }];
+  });
+  const views = await lookup(asked).catch(() => new Map<string, TakenView>());
+  return rows.map((row) => {
+    const channel = conversationOf(row);
+    return { ...row, taken: channel === undefined ? null : (views.get(`${channel}/${row.message.ts}`) ?? null) };
+  });
 }
 
 export interface HistoryResult {
@@ -81,6 +105,8 @@ export interface HistoryOptions {
   cursor?: string | undefined;
   /** Resolve author names. On by default; a caller reading thousands of rows may turn it off. */
   resolveNames?: boolean | undefined;
+  /** Who has each message, for the rows' `taken`: `takenLookupFor` (`taken-lookup.ts`), as both surfaces pass it. */
+  taken?: TakenLookup | undefined;
 }
 
 async function rowsFrom(
@@ -150,11 +176,15 @@ export async function readChannel(
     { limit, cursor: options.cursor },
   );
 
-  const rows = await rowsFrom(call, page.items, book, {
-    resolveNames: options.resolveNames ?? true,
-    accountName,
-    ourTeamId: options.ourTeamId,
-  });
+  const rows = await withTaken(
+    await rowsFrom(call, page.items, book, {
+      resolveNames: options.resolveNames ?? true,
+      accountName,
+      ourTeamId: options.ourTeamId,
+    }),
+    () => channelId,
+    options.taken,
+  );
   return {
     channel,
     rows,
@@ -189,6 +219,8 @@ export async function readThread(
     resolveNames?: boolean | undefined;
     cursor?: string | undefined;
     ourTeamId?: string | undefined;
+    /** Who has each message, for the rows' `taken`. */
+    taken?: TakenLookup | undefined;
   } = {},
 ): Promise<ThreadResult> {
   const book = new NameBook();
@@ -199,11 +231,15 @@ export async function readThread(
     (response) => list(response.messages),
     { limit: options.limit ?? 100, cursor: options.cursor },
   );
-  const rows = await rowsFrom(call, page.items, book, {
-    resolveNames: options.resolveNames ?? true,
-    accountName,
-    ourTeamId: options.ourTeamId,
-  });
+  const rows = await withTaken(
+    await rowsFrom(call, page.items, book, {
+      resolveNames: options.resolveNames ?? true,
+      accountName,
+      ourTeamId: options.ourTeamId,
+    }),
+    () => channelId,
+    options.taken,
+  );
   /*
    * The parent is the row whose own timestamp is the thread's — not simply the first one.
    *
@@ -254,6 +290,8 @@ export interface SearchOptions {
   ourTeamId?: string | undefined;
   /** Which surface asked, so a refusal names the number as that surface spells it: `--limit` or `limit`. */
   surface?: 'cli' | 'mcp' | undefined;
+  /** Who has each message, for the hits' `taken`. */
+  taken?: TakenLookup | undefined;
 }
 
 /**
@@ -281,7 +319,7 @@ export async function searchMessages(
   const book = new NameBook();
   const rows = await rowsFrom(call, raws, book, { resolveNames: true, accountName, ourTeamId: options.ourTeamId });
 
-  const hits: SearchHit[] = rows.map((row, index) => {
+  const found: SearchHit[] = rows.map((row, index) => {
     const raw = raws[index] ?? {};
     const channel = (raw.channel as Raw | undefined) ?? {};
     return {
@@ -291,6 +329,7 @@ export async function searchMessages(
       permalink: typeof raw.permalink === 'string' ? raw.permalink : undefined,
     };
   });
+  const hits = await withTaken(found, (hit) => hit.channelId, options.taken);
 
   const total = typeof matches.total === 'number' ? matches.total : undefined;
   const paging = (matches.paging as Raw | undefined) ?? {};
