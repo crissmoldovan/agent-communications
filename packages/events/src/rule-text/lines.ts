@@ -129,6 +129,12 @@ export class Cursor {
     this.#at = at;
   }
 
+  /** Skips spaces and returns where the next token starts, for a refusal that points at it. */
+  mark(): number {
+    this.#skip();
+    return this.#at;
+  }
+
   /** The 1-based column of a position on this line. */
   column(at: number = this.#at): number {
     return this.line.column + at;
