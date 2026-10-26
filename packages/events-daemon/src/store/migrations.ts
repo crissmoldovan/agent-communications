@@ -901,6 +901,48 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '25' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // AI provider keys (owner decision 2026-10-26): one key slot for each provider the person has an account with —
+    // TypeSafe and OpenRouter — beside the hosted judge's own. The slot's owner is the provider; its material stays in
+    // the selected backend and its opaque reference is sealed like every other generation's.
+    version: 26,
+    name: 'event-secret-provider-slot-v1',
+    statements: [
+      'DROP INDEX event_secret_generations_current',
+      `CREATE TABLE event_secret_generations_v26 (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN ('typesafe', 'openrouter'))
+        )
+      ) STRICT`,
+      `INSERT INTO event_secret_generations_v26
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+      'DROP TABLE event_secret_generations',
+      'ALTER TABLE event_secret_generations_v26 RENAME TO event_secret_generations',
+      `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+      "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

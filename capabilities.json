@@ -2736,6 +2736,47 @@
       "reason": "It reads a lane's item for the one agent window the person bound to that lane, and only items that arrived after the binding. The person reads every item, a lane's included, with the queue's own content reads at a terminal or in the app (routing design 2026-10-25, B2, B3, §3.7)."
     },
     {
+      "id": "events-daemon.judge.setup",
+      "package": "events-daemon",
+      "cli": "judge setup",
+      "mcp": null,
+      "status": "exception",
+      "operation": "judgeSetup",
+      "argv": ["typesafe"],
+      "expect": { "kind": "typesafe" },
+      "reason": "Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2)."
+    },
+    {
+      "id": "events-daemon.provider.list",
+      "package": "events-daemon",
+      "cli": "provider list",
+      "mcp": "events_provider_list",
+      "status": "both",
+      "operation": "providerList"
+    },
+    {
+      "id": "events-daemon.provider-key.set",
+      "package": "events-daemon",
+      "cli": "provider key set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "providerKeySet",
+      "argv": ["openrouter"],
+      "expect": { "provider": "openrouter" },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.provider-key.remove",
+      "package": "events-daemon",
+      "cli": "provider key remove",
+      "mcp": null,
+      "status": "exception",
+      "operation": "providerKeyRemove",
+      "argv": ["openrouter"],
+      "expect": { "provider": "openrouter" },
+      "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

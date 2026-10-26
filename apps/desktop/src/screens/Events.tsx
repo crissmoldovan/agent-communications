@@ -18,11 +18,19 @@ import {
 } from '@cueplusplus/ui';
 import { Fragment, type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
+import {
+  JevRow,
+  JudgesFooter,
+  JudgesIntro,
+  LayaNotAvailableRow,
+  LocalModelRow,
+  type SetupKindState,
+} from '../components/judges/SetupRows.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { TerminalResult } from '../components/TerminalResult.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { Ago, When } from '../components/When.tsx';
-import { COPY, needsLine } from '../copy.ts';
+import { COPY, needsLine, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { GATES, supports } from '../gates.ts';
 import { useCall } from '../hooks/use-call.ts';
@@ -36,6 +44,7 @@ import {
   errorMessage,
   type TerminalOutcome,
 } from '../ipc.ts';
+import { NavigationProvider, takeDestination } from '../navigation.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /*
@@ -1333,6 +1342,16 @@ function Laya({
     setBusy(false);
   };
 
+  // From the release with judge setup (0.32.0), a Laya no release offers yet reads plainly, as the owner's prototype of
+  // 2026-10-26 has it: Not available yet, with nothing to set up — no button and no details.
+  if (
+    version.state === 'ready' &&
+    supports(version.value, 'judgeSetup') &&
+    kindRead.state === 'unavailable' &&
+    NOT_OFFERED_CODES.has(kindRead.code)
+  )
+    return <LayaNotAvailableRow name={JUDGES_COPY.kinds.laya.name} />;
+
   // Its code is said once: in its details' reason when they carry the same one, otherwise beside Unavailable.
   const codeShown = kindRead.state !== 'unavailable' || status?.reason !== kindRead.code;
   return (
@@ -1380,12 +1399,14 @@ function KindRows({
   judges,
   version,
   reloadKinds,
+  reload,
   onLayaFailed,
 }: {
   value: unknown;
   judges: Loadable<unknown>;
   version: Loadable<string>;
   reloadKinds: () => Promise<void>;
+  reload: () => Promise<void>;
   onLayaFailed: (failed: boolean) => void;
 }) {
   const kinds = readKinds(value);
@@ -1397,12 +1418,27 @@ function KindRows({
     );
   }
   const listed = judges.state === 'ready' ? readJudges(judges.value) : null;
+  // From the release with judge setup (0.32.0), Jev and a local model server are set up and turned on here.
+  const setup = version.state === 'ready' && supports(version.value, 'judgeSetup');
   return (
     <>
       <div className="flex flex-col divide-y divide-border">
-        <EndpointKind kind="typesafe" read={kinds.typesafe} judges={listed} reloadKinds={reloadKinds} />
+        {setup ? (
+          <JevRow state={setupState(kinds.typesafe)} judges={listed} reload={reload} />
+        ) : (
+          <EndpointKind kind="typesafe" read={kinds.typesafe} judges={listed} reloadKinds={reloadKinds} />
+        )}
         <Laya version={version} read={kinds.laya} judges={listed} reloadKinds={reloadKinds} onFailed={onLayaFailed} />
-        <EndpointKind kind="local-endpoint" read={kinds['local-endpoint']} judges={listed} reloadKinds={reloadKinds} />
+        {setup ? (
+          <LocalModelRow state={setupState(kinds['local-endpoint'])} judges={listed} reload={reload} />
+        ) : (
+          <EndpointKind
+            kind="local-endpoint"
+            read={kinds['local-endpoint']}
+            judges={listed}
+            reloadKinds={reloadKinds}
+          />
+        )}
       </div>
       {judges.state === 'error' ? (
         <p role="alert" className={`${INSET} text-danger`}>
@@ -1428,6 +1464,8 @@ interface JudgeReads {
   kinds: Loadable<unknown>;
   judges: Loadable<unknown>;
   reloadKinds: () => Promise<void>;
+  /** Reads the kinds and the judges again: after a setup, which adds a judge version. */
+  reload: () => Promise<void>;
   layaFailed: boolean;
   onLayaFailed: (failed: boolean) => void;
 }
@@ -1449,7 +1487,7 @@ function useJudgeReads(): JudgeReads {
   useReloadOnReturn(reload);
   useReloadOnServiceTurn(reload);
   const [layaFailed, onLayaFailed] = useState(false);
-  return { version, hasJudges, kinds, judges, reloadKinds, layaFailed, onLayaFailed };
+  return { version, hasJudges, kinds, judges, reloadKinds, reload, layaFailed, onLayaFailed };
 }
 
 /**
@@ -1488,10 +1526,12 @@ function judgesNeedUpdate({ version, hasJudges }: JudgeReads): boolean {
 
 /** The Judges section: its three kinds, once the events service has judges, or what it needs first. */
 function Judges({ reads }: { reads: JudgeReads }) {
-  const { version, hasJudges, kinds, judges, reloadKinds, onLayaFailed } = reads;
+  const { version, hasJudges, kinds, judges, reloadKinds, reload, onLayaFailed } = reads;
+  const setup = version.state === 'ready' && supports(version.value, 'judgeSetup');
   return (
-    <section aria-label={JUDGES_COPY.title}>
+    <section aria-label={JUDGES_COPY.title} className="flex flex-col gap-(--cue-space-3)">
       <Panel>
+        {setup ? <JudgesIntro /> : null}
         {hasJudges ? (
           <InPanel value={kinds}>
             {(value) => (
@@ -1500,6 +1540,7 @@ function Judges({ reads }: { reads: JudgeReads }) {
                 judges={judges}
                 version={version}
                 reloadKinds={reloadKinds}
+                reload={reload}
                 onLayaFailed={onLayaFailed}
               />
             )}
@@ -1517,8 +1558,14 @@ function Judges({ reads }: { reads: JudgeReads }) {
           </div>
         )}
       </Panel>
+      {setup ? <JudgesFooter /> : null}
     </section>
   );
+}
+
+/** A judge kind's state as the setup rows read it: off, on, or what the app cannot read. */
+function setupState(read: KindRead): SetupKindState {
+  return read.state === 'off' ? 'off' : read.state === 'on' ? 'on' : 'unreadable';
 }
 
 /** A tab's count of what waits in it for the person, as a caution chip; said in words to a screen reader. */
@@ -1574,6 +1621,8 @@ function EventsTabs() {
   const deliveries = useCall<unknown>(DELIVERIES);
   useReloadOnServiceTurn(deliveries.reload);
   const { tabs } = EVENTS_COPY;
+  // A link from Settings → AI providers opens the Judges tab; otherwise the screen opens on Service.
+  const [initialTab] = useState<EventsTab>(() => (takeDestination('events') === null ? 'service' : 'judges'));
   const tab = (value: EventsTab, badge: ReactNode) => (
     <Tabs.Tab value={value}>
       {tabs[value]}
@@ -1581,7 +1630,7 @@ function EventsTabs() {
     </Tabs.Tab>
   );
   return (
-    <Tabs.Root defaultValue={'service' satisfies EventsTab}>
+    <Tabs.Root defaultValue={initialTab}>
       <Tabs.List aria-label="Events" className="self-start">
         {tab(
           'service',
@@ -1644,13 +1693,15 @@ function EventsTabs() {
  * Resume, its judges with Turn on in Terminal and Turn off, its rules and its recent deliveries. Everything else stays in
  * its CLI and MCP, which carry its secret-handling rules. Nothing here runs unless its launcher is installed.
  */
-export function Events() {
+export function Events({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined } = {}) {
   const { installation } = useAppData();
   const present = installation.state === 'ready' && installation.value.present.includes('events-daemon');
   return (
     <ScreenFrame title="Events">
       {present ? (
-        <EventsTabs />
+        <NavigationProvider onScreen={onScreen}>
+          <EventsTabs />
+        </NavigationProvider>
       ) : (
         <Panel>
           <EmptyState title="The events service isn't installed." />

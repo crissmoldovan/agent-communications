@@ -1,13 +1,14 @@
-//! The twenty-one commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
+//! The twenty-two commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
-use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId};
+use crate::allowlist::{AccountName, AiProvider, ApprovalId, Call, ConversationId};
 use crate::ipc::{
     AppError, AppSettings, CliResult, DeepLinkTarget, EventServiceState, Installation,
     ProfileOpened, TerminalCommand, TerminalOutcome, UpdaterState,
 };
 use crate::launchers::discover;
 use crate::paths::FolderOverrides;
+use crate::provider_keys::{self, ProviderKey};
 use crate::runner::{run, RunContext};
 use crate::{
     deeplink, event_service, links, login_item, settings, terminal, tray, updater, AppState,
@@ -37,6 +38,7 @@ pub const NAMES: &[&str] = &[
     "answer_first_start",
     "open_full_disk_access",
     "answer_quit",
+    "provider_key_set",
 ];
 
 /// This machine's run context, with Settings' folder overrides.
@@ -253,6 +255,20 @@ pub async fn answer_quit(keep: bool, remember: bool, app: AppHandle) -> Result<(
     blocking(move || event_service::answer_quit(&app, keep, remember)).await?
 }
 
+/// Stores an AI provider's key, from Settings → AI providers (0.32.0, owner decision 2026-10-26): the events CLI's
+/// `provider key set <provider>`, with the key on its stdin and never in its argv. The key is checked as it arrives,
+/// held only for this call, and overwritten when it ends; it is never logged, kept or sent back. Core's answer, which
+/// never holds the key, is given back as it is.
+#[tauri::command]
+pub async fn provider_key_set(
+    provider: AiProvider,
+    key: ProviderKey,
+    state: State<'_, AppState>,
+) -> Result<CliResult, AppError> {
+    let ctx = context(&state);
+    blocking(move || provider_keys::set(provider, key, &ctx)).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -273,7 +289,7 @@ mod tests {
 
     #[test]
     fn capabilities_grant_exactly_the_commands() {
-        assert_eq!(NAMES.len(), 21);
+        assert_eq!(NAMES.len(), 22);
         assert_eq!(build_rs_commands(), NAMES);
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json"))

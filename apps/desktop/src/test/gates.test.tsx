@@ -44,7 +44,12 @@ describe('what each CLI version supports', () => {
       activity: '0.29.0',
       queue: '0.30.0',
       lanes: '0.31.0',
+      judgeSetup: '0.32.0',
     });
+    // Judge setup and AI provider keys are the event service's from 0.32.0, a pull request's build of it included.
+    expect(supports('0.31.0', 'judgeSetup')).toBe(false);
+    expect(supports('0.32.0', 'judgeSetup')).toBe(true);
+    expect(supports('0.32.0-feat-0.32-judges', 'judgeSetup')).toBe(true);
     // Lanes are the event service's from 0.31.0, read from its own version, a pull request's build of it included.
     expect(supports('0.30.0', 'lanes')).toBe(false);
     expect(supports('0.30.9', 'lanes')).toBe(false);

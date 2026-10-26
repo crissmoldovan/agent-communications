@@ -34,6 +34,7 @@ import {
   laneWhoami,
 } from '../operations/lanes.ts';
 import { pause, resume } from '../operations/pause.ts';
+import { providerList } from '../operations/providers.ts';
 import { queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
 import { ruleTest } from '../operations/rule-test.ts';
 import {
@@ -459,6 +460,15 @@ function buildEventsMcpServer(
     'Lists each judge kind as disabled or enabled, or Laya as unavailable here with its reason.',
     {},
     () => judgeKindsList(options),
+  );
+  // Whether each AI provider has a key (owner decision 2026-10-26): never a key. Setting one, removing one and judge
+  // setup are the person's, in the app or at their terminal; no tool here performs them.
+  strictControlTool(
+    'events_provider_list',
+    'List AI providers',
+    'Lists TypeSafe and OpenRouter, the providers Jev can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
+    {},
+    () => providerList(options),
   );
   strictControlTool(
     'events_judge_kind_enable',
