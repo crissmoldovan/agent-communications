@@ -3,7 +3,7 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
-## Unreleased
+## 0.31.0
 
 **Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the
 queue: "when David is messaging me on Slack", route it to the right agent session.
