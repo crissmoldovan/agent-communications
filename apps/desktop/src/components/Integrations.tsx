@@ -18,8 +18,9 @@ import { useCall } from '../hooks/use-call.ts';
 import { useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { readAgentSessions, readLinear, type SessionsState, SOURCE_WORDS } from '../integrations.ts';
-import { type Call, errorMessage } from '../ipc.ts';
+import { type Call, errorMessage, type TerminalCommand } from '../ipc.ts';
 import { takeDestination } from '../navigation.tsx';
+import { DoInTerminal, refusedAsUnattested, setupsAtTerminal } from './DoInTerminal.tsx';
 import { SetupProblem } from './judges/JudgeRow.tsx';
 import { ScreenState } from './ScreenState.tsx';
 import { UntrustedText } from './UntrustedText.tsx';
@@ -213,6 +214,15 @@ function Linear() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
   const field = useRef<HTMLInputElement>(null);
+  // Where the app cannot attest the person, the key is set or removed in a terminal, which asks for it there.
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
+  const [pending, setPending] = useState<TerminalCommand | null>(null);
+  const connectAtTerminal: TerminalCommand = { kind: 'providerKeySet', provider: 'linear' };
+  const disconnectAtTerminal: TerminalCommand = {
+    kind: 'atTerminal',
+    call: { kind: 'providerKeyRemove', provider: 'linear' },
+  };
   const read = shown.result.state === 'ready' ? readLinear(shown.result.value) : null;
   const empty = () => {
     if (field.current !== null) field.current.value = '';
@@ -227,8 +237,14 @@ function Linear() {
     setProblem(null);
     try {
       const result = await bridge.providerKeySet('linear', value);
-      if (result.status === 'failed') setProblem({ message: result.message, hint: result.hint });
-      else setForm(false);
+      if (result.status === 'failed') {
+        setProblem({ message: result.message, hint: result.hint });
+        if (refusedAsUnattested(result.code)) {
+          setRefused(true);
+          setForm(false);
+          setPending(connectAtTerminal);
+        }
+      } else setForm(false);
     } catch (error) {
       setProblem({ message: errorMessage(error), hint: null });
     } finally {
@@ -238,10 +254,20 @@ function Linear() {
   };
 
   const disconnect = async () => {
-    setBusy(true);
     setProblem(null);
+    if (atTerminal) {
+      setPending(disconnectAtTerminal);
+      return;
+    }
+    setBusy(true);
     const outcome = await run({ kind: 'providerKeyRemove', provider: 'linear' });
-    if (outcome.state === 'failed') setProblem({ message: outcome.message, hint: outcome.hint });
+    if (outcome.state === 'failed') {
+      setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) {
+        setRefused(true);
+        setPending(disconnectAtTerminal);
+      }
+    }
     await shown.reload();
     setBusy(false);
   };
@@ -263,38 +289,44 @@ function Linear() {
       {read.connected ? INTEGRATIONS_COPY.connected : INTEGRATIONS_COPY.notConnected}
     </Chip>
   );
-  const actions = form ? undefined : read.connected ? (
-    <>
-      <Button size="sm" disabled title={INTEGRATIONS_COPY.laterRelease}>
-        {INTEGRATIONS_COPY.changeTeams}
+  const actions =
+    form || pending !== null ? undefined : read.connected ? (
+      <>
+        <Button size="sm" disabled title={INTEGRATIONS_COPY.laterRelease}>
+          {INTEGRATIONS_COPY.changeTeams}
+        </Button>
+        <AlertDialog.Root>
+          <AlertDialog.Trigger
+            render={
+              <Button size="sm" variant="danger-outline" disabled={busy}>
+                {INTEGRATIONS_COPY.disconnect}
+              </Button>
+            }
+          />
+          <AlertDialog.Content>
+            <AlertDialog.Title>{INTEGRATIONS_COPY.disconnectTitle}</AlertDialog.Title>
+            <AlertDialog.Description>
+              {INTEGRATIONS_COPY.disconnectBody(read.usedBy?.length ?? null)}
+            </AlertDialog.Description>
+            <AlertDialog.Footer>
+              <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
+              <AlertDialog.Action tone="danger" onClick={() => void disconnect()}>
+                {INTEGRATIONS_COPY.disconnect}
+              </AlertDialog.Action>
+            </AlertDialog.Footer>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
+      </>
+    ) : (
+      <Button
+        size="sm"
+        variant="primary"
+        disabled={busy}
+        onClick={() => (atTerminal ? setPending(connectAtTerminal) : setForm(true))}
+      >
+        {INTEGRATIONS_COPY.connect}
       </Button>
-      <AlertDialog.Root>
-        <AlertDialog.Trigger
-          render={
-            <Button size="sm" variant="danger-outline" disabled={busy}>
-              {INTEGRATIONS_COPY.disconnect}
-            </Button>
-          }
-        />
-        <AlertDialog.Content>
-          <AlertDialog.Title>{INTEGRATIONS_COPY.disconnectTitle}</AlertDialog.Title>
-          <AlertDialog.Description>
-            {INTEGRATIONS_COPY.disconnectBody(read.usedBy?.length ?? null)}
-          </AlertDialog.Description>
-          <AlertDialog.Footer>
-            <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
-            <AlertDialog.Action tone="danger" onClick={() => void disconnect()}>
-              {INTEGRATIONS_COPY.disconnect}
-            </AlertDialog.Action>
-          </AlertDialog.Footer>
-        </AlertDialog.Content>
-      </AlertDialog.Root>
-    </>
-  ) : (
-    <Button size="sm" variant="primary" disabled={busy} onClick={() => setForm(true)}>
-      {INTEGRATIONS_COPY.connect}
-    </Button>
-  );
+    );
   return (
     <Card letter="L" title={INTEGRATIONS_COPY.linear} chip={chip} body={INTEGRATIONS_COPY.linearBody} actions={actions}>
       {read.connected ? (
@@ -355,6 +387,17 @@ function Linear() {
         </form>
       ) : null}
       <SetupProblem problem={problem} />
+      {pending === null ? null : (
+        <DoInTerminal
+          command={pending}
+          asksForKey={pending.kind === 'providerKeySet'}
+          onCancel={() => setPending(null)}
+          onDone={() => {
+            setPending(null);
+            void shown.reload();
+          }}
+        />
+      )}
     </Card>
   );
 }
@@ -373,12 +416,30 @@ function AgentSessions() {
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
   const [folder, setFolder] = useState('');
+  // Where the app cannot attest the person, where the relay is is set in a terminal (Do it in Terminal).
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
+  const [pending, setPending] = useState<TerminalCommand | null>(null);
   const read = shown.result.state === 'ready' ? readAgentSessions(shown.result.value) : null;
   const choose = async (relayHome: string) => {
-    setBusy(true);
     setProblem(null);
+    const atTerminalCommand: TerminalCommand = {
+      kind: 'atTerminal',
+      call: { kind: 'integrationSetAgentSessions', relayHome },
+    };
+    if (atTerminal) {
+      setPending(atTerminalCommand);
+      return;
+    }
+    setBusy(true);
     const outcome = await run({ kind: 'integrationSetAgentSessions', relayHome });
-    if (outcome.state === 'failed') setProblem({ message: outcome.message, hint: outcome.hint });
+    if (outcome.state === 'failed') {
+      setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) {
+        setRefused(true);
+        setPending(atTerminalCommand);
+      }
+    }
     await shown.reload();
     setBusy(false);
   };
@@ -463,6 +524,17 @@ function AgentSessions() {
         </form>
       </div>
       <SetupProblem problem={problem} />
+      {pending === null ? null : (
+        <DoInTerminal
+          key={JSON.stringify(pending)}
+          command={pending}
+          onCancel={() => setPending(null)}
+          onDone={() => {
+            setPending(null);
+            void shown.reload();
+          }}
+        />
+      )}
     </Card>
   );
 }

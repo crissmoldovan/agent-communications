@@ -5,6 +5,7 @@ import { useChange } from '../../hooks/use-change.ts';
 import type { AiProvider, Call } from '../../ipc.ts';
 import { useNavigate } from '../../navigation.tsx';
 import { jevModelName, readProviders } from '../../providers.ts';
+import { DoInTerminal, refusedAsUnattested, setupsAtTerminal } from '../DoInTerminal.tsx';
 import { JEV_SETUP_COPY } from './copy.ts';
 import { SetupProblem } from './JudgeRow.tsx';
 
@@ -42,6 +43,10 @@ export function SetUpJevDialog({
   const [picked, setPicked] = useState<AiProvider | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<{ message: string; hint: string | null } | null>(null);
+  // Where the app cannot attest the person, Jev is set up in a terminal (Do it in Terminal); on macOS too once the event
+  // service refuses the app for that reason.
+  const [refused, setRefused] = useState(false);
+  const atTerminal = setupsAtTerminal() || refused;
   const chosen = picked !== null && usable.includes(picked) ? picked : (usable.find((p) => p === current) ?? usable[0]);
 
   // Each opening starts again from what is stored: the keys are read again as it opens.
@@ -49,6 +54,7 @@ export function SetUpJevDialog({
     if (!open) return;
     setPicked(null);
     setProblem(null);
+    setRefused(false);
   }, [open]);
 
   const turnOn = async () => {
@@ -59,6 +65,7 @@ export function SetUpJevDialog({
     setBusy(false);
     if (outcome.state === 'failed') {
       setProblem({ message: outcome.message, hint: outcome.hint });
+      if (refusedAsUnattested(outcome.code)) setRefused(true);
       return;
     }
     if (outcome.state === 'needsTerminal') {
@@ -162,12 +169,24 @@ export function SetUpJevDialog({
             </>
           )}
           <SetupProblem problem={problem} />
+          {atTerminal && chosen !== undefined ? (
+            <DoInTerminal
+              key={chosen}
+              command={{ kind: 'atTerminal', call: { kind: 'judgeSetup', judgeKind: 'typesafe', provider: chosen } }}
+              onDone={() => {
+                onOpenChange(false);
+                void onDone();
+              }}
+            />
+          ) : null}
         </div>
         <Dialog.Footer>
           <Dialog.Close render={<Button variant="ghost">{JEV_SETUP_COPY.cancel}</Button>} />
-          <Button variant="primary" loading={busy} disabled={chosen === undefined} onClick={() => void turnOn()}>
-            {current === null ? JEV_SETUP_COPY.turnOn : JEV_SETUP_COPY.save}
-          </Button>
+          {atTerminal ? null : (
+            <Button variant="primary" loading={busy} disabled={chosen === undefined} onClick={() => void turnOn()}>
+              {current === null ? JEV_SETUP_COPY.turnOn : JEV_SETUP_COPY.save}
+            </Button>
+          )}
         </Dialog.Footer>
       </Dialog.Content>
     </Dialog.Root>

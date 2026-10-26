@@ -286,6 +286,9 @@ pub fn applescript_string(text: &str) -> String {
 ///   kind from its closed enum, as Laya's Enable (0.27.1).
 /// - **Binding a lane:** the events service's `lane bind <lane> --window <id>` (0.31.0, design 2026-10-25-routing B1):
 ///   the person runs it; the app never binds (DA10). The lane and the window each come from a closed grammar.
+/// - **A person-only setup at a terminal:** the events service's `judge setup …`, `provider key remove <provider>`,
+///   `integration set agent-sessions --relay-home …` (the call's own words), or `provider key set <provider>`, which
+///   asks for the key there, hidden (0.33.0, where the app cannot attest the person). No other call; never a key.
 /// - **Approving a rule at a terminal:** the events service's `approve <approval-id>` (0.33.0), for a rule's activation
 ///   the editor prepared: the terminal shows its preview and takes its challenge; `open_with` opens only one `Prepared`
 ///   recorded.
@@ -361,6 +364,23 @@ pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>)
                 judge_kind.word().to_string(),
             ],
         ),
+        TerminalCommand::AtTerminal { call } => match call {
+            Call::JudgeSetup { .. }
+            | Call::ProviderKeyRemove { .. }
+            | Call::IntegrationSetAgentSessions { .. } => {
+                let built = call.words()?;
+                (built.product, built.words)
+            }
+            _ => {
+                return Err(AppError::refused(
+                    "only judge setup, removing a provider's key, or where the relay is opens at the terminal this way",
+                ))
+            }
+        },
+        TerminalCommand::ProviderKeySet { provider } => {
+            let built = crate::allowlist::provider_key_set(*provider);
+            (built.product, built.words)
+        }
         TerminalCommand::RuleApprove { approval_id } => (
             Product::EventsDaemon,
             vec!["approve".to_string(), approval_id.as_str().to_string()],
@@ -548,6 +568,8 @@ pub fn open_with(
         | TerminalCommand::JudgeKindEnable { .. }
         | TerminalCommand::LaneBind { .. }
         | TerminalCommand::RuleApprove { .. }
+        | TerminalCommand::AtTerminal { .. }
+        | TerminalCommand::ProviderKeySet { .. }
         | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
@@ -2422,6 +2444,106 @@ mod tests {
             argv_for(&command, &bare).expect_err("not installed").code,
             "APP_NOT_INSTALLED"
         );
+    }
+
+    /// Do it in Terminal, for the person-only setups where the app cannot attest the person (0.33.0): each opens the
+    /// events service's own launcher with the call's own words and the pins — judge setup, a provider's key removed,
+    /// where the relay is — or `provider key set <provider>`, which asks for the key there. Nothing is revoked or
+    /// recorded, no other call opens this way, and no key is ever part of the command.
+    #[test]
+    fn person_setups_open_at_the_terminal_with_their_own_words_and_never_a_key() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let at = |call: serde_json::Value| -> TerminalCommand {
+            serde_json::from_value(serde_json::json!({ "kind": "atTerminal", "call": call }))
+                .expect("the shape")
+        };
+        for (call, words) in [
+            (
+                serde_json::json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" }),
+                vec!["judge", "setup", "typesafe", "--provider", "openrouter"],
+            ),
+            (
+                serde_json::json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434", "model": "nimble" }),
+                vec![
+                    "judge",
+                    "setup",
+                    "local-endpoint",
+                    "--url",
+                    "http://127.0.0.1:11434",
+                    "--model",
+                    "nimble",
+                ],
+            ),
+            (
+                serde_json::json!({ "kind": "providerKeyRemove", "provider": "linear" }),
+                vec!["provider", "key", "remove", "linear"],
+            ),
+            (
+                serde_json::json!({ "kind": "integrationSetAgentSessions", "relayHome": "default" }),
+                vec![
+                    "integration",
+                    "set",
+                    "agent-sessions",
+                    "--relay-home",
+                    "default",
+                ],
+            ),
+        ] {
+            let command = at(call.clone());
+            assert_eq!(
+                argv_for(&command, &ctx).expect("words"),
+                located(&ctx, Product::EventsDaemon, &words),
+                "{call}"
+            );
+            let effects = Fake::new(true);
+            let prepared = Prepared::default();
+            let outcome = open_with(command, &ctx, &effects, &prepared).expect("an outcome");
+            assert!(
+                matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+                "{outcome:?}"
+            );
+            assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+            assert!(prepared.map().is_empty());
+        }
+        let set: TerminalCommand = serde_json::from_value(
+            serde_json::json!({ "kind": "providerKeySet", "provider": "anthropic" }),
+        )
+        .expect("the shape");
+        let words = argv_for(&set, &ctx).expect("words");
+        assert_eq!(
+            words,
+            located(
+                &ctx,
+                Product::EventsDaemon,
+                &["provider", "key", "set", "anthropic"]
+            )
+        );
+        // No other call opens this way: not a rule's switch, an update setting, or anything that reads.
+        for call in [
+            serde_json::json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 }),
+            serde_json::json!({ "kind": "updateLevel", "level": "never" }),
+            serde_json::json!({ "kind": "providerList" }),
+            serde_json::json!({ "kind": "integrationShow", "integration": "linear" }),
+            serde_json::json!({ "kind": "judgeKindDisable", "judgeKind": "typesafe" }),
+        ] {
+            let refused = argv_for(&at(call.clone()), &ctx).expect_err("not a setup");
+            assert_eq!(refused.code, "APP_REFUSED", "{call}");
+        }
+        // A key is never part of either: the shapes take none.
+        for value in [
+            serde_json::json!({ "kind": "providerKeySet", "provider": "openrouter", "key": "fake-key" }),
+            serde_json::json!({ "kind": "providerKeySet", "provider": "openrouter", "hidden": "fake-key" }),
+            serde_json::json!({ "kind": "providerKeySet", "provider": "github" }),
+            serde_json::json!({ "kind": "providerKeySet" }),
+            serde_json::json!({ "kind": "atTerminal", "call": { "kind": "providerKeyRemove", "provider": "openrouter", "key": "fake-key" } }),
+            serde_json::json!({ "kind": "atTerminal", "call": { "kind": "providerKeyRemove", "provider": "openrouter" }, "key": "fake-key" }),
+            serde_json::json!({ "kind": "atTerminal" }),
+        ] {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(value.clone()).is_err(),
+                "{value}"
+            );
+        }
     }
 
     /// Approve in Terminal, for a rule's activation the editor prepared (0.33.0), where the app cannot attest the person
