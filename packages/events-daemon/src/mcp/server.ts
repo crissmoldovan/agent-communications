@@ -523,13 +523,17 @@ function buildEventsMcpServer(
     (args) => retryDelivery(args.deliveryId as string, options),
     true,
   );
-  strictControlTool(
+  // 0.32.0: drop also stops a delivery that will be tried again; a lane target's is reached only by its bound window.
+  server.registerTool(
     'events_delivery_drop',
-    'Drop delivery',
-    'Drops one exact dead-letter delivery and its retained payload.',
-    { deliveryId: z.string().min(1) },
-    (args) => dropDelivery(args.deliveryId as string, options),
-    true,
+    {
+      title: 'Drop delivery',
+      description:
+        'Stops one exact delivery that will be tried again, or drops one dead-letter delivery and its retained payload.',
+      inputSchema: z.strictObject({ deliveryId: z.string().min(1) }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async (args, ctx) => reply(await dropDelivery(args.deliveryId, await scoped(ctx))),
   );
   strictControlTool(
     'events_held_list',

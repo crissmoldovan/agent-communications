@@ -86,6 +86,30 @@
       "loadedMarker": "drop-clears-retained-payload"
     },
     {
+      "case": "drop-refuses-a-delivery-in-flight",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "      if (row.state === 'disclosing') throw deliveryInFlight();\n",
+        "to": ""
+      },
+      "mutationTest": "0.32 B7: a delivery being sent right now is refused, with its reason, and left as it was",
+      "loadedMarker": "drop-refuses-a-delivery-in-flight"
+    },
+    {
+      "case": "drop-reaches-no-lane-delivery-for-an-unbound-window",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);\n",
+        "to": "      void caller;\n"
+      },
+      "mutationTest": "0.32 B7: over MCP, a window not bound to a lane cannot drop its deliveries; the bound one and the person reach them",
+      "loadedMarker": "drop-reaches-no-lane-delivery-for-an-unbound-window"
+    },
+    {
       "case": "retry-delegates-account-identity-fence",
       "operation": "retryDelivery",
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",

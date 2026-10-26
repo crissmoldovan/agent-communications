@@ -73,6 +73,11 @@ subject version 1 state active and approval and activation", and a next try "alw
   message it came from by its own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
   host only). It is yours, at a terminal or in the app: inside the event service's MCP server it is refused, and no
   tool reads it.
+- **Stop trying.** `agent-events delivery drop <delivery-id>` (and `events_delivery_drop`) now also stops a delivery
+  that is waiting or will be tried again: it is cancelled at once, its payload and next try gone, and no later tick
+  tries it. A dead letter's drop is unchanged. One being sent right now is refused with the reason
+  `DELIVERY_IN_FLIGHT`. Over MCP, a window not bound to a lane can't reach that lane's deliveries, as the list
+  already hides them from it.
 - **The dry-run log in the app.** `dryrun list` and `dryrun show` worked only at an interactive terminal, so the app,
   which reads with `--json`, could not open the log the design gives it. They now refuse only inside the event
   service's MCP server, like the queue's own content reads; `dryrun show --json` gives the record as data, for the app
