@@ -9,6 +9,7 @@ import {
 } from '../src/domain/analyse-model.ts';
 import { ANALYSE_PROMPTS } from '../src/domain/analyse-prompts.ts';
 import {
+  ANALYSE_SENT,
   deterministicSuggestions,
   type JudgedFact,
   mappedFieldNames,
@@ -18,6 +19,7 @@ import {
   type QueueFact,
   type RuleAnalyseFacts,
   readModelAnswer,
+  redactConditionLiterals,
   summariseAnalyseFacts,
 } from '../src/domain/rule-analyse.ts';
 import { readHttpResponse } from '../src/runtime/analyse-transport.ts';
@@ -371,6 +373,52 @@ test('ANALYSE: what a model is sent is the rule’s own text and numbers — no 
   assert.equal(text.includes('secret-sender'), false, 'no domain');
   assert.equal(text.includes('ibx_ANALYSEDOMAIN001'), false, 'no account');
   assert.equal(text.includes('untrusted-content'), false, 'no sender material at all');
+});
+
+test('ANALYSE: the condition’s addresses and domains are sent as placeholders, and the wording says so', () => {
+  // Security review of 0.33.0, finding 7: a condition can name a person and a domain an applied exclusion left out.
+  const doc = rule({
+    condition: {
+      all: [
+        { path: '/from/address', op: 'equals', value: 'jane.ceo@acme-private.example', caseSensitive: false },
+        { path: '/from/address', op: 'startsWith', value: 'jane.', caseSensitive: false },
+        { path: '/subject', op: 'contains', value: 'write to billing@acme-private.example', caseSensitive: false },
+        { path: '/subject', op: 'in', values: ['invoice', 'acme-private.example'] },
+        { path: '/subject', op: 'contains', value: 'invoice v1.2', caseSensitive: false },
+        {
+          not: {
+            path: '/from/address',
+            op: 'domainIs',
+            value: 'sender-chosen-domain.example',
+            includeSubdomains: false,
+          },
+        },
+      ],
+    },
+  });
+  const [question] = modelPartsOf(doc);
+  assert.ok(question !== undefined);
+  const sent = modelInput(doc, question, summariseAnalyseFacts(facts(), wrap));
+  for (const literal of ['jane.ceo', 'acme-private', 'sender-chosen-domain', 'jane.', 'billing@'])
+    assert.equal(sent.includes(literal), false, `${literal} is not sent`);
+  const condition = (JSON.parse(sent) as { rule: { condition: string } }).rule.condition;
+  assert.equal(
+    condition,
+    [
+      'match all',
+      '  from.address is "<address>"',
+      '  from.address starts with "<address>"',
+      '  subject contains "<address>"',
+      '  subject is one of "invoice", "<domain>"',
+      '  subject contains "invoice v1.2"',
+      '  not from.address has domain "<domain>"',
+    ].join('\n'),
+    'the shape and the person’s other words stay',
+  );
+  assert.match(ANALYSE_SENT, /condition with each address and domain replaced by <address> or <domain>/u);
+  assert.doesNotMatch(ANALYSE_SENT, /^The rule's own text and content-free counts/u);
+  // What the person sees and approves is never changed: the suggestion's before is the condition as it is.
+  assert.deepEqual(redactConditionLiterals({ ...doc, condition: undefined }), undefined);
 });
 
 test('ANALYSE: a model’s answer is read strictly — one JSON object within its limits, or refused', () => {

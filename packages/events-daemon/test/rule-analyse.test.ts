@@ -336,7 +336,7 @@ test('ANALYSE-E: the counts and the suggestions made without a model, from a see
       ran: false,
       reason: 'NO_KEY',
       noKey: ['openrouter', 'anthropic'],
-      sent: "The rule's own text and content-free counts of its last 30 days: never a message, a sender, a subject, a body or an address.",
+      sent: "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
       parts: [
         { part: 'judge.question', at: {}, outcome: 'not-run' },
         { part: 'session.context', at: { targetId: 'billing-session', contextIndex: 0 }, outcome: 'not-run' },

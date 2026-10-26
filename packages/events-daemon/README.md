@@ -295,8 +295,10 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   (`anthropic/claude-sonnet-5.5`, the key Jev may already use), then Anthropic's own API (`claude-sonnet-5-5`, with
   `agent-events provider key set anthropic`). The result's `model` names the provider and the model, or why it did not
   run — `NO_KEY`, with `noKey` listing the providers that have none. The suggestions from the counts come either way.
-- **What it sends.** The rule's own text around each part, and the counts without any domain: never a message, a
-  sender, a subject, a body or an address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
+- **What it sends.** The rule's own text around each part — its question, a session's text and a Linear title as you
+  wrote them, and its condition with each address and domain it names (a person it watches for, a domain an applied
+  exclusion left out) replaced by `<address>` or `<domain>` — and the counts without any domain: never a message or
+  anything from one, no sender, subject, body or address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
   `https://api.anthropic.com/v1/messages`, through the same pinned path as the judges, with a 64 KiB request, a 256 KiB
   answer and a 60-second deadline.
 - **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
