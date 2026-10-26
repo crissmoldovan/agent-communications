@@ -207,11 +207,18 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   (`{{subject}}`, `{{sender}}`, or `{{from.address}}` within a mapped `from`); a rule naming any other is refused when
   you activate it. A model-written title or description comes later. The approval says which team, labels and
   assignee, and which fields fill the title and the description.
-- **What a sender wrote stays text.** Linear makes a mention from a person's or an issue's plain address, links bare
-  addresses and issue ids, and reads the description as Markdown. So in the description each value from the message is
-  a block quote labelled "From outside: written by the sender, not checked", its text inside a code block, where
-  Linear makes no link, mention or formatting; in the title, which is plain text, it is one line. Your own words in the
-  templates are written as they are, and the description ends with the rule and delivery that added the issue.
+- **A slot's value stays text.** Linear makes a mention from a person's or an issue's plain address, links bare
+  addresses and issue ids, and reads the description as Markdown. So in the description every slot's value is a block
+  quote, its text inside a code block, where Linear makes no link, mention or formatting: a value from the message is
+  labelled "From outside: written by the sender, not checked", and a constant the rule's mapping sets "From the rule's
+  mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain text,
+  each is one line. The templates' own words are written as they are, as you approved them, and the description ends
+  with the rule and delivery that added the issue.
+- **Checked against Linear.** When you enable a rule and a Linear key is kept, the event service asks Linear (as
+  `integration show linear --team` does) whether each target's team key is the team its id names, and each label name
+  its id's; a mismatch is refused (`LINEAR_TEAM_MISMATCH`, `LINEAR_LABEL_MISMATCH`), and so is a key Linear refuses or a
+  Linear that does not answer. With no key kept the check is skipped — nothing is sent until there is one — and
+  `approval view` says so.
 - **One issue per match.** The issue is sent to `https://api.linear.app/graphql` — the one Linear address the event
   service may reach — through the same pinned, checked connection as a hosted judge. A rate limit, a 5xx or no answer
   is tried again, as a webhook's failure is, up to ten times; Linear refusing the issue fails it at once with Linear's

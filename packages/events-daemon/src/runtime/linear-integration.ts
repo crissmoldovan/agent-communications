@@ -1,4 +1,6 @@
 import { CommsError } from '@agentcomms/core';
+import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { EventDomainError } from '../domain/lifecycle.ts';
 import { isLinearId } from '../domain/linear-target.ts';
 import type { EventSecretStore } from '../store/event-secrets.ts';
 import { providerSecretOwner } from '../store/event-secrets.ts';
@@ -43,7 +45,7 @@ const LABELS_QUERY =
 function shown(value: unknown): string | null {
   if (typeof value !== 'string') return null;
   // biome-ignore lint/suspicious/noControlCharactersInRegex: these are exactly the characters it removes.
-  const text = value.replace(/[\u0000-\u001f\u007f-\u009f‎‏‪-‮⁦-⁩]/gu, ' ').trim();
+  const text = value.replace(/[\u0000-\u001f\u007f-\u009f\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu, ' ').trim();
   return text.length === 0 ? null : text.slice(0, 200);
 }
 
@@ -91,13 +93,8 @@ export class LinearIntegration {
     return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
   }
 
-  async show(args: Readonly<Record<string, unknown>>): Promise<IntegrationShowResultV1> {
-    if (args.integration !== 'linear') throw new CommsError('USAGE', 'the integration is linear');
-    const team = args.team;
-    if (team !== undefined && (typeof team !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(team)))
-      throw new CommsError('USAGE', 'a team is named by its key, such as CUE, or its id');
-    const key = await this.key();
-    if (key === null) return { integration: 'linear', connected: false, workspace: null, teams: [] };
+  /** The workspace's name and the teams the key sees, as `integration show` gives them; throws as Linear refuses. */
+  async #workspace(key: string): Promise<{ readonly workspace: string; readonly teams: readonly LinearTeamV1[] }> {
     const workspace = await this.#client.request({ key, query: WORKSPACE_QUERY, variables: {} });
     if (workspace.kind !== 'data') failed(workspace);
     const teams = nodes(workspace.data.teams).flatMap((entry) => {
@@ -107,17 +104,12 @@ export class LinearIntegration {
         : [];
     });
     const organization = (workspace.data.viewer as { organization?: { name?: unknown } } | null)?.organization;
-    const result = {
-      integration: 'linear' as const,
-      connected: true,
-      workspace: shown(organization?.name) ?? 'Linear',
-      teams,
-    };
-    if (team === undefined) return result;
-    const chosen = teams.find((entry) => entry.id === team || entry.key.toLowerCase() === team.toLowerCase());
-    if (chosen === undefined)
-      throw new CommsError('NOT_FOUND', 'the Linear key sees no such team', { details: { reason: 'LINEAR_TEAM' } });
-    const labels = await this.#client.request({ key, query: LABELS_QUERY, variables: { team: chosen.id } });
+    return { workspace: shown(organization?.name) ?? 'Linear', teams };
+  }
+
+  /** The labels an issue in the team can carry — the team's and the workspace's — each once, by name. */
+  async #labels(key: string, teamId: string): Promise<readonly LinearLabelV1[]> {
+    const labels = await this.#client.request({ key, query: LABELS_QUERY, variables: { team: teamId } });
     if (labels.kind !== 'data') failed(labels);
     const found = new Map<string, LinearLabelV1>();
     for (const entry of [
@@ -128,11 +120,74 @@ export class LinearIntegration {
       if (isLinearId(entry.id) && name !== null && !found.has(entry.id))
         found.set(entry.id, { id: entry.id, name: name.slice(0, 80) });
     }
-    return {
-      ...result,
-      labels: [...found.values()].sort((left, right) =>
-        left.name < right.name ? -1 : left.name > right.name ? 1 : left.id < right.id ? -1 : 1,
-      ),
-    };
+    return [...found.values()].sort((left, right) =>
+      left.name < right.name ? -1 : left.name > right.name ? 1 : left.id < right.id ? -1 : 1,
+    );
+  }
+
+  async show(args: Readonly<Record<string, unknown>>): Promise<IntegrationShowResultV1> {
+    if (args.integration !== 'linear') throw new CommsError('USAGE', 'the integration is linear');
+    const team = args.team;
+    if (team !== undefined && (typeof team !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/u.test(team)))
+      throw new CommsError('USAGE', 'a team is named by its key, such as CUE, or its id');
+    const key = await this.key();
+    if (key === null) return { integration: 'linear', connected: false, workspace: null, teams: [] };
+    const { workspace, teams } = await this.#workspace(key);
+    const result = { integration: 'linear' as const, connected: true, workspace, teams };
+    if (team === undefined) return result;
+    const chosen = teams.find((entry) => entry.id === team || entry.key.toLowerCase() === team.toLowerCase());
+    if (chosen === undefined)
+      throw new CommsError('NOT_FOUND', 'the Linear key sees no such team', { details: { reason: 'LINEAR_TEAM' } });
+    return { ...result, labels: await this.#labels(key, chosen.id) };
+  }
+
+  /**
+   * At activation (second look of 0.33.0): each Linear target's team key names its team id, and each label name its id,
+   * as Linear says through `integration show linear --team`, so the approval cannot name one team or label and send to
+   * another. With no Linear key kept the check is skipped — nothing is sent until one is, and the approval says so —
+   * and its result says which. A target Linear refuses is refused with `LINEAR_TEAM_MISMATCH` or
+   * `LINEAR_LABEL_MISMATCH`; Linear refusing the key or not answering refuses the activation, as `integration show`
+   * does, rather than skip the check.
+   */
+  async assertActivation(rule: CanonicalFullRuleDocument): Promise<'none' | 'checked' | 'skipped'> {
+    const targets = rule.targets.flatMap((target) => (target.kind === 'linear' ? [target] : []));
+    if (targets.length === 0) return 'none';
+    const key = await this.key();
+    if (key === null) return 'skipped';
+    const { teams } = await this.#workspace(key);
+    const labelsByTeam = new Map<string, readonly LinearLabelV1[]>();
+    for (const target of targets) {
+      const team = teams.find((entry) => entry.id === target.team.id);
+      if (team === undefined)
+        throw new EventDomainError(
+          'LINEAR_TEAM_MISMATCH',
+          `Linear target ${target.targetId} names team ${target.team.key} by an id the Linear key cannot see; choose the team again in Settings → Integrations`,
+        );
+      if (team.key !== target.team.key)
+        throw new EventDomainError(
+          'LINEAR_TEAM_MISMATCH',
+          `Linear target ${target.targetId} names team ${target.team.key}, but its team id is Linear's team ${team.key}`,
+        );
+      if (target.labels.length === 0) continue;
+      let labels = labelsByTeam.get(team.id);
+      if (labels === undefined) {
+        labels = await this.#labels(key, team.id);
+        labelsByTeam.set(team.id, labels);
+      }
+      for (const label of target.labels) {
+        const found = labels.find((entry) => entry.id === label.id);
+        if (found === undefined)
+          throw new EventDomainError(
+            'LINEAR_LABEL_MISMATCH',
+            `Linear target ${target.targetId} names label ${JSON.stringify(label.name)} by an id team ${team.key} has no label for`,
+          );
+        if (found.name !== label.name)
+          throw new EventDomainError(
+            'LINEAR_LABEL_MISMATCH',
+            `Linear target ${target.targetId} names label ${JSON.stringify(label.name)}, but its id is Linear's label ${JSON.stringify(found.name)}`,
+          );
+      }
+    }
+    return 'checked';
   }
 }

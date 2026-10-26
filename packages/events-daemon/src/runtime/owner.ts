@@ -1399,6 +1399,7 @@ async function startOwnerWithLock(
     config: core.config,
     gmailSourceFor,
     assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
+    assertLinearTargets: (rule) => readers.linear?.assertActivation(rule) ?? Promise.resolve('none'),
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {

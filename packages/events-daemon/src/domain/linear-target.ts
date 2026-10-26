@@ -9,12 +9,15 @@ import { EventDomainError } from './lifecycle.ts';
  * how the title and the description are written: a text with `{{field}}` slots, each naming one of the rule's mapped
  * fields, checked when the rule is activated. Nothing else from the message reaches Linear.
  *
- * Sender-written values never reach Linear's Markdown as Markdown. Linear makes a mention from a resource's plain URL
- * (a profile URL notifies that person and subscribes them; an issue URL relates that issue), links bare URLs and
- * pasted issue ids, and renders the description as Markdown (linear.app/developers/graphql and linear.app/docs/editor,
- * read 2026-10-26). So in the description each value from the message is a block quote labelled as from outside, the
- * text inside a fenced code block, where Linear's Markdown makes no link, mention, image or formatting; and in the
- * title, which is plain text, it is flattened to one line.
+ * No slot's value reaches Linear's Markdown as Markdown. Linear makes a mention from a resource's plain URL (a profile
+ * URL notifies that person and subscribes them; an issue URL relates that issue), links bare URLs and pasted issue ids,
+ * and renders the description as Markdown (linear.app/developers/graphql and linear.app/docs/editor, read 2026-10-26).
+ * So in the description every slot's value — from the message, or a constant the rule's mapping sets — is a block quote
+ * labelled with who wrote it, the text inside a fenced code block, where Linear's Markdown makes no link, mention,
+ * image or formatting; and in the title, which is plain text, it is flattened to one line.
+ *
+ * Activation also checks the target against Linear when a Linear key is kept: the team key names the team id, and each
+ * label name its id (`LinearIntegration.assertActivation`), so a preview cannot name one team and send to another.
  */
 
 /** Linear's GraphQL endpoint: the one URL a Linear target or `integration show linear` reaches. */
@@ -252,12 +255,23 @@ export function escapeMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]()#+\-.!|<>~:@&=]/gu, '\\$&');
 }
 
+/** Who wrote a slot's value: the message's sender, or the rule's mapping, as a constant. */
+export type SlotAuthor = 'sender' | 'rule';
+
+/** Each block's label, as the issue says it. */
+const BLOCK_LABELS: Readonly<Record<SlotAuthor, string>> = Object.freeze({
+  sender: 'From outside: written by the sender, not checked',
+  rule: "From the rule's mapping: a fixed value, shown as text",
+});
+
 /**
- * A value from the message, as the description shows it: a block quote labelled as from outside, holding the text in a
- * fenced code block longer than any run of backticks in it. Linear's Markdown makes no link, mention or formatting
- * inside it, so a URL, an `@name`, an issue id or markup the sender wrote is shown, never followed.
+ * A slot's value, as the description shows it: a block quote labelled with who wrote it, holding the text in a fenced
+ * code block longer than any run of backticks in it. Linear's Markdown makes no link, mention or formatting inside it,
+ * so a URL, an `@name`, an issue id or markup is shown, never followed. Every slot's value is shown so — what the sender
+ * wrote, and a constant the rule's mapping sets, which an agent may have written into the rule (second look of 0.33.0):
+ * neither may mention a person or link an issue.
  */
-export function outsideBlock(field: string, value: string): string {
+export function outsideBlock(field: string, value: string, author: SlotAuthor = 'sender'): string {
   let text = value.replace(/\r\n?|[\u2028\u2029]/gu, '\n').replace(UNSHOWN, '');
   const shortened = text.length > LINEAR_OUTSIDE_VALUE_MAX;
   if (shortened) text = text.slice(0, LINEAR_OUTSIDE_VALUE_MAX);
@@ -265,7 +279,7 @@ export function outsideBlock(field: string, value: string): string {
   const fence = '`'.repeat(Math.max(3, longestRun + 1));
   const lines = text.split('\n');
   return [
-    `> **From outside: written by the sender, not checked** (\`${field}\`)`,
+    `> **${BLOCK_LABELS[author]}** (\`${field}\`)`,
     '>',
     `> ${fence}text`,
     ...lines.map((line) => (line.length === 0 ? '>' : `> ${line}`)),
@@ -286,9 +300,10 @@ export interface RenderedLinearIssue {
 
 /**
  * The issue a match makes, from the approved target and the rule's mapped data: the title and description templates
- * with each slot filled. A value from the message is flattened in the title and quoted as from outside in the
- * description; a constant the rule maps is the person's own text and is written as it is. The description ends with a
- * line saying which rule and delivery added it.
+ * with each slot filled. In the title every slot's value is flattened to one line of plain text; in the description
+ * every slot's value is a quoted code block, labelled as the sender's or the rule's — never Markdown, so no slot can
+ * mention a person or link an issue. The template's own text is the approved document's, written as it is. The
+ * description ends with a line saying which rule and delivery added it.
  */
 export function renderLinearIssue(input: {
   readonly target: LinearTargetDocument;
@@ -298,24 +313,21 @@ export function renderLinearIssue(input: {
   readonly data: JsonValue;
   readonly fields: ReadonlyMap<string, MappedFieldOrigin>;
 }): RenderedLinearIssue {
-  const lookup = (name: string): { readonly text: string; readonly outside: boolean } => {
+  const lookup = (name: string): { readonly text: string; readonly author: SlotAuthor } => {
     const found = getPointer(input.data, slotPointer(name));
     return {
       text: valueText(found.found ? found.value : undefined),
-      // A field the activation check did not see is treated as the message's: outside, never the person's words.
-      outside: slotOrigin(input.fields, name) !== 'constant',
+      // A field the activation check did not see is treated as the message's.
+      author: slotOrigin(input.fields, name) === 'constant' ? 'rule' : 'sender',
     };
   };
-  const filledTitle = input.target.title.text.replace(SLOT, (_slot, name: string) => {
-    const { text, outside } = lookup(name);
-    return outside ? titleText(text) : text;
-  });
+  const filledTitle = input.target.title.text.replace(SLOT, (_slot, name: string) => titleText(lookup(name).text));
   let title = titleText(filledTitle).trim();
   if (title.length > LINEAR_TITLE_MAX) title = `${title.slice(0, LINEAR_TITLE_MAX - 1).trimEnd()}…`;
   if (title.length === 0) title = `Agent Comms: rule ${input.ruleId}`.slice(0, LINEAR_TITLE_MAX);
   const body = input.target.description.text.replace(SLOT, (_slot, name: string) => {
-    const { text, outside } = lookup(name);
-    return outside ? `\n\n${outsideBlock(name, text)}\n\n` : text;
+    const { text, author } = lookup(name);
+    return `\n\n${outsideBlock(name, text, author)}\n\n`;
   });
   const footer = `_Added by Agent Comms: rule ${escapeMarkdown(input.ruleId)}, version ${input.ruleVersion}; delivery ${escapeMarkdown(input.deliveryId)}._`;
   const description = `${body.replace(/\n{3,}/gu, '\n\n').trim()}${body.trim().length === 0 ? '' : '\n\n'}${footer}`;
@@ -338,5 +350,5 @@ export function linearTargetDisclosure(target: LinearTargetDocument): string {
     const slots = linearTemplateSlots(template);
     return slots.length === 0 ? 'no field' : slots.join(', ');
   };
-  return `Linear issue ${target.targetId}@${target.version}: adds an issue in team ${target.team.key} (${target.team.id}) through Linear's API (api.linear.app), with your Linear key; ${labels}; ${assignee}. Its title is filled from ${from(target.title)}; its description from ${from(target.description)}, each value from the message quoted as written by the sender.`;
+  return `Linear issue ${target.targetId}@${target.version}: adds an issue in team ${target.team.key} (${target.team.id}) through Linear's API (api.linear.app), with your Linear key; ${labels}; ${assignee}. Its title is filled from ${from(target.title)}; its description from ${from(target.description)}, each value quoted as text, never as links or mentions.`;
 }

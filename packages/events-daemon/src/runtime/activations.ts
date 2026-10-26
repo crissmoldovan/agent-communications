@@ -194,6 +194,13 @@ export interface ActivationRuntimeOptions {
   readonly assertSessionTargets?:
     | ((rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']) => Promise<void>)
     | undefined;
+  /**
+   * The Linear targets' activation check (second look of 0.33.0): each team key names its team id, and each label name
+   * its id, in Linear, when a Linear key is kept. Supplied by the owner composition; refusals name the target.
+   */
+  readonly assertLinearTargets?:
+    | ((rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']) => Promise<unknown>)
+    | undefined;
   /** Tests may inject strict reviewed fixture bytes; production always reads the daemon's shipped asset bytes. */
   readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
   /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
@@ -230,6 +237,7 @@ export class ActivationRuntime {
   readonly #deadlineFailpoint: ActivationDeadlineFailpoint | undefined;
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
   readonly #assertSessionTargets: ActivationRuntimeOptions['assertSessionTargets'];
+  readonly #assertLinearTargets: ActivationRuntimeOptions['assertLinearTargets'];
   readonly #layaInputs: LayaEnablementInputs;
   readonly #onJudgeKindEnabled: ActivationRuntimeOptions['onJudgeKindEnabled'];
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
@@ -262,6 +270,7 @@ export class ActivationRuntime {
     this.#deadlineFailpoint = options.deadlineFailpoint;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
     this.#assertSessionTargets = options.assertSessionTargets;
+    this.#assertLinearTargets = options.assertLinearTargets;
     this.#layaInputs = {
       ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
       ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
@@ -277,6 +286,7 @@ export class ActivationRuntime {
     const document = versions.prepareRule(input.ruleId, input.version);
     await this.#assertDocumentSecretsReady(document.rule);
     await this.#assertSessionTargets?.(document.rule);
+    await this.#assertLinearTargets?.(document.rule);
     this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {
