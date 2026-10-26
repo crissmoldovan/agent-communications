@@ -172,15 +172,21 @@ async function standing(core: Core): Promise<{ state: string; via: string | unde
   return { state: stateOf(record), via: record.form === 'v2' ? record.record.approvedVia : undefined };
 }
 
-test('an app approval is checked against this exact change before it is answered: another change leaves it untouched', async () => {
+test('an app approval is checked against this exact change before it is answered: another change voids it', async () => {
   const { core } = coreWith('never');
   const approvalId = await prepared(core, setSendPolicy(core, 'chat'));
   await assert.rejects(
     gatedChangeAtTerminal(core, setSendPolicy(core, 'confirm'), { ...APP, appApproval: approvalId }),
-    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_REQUIRED',
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
   );
   assert.equal(await policyNow(core), 'never');
-  assert.deepEqual(await standing(core), { state: 'pending', via: undefined }, 'never answered');
+  // Never answered, and void (the security review of 0.34.0, finding 4): as a claim for another change voids it.
+  assert.deepEqual(await standing(core), { state: 'revoked', via: undefined });
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'chat'), { ...APP, appApproval: approvalId }),
+    CommsError,
+  );
+  assert.equal(await policyNow(core), 'never', 'nor used for the change it was prepared for');
 });
 
 /*

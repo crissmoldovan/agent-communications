@@ -325,3 +325,42 @@ test(
     }
   },
 );
+
+/*
+ * The security review of 0.34.0 (finding 4): the approval is bound to the whole list, in its order. Another order, a
+ * subset, a superset or a single install is another change: it is refused, registers nothing, and voids the approval —
+ * the same through `--approval` and `--app-approval`, which once left it pending. Each case on a machine of its own.
+ */
+const MISMATCHES: readonly (readonly [string, string])[] = [
+  ['core,gmail,events', 'events,gmail,core'],
+  ['core,gmail,events', 'gmail,core,events'],
+  ['core,gmail,events', 'core,gmail'],
+  ['core,gmail,events', 'core,gmail,events,slack'],
+  ['core,gmail,events', 'core'],
+  ['core', 'core,gmail'],
+];
+for (const how of ['approval', 'app-approval'] as const) {
+  test(
+    `an approval for a list is claimed only for that list, in that order, through --${how}`,
+    NOT_ON_WINDOWS,
+    async () => {
+      const base = ['mcp', 'install', '--client', 'claude-code', '--launcher', 'local', '--no-verify'];
+      for (const [prepared, claimed] of MISMATCHES) {
+        const m = machine();
+        const { approvalId } = await prepare(m, [...base, '--server', prepared]);
+        const words = [...base, '--server', claimed, `--${how}`, approvalId];
+        const run = await m.run(words, how === 'approval' ? { extra: { CLAUDECODE: '1' } } : { origin: ATTESTED });
+        assert.equal(run.code, 10, `${prepared} → ${claimed}: ${run.stdout}`);
+        assert.equal(errorOf(run).code, 'APPROVAL_VOID', `${prepared} → ${claimed}`);
+        assert.deepEqual(added(m), [], `${prepared} → ${claimed}: nothing was registered`);
+        const [record] = await m.core.approvals.list();
+        assert.equal(record && stateOf(record), 'revoked', `${prepared} → ${claimed}: void, never left to wait`);
+        // Void for the list it was prepared for too.
+        const original = [...base, '--server', prepared, `--${how}`, approvalId];
+        const after = await m.run(original, how === 'approval' ? { extra: { CLAUDECODE: '1' } } : { origin: ATTESTED });
+        assert.notEqual(after.code, 0, after.stdout);
+        assert.deepEqual(added(m), [], `${prepared}: nothing was registered with a void approval`);
+      }
+    },
+  );
+}
