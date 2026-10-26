@@ -150,10 +150,12 @@ const EXPECTED_SETUP_ROWS = [
 
 /**
  * Rules edited in the app (0.33.0 design §3.1): a rule's activation is approved by the person in the app, after its
- * preview, the app's only path; at a terminal the person types the challenge with `approve`.
+ * preview, the app's only path; at a terminal the person types the challenge with `approve`. Switching the event
+ * service on (0.34.0 design B4) is approved the same way.
  */
 const EXPECTED_RULE_APPROVAL_ROWS = [
   ['events-daemon.rule.approve', 'rule approve', null, 'exception', 'approveRuleFromApp'],
+  ['events-daemon.collection.approve', 'collection approve', null, 'exception', 'approveEnableAllFromApp'],
 ] as const;
 
 /** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
@@ -343,6 +345,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
     'events-daemon.rule.approve',
+    'events-daemon.collection.approve',
     'events-daemon.rule.analyse',
     'events-daemon.integration.show',
     'events-daemon.integration.show-agent-sessions',

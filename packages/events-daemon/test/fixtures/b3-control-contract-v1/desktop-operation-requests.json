@@ -258,5 +258,15 @@
         "version": 1
       }
     }
+  },
+  {
+    "name": "enable-all-approve-request",
+    "request": {
+      "operation": "enable-all-approve",
+      "args": {
+        "approvalId": "ap_VJPKF7Z3VVEVZ1GKGCWP3PZB40",
+        "digest": "75518500da9318b19a1148deebe93db44b3f6351f6488d79acf0ada8a2b7552c"
+      }
+    }
   }
 ]

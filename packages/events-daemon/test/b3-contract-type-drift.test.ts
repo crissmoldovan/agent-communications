@@ -467,7 +467,7 @@ test('B3 v1: a person-only change is never approved by the app unattested — th
     readonly name: string;
     readonly result: Record<string, unknown>;
   }[];
-  for (const name of ['judge-setup-result', 'rule-approve-result']) {
+  for (const name of ['judge-setup-result', 'rule-approve-result', 'enable-all-approve-result']) {
     const vector = seeded.find((entry) => entry.name === name);
     assert.ok(vector, `the fixture set carries ${name}`);
     assert.equal(validateVector(vector), true, `${name} validates as checked in`);

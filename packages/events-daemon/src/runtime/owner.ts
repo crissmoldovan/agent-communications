@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import {
   type ApprovalStore,
   type AuditLog,
+  accountHome,
   CommsError,
   type ConfigStore,
   homeDirectory,
@@ -50,6 +51,7 @@ import { type LaneWindowIdentity, parseLaneWindowIdentity } from '../domain/lane
 import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
+import type { AgentApprovalViewV1 } from '../operations/approval-view.ts';
 import {
   B3_SECRET_TERMINAL_ORIGIN,
   type B3ApprovalViewResultV1,
@@ -144,6 +146,7 @@ import { SessionQueue, SessionQueueFollower } from './session-queue.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
+import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -574,6 +577,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             now,
             request.args,
             options.laya !== undefined,
+            request.args.agentView === true,
           );
         case 'ruleTest':
           return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
@@ -842,7 +846,8 @@ async function approvalViewFromOwner(
   now: () => number,
   args: Readonly<Record<string, unknown>>,
   layaJudges = false,
-): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3> {
+  agentView = false,
+): Promise<B3ApprovalViewResultV1 | B3LayaRuleApprovalReadyV3 | AgentApprovalViewV1> {
   const approvalId = requiredText(args.approvalId, 'approval id');
   const digest = requiredText(args.digest, 'approval digest');
   const row = store.database
@@ -854,6 +859,17 @@ async function approvalViewFromOwner(
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
+  // An agent's view — the event service's MCP server, or `approval view` from an agent's shell (0.34.0 design B7, review
+  // finding 3): the preview alone. No challenge is issued for it, so nothing an agent holds can answer `approve`, and
+  // one the person is answering at their terminal stays theirs. The caller's flag only narrows.
+  if (agentView)
+    return {
+      kind: 'READY',
+      approvalId,
+      digest: row.digest,
+      preview,
+      ...(layaJudge === undefined ? {} : { layaJudge }),
+    };
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
   if (challenge === null) return { kind: 'CHALLENGE_EXPIRED' };
@@ -1005,6 +1021,10 @@ async function startOwnerWithLock(
   onDatabase(database);
   const now = options.now ?? Date.now;
   const lifecycle = new EventLifecycle(database, now);
+  // The only event service the local test build may change is a test profile's (security review of 0.34.0, finding 1):
+  // read when a test build asks, from this owner's own state folder and the account's own home — a test's home seam,
+  // otherwise `os.userInfo()`'s, never the environment's.
+  const testProfile = () => isTestProfileState(stateDir, options.homeDirectory ?? accountHome());
   const core = openCore({
     pathOverrides: {
       stateDir,
@@ -1257,6 +1277,7 @@ async function startOwnerWithLock(
     ],
     audit: core.audit,
     now,
+    testProfile,
   });
   const sessionQueue = new SessionQueue({ store: database, now });
   let tickAfterRelease: () => void = () => undefined;
@@ -1692,6 +1713,7 @@ async function startOwnerWithLock(
     quiescer: writerQuiescer,
     audit: core.audit,
     now,
+    testProfile,
   });
   const token = randomBytes(32).toString('hex');
   const instance = newInstanceRecord(controlEndpoint(paths), token);
@@ -2025,6 +2047,12 @@ async function handleControl(
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
     case OWNER_CONTROL_WIRES.approveRuleFromApp:
       return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
+    // Switching the event service on from the app, after its preview (0.34.0 design B4): the person's, as a rule's is.
+    case OWNER_CONTROL_WIRES.approveEnableAllFromApp:
+      return requireJudgeSetup(judgeSetup).approveEnableAll(
+        personOnly(request.args, 'switching the event service on'),
+        request.origin,
+      );
     case OWNER_CONTROL_WIRES.providerList:
       return requireJudgeSetup(judgeSetup).providerList();
     case OWNER_CONTROL_WIRES.providerKeySet:
