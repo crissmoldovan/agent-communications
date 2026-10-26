@@ -3,9 +3,56 @@ import { JUDGE_KIND_TYPESAFE, JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
 const JUDGE_KIND_SQL_VALUES = JUDGE_KINDS.map((kind) => `'${kind.replaceAll("'", "''")}'`).join(', ');
-const PROVIDER_KEY_SQL_VALUES = [JUDGE_KIND_TYPESAFE, 'openrouter'].map((id) => `'${id}'`).join(', ');
-/** Migration 29's provider slots (0.33.0 design §3.4): migration 26's two, and Linear. */
-const PROVIDER_KEY_SQL_VALUES_V29 = [JUDGE_KIND_TYPESAFE, 'openrouter', 'linear'].map((id) => `'${id}'`).join(', ');
+/**
+ * The providers each migration's key-slot CHECK admits, frozen per migration: a migration's statements never change
+ * once released, so a later release widens the list with a migration of its own.
+ */
+const providerKeySqlValues = (providers: readonly string[]): string => providers.map((id) => `'${id}'`).join(', ');
+const PROVIDER_KEY_SQL_VALUES = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter']);
+/** 0.33.0 (design §3.3): Analyse's model runs on OpenRouter or Anthropic, so Anthropic gains a key slot. */
+const PROVIDER_KEY_SQL_VALUES_V29 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic']);
+
+/** The key-slot table's statements, with the providers its CHECK admits (v26, and its widenings since). */
+function providerSlotTableStatements(version: number, providers: string): readonly string[] {
+  const table = `event_secret_generations_v${version}`;
+  return [
+    'DROP INDEX event_secret_generations_current',
+    `CREATE TABLE ${table} (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${providers}))
+        )
+      ) STRICT`,
+    `INSERT INTO ${table}
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+    'DROP TABLE event_secret_generations',
+    `ALTER TABLE ${table} RENAME TO event_secret_generations`,
+    `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+    `UPDATE meta SET value = '${version}' WHERE key = 'schema_version'`,
+  ];
+}
+/** 0.33.0 (design §3.4): a Linear target adds issues with the person's Linear key, so Linear gains a key slot too. */
+const PROVIDER_KEY_SQL_VALUES_V30 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic', 'linear']);
 
 export interface EventMigration {
   readonly version: number;
@@ -993,56 +1040,30 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     ],
   },
   {
-    // A Linear key (0.33.0 design §3.4): the person's Linear API key is kept beside the AI provider keys, in a slot whose
-    // owner is Linear itself, so a rule's Linear target can add issues with it. The provider check is a closed set, so
-    // the ledger is rebuilt with its exact columns, in order, as migration 26 rebuilt it.
+    // 0.33.0 (design §3.3): Analyse's model runs on the provider the person picks among those with keys — OpenRouter,
+    // or Anthropic's own Messages API — so Anthropic gains a key slot beside TypeSafe's and OpenRouter's. The table is
+    // rebuilt as v26 built it, with the wider CHECK; every row is copied as it is.
     version: 29,
+    name: 'event-secret-provider-slot-anthropic-v1',
+    statements: providerSlotTableStatements(29, PROVIDER_KEY_SQL_VALUES_V29),
+  },
+  {
+    // A Linear key (0.33.0 design §3.4): the person's Linear API key is kept beside the AI provider keys, in a slot whose
+    // owner is Linear itself, so a rule's Linear target can add issues with it. The table is rebuilt as v26 built it,
+    // with the wider CHECK; every row is copied as it is.
+    version: 30,
     name: 'event-secret-linear-slot-v1',
-    statements: [
-      'DROP INDEX event_secret_generations_current',
-      `CREATE TABLE event_secret_generations_v29 (
-        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
-        owner_id TEXT NOT NULL,
-        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
-        purpose TEXT NOT NULL CHECK (
-          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
-        ),
-        generation INTEGER NOT NULL CHECK (generation > 0),
-        owner_digest TEXT NOT NULL,
-        secret_digest TEXT NOT NULL,
-        encrypted_ref BLOB NOT NULL,
-        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
-        expires_at INTEGER,
-        created_at INTEGER NOT NULL,
-        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
-        CHECK (
-          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
-          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
-          OR (owner_kind = 'judge' AND purpose = 'judge-key')
-          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${PROVIDER_KEY_SQL_VALUES_V29}))
-        )
-      ) STRICT`,
-      `INSERT INTO event_secret_generations_v29
-       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
-              encrypted_ref, lifecycle, expires_at, created_at
-         FROM event_secret_generations`,
-      'DROP TABLE event_secret_generations',
-      'ALTER TABLE event_secret_generations_v29 RENAME TO event_secret_generations',
-      `CREATE UNIQUE INDEX event_secret_generations_current
-       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
-       WHERE lifecycle = 'current'`,
-      "UPDATE meta SET value = '29' WHERE key = 'schema_version'",
-    ],
+    statements: providerSlotTableStatements(30, PROVIDER_KEY_SQL_VALUES_V30),
   },
   {
     // The Linear target (0.33.0 design §3.4): a delivery may add a Linear issue, and records which issue it added — its
     // id, its identifier (CUE-123) and its address without the title's words — and nothing of what it says. The kind
     // check is a closed set, so the table is rebuilt with its exact columns, in order, as migration 24 rebuilt it.
-    version: 30,
+    version: 31,
     name: 'event-linear-target-v1',
     rebuildsParentTable: true,
     statements: [
-      `CREATE TABLE deliveries_v30 (
+      `CREATE TABLE deliveries_v31 (
         id TEXT PRIMARY KEY,
         decision_id TEXT NOT NULL REFERENCES decisions(id),
         account_id TEXT NOT NULL,
@@ -1087,7 +1108,7 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
         CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
         CHECK (linear_issue_id IS NULL OR target_kind = 'linear')
       ) STRICT`,
-      `INSERT INTO deliveries_v30
+      `INSERT INTO deliveries_v31
        (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
         attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
         last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
@@ -1099,10 +1120,10 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
               whatsapp_visibility_version, whatsapp_message_id
          FROM deliveries ORDER BY rowid`,
       'DROP TABLE deliveries',
-      'ALTER TABLE deliveries_v30 RENAME TO deliveries',
+      'ALTER TABLE deliveries_v31 RENAME TO deliveries',
       `CREATE INDEX deliveries_stable_order
        ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
-      "UPDATE meta SET value = '30' WHERE key = 'schema_version'",
+      "UPDATE meta SET value = '31' WHERE key = 'schema_version'",
     ],
   },
 ];

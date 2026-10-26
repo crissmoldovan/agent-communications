@@ -27,6 +27,7 @@ const CONFIG_EXIT = new CommsError('CONFIG', 'x').exitCode;
 const OPENROUTER_KEY = 'fake-or';
 const OPENROUTER_KEY_2 = 'fake-or2';
 const TYPESAFE_KEY = 'fake-ts';
+const ANTHROPIC_KEY = 'fake-an';
 
 interface Ran {
   readonly code: number;
@@ -266,6 +267,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       providers: [
         { id: 'typesafe', name: 'TypeSafe', hasKey: false },
         { id: 'openrouter', name: 'OpenRouter', hasKey: false },
+        { id: 'anthropic', name: 'Anthropic', hasKey: false },
         { id: 'linear', name: 'Linear', hasKey: false },
       ],
     });
@@ -289,6 +291,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       [
         ['typesafe', false],
         ['openrouter', true],
+        ['anthropic', false],
         ['linear', false],
       ],
     );
@@ -371,6 +374,24 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     assert.equal((native.budget as { approvedNow: boolean }).approvedNow, true);
     assert.equal(native.enabledNow, false);
     assert.equal(native.key, 'stored');
+
+    // Anthropic's key (0.33.0 design §3.3) is Analyse's alone: it is kept beside the others, serves no Jev judge, and
+    // Jev cannot be set up on it.
+    assert.deepEqual(await ok(['provider', 'key', 'set', 'anthropic'], `${ANTHROPIC_KEY}\n`), {
+      provider: 'anthropic',
+      hasKey: true,
+      judges: 0,
+    });
+    const anthropicJev = await cli(['judge', 'setup', 'typesafe', '--provider', 'anthropic'], { stateDir });
+    assert.equal(anthropicJev.code, USAGE_EXIT, anthropicJev.stderr);
+    assert.deepEqual(await ok(['provider', 'key', 'remove', 'anthropic']), {
+      provider: 'anthropic',
+      hasKey: false,
+      judges: 0,
+    });
+    const unknownProvider = await cli(['provider', 'key', 'set', 'someone-else'], { stateDir, stdin: 'fake-x\n' });
+    assert.equal(unknownProvider.code, USAGE_EXIT, unknownProvider.stderr);
+    assert.match(unknownProvider.stderr, /the provider is typesafe, openrouter, anthropic or linear/u);
 
     // A local model server: its URL, checked again by the owner, and a new version when it changes.
     const local = await ok(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434']);
@@ -471,7 +492,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
   }
   try {
     // No key reached any output, the audit log, the database or its journal: only the events-only secret store.
-    const keys = [OPENROUTER_KEY, OPENROUTER_KEY_2, TYPESAFE_KEY];
+    const keys = [OPENROUTER_KEY, OPENROUTER_KEY_2, TYPESAFE_KEY, ANTHROPIC_KEY];
     for (const output of outputs)
       for (const key of keys) assert.ok(!output.includes(key), `an output names a provider key: ${output}`);
     for (const file of await filesBelow(stateDir, (name) => name === 'secrets')) {

@@ -28,10 +28,20 @@ const TYPESAFE_GLOBAL_ONLY_ENDPOINT = 'https://api.typesafe.ai/v1/systemone';
  */
 const OPENROUTER_GLOBAL_ONLY_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
 /**
- * The third (0.33.0 design §3.4): Linear's GraphQL endpoint, where a Linear target adds its issues and `integration show
- * linear` reads the workspace. Exactly this URL — scheme, host `api.linear.app`, port and path — and nothing else there.
+ * Analyse's model endpoints (0.33.0 design §3.3): OpenRouter's chat completions and Anthropic's Messages API. They are
+ * admitted only to a caller that names Analyse's purpose, and that purpose admits nothing else: a judge never reaches
+ * them, and Analyse never reaches a judge's endpoint.
  */
-const LINEAR_GLOBAL_ONLY_ENDPOINT = 'https://api.linear.app/graphql';
+export const ANALYSE_GLOBAL_ONLY_ENDPOINTS: readonly [
+  'https://openrouter.ai/api/v1/chat/completions',
+  'https://api.anthropic.com/v1/messages',
+] = ['https://openrouter.ai/api/v1/chat/completions', 'https://api.anthropic.com/v1/messages'];
+/**
+ * Linear's GraphQL endpoint (0.33.0 design §3.4), where a Linear target adds its issues and `integration show linear`
+ * reads the workspace. It is admitted only to a caller that names the Linear purpose, which admits exactly this URL —
+ * scheme, host `api.linear.app`, port and path — and nothing else: a judge and Analyse never reach it.
+ */
+export const LINEAR_GLOBAL_ONLY_ENDPOINT = 'https://api.linear.app/graphql';
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -39,6 +49,11 @@ export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly approvedAddressSetDigest?: string;
   /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
   readonly signal?: AbortSignal;
+  /**
+   * Global-only only: `analyse` admits Analyse's model endpoints, and only them; `linear` admits Linear's GraphQL
+   * endpoint, and only it; omitted, a judge's two.
+   */
+  readonly hostedPurpose?: 'analyse' | 'linear' | undefined;
 };
 
 export interface PinnedTcpOptions {
@@ -135,11 +150,19 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
   const url = typeof options.url === 'string' ? new URL(options.url) : new URL(options.url.href);
   assertPinnedUrl(url);
   const globalOnly = options.addressMode === 'global-only';
+  if (options.hostedPurpose !== undefined && !globalOnly)
+    throw new AddressPolicyError('a hosted purpose is for global-only address mode');
   if (globalOnly) {
-    if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
-      // Jev through OpenRouter: the second fixed hosted endpoint.
-    } else if (url.href === LINEAR_GLOBAL_ONLY_ENDPOINT) {
-      // A Linear target's issues and the Linear integration's read: the third, and last, fixed hosted endpoint.
+    if (options.hostedPurpose === 'analyse') {
+      // Analyse's model: exactly its fixed endpoints, and never a judge's.
+      if (!(ANALYSE_GLOBAL_ONLY_ENDPOINTS as readonly string[]).includes(url.href))
+        throw new AddressPolicyError('global-only address mode for Analyse is reserved for its fixed model endpoints');
+    } else if (options.hostedPurpose === 'linear') {
+      // A Linear target's issues and the Linear integration's read: exactly Linear's GraphQL endpoint.
+      if (url.href !== LINEAR_GLOBAL_ONLY_ENDPOINT)
+        throw new AddressPolicyError('global-only address mode for Linear is reserved for its GraphQL endpoint');
+    } else if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
+      // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
     } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
       throw new AddressPolicyError('global-only address mode is reserved for the fixed TypeSafe endpoint');
     if (options.approvedAddressSetDigest !== undefined)

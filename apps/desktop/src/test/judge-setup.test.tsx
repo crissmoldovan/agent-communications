@@ -58,6 +58,8 @@ function setupBridge(
         providers: [
           { id: 'typesafe', name: 'TypeSafe', hasKey: keys.typesafe },
           { id: 'openrouter', name: 'OpenRouter', hasKey: keys.openrouter },
+          // 0.33.0's event service lists Anthropic's key too (Analyse's); the Jev screens pass over it.
+          { id: 'anthropic', name: 'Anthropic', hasKey: true },
         ],
       }),
       judgeSetup: () => ({}),

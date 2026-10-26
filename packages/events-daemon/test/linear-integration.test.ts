@@ -71,6 +71,7 @@ test('E3: the hosted network admits exactly Linear’s GraphQL URL, and still re
   const connection = await preparePinnedConnection({
     url: LINEAR_GRAPHQL_ENDPOINT,
     addressMode: 'global-only',
+    hostedPurpose: 'linear',
     resolver,
   });
   assert.equal(connection.hostname, 'api.linear.app');
@@ -86,11 +87,23 @@ test('E3: the hosted network admits exactly Linear’s GraphQL URL, and still re
     'https://api.linear.app.example/graphql',
     'http://api.linear.app/graphql',
     'https://uploads.linear.app/graphql',
+    // Linear's purpose admits no other hosted endpoint: a judge's or Analyse's.
+    'https://api.typesafe.ai/v1/systemone',
+    'https://openrouter.ai/api/v1/systemone',
+    'https://api.anthropic.com/v1/messages',
   ])
     await assert.rejects(
-      () => preparePinnedConnection({ url, addressMode: 'global-only', resolver }),
+      () => preparePinnedConnection({ url, addressMode: 'global-only', hostedPurpose: 'linear', resolver }),
       /global-only/u,
       url,
+    );
+  // And Linear's endpoint is reached only with Linear's purpose: not as a judge's, nor as Analyse's.
+  for (const hostedPurpose of [undefined, 'analyse'] as const)
+    await assert.rejects(
+      () =>
+        preparePinnedConnection({ url: LINEAR_GRAPHQL_ENDPOINT, addressMode: 'global-only', hostedPurpose, resolver }),
+      /global-only/u,
+      String(hostedPurpose),
     );
   assert.deepEqual(lookups, ['api.linear.app'], 'a refused URL never reaches DNS');
   // A global-only answer that is not a global address is refused too: Linear is never this machine or its network.
@@ -99,6 +112,7 @@ test('E3: the hosted network admits exactly Linear’s GraphQL URL, and still re
       preparePinnedConnection({
         url: LINEAR_GRAPHQL_ENDPOINT,
         addressMode: 'global-only',
+        hostedPurpose: 'linear',
         resolver: { lookup: async () => ['127.0.0.1'] },
       }),
     /refused by global-only policy/u,

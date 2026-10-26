@@ -55,7 +55,7 @@ Scripts should read these rather than parse output.
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
-| [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe and OpenRouter for Jev, Linear for a Linear target — and whether each has a key |
+| [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
 | [`integration`](#agent-events-integration) | the services a rule can act in — Linear — and what your key there can see (a person only) |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
@@ -273,6 +273,19 @@ agent-events rule test-retained [options] <event-id>
 |---|---|---|
 | `--rule <rule-id>` |  | — |
 | `--version <version>` |  | — |
+
+### `agent-events rule analyse`
+
+suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)
+
+```
+agent-events rule analyse [options] <rule-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--draft <source>` | analyse a draft rule document instead of the stored version: - reads it from stdin | — |
+| `--provider <provider>` | the provider Analyse's model runs on: openrouter or anthropic | — |
 
 ### `agent-events targets`
 
@@ -618,7 +631,7 @@ agent-events budget update [options] <document>
 
 ### `agent-events provider`
 
-the providers whose keys the event service keeps — TypeSafe and OpenRouter for Jev, Linear for a Linear target — and whether each has a key
+the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key
 
 ```
 agent-events provider [options] [command]

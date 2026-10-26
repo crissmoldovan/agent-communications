@@ -672,6 +672,11 @@
           "hasKey": true
         },
         {
+          "id": "anthropic",
+          "name": "Anthropic",
+          "hasKey": false
+        },
+        {
           "id": "linear",
           "name": "Linear",
           "hasKey": false
@@ -705,6 +710,178 @@
       "provider": "openrouter",
       "hasKey": false,
       "judges": 1
+    }
+  },
+  {
+    "name": "rule-analyse-result",
+    "request": {
+      "operation": "rule-analyse",
+      "args": {
+        "ruleId": "invoices"
+      }
+    },
+    "result": {
+      "ruleId": "invoices",
+      "analysed": {
+        "source": "stored",
+        "version": 1
+      },
+      "counts": {
+        "windowDays": 30,
+        "since": 1790424000000,
+        "decisions": 13,
+        "outcomes": {
+          "matched": 5,
+          "no-match": 8,
+          "mapping-rejected": 0,
+          "retention-expired": 0,
+          "hold": 0
+        },
+        "judge": {
+          "answered": 12,
+          "yes": 5,
+          "no": 7,
+          "held": 0,
+          "spread": [1, 2, 2, 1, 1, 0, 0, 2, 1, 2],
+          "lowest": 0.05,
+          "highest": 0.95
+        },
+        "domainsKnown": 9,
+        "domains": [
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nbank.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 4,
+            "yes": 0,
+            "no": 4
+          },
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nreceipts.shop.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 3,
+            "yes": 0,
+            "no": 3
+          },
+          {
+            "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nsupplier.example\n</untrusted-content boundary=\"BOUNDARY\">",
+            "judged": 2,
+            "yes": 2,
+            "no": 0
+          }
+        ],
+        "queue": {
+          "open": 1,
+          "done": 2,
+          "dismissed": 2,
+          "lowestDone": 0.86,
+          "highestDismissed": 0.73
+        }
+      },
+      "suggestions": [
+        {
+          "part": "condition",
+          "before": "match subject contains \"invoice\"",
+          "after": "match all\n  subject contains \"invoice\"\n  not from.address has domain \"bank.example\"\n  not from.address has domain \"receipts.shop.example\"",
+          "why": "The judge said no to all 7 messages from these 2 sending domains in the last 30 days, and yes to none. Leaving them out before the judge is asked saves about 7 judge calls a month.",
+          "evidence": {
+            "by": "counts",
+            "windowDays": 30,
+            "judgedNo": 7,
+            "domains": [
+              {
+                "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nbank.example\n</untrusted-content boundary=\"BOUNDARY\">",
+                "judgedNo": 4,
+                "judgedYes": 0
+              },
+              {
+                "domain": "<untrusted-content boundary=\"BOUNDARY\" field=\"senderDomain\">\nreceipts.shop.example\n</untrusted-content boundary=\"BOUNDARY\">",
+                "judgedNo": 3,
+                "judgedYes": 0
+              }
+            ]
+          }
+        },
+        {
+          "part": "judge.threshold",
+          "before": "yes at 0.7, if unsure drop",
+          "after": "yes at 0.79, if unsure drop",
+          "why": "Every one of the 2 messages you kept scored 0.86 or more, and the 2 you dismissed scored 0.73 at most. A bar of 0.79, between them, keeps the first and leaves out the second.",
+          "evidence": {
+            "by": "counts",
+            "windowDays": 30,
+            "kept": 2,
+            "dismissed": 2,
+            "lowestKept": 0.86,
+            "highestDismissed": 0.73,
+            "threshold": 0.7
+          }
+        },
+        {
+          "part": "judge.question",
+          "before": "Is this asking me to pay or send something?",
+          "after": "Is the sender asking me to pay them, or to send them an invoice?",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5"
+          }
+        },
+        {
+          "part": "session.context",
+          "before": "Check the invoice against Stripe before replying.",
+          "after": "Task: answer an invoice request.\n1. Find the invoice in Stripe.\n2. Draft a reply and wait for my approval.\nNever pay. If unsure, ask me.",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5",
+            "targetId": "billing-session",
+            "contextIndex": 0
+          }
+        },
+        {
+          "part": "linear.title",
+          "before": "Invoice from {{from.name}}",
+          "after": "Invoice request from {{from.name}}",
+          "why": "It names who asks for what.",
+          "evidence": {
+            "by": "model",
+            "provider": "openrouter",
+            "model": "anthropic/claude-sonnet-5.5",
+            "targetId": "billing-issue"
+          }
+        }
+      ],
+      "model": {
+        "provider": "openrouter",
+        "name": "OpenRouter",
+        "model": "anthropic/claude-sonnet-5.5",
+        "noKey": ["anthropic"],
+        "sent": "The rule's own text and content-free counts of its last 30 days: never a message, a sender, a subject, a body or an address.",
+        "ran": true,
+        "reason": null,
+        "parts": [
+          {
+            "part": "judge.question",
+            "at": {},
+            "outcome": "suggested"
+          },
+          {
+            "part": "session.context",
+            "at": {
+              "targetId": "billing-session",
+              "contextIndex": 0
+            },
+            "outcome": "suggested"
+          },
+          {
+            "part": "linear.title",
+            "at": {
+              "targetId": "billing-issue"
+            },
+            "outcome": "suggested"
+          }
+        ]
+      }
     }
   },
   {

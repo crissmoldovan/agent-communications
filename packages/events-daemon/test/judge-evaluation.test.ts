@@ -371,6 +371,60 @@ test('E7: evaluator taints exact judge input, reserves, uses sealed transport, a
   }
 });
 
+test('ANALYSE: a judged decision keeps its sender’s domain in its encrypted metadata, never the address', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // 0.33.0 design §3.3: Analyse counts the judge's answers per sending domain. The rule tests the sender's address, so
+  // its projection holds it; the decision keeps only the domain, inside the metadata it already encrypts.
+  for (const [condition, expected] of [
+    [
+      {
+        all: [
+          { path: '/subject', op: 'exists' },
+          { path: '/from/address', op: 'exists' },
+        ],
+      },
+      'example.test',
+    ],
+    [{ path: '/subject', op: 'exists' }, undefined],
+  ] as const) {
+    const requests: Buffer[] = [];
+    const setup = await fixture(11434, condition);
+    try {
+      const taint = productionTaintRecorder(setup.stateDir);
+      const transport = new JudgeTransport({ tcpConnect: async () => respondingSocket(requests) as never });
+      assert.equal(
+        await evaluatorFor(setup, transport, taint).admit({
+          event: setup.event,
+          eventId: setup.event.id,
+          ruleId: 'rule-e7',
+          ruleVersion: 1,
+          stagedAt: NOW,
+        }),
+        'terminal',
+      );
+      const decision = setup.store.database.prepare('SELECT id, outcome, encrypted_record FROM decisions').get() as {
+        id: string;
+        outcome: string;
+        encrypted_record: Uint8Array;
+      };
+      assert.equal(decision.outcome, 'matched');
+      const metadata = (
+        await setup.cipher.decrypt(
+          { table: 'decisions', column: 'encryptedRecord', key: [{ type: 'text', value: decision.id }] },
+          decision.encrypted_record,
+        )
+      ).toString('utf8');
+      assert.equal((JSON.parse(metadata) as { senderDomain?: unknown }).senderDomain, expected);
+      assert.equal(metadata.includes('sender@example.test'), false, 'the address is never kept');
+      assert.equal(metadata.includes('Synthetic Sender'), false, 'nor the sender’s name');
+    } finally {
+      setup.store.close();
+      await rm(setup.stateDir, { recursive: true, force: true });
+    }
+  }
+});
+
 test('E7: pause fences reserved judge I/O and completed-response decision writes', { skip: WINDOWS_SKIP }, async () => {
   {
     const requests: Buffer[] = [];

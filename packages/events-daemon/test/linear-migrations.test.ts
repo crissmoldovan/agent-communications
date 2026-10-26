@@ -5,8 +5,9 @@ import { providerSecretOwner } from '../src/store/event-secrets.ts';
 import { applyMigrations, EVENT_MIGRATIONS } from '../src/store/migrations.ts';
 
 /**
- * The Linear target's migrations (0.33.0 design §3.4). Migration 29 gives the provider key ledger a slot for Linear, the
- * person's Linear API key, beside TypeSafe's and OpenRouter's, and keeps every generation it held.
+ * The Linear target's migrations (0.33.0 design §3.4). Migration 30 gives the provider key ledger a slot for Linear, the
+ * person's Linear API key, beside TypeSafe's, OpenRouter's and Anthropic's, and keeps every generation it held; migration
+ * 31 lets a delivery be a Linear one and record its issue.
  */
 
 function migratedTo(name: string): DatabaseSync {
@@ -33,7 +34,7 @@ const insertProviderSlot = (database: DatabaseSync, provider: string) => {
     .run(provider, owner.digest, 'a'.repeat(64));
 };
 
-test('0.33 E3: migration 29 adds a Linear key slot, keeps every generation, and still refuses any other provider', () => {
+test('0.33 E3: migration 30 adds a Linear key slot, keeps every generation, and still refuses any other provider', () => {
   const database = migratedTo('event-secret-linear-slot-v1');
   try {
     insertProviderSlot(database, 'openrouter');
@@ -45,7 +46,7 @@ test('0.33 E3: migration 29 adds a Linear key slot, keeps every generation, and 
          VALUES ('judge', 'jev', 1, 'judge-key', 1, ?, ?, X'02', 'current', 2)`,
       )
       .run('b'.repeat(64), 'c'.repeat(64));
-    assert.throws(() => insertProviderSlot(database, 'linear'), /CHECK constraint failed/u, 'no Linear slot before 29');
+    assert.throws(() => insertProviderSlot(database, 'linear'), /CHECK constraint failed/u, 'no Linear slot before 30');
 
     applyMigrations(database);
     assert.deepEqual(
@@ -82,7 +83,7 @@ test('0.33 E3: migration 29 adds a Linear key slot, keeps every generation, and 
   }
 });
 
-test('0.33 E3: migration 30 lets a delivery add a Linear issue and record which, content-free, keeping every row', () => {
+test('0.33 E3: migration 31 lets a delivery add a Linear issue and record which, content-free, keeping every row', () => {
   const database = migratedTo('event-linear-target-v1');
   try {
     database.exec(

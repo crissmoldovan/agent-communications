@@ -23,7 +23,7 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' | 'integration' = 'read',
+  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' | 'analyse' | 'integration' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -74,6 +74,12 @@ export function assertNotMcpServer(
       message:
         "what your Linear key can see is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
       hint: 'events_provider_list says whether a Linear key is kept; the person connects Linear in Settings → Integrations.',
+    },
+    // Analyse (0.33.0 §3.3): what a rule did and the suggestions for it are the person's, when they ask for them.
+    analyse: {
+      message:
+        "analysing a rule is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to press Analyse on the rule in the app: Events → Rules.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

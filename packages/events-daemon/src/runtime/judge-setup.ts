@@ -19,14 +19,10 @@ import {
   JUDGE_BUDGET_ID,
 } from '../domain/judges.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
 import type { B3OwnerService } from '../operations/b3-contract.ts';
 import type { EventDatabase } from '../store/database.ts';
-import {
-  EVENT_SECRET_PROVIDER_WORDS,
-  type EventSecretProvider,
-  isEventSecretProvider,
-} from '../store/event-secrets.ts';
 import type { ActivationRuntime, PreparedActivation } from './activations.ts';
 import type { B3SecretControl } from './b3-secret-control.ts';
 import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -40,6 +36,7 @@ export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
 export const PROVIDER_NAMES: Readonly<Record<EventSecretProvider, string>> = Object.freeze({
   typesafe: 'TypeSafe',
   openrouter: 'OpenRouter',
+  anthropic: 'Anthropic',
   linear: 'Linear',
 });
 

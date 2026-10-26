@@ -116,6 +116,10 @@ const ESCAPED: Readonly<Record<string, readonly string[]>> = {
   // A rule with no targets yet.
   'packages/events-daemon/test/phase-d-owner-e2e.test.ts': ['raw /targets ='],
   // Partial rules written straight into the store.
+  // Analyse's rules (0.33.0 §3.3): a source and event per test, a short retention, and session and Linear targets in
+  // the shapes Analyse reads, some of which the event service refuses (a bare-string title, a model-written one).
+  'packages/events-daemon/test/rule-analyse-domain.test.ts': ['raw /event =', 'raw /source =', 'raw item'],
+  'packages/events-daemon/test/rule-analyse.test.ts': ['raw /retention =', 'raw /targets =', 'raw item'],
   'packages/events-daemon/test/sse-persistence-auth.test.ts': [
     'raw /condition absent',
     'raw /event absent',

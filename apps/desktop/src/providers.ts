@@ -16,7 +16,8 @@ export function readProviders(value: unknown): Record<AiProvider, boolean> | nul
     if (typeof entry !== 'object' || entry === null) return null;
     const { id, hasKey } = entry as { id?: unknown; hasKey?: unknown };
     if (typeof id !== 'string' || typeof hasKey !== 'boolean') return null;
-    // Another provider the event service keeps a key for is not one Jev can use.
+    // A provider this screen has no row for — Anthropic's key, which Analyse uses, or Linear's, a Linear target's
+    // (0.33.0) — is passed over, so a newer event service still reads; the two Jev providers must each be there.
     if (!(AI_PROVIDERS as readonly string[]).includes(id)) continue;
     found[id as AiProvider] = hasKey;
   }

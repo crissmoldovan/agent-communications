@@ -11,6 +11,7 @@ import {
   resolvePaths,
 } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
+import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
   isSetupJudgeKind,
   localSetupEndpoint,
@@ -21,7 +22,9 @@ import {
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
@@ -114,7 +117,7 @@ import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-ju
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
-import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../store/event-secrets.ts';
+import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -479,6 +482,37 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     });
 
+  rule
+    .command('analyse <rule-id>')
+    .description(
+      "suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
+    )
+    .option('--draft <source>', 'analyse a draft rule document instead of the stored version: - reads it from stdin')
+    .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
+    .action(async (ruleId: string, options: Record<string, unknown>) => {
+      ran = true;
+      assertNotMcpServer(env, 'analyse');
+      // Analyse is a person's act (0.33.0 §3.3): it runs when they press it, on their own key, so an agent's shell is
+      // refused as well as the MCP server, before anything is read or sent.
+      const marker = agentMarker(env);
+      if (marker !== null)
+        throw new CommsError('APPROVAL_REQUIRED', 'only a person can analyse a rule, in the app or at their terminal', {
+          details: { marker },
+          hint: 'Ask the person to press Analyse on the rule in the app: Events → Rules.',
+        });
+      const provider = options.provider as string | undefined;
+      if (provider !== undefined && !isAnalyseProvider(provider))
+        throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
+      let draft: Readonly<Record<string, unknown>> | undefined;
+      if (options.draft !== undefined) {
+        if (options.draft !== '-') throw new CommsError('USAGE', '--draft reads the draft from stdin: give it -');
+        draft = await draftInput(streams);
+      }
+      // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseRuleAnalyseArguments({ ruleId, ...(draft === undefined ? {} : { draft }), provider });
+      print(await ruleAnalyse(ruleId, { ...controlOptions(program), draft, provider }));
+    });
+
   const targets = program.command('targets').description('inspect immutable local event target versions');
   targets.command('list').action(async () => {
     ran = true;
@@ -774,7 +808,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const providers = program
     .command('provider')
     .description(
-      'the providers whose keys the event service keeps — TypeSafe and OpenRouter for Jev, Linear for a Linear target — and whether each has a key',
+      'the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key',
     );
   providers
     .command('list')
@@ -1217,6 +1251,28 @@ function isTerminalSecretReveal(
   value: unknown,
 ): value is { readonly receipt: Record<string, unknown>; readonly terminalReveal: string } {
   return isRecord(value) && isRecord(value.receipt) && typeof value.terminalReveal === 'string';
+}
+
+/** Analyse's draft (0.33.0 §3.3): one JSON rule document on stdin, as the app's editor sends it. */
+async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<string, unknown>>> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > ANALYSE_DRAFT_MAX_BYTES)
+      throw new CommsError('USAGE', `a draft is at most ${ANALYSE_DRAFT_MAX_BYTES} bytes of JSON`);
+    chunks.push(bytes);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  } catch {
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  return parsed as Readonly<Record<string, unknown>>;
 }
 
 /** The most a provider key read from the app's stdin may be. */

@@ -466,7 +466,7 @@ function buildEventsMcpServer(
   strictControlTool(
     'events_provider_list',
     'List providers',
-    'Lists TypeSafe and OpenRouter, the providers Jev can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.',
+    'Lists TypeSafe, OpenRouter and Anthropic, the providers Jev and Analyse can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.',
     {},
     () => providerList(options),
   );

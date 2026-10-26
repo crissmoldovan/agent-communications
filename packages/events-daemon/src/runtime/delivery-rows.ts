@@ -1,6 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-/** The closed set of target kinds a delivery row can carry (migration 24; Linear from migration 30). */
+/** The closed set of target kinds a delivery row can carry (migration 24; Linear from migration 31). */
 export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue' | 'linear';
 
 /**

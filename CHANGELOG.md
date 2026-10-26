@@ -9,6 +9,13 @@ together under one version.
   shows (`when a new message arrives in cue/gmail, in the inbox`, `match any`, `ask`, `then`, `keep`, `at most`), and
   `parseRuleText` reads it back to the same document, with each mistake's line and column. Anything the text has no
   words for is kept as `raw` JSON, so nothing is dropped. The grammar is in `packages/events/src/rule-text/GRAMMAR.md`.
+- **Analyse** (`@agentcomms/events-daemon`): `agent-events rule analyse <ruleId> [--draft -] --json` suggests how to
+  improve a rule part by part — from its own text and content-free counts of its last 30 days (a sending domain the
+  judge always refused, a bar between kept and dismissed scores, a rule that never matched), and from a model on your
+  own OpenRouter or Anthropic key for the judge's question, a session's text and a Linear title — and never applies
+  one. It reads and sends no message content, and runs only at your terminal or in the app. `provider key set` takes
+  `anthropic`; a judged decision now keeps its sender's domain, never the address, in its encrypted metadata (one
+  automatic migration, 29, gives Anthropic a key slot).
 - **A rule can add a Linear issue** (`@agentcomms/events-daemon`, `@agentcomms/events`):
   - **The key:** your Linear personal API key is kept beside the AI provider keys: `agent-events provider key set
     linear`, from the app or your own terminal, never from an agent. `provider list` names Linear too.
@@ -26,8 +33,8 @@ together under one version.
     the event service may reach. A rate limit or a 5xx is tried again as a webhook's failure is; Linear refusing it
     fails at once with Linear's code. A retry never adds a second issue: each try looks for the issue by its own id
     first. `deliveries list` and `delivery show` name the issue (`linear: { identifier, url }`), never what it says.
-  - **Migrations:** two event service migrations run on their own: a key slot for Linear, and a delivery that can
-    record its Linear issue.
+  - **Migrations:** two event service migrations run on their own: 30, a key slot for Linear, and 31, a delivery that
+    can record its Linear issue.
 
 ## 0.32.0
 

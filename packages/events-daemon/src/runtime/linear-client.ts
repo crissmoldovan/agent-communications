@@ -252,6 +252,7 @@ export class LinearClient {
         preparePinnedConnection({
           url: LINEAR_GRAPHQL_ENDPOINT,
           addressMode: 'global-only',
+          hostedPurpose: 'linear',
           ...(this.#resolver === undefined ? {} : { resolver: this.#resolver }),
         }),
         deadline,

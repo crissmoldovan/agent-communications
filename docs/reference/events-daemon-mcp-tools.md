@@ -34,7 +34,7 @@ This server identifies itself as `events`. Read each tool's input schema before 
 | [`events_budget_show`](#events_budget_show) | Lists immutable judge budgets and the active singleton. |
 | [`events_budget_update`](#events_budget_update) | Creates a pending immutable global budget and prepares its approval. |
 | [`events_judge_kinds_list`](#events_judge_kinds_list) | Lists each judge kind as disabled or enabled, or Laya as unavailable here with its reason. |
-| [`events_provider_list`](#events_provider_list) | Lists TypeSafe and OpenRouter, the providers Jev can use, and Linear, where a Linear target adds issues, with whether each has a key. |
+| [`events_provider_list`](#events_provider_list) | Lists TypeSafe, OpenRouter and Anthropic, the providers Jev and Analyse can use, and Linear, where a Linear target adds issues, with whether each has a key. |
 | [`events_judge_kind_enable`](#events_judge_kind_enable) | Prepares, but never approves or claims, judge-kind enablement. |
 | [`events_judge_kind_disable`](#events_judge_kind_disable) | Immediately disables one judge kind; for Laya it also cancels a download and keeps verified files. |
 | [`events_judge_model_status`](#events_judge_model_status) | Reports the local Laya runtime and model state, byte progress and any failure or unavailable reason. |
@@ -281,7 +281,7 @@ Takes no arguments.
 
 ### `events_provider_list`
 
-Lists TypeSafe and OpenRouter, the providers Jev can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.
+Lists TypeSafe, OpenRouter and Anthropic, the providers Jev and Analyse can use, and Linear, where a Linear target adds issues, with whether each has a key. The person adds keys in the app’s Settings.
 
 *read-only · idempotent*
 
