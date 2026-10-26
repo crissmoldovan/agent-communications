@@ -2836,7 +2836,7 @@
       "operation": "integrationShow",
       "argv": ["linear"],
       "expect": { "integration": "linear" },
-      "reason": "What the person's Linear key can see — their workspace, its teams and a team's labels — is read with their own key for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reads it; events_provider_list tells an agent whether a Linear key is kept."
+      "reason": "What Linear shows the person — their workspace, its teams and a team's labels, fetched with their own Linear key — is for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reaches it; events_provider_list tells an agent whether a Linear key is kept."
     },
     {
       "id": "events-daemon.mcp.serve",

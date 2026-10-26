@@ -122,6 +122,24 @@ refuses it: say so. For a dead letter, the tool drops the kept payload, as befor
 refused with the reason `DELIVERY_IN_FLIGHT`. A lane's deliveries are not there for a window that is not bound to that
 lane.
 
+## Linear target
+
+A rule can add an issue to the person's Linear workspace: a target of kind `linear` names the team (`{ id, key }`), its
+labels (`[{ id, name }]`), who it is assigned to (`"me"`, `{ id }` or `null`), and a `title` and `description`, each
+`{ "text": … }` with `{{field}}` slots.
+
+- **The person connects Linear.** Their Linear API key is theirs, added in the desktop app (Settings → Integrations) or
+  at their own terminal. `events_provider_list` says whether a Linear key is kept, never the key. When there is none,
+  ask the person to connect Linear; never ask for, repeat or pass on a key.
+- **Ask for the team and labels.** You cannot see the workspace, its teams or their labels: ask the person which team
+  and labels the issue should have, or to choose them in the app. Never invent a team, label or user id.
+- **Slots name mapped fields only.** Each `{{field}}` names a field the rule's mapping keeps, such as `{{subject}}` or
+  `{{from.address}}`; the rule is refused at activation otherwise. A model-written title or description is not
+  available yet. What a sender wrote reaches the issue as quoted text, never as Markdown.
+- **Propose, then hand over.** `events_target_add` makes the target version and `events_rule_create` the rule naming it;
+  activation is the person's approval, as for every rule. An issue exists only once `events_deliveries_list` shows the
+  delivery with its `linear` identifier.
+
 ## Approval handoff
 
 An approval id, digest and preview mean the proposed activation is still pending. Give the approval id and preview to
@@ -133,8 +151,8 @@ the call to force activation, reconstruct a selector, or relay a challenge.
 ## Human-only boundaries
 
 Do not invoke dry-run record reads, delivery details, queue item reads, clearing the queue, binding a lane, message
-stories, judge setup, AI provider keys, retained rule tests, target resume, held decisions, standing approval, or daemon
-secret operations. State the relevant human-only outcome exactly and hand it to the person:
+stories, judge setup, AI provider keys, the Linear integration's read, retained rule tests, target resume, held decisions,
+standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
@@ -145,6 +163,7 @@ secret operations. State the relevant human-only outcome exactly and hand it to 
 - Message list and show: “What happened to each message — its deliveries, the queue item it became and that item's history: which agent window was woken for it and read it, and who marked it — is the person's own view, at a terminal or in the app. No MCP tool returns it, so no agent window learns of an item in a lane bound to another (0.32.0 spec §3.6, §4).”
 - Judge setup: “Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2).”
 - AI provider keys: “An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26).”
+- Linear integration: “What Linear shows the person — their workspace, its teams and a team's labels, fetched with their own Linear key — is for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). It refuses inside the event service's MCP server, and no tool reaches it; events_provider_list tells an agent whether a Linear key is kept.”
 - Retained rule test: “Retained sender content may be selected only by a person outside model context.”
 - Target resume: “A person, not model context, decides to reopen a degraded target reset barrier.”
 - Held decision: “A held model decision can be resolved only by a person at terminal/app, never by model context.”
