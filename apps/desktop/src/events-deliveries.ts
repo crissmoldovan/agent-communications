@@ -194,6 +194,24 @@ export function madeAt(row: Pick<DeliveryRow, 'deliveredAt' | 'expiresAt'>, rete
   return made > 0 ? made : null;
 }
 
+/** The longest the dry-run log keeps an entry (the event service's `MAX_DRYRUN_RETENTION_MS`): 24 hours. */
+export const DRY_RUN_KEPT_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whether a dry-run delivery's log entry is gone (0.34.0 design B5): it was written longer ago than its target keeps one,
+ * which is 24 hours at most. Its row stays in the list, folded. Only a delivered dry run, written at a known time; any
+ * other delivery, or one whose time is not known, is not said to be gone.
+ */
+export function dryRunRemoved(
+  row: Pick<DeliveryRow, 'state' | 'deliveredAt'> & { kind: string | null },
+  retentionMs: number | null,
+  now: number,
+): boolean {
+  if (row.kind !== 'dry-run' || row.state !== 'delivered' || row.deliveredAt === null) return false;
+  const kept = retentionMs === null || retentionMs <= 0 ? DRY_RUN_KEPT_MS : Math.min(retentionMs, DRY_RUN_KEPT_MS);
+  return row.deliveredAt + kept <= now;
+}
+
 /** What a delivery's last try got, in words to follow "Its last try:", or null when nothing is recorded. */
 export function lastAnswer(row: Pick<DeliveryRow, 'lastErrorCode' | 'lastStatus' | 'targetKind'>): string | null {
   const who = row.targetKind === 'webhook' ? 'the webhook' : 'the target';
