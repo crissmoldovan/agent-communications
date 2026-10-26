@@ -116,6 +116,46 @@ describe('Review and approve… says all a target is given', () => {
     for (const part of lines.flat()) if (part.text.includes(LYING_KEY)) expect(part.kind).toBe('untrusted');
   });
 
+  it('a webhook shows its whole address and says when its format skips the envelope; a pointer with no words is boxed', () => {
+    const hook = {
+      targetId: 'w',
+      version: 1,
+      kind: 'webhook',
+      url: { kind: 'plain', value: 'https://hooks.example.com:8443/path/token?x=1' },
+      approvedAddressSet: ['93.184.216.34'],
+      signing: 'standard-webhooks',
+      ordering: 'strict',
+      retryLimit: 5,
+      representation: 'plain',
+    };
+    const plainHook = whatLeaves({
+      ...RULE,
+      agentic: undefined,
+      mapping: { subject: { $path: '/subject' }, list: { $path: '/headers/list-id' } },
+      targets: [hook],
+    } as never);
+    const all = words(plainHook).join('\n');
+    expect(authored(plainHook)).toEqual(
+      expect.arrayContaining(['https://hooks.example.com:8443/path/token?x=1', '93.184.216.34', '/headers/list-id']),
+    );
+    expect(all).toContain('without the untrusted-content envelope');
+    expect(plainHook.flat().some((part) => part.kind === 'value')).toBe(false);
+    const secret = whatLeaves({
+      ...RULE,
+      agentic: undefined,
+      targets: [
+        {
+          ...hook,
+          url: { kind: 'secret', scheme: 'https', host: 'hooks.example.com', port: 8443, sha256: 'ab'.repeat(32) },
+          representation: 'enveloped',
+        },
+      ],
+    } as never);
+    const shown = words(secret).join('\n');
+    expect(shown).toContain('https://hooks.example.com:8443, the rest of its address kept secret, its fingerprint');
+    expect(shown).toContain("The webhook gets the sender's words inside the untrusted-content envelope");
+  });
+
   it('a part or field the app cannot read is shown as written, never left out', () => {
     const odd = {
       ...RULE,

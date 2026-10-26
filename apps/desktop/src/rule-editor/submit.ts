@@ -149,7 +149,8 @@ function fieldList(pointers: readonly string[]): RulePart[] {
   if (pointers.length === 0) return [plain('nothing of the message')];
   return pointers.flatMap((pointer, index) => {
     const name = FIELD_WORDS[pointer];
-    const part = name === undefined ? value(pointer) : plain(name);
+    // A pointer the app has no words for is the author's, boxed as theirs: never set out as the app's own.
+    const part = name === undefined ? authored(pointer) : plain(name);
     const between = index === 0 ? [] : [plain(index === pointers.length - 1 ? ' and ' : ', ')];
     return [...between, part];
   });
@@ -263,6 +264,12 @@ function wholeRecord(mapping: unknown, fields: RulePart[]): RulePart[] {
 /** A Linear slot's mapped field, as the event service reads it (`slotPointer`): `from.address` is `/from/address`. */
 const SLOT = /\{\{\s*([A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*)\s*\}\}/gu;
 
+/** Where a model part's provider sends its fields (`ANALYSE_ROUTES`): the two a context part may name. */
+const MODEL_ROUTES: Readonly<Record<string, string>> = {
+  openrouter: 'OpenRouter (openrouter.ai)',
+  anthropic: 'Anthropic (api.anthropic.com)',
+};
+
 const JEV_ROUTES: Readonly<Record<string, string>> = {
   openrouter: 'OpenRouter (openrouter.ai), which passes it to TypeSafe',
   typesafe: 'TypeSafe (api.typesafe.ai)',
@@ -295,22 +302,9 @@ export function whatLeaves(rule: JsonObject): RulePart[][] {
       case 'dry-run':
       case 'queue':
         break;
-      case 'webhook': {
-        const url = isObject(target.url) ? target.url : {};
-        const host =
-          url.kind === 'secret' && typeof url.host === 'string'
-            ? url.host
-            : typeof url.value === 'string'
-              ? hostOf(url.value)
-              : null;
-        lines.push([
-          ...wholeRecord(rule.mapping, fields),
-          plain(' go to the webhook at '),
-          value(host ?? 'its address'),
-          plain('.'),
-        ]);
+      case 'webhook':
+        lines.push(...webhookLines(target, wholeRecord(rule.mapping, fields)));
         break;
-      }
       case 'sse':
         lines.push([...wholeRecord(rule.mapping, fields), plain(' go to the apps that subscribe to the live stream.')]);
         break;
@@ -366,7 +360,9 @@ function generated(
     plain(' — it is sent '),
     ...mappedList(mapping, part.from),
     plain(' through '),
-    value(part.provider || 'its provider'),
+    ...(MODEL_ROUTES[part.provider] === undefined
+      ? [authored(part.provider || '(no provider)')]
+      : [plain(MODEL_ROUTES[part.provider] as string)]),
     plain(', on your own key'),
   ];
 }
@@ -503,10 +499,65 @@ function linearLines(target: JsonObject, mapping: unknown): RulePart[][] {
   return lines;
 }
 
-function hostOf(url: string): string | null {
-  try {
-    return new URL(url).hostname || null;
-  } catch {
-    return null;
-  }
+const WEBHOOK_FIELDS = [
+  'targetId',
+  'version',
+  'kind',
+  'url',
+  'approvedAddressSet',
+  'signing',
+  'ordering',
+  'retryLimit',
+  'representation',
+];
+
+/**
+ * A webhook target (`webhook-target.ts`): its whole address — scheme, host, port and path, as the author wrote it; for
+ * a secret one, the part that is not secret and its fingerprint — the addresses it may reach, and whether the sender's
+ * words go inside the untrusted-content envelope or, in the plain format, as they are.
+ */
+function webhookLines(target: JsonObject, record: RulePart[]): RulePart[][] {
+  const url = isObject(target.url) ? target.url : null;
+  const lines: RulePart[][] = [];
+  if (url?.kind === 'plain' && typeof url.value === 'string')
+    lines.push([...record, plain(' go to the webhook at '), authored(url.value), plain('.')]);
+  else if (
+    url?.kind === 'secret' &&
+    typeof url.scheme === 'string' &&
+    typeof url.host === 'string' &&
+    typeof url.port === 'number'
+  ) {
+    const host = url.host.includes(':') ? `[${url.host}]` : url.host;
+    lines.push([
+      ...record,
+      plain(' go to the webhook at '),
+      authored(`${url.scheme}://${host}:${url.port}`),
+      plain(', the rest of its address kept secret, its fingerprint '),
+      authored(typeof url.sha256 === 'string' ? url.sha256 : '(none)'),
+      plain('.'),
+    ]);
+  } else
+    lines.push([...record, plain(' go to a webhook whose address is, as written: '), authored(written(target.url))]);
+  if (Array.isArray(target.approvedAddressSet) && target.approvedAddressSet.length > 0)
+    lines.push([
+      plain('It may reach only '),
+      ...target.approvedAddressSet.flatMap((address, index) => [
+        ...(index === 0 ? [] : [plain(', ')]),
+        authored(written(address)),
+      ]),
+      plain('.'),
+    ]);
+  if (target.representation === 'plain')
+    lines.push([
+      plain(
+        "The webhook's format is plain: the sender's words go as they are, without the untrusted-content envelope that marks them as the sender's.",
+      ),
+    ]);
+  else if (target.representation === 'enveloped')
+    lines.push([
+      plain("The webhook gets the sender's words inside the untrusted-content envelope, marked as the sender's."),
+    ]);
+  else lines.push([plain("The webhook's format, as written: "), authored(written(target.representation))]);
+  lines.push(...otherFields(target, WEBHOOK_FIELDS));
+  return lines;
 }
