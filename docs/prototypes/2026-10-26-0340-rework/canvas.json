@@ -6,10 +6,20 @@
   },
   "title": "Agent Comms 0.34 rework prototype",
   "launch": {
-    "view": "canvas"
+    "view": "focused",
+    "file": "Main.dc.html"
   },
   "pages": [],
   "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": -1500,
+      "w": 1280,
+      "h": 1000,
+      "title": "Start here: this round’s changes",
+      "expand": "fill",
+      "is_interactive": true
+    },
     "YourAgents.dc.html": {
       "x": 0,
       "y": 0,
@@ -41,14 +51,14 @@
       "x": 0,
       "y": 2280,
       "w": 1280,
-      "h": 2560,
-      "title": "MCP servers, one card each (testBuild=true for the test build)",
+      "h": 1480,
+      "title": "MCP servers: Agent Comms, one row per AI app (empty=true, testBuild=true)",
       "expand": "fill",
       "is_interactive": true
     },
     "EventsService.dc.html": {
       "x": 0,
-      "y": 5220,
+      "y": 4140,
       "w": 1280,
       "h": 1180,
       "title": "Events → Service: switched off, on or paused (state=)",
@@ -57,7 +67,7 @@
     },
     "Deliveries.dc.html": {
       "x": 1360,
-      "y": 5220,
+      "y": 4140,
       "w": 1280,
       "h": 1460,
       "title": "Events → Deliveries: a rule in dry-run",
@@ -66,7 +76,7 @@
     },
     "Doctor.dc.html": {
       "x": 0,
-      "y": 7060,
+      "y": 5980,
       "w": 1280,
       "h": 1600,
       "title": "Doctor: a long detail wraps beside the name",
@@ -75,7 +85,7 @@
     },
     "Face.dc.html": {
       "x": 1360,
-      "y": 7060,
+      "y": 5980,
       "w": 1280,
       "h": 1000,
       "title": "Which face? Inter beside SF Pro",
@@ -84,6 +94,7 @@
     }
   },
   "order": [
+    "Main.dc.html",
     "YourAgents.dc.html",
     "AccountSlack.dc.html",
     "AccountGmail.dc.html",
@@ -110,15 +121,22 @@
     },
     "row3": {
       "x": 0,
-      "y": 4960,
+      "y": 3880,
       "text": "3 · Events: the service in plain words, and where a match goes",
       "kind": "title1",
       "maxW": 2640
     },
     "row4": {
       "x": 0,
-      "y": 6800,
+      "y": 5720,
       "text": "4 · Doctor's fixed layout, and which face",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row0": {
+      "x": 0,
+      "y": -1760,
+      "text": "0 · Start here",
       "kind": "title1",
       "maxW": 2640
     }

@@ -16,9 +16,9 @@ Then open http://localhost:8340/. `index.html` lists every screen.
 - Each screen is clickable. Every button that changes something opens the step it would in the app: an approval, or a
   line saying it applied at once.
 - Add `?theme=dark` to a screen's address for its dark look.
-- Other levers work the same way: `McpServers.dc.html?testBuild=true`, `EventsService.dc.html?state=on` (or `off`,
-  `paused`), `AccountGmail.dc.html?account=personal%2Fgmail`, `AccountSlack.dc.html?view=about`,
-  `Doctor.dc.html?layout=before`.
+- Other levers work the same way: `McpServers.dc.html?testBuild=true` (or `?empty=true` for the first time),
+  `EventsService.dc.html?state=on` (or `off`, `paused`), `AccountGmail.dc.html?account=personal%2Fgmail`,
+  `AccountSlack.dc.html?view=about`, `Doctor.dc.html?layout=before`.
 - A small **new** chip marks what the app can't do yet. Everything without one is there today, reworded or moved.
 
 The screens need a local server, not `file://`, because each one loads `support.js`. That file is the small viewer
@@ -39,7 +39,7 @@ This folder hasn't been put on a canvas yet.
 | Row | Screens | What it shows |
 |---|---|---|
 | 1 · Your agents | YourAgents, AccountSlack, AccountGmail | what people see when an agent writes, your name and word, the exceptions; each account's Agents here |
-| 2 · MCP servers | McpServers | one card per server, with each app under it; the test build's state |
+| 2 · MCP servers | McpServers | one row per AI app, each with Agent Comms connected or not, its parts, and up to date or not; the first time; the test build's state |
 | 3 · Events | EventsService, Deliveries | the service as off, on or paused, in words; a rule in dry-run, and where a match goes |
 | 4 · Doctor and face | Doctor, Face | the fixed check layout, beside how it was; Inter beside SF Pro |
 
@@ -50,7 +50,8 @@ This folder hasn't been put on a canvas yet.
 - **Each account's Agents here:** the whole tab — what agents may do as switches, the per-conversation (Slack) and
   per-person (Gmail) lines, how messages look (Slack), and the replies approved in advance, moved from the Agent
   screen. Every loosening here is approved in the app on macOS; today these are approved in Terminal.
-- **MCP servers:** the card layout, and Bring up to date for an app that starts an older copy.
+- **MCP servers:** one row per app; Connect Agent Comms…, with the parts you use, in one approval; Bring everything up
+  to date, approved in the app on macOS.
 - **Events → Service:** Switch on… approved in the app on macOS (today `enable-all` is approved in Terminal).
 - **Events → Deliveries:** a dry-run log you can open as a list.
 
