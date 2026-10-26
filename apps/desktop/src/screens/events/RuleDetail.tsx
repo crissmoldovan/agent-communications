@@ -161,7 +161,16 @@ function VersionTimes({ version }: { version: RuleVersionView }) {
 const VERSION_TONES = { active: 'ok', superseded: 'neutral', revoked: 'neutral' } as const;
 
 /** Each version, newest first, with its times and what changed from the one before it. */
-function Versions({ versions, onApprovals }: { versions: readonly RuleVersionView[]; onApprovals?: () => void }) {
+function Versions({
+  versions,
+  on,
+  onApprovals,
+}: {
+  versions: readonly RuleVersionView[];
+  /** Whether a version is on: only then does a new one wait while this one keeps running. */
+  on: boolean;
+  onApprovals?: () => void;
+}) {
   const newestFirst = [...versions].reverse();
   return (
     <Part title={RULE_COPY.versions}>
@@ -195,7 +204,7 @@ function Versions({ versions, onApprovals }: { versions: readonly RuleVersionVie
           );
         })}
       </ul>
-      <p className="text-(length:--cue-text-label) text-fg-muted">{RULE_COPY.newVersion}</p>
+      {on ? <p className="text-(length:--cue-text-label) text-fg-muted">{RULE_COPY.newVersion}</p> : null}
     </Part>
   );
 }
@@ -408,9 +417,12 @@ export function RuleDetail({
               <Facet key={title} title={title} lines={lines} names={lists.names} />
             ))}
           </div>
-          <Week versions={versions} onDeliveries={() => nav.showDeliveriesOf(id)} />
+          {status === 'not-switched-on' ? null : (
+            <Week versions={versions} onDeliveries={() => nav.showDeliveriesOf(id)} />
+          )}
           <Versions
             versions={versions}
+            on={status === 'on'}
             {...(onScreen === undefined ? {} : { onApprovals: () => onScreen('approvals') })}
           />
           <TechnicalDetails id={id} versions={versions} />

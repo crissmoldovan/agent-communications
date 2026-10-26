@@ -266,6 +266,9 @@ describe('Events → Rules', () => {
       'Webhook, hooks.ops.example',
     );
     expect(within(page).getByRole('region', { name: 'Versions' }).textContent).toContain('Version 1 · not switched on');
+    // It never ran: no week to count, and nothing that keeps running while a new version waits.
+    expect(within(page).queryByRole('region', { name: 'The last 7 days' })).toBeNull();
+    expect(page.textContent).not.toContain('keeps running');
     // Nothing to turn off: it never ran.
     expect(within(page).queryByRole('button', { name: 'Turn off' })).toBeNull();
     expect(within(page).queryByRole('button', { name: 'Remove…' })).toBeNull();

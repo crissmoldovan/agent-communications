@@ -78,7 +78,7 @@ function facts(status: RuleStatus, versions: readonly RuleVersionView[] | null, 
     counts === null ? null : `${counts.failed} ${counts.failed === 1 ? 'problem' : 'problems'}`,
     last === null ? null : (
       <>
-        last passed on <Short at={last} />
+        latest delivery <Short at={last} />
       </>
     ),
     active?.activatedAt == null ? null : (
