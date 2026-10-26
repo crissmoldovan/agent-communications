@@ -131,7 +131,8 @@ subject version 1 state active and approval and activation", and a next try "alw
   it was switched on, replaced or revoked, a one-sentence `summary` such as "When mail arrives in cue/gmail with
   'invoice' in the subject, ask Jev '…'. If it says yes, put it in the Queue, lane billing.", and what it did in the
   last 7 days: matched, judged yes and no, held, delivered and failed. Every word the rule's author wrote is marked as
-  theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve. These fields
+  theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve, the author's
+  text in escaped double quotes it cannot close. These fields
   are added: nothing is renamed or removed.
 - **Deliveries say where they went.** `deliveries list` rows gain the target's kind, the last try's answer, the
   decision and event they came from, when they were delivered where a log keeps that, and when one failed for good.

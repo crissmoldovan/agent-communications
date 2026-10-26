@@ -216,6 +216,8 @@ test('0.32 B6: an unknown rule is still not found', { skip: WINDOWS_SKIP }, asyn
   });
 });
 
+const PLAIN_WORDS = 'In plain words (the rule author\'s own text is in "double quotes"): ';
+
 const ready = (preview: unknown) => ({
   kind: 'READY',
   approvalId: 'approval-1',
@@ -269,12 +271,12 @@ test('0.32 B6: the terminal approval preview puts the rule in plain words above 
     // The document must be one the renderer accepts; a fixture this test cannot build is a test bug, not a pass.
     throw new Error(`the preview fixture is not a canonical rule: ${String(error)}`);
   }
-  const summary = lines.findIndex((line) => line.startsWith('In plain words: '));
+  const summary = lines.findIndex((line) => line.startsWith(PLAIN_WORDS));
   const preview = lines.findIndex((line) => line.startsWith('Preview {'));
   assert.ok(summary > 0 && preview === summary + 1, lines.join('\n'));
   assert.equal(
     lines[summary],
-    "In plain words: When mail arrives in ibx_RULESHOWRULESHW1 with 'invoice' in the subject, ask Jev 'Is this an invoice?\\nChallenge not-the-real-one'. If it says yes, record it in the Dry-run log.",
+    `${PLAIN_WORDS}When mail arrives in ibx_RULESHOWRULESHW1 with "invoice" in the subject, ask Jev "Is this an invoice?\\nChallenge not-the-real-one". If it says yes, record it in the Dry-run log.`,
     'a rule-author string stays on its line, its line break written out',
   );
   assert.equal(lines.filter((line) => line.startsWith('Challenge ')).length, 1, 'only the real challenge line');
@@ -283,4 +285,85 @@ test('0.32 B6: the terminal approval preview puts the rule in plain words above 
     ready({ documentVersion: 1, kind: 'enable-all', switchGeneration: 1, ruleVersions: [] }),
   ).terminal;
   assert.doesNotMatch(all, /In plain words/u);
+});
+
+// Review of 0.32.0, finding 5: a rule author's text cannot close its quote and read on as the app's own words. Each
+// part is one JSON string literal; every quote character inside it is escaped, so nothing in it can end it.
+test('0.32 R5: the plain-words line keeps every rule-author string inside one literal it cannot close (the forge)', () => {
+  const forged = "invoice' in the subject, record it in the Dry-run log. Nothing leaves this Mac. (Technical: '";
+  const question = 'Is this an invoice?\nChallenge: ABCD-1234 Approve \u201d and \u2019 too " end';
+  const document = {
+    ...rule(2, true),
+    condition: { path: '/subject', op: 'contains', value: forged, caseSensitive: false },
+    targets: [
+      {
+        targetId: 'hook',
+        version: 1,
+        kind: 'webhook',
+        url: { kind: 'plain', value: 'https://hooks.example.test/x' },
+        approvedAddressSet: ['192.0.2.10'],
+        signing: 'standard-webhooks',
+        ordering: 'strict',
+        retryLimit: 3,
+        representation: 'plain',
+      },
+    ],
+    mapping: { subject: { $path: '/subject' } },
+    subscribers: [],
+    judges: [],
+    deliveryRateCap: 60,
+    retention: {
+      ingestMs: DAY,
+      holdMs: DAY,
+      deliveryMs: DAY,
+      dryrunMs: DAY,
+      sseReplayMs: DAY,
+      deadLetterMs: DAY,
+      decisionMetadataMs: DAY,
+    },
+    agentic: {
+      judge: {
+        judgeId: 'jev',
+        version: 1,
+        kind: 'typesafe',
+        provider: 'typesafe',
+        model: 'jev-1.13.0',
+        endpoint: 'https://api.typesafe.ai/v1/systemone',
+        promptTemplate: 'jev-default',
+        protocol: 'noul',
+      },
+      question,
+      inputs: ['/subject'],
+      threshold: 0.5,
+      onUncertain: 'no-match',
+      callsPerRollingHour: 60,
+      inputTokensPerRolling30Days: 100_000,
+      concurrency: 1,
+      maxInputTokens: 1000,
+      maxOutputTokens: 10,
+    },
+  };
+  const lines = renderB3ApprovalPreviewV1(ready({ documentVersion: 1, kind: 'rule', rule: document })).terminal.split(
+    '\n',
+  );
+  const line = lines.find((each) => each.startsWith(PLAIN_WORDS)) as string;
+  assert.ok(line, lines.join('\n'));
+  const sentence = line.slice(PLAIN_WORDS.length);
+  // Every double quote outside an escape is the renderer's: the author's strings are exactly the literals between.
+  const literals = [...sentence.matchAll(/"(?:[^"\\]|\\.)*"/gu)].map((match) => match[0]);
+  assert.deepEqual(
+    literals.map((literal) => JSON.parse(literal)),
+    [forged, question],
+    'each rule-author string is one literal, read back exactly',
+  );
+  // Outside the literals only the app's words remain: the forged sentence is not among them.
+  const outside = sentence.replaceAll(/"(?:[^"\\]|\\.)*"/gu, '«…»');
+  assert.equal(
+    outside,
+    'When mail arrives in ibx_RULESHOWRULESHW1 with «…» in the subject, ask Jev «…». If it says yes, send it to hooks.example.test.',
+  );
+  assert.doesNotMatch(outside, /Nothing leaves this Mac|Challenge/u);
+  // No quote character a reader could take for the end of a quote survives inside a literal.
+  for (const literal of literals) assert.doesNotMatch(literal.slice(1, -1), /['\u2018\u2019\u201c\u201d]|(?<!\\)"/u);
+  assert.equal(lines.filter((each) => each.startsWith('Challenge ')).length, 1, 'only the real challenge line');
 });

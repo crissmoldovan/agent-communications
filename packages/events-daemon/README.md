@@ -243,7 +243,8 @@ agent-events message show <event-id> --json          # one message, with every l
 - **Rules and deliveries you can read (0.32.0):**
   - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words
     (its `summary`, as parts; a part of kind `untrusted` is the rule author's own text), and what it did in the last 7
-    days (`counts7d`). The approval preview prints the same words above the JSON you approve.
+    days (`counts7d`). The approval preview prints the same words above the JSON you approve, each piece of the rule
+    author's text as one escaped string in double quotes, which nothing it holds can close.
   - `deliveries list` gives each delivery's target kind, its last try's answer, the decision and event it came from,
     when it was delivered where a log keeps that, and when it failed for good. A delivered row has no next try.
   - `agent-events delivery show <delivery-id>` gives one delivery's details: its decision and the judge's answer, the
