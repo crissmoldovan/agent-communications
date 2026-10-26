@@ -1,4 +1,5 @@
 import { CommsError } from '@agentcomms/core';
+import { sqlTargetLane } from '../domain/lanes.ts';
 import {
   isEventId,
   isMessagesCursor,
@@ -202,7 +203,7 @@ export class MessagesStore {
     const deliveries = database
       .prepare(
         `SELECT del.id, d.event_id, del.target_kind, del.target_id, del.state,
-                CASE WHEN del.target_kind = 'queue' THEN json_extract(tv.document, '$.lane.name') END AS lane
+                ${sqlTargetLane('tv.document')} AS lane
            FROM deliveries del
            JOIN decisions d ON d.id = del.decision_id
            LEFT JOIN target_versions tv ON tv.target_id = del.target_id AND tv.version = del.target_version
@@ -216,7 +217,7 @@ export class MessagesStore {
       .prepare(
         `SELECT id, event_id, state, state_at, lane FROM (
            SELECT qi.id, qi.event_id, qi.state, qi.state_at,
-                  json_extract(tv.document, '$.lane.name') AS lane,
+                  ${sqlTargetLane('tv.document')} AS lane,
                   ROW_NUMBER() OVER (PARTITION BY qi.event_id ORDER BY qi.appended_at, qi.id) AS rank
              FROM queue_items qi
              LEFT JOIN target_versions tv ON tv.target_id = qi.target_id AND tv.version = qi.target_version

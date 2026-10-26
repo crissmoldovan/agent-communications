@@ -13,6 +13,15 @@ export function isLaneName(value: unknown): value is string {
   return typeof value === 'string' && LANE_NAME.test(value);
 }
 
+/**
+ * The lane a stored target document carries, as SQL over the JSON expression `document` — `targetLane`'s twin (B5): a
+ * queue target's `lane.name`, or the lane an agent-session target finds its session by (0.33.0 §3.5), whose items fall
+ * back to that lane's queue. NULL for every other target.
+ */
+export function sqlTargetLane(document: string): string {
+  return `(CASE json_extract(${document}, '$.kind') WHEN 'queue' THEN json_extract(${document}, '$.lane.name') WHEN 'session' THEN json_extract(${document}, '$.find.lane') END)`;
+}
+
 /** A Claude Code session id, as `CLAUDE_CODE_SESSION_ID` carries it: a lowercase UUID. */
 const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
 /** Core's activity session key: 16 lowercase hex characters (activity design S2). */

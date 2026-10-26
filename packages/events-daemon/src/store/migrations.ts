@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import { sqlTargetLane } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE, JUDGE_KINDS } from '../domain/lifecycle.ts';
 import { PHASE_E_DURABLE_SCHEMA_STATEMENTS, SCHEMA_V1_STATEMENTS } from './schema-v1.ts';
 
@@ -988,6 +989,124 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     statements: [
       "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
       "UPDATE meta SET value = '28' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Agent sessions through claude-stream (0.33.0 design §3.5): a delivery may target a session the relay runs. The
+    // deliveries kind check is a closed set, so the table is rebuilt with its exact columns, in order, to admit it, as
+    // migration 24 did for the queue. Three tables follow, all content-free:
+    // - session_queue: a delivery that met a busy session waits here, oldest first per relay session, until the
+    //   relay's event stream says that session's run ended; the delivery keeps its own encrypted record and retention,
+    //   and its row goes with it — the triggers run whenever the delivery stops being one that may still be tried;
+    // - session_deliveries: the relay session a delivery chose, and the run it made, so a retry reuses both;
+    // - agent_session_settings: where the person's relay is, and the folders a file part may be read from.
+    // A session target found by a lane carries that lane (B5), so a lane's binding follows those targets too.
+    version: 29,
+    name: 'agent-session-target-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE deliveries_v29 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'session')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing'))
+      ) STRICT`,
+      `INSERT INTO deliveries_v29
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v29 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      `CREATE TABLE session_queue (
+        delivery_id TEXT PRIMARY KEY,
+        relay_session_id TEXT NOT NULL CHECK (length(relay_session_id) = 41 AND substr(relay_session_id, 1, 5) = 'sess_'),
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL CHECK (target_version > 0),
+        queued_at INTEGER NOT NULL,
+        released_at INTEGER
+      ) STRICT`,
+      'CREATE INDEX session_queue_order ON session_queue(relay_session_id, queued_at, delivery_id)',
+      `CREATE TABLE session_deliveries (
+        delivery_id TEXT PRIMARY KEY,
+        relay_session_id TEXT NOT NULL CHECK (length(relay_session_id) = 41 AND substr(relay_session_id, 1, 5) = 'sess_'),
+        started INTEGER NOT NULL CHECK (started IN (0, 1)),
+        run_id TEXT CHECK (run_id IS NULL OR (length(run_id) = 40 AND substr(run_id, 1, 4) = 'run_')),
+        chosen_at INTEGER NOT NULL
+      ) STRICT`,
+      `CREATE TRIGGER session_queue_goes_with_its_delivery
+        AFTER UPDATE OF state ON deliveries WHEN NEW.state NOT IN ('queued', 'retryable', 'disclosing')
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = NEW.id;
+        END`,
+      `CREATE TRIGGER session_work_goes_with_its_delivery
+        AFTER DELETE ON deliveries
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = OLD.id;
+          DELETE FROM session_deliveries WHERE delivery_id = OLD.id;
+        END`,
+      `CREATE TABLE agent_session_settings (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        relay_home TEXT CHECK (relay_home IS NULL OR (length(relay_home) BETWEEN 2 AND 1024 AND substr(relay_home, 1, 1) = '/')),
+        relay_port INTEGER CHECK (relay_port IS NULL OR relay_port BETWEEN 1 AND 65535),
+        allowed_folders TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(allowed_folders) AND json_type(allowed_folders) = 'array'),
+        updated_at INTEGER NOT NULL
+      ) STRICT`,
+      'DROP TRIGGER lane_bindings_follow_rule_pointer_update',
+      'DROP TRIGGER lane_bindings_follow_rule_pointer_delete',
+      ...(['UPDATE', 'DELETE'] as const).map(
+        (change) => `CREATE TRIGGER lane_bindings_follow_rule_pointer_${change.toLowerCase()}
+        AFTER ${change} ON active_versions WHEN OLD.kind = 'rule'
+        BEGIN
+          DELETE FROM lane_bindings WHERE lane NOT IN (
+            SELECT ${sqlTargetLane('target.value')}
+              FROM active_versions AS pointer
+              JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
+              JOIN json_each(stored.document, '$.targets') AS target
+             WHERE pointer.kind = 'rule'
+               AND ${sqlTargetLane('target.value')} IS NOT NULL
+          );
+        END`,
+      ),
+      "UPDATE meta SET value = '29' WHERE key = 'schema_version'",
     ],
   },
 ];

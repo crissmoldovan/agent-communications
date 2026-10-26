@@ -1,4 +1,10 @@
-import type { AnyEventDefinition, JsonValue, MappedClassification } from '@agentcomms/events';
+import {
+  type AnyEventDefinition,
+  contextFieldValues,
+  type JsonValue,
+  type MappedClassification,
+  targetQueues,
+} from '@agentcomms/events';
 import type { CanonicalFullRuleDocument, TargetDocument } from '../domain/activation-documents.ts';
 import { type QueueItemContent, queueItemContent } from '../domain/queue-target.ts';
 import { sseDeliveryTarget } from '../domain/sse-subscriber.ts';
@@ -39,6 +45,18 @@ export interface QueueDeliveryRecord {
   readonly released: boolean;
 }
 
+/**
+ * An agent-session delivery's payload (0.33.0 design §3.5–§3.6): the mapped values its context reads, by pointer, and
+ * nothing else of the match; the queue item it leaves in the Queue when it falls back there, when it can; and whether
+ * a person let a held decision through. The prompt is written from it at dispatch, never stored.
+ */
+export interface SessionDeliveryRecord {
+  readonly kind: 'session-message';
+  readonly values: Readonly<Record<string, JsonValue>>;
+  readonly item?: QueueItemContent | undefined;
+  readonly released: boolean;
+}
+
 export async function prepareDeliveries(input: {
   readonly cipher: ProjectionCipher;
   readonly definition: AnyEventDefinition;
@@ -60,6 +78,10 @@ export async function prepareDeliveries(input: {
     const id = input.newId();
     if (target.kind === 'queue') {
       deliveries.push(await prepareQueueDelivery(input, target, id));
+      continue;
+    }
+    if (target.kind === 'session') {
+      deliveries.push(await prepareSessionDelivery(input, target, id));
       continue;
     }
     const constructed = constructTargetDelivery({
@@ -129,6 +151,42 @@ async function prepareQueueDelivery(
   };
 }
 
+/** A session delivery carries the mapped values its context reads, and its fallback item; both sealed for the row. */
+async function prepareSessionDelivery(
+  input: Parameters<typeof prepareDeliveries>[0],
+  target: Extract<DeliveryTarget, { readonly kind: 'session' }>,
+  id: string,
+): Promise<PreparedDelivery> {
+  const record: SessionDeliveryRecord = {
+    kind: 'session-message',
+    values: contextFieldValues(target.document.context, input.data),
+    ...(targetQueues(target.document)
+      ? {
+          item: queueItemContent({
+            eventType: input.rule.event.type,
+            mapping: input.rule.mapping,
+            event: input.event as JsonValue,
+            show: 'summary',
+          }),
+        }
+      : {}),
+    released: input.released === true,
+  };
+  const encryptedRecord = await input.cipher.encrypt(
+    { table: 'deliveries', column: 'encryptedRecord', key: [{ type: 'text', value: id }] },
+    Buffer.from(JSON.stringify(record)),
+  );
+  return {
+    id,
+    targetKey: targetDeliveryKey(target),
+    target,
+    representation: target.representation,
+    cloudEventBytes: '',
+    encryptedRecord,
+    expiresAt: fixedDeadline(input.createdAt, input.rule.retention.deliveryMs),
+  };
+}
+
 function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetDocument): DeliveryTarget {
   switch (target.kind) {
     case 'dry-run':
@@ -160,6 +218,15 @@ function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetD
         representation: 'plain',
         show: target.show,
         retentionMs: target.retentionMs,
+      };
+    case 'session':
+      // Its sender values are enveloped when the prompt is written: the record keeps them as the source sanitised them.
+      return {
+        kind: 'session',
+        targetId: target.targetId,
+        targetVersion: target.version,
+        representation: 'enveloped',
+        document: target,
       };
   }
 }

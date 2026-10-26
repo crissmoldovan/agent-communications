@@ -1,5 +1,6 @@
 import { type ApprovalStore, CommsError, type ConfigStore, newBoundary, wrapUntrusted } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { sqlTargetLane } from '../domain/lanes.ts';
 import {
   isQueueItemId,
   parseQueueItemContent,
@@ -119,7 +120,7 @@ export interface QueueScope {
 }
 
 /** The lane an item is in: its exact target version's, as the person approved it (B2). Null outside a lane. */
-const ITEM_LANE = `(SELECT json_extract(tv.document, '$.lane.name') FROM target_versions tv
+const ITEM_LANE = `(SELECT ${sqlTargetLane('tv.document')} FROM target_versions tv
   WHERE tv.target_id = qi.target_id AND tv.version = qi.target_version)`;
 
 const ROW_COLUMNS = `qi.id, qi.delivery_id, qi.decision_id, qi.rule_id, qi.rule_version, qi.target_id, qi.target_version,
