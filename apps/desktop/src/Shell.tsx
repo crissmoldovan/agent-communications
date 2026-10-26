@@ -6,6 +6,7 @@ import {
   History,
   Inbox,
   LayoutDashboard,
+  Plug,
   RefreshCw,
   Settings,
   Stethoscope,
@@ -13,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { AppearanceMenu } from './components/AppearanceMenu.tsx';
+import { NewTag } from './components/NewTag.tsx';
 import { QueueBadge } from './components/QueueBadge.tsx';
 import { COPY, type Screen, SECTIONS, SETTINGS } from './copy.ts';
 import { isMac } from './platform.ts';
@@ -21,6 +23,7 @@ const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
   queue: Inbox,
   accounts: Users,
+  connections: Plug,
   approvals: CheckCheck,
   activity: History,
   agent: Bot,
@@ -50,14 +53,14 @@ export function Shell({
   mac?: boolean;
   children: ReactNode;
 }) {
-  const item = (target: Screen, label: string) => (
+  const item = (target: Screen, label: string, isNew?: true) => (
     <Sidebar.Item
       key={target}
       icon={ICONS[target]}
       active={screen === target}
       onClick={() => onScreen(target)}
-      // The queue's open count, once there is one (0.30.0): nothing else in the sidebar carries a badge.
-      {...(target === 'queue' ? { badge: <QueueBadge /> } : {})}
+      // The queue's open count, once there is one (0.30.0), and a section new in this release's "New" (0.32.0).
+      {...(target === 'queue' ? { badge: <QueueBadge /> } : isNew ? { badge: <NewTag /> } : {})}
     >
       {label}
     </Sidebar.Item>
@@ -83,7 +86,9 @@ export function Shell({
       />
       <AppShell.Body>
         <AppShell.Sidebar aria-label="Sections" drawerTitle="Sections" collapsible={false} className="bg-sunken">
-          <Sidebar.Section>{SECTIONS.map(({ screen: target, label }) => item(target, label))}</Sidebar.Section>
+          <Sidebar.Section>
+            {SECTIONS.map(({ screen: target, label, isNew }) => item(target, label, isNew))}
+          </Sidebar.Section>
           <Sidebar.Section className="mt-auto">{item(SETTINGS.screen, SETTINGS.label)}</Sidebar.Section>
         </AppShell.Sidebar>
         <AppShell.Content>

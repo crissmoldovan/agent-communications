@@ -16,6 +16,8 @@ const LABELS: Record<Screen, string> = {
   overview: 'Overview',
   queue: 'Queue',
   accounts: 'Accounts',
+  // Its button's name, with its "New" tag (0.32.0).
+  connections: 'Connections New',
   approvals: 'Approvals',
   activity: 'Activity',
   agent: 'Agent',
