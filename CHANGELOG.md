@@ -68,7 +68,7 @@ subject version 1 state active and approval and activation", and a next try "alw
   theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve. These fields
   are added: nothing is renamed or removed.
 - **Deliveries say where they went.** `deliveries list` rows gain the target's kind, the last try's answer, the
-  decision and event they came from, and when they were delivered where a log keeps that.
+  decision and event they came from, when they were delivered where a log keeps that, and when one failed for good.
 - **One delivery's details:** `agent-events delivery show <delivery-id>` gives its decision and the judge's answer, the
   message it came from by its own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
   host only). It is yours, at a terminal or in the app: inside the event service's MCP server it is refused, and no

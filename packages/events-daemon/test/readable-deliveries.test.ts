@@ -112,6 +112,7 @@ test('0.32 B2: deliveries list rows carry the target kind, the last answer, the 
         decisionId: 'decision-dry',
         eventId: 'event-dry',
         deliveredAt: 2000,
+        deadLetteredAt: null,
       },
       {
         deliveryId: 'delivery-hook',
@@ -134,8 +135,18 @@ test('0.32 B2: deliveries list rows carry the target kind, the last answer, the 
         decisionId: 'decision-hook',
         eventId: 'event-hook',
         deliveredAt: null,
+        deadLetteredAt: null,
       },
     ]);
+    // A try that failed for good says when (0.32.0, the lead's addition): the table keeps the time it was dead-lettered.
+    store.database.exec(
+      "UPDATE deliveries SET state = 'dead-lettered', next_at = NULL, dead_lettered_at = 6000, dead_letter_expires_at = 99000 WHERE id = 'delivery-hook'",
+    );
+    const failed = (await control.handle({ operation: 'deliveriesList', args: {} })) as Array<Record<string, unknown>>;
+    assert.deepEqual(
+      { state: failed[1]?.state, deadLetteredAt: failed[1]?.deadLetteredAt, until: failed[1]?.deadLetterExpiresAt },
+      { state: 'dead-lettered', deadLetteredAt: 6000, until: 99000 },
+    );
     // A dry-run entry past its 24 hours is gone: the delivery stays, and no longer says when it was delivered.
     store.database.exec("DELETE FROM dryrun_log WHERE delivery_id = 'delivery-dry'");
     const after = (await control.handle({ operation: 'deliveriesList', args: {} })) as Array<Record<string, unknown>>;

@@ -294,6 +294,7 @@ test('0.32 B3: a dry-run delivery shows its decision with the judge’s answer, 
         decisionId: 'decision-mail',
         eventId: 'event-mail',
         deliveredAt: 1200,
+        deadLetteredAt: null,
       },
       decision: {
         outcome: 'matched',

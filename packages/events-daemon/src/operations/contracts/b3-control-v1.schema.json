@@ -1733,7 +1733,8 @@
         "lastStatus",
         "decisionId",
         "eventId",
-        "deliveredAt"
+        "deliveredAt",
+        "deadLetteredAt"
       ],
       "properties": {
         "deliveryId": { "$ref": "#/$defs/id" },
@@ -1755,7 +1756,8 @@
         "lastStatus": { "$ref": "#/$defs/nullableCount" },
         "decisionId": { "$ref": "#/$defs/id" },
         "eventId": { "$ref": "#/$defs/nullableId" },
-        "deliveredAt": { "$ref": "#/$defs/nullableCount" }
+        "deliveredAt": { "$ref": "#/$defs/nullableCount" },
+        "deadLetteredAt": { "$ref": "#/$defs/nullableCount" }
       }
     },
     "deliveryShow": {

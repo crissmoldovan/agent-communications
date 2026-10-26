@@ -240,7 +240,7 @@ agent-events message show <event-id> --json          # one message, with every l
     (its `summary`, as parts; a part of kind `untrusted` is the rule author's own text), and what it did in the last 7
     days (`counts7d`). The approval preview prints the same words above the JSON you approve.
   - `deliveries list` gives each delivery's target kind, its last try's answer, the decision and event it came from,
-    and when it was delivered where a log keeps that. A delivered row has no next try.
+    when it was delivered where a log keeps that, and when it failed for good. A delivered row has no next try.
   - `agent-events delivery show <delivery-id>` gives one delivery's details: its decision and the judge's answer, the
     event with its source's own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
     host only). It is yours, at your terminal or in the app: it refuses inside the event service's MCP server.

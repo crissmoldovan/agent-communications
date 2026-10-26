@@ -8,7 +8,8 @@ export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue';
  * feedback §3.5) and additive: the target's kind, the last answer a try got, the decision and event the delivery came
  * from, and when it was delivered. The deliveries table keeps no creation or delivery time of its own, so
  * `deliveredAt` is the time the dry-run log, the SSE replay log or the queue recorded the delivery, while that row is
- * kept, and null otherwise (a webhook's delivery time is not stored).
+ * kept, and null otherwise (a webhook's delivery time is not stored). `deadLetteredAt` is when a delivery failed for
+ * good (its tries spent), from the table's own column.
  */
 export interface DeliveryListRowV1 {
   readonly deliveryId: string;
@@ -31,6 +32,7 @@ export interface DeliveryListRowV1 {
   readonly decisionId: string;
   readonly eventId: string | null;
   readonly deliveredAt: number | null;
+  readonly deadLetteredAt: number | null;
 }
 
 interface DeliveryListSqlRow {
@@ -54,11 +56,13 @@ interface DeliveryListSqlRow {
   readonly decision_id: string;
   readonly event_id: string | null;
   readonly delivered_at: number | null;
+  readonly dead_lettered_at: number | null;
 }
 
 const SELECT_ROWS = `SELECT d.id, d.account_id, d.rule_id, d.rule_version, d.target_id, d.target_version, d.subscriber_id,
          d.subscriber_version, d.attempts, d.next_at, d.expires_at, d.state, d.switch_generation,
          d.dead_letter_expires_at, d.target_kind, d.last_error_code, d.last_status, d.decision_id, x.event_id,
+         d.dead_lettered_at,
          CASE WHEN d.state = 'delivered' THEN COALESCE(l.delivered_at, s.delivered_at, q.appended_at) END AS delivered_at
     FROM deliveries AS d
     LEFT JOIN decisions AS x ON x.id = d.decision_id
@@ -88,6 +92,7 @@ function shape(row: DeliveryListSqlRow): DeliveryListRowV1 {
     decisionId: row.decision_id,
     eventId: row.event_id,
     deliveredAt: row.delivered_at,
+    deadLetteredAt: row.dead_lettered_at,
   };
 }
 

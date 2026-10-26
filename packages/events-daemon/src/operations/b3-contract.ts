@@ -966,6 +966,7 @@ const DELIVERY_ROW_FIELDS = [
   'decisionId',
   'eventId',
   'deliveredAt',
+  'deadLetteredAt',
 ];
 const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue'];
 
@@ -991,7 +992,14 @@ function assertDeliveryShow(value: Readonly<Record<string, unknown>>): void {
   for (const field of ['ruleVersion', 'targetVersion']) assertPositiveInteger(row[field], `a shown delivery ${field}`);
   for (const field of ['attempts', 'expiresAt', 'switchGeneration'])
     assertNonNegativeInteger(row[field], `a shown delivery ${field}`);
-  for (const field of ['subscriberVersion', 'nextAt', 'deadLetterExpiresAt', 'lastStatus', 'deliveredAt'])
+  for (const field of [
+    'subscriberVersion',
+    'nextAt',
+    'deadLetterExpiresAt',
+    'lastStatus',
+    'deliveredAt',
+    'deadLetteredAt',
+  ])
     assertNullable(row[field], assertNonNegativeInteger, `a shown delivery ${field}`);
   for (const field of ['subscriberId', 'lastErrorCode', 'eventId'])
     assertNullable(row[field], assertText, `a shown delivery ${field}`);
