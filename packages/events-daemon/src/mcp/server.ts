@@ -34,6 +34,7 @@ import {
   laneWhoami,
 } from '../operations/lanes.ts';
 import { pause, resume } from '../operations/pause.ts';
+import { providerList } from '../operations/providers.ts';
 import { queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
 import { ruleTest } from '../operations/rule-test.ts';
 import {
@@ -460,6 +461,15 @@ function buildEventsMcpServer(
     {},
     () => judgeKindsList(options),
   );
+  // Whether each AI provider has a key (owner decision 2026-10-26): never a key. Setting one, removing one and judge
+  // setup are the person's, in the app or at their terminal; no tool here performs them.
+  strictControlTool(
+    'events_provider_list',
+    'List AI providers',
+    'Lists TypeSafe and OpenRouter, the providers Jev can use, and whether each has a key. Keys are added by the person in Settings → AI providers.',
+    {},
+    () => providerList(options),
+  );
   strictControlTool(
     'events_judge_kind_enable',
     'Enable judge kind',
@@ -513,13 +523,17 @@ function buildEventsMcpServer(
     (args) => retryDelivery(args.deliveryId as string, options),
     true,
   );
-  strictControlTool(
+  // 0.32.0: drop also stops a delivery that will be tried again; a lane target's is reached only by its bound window.
+  server.registerTool(
     'events_delivery_drop',
-    'Drop delivery',
-    'Drops one exact dead-letter delivery and its retained payload.',
-    { deliveryId: z.string().min(1) },
-    (args) => dropDelivery(args.deliveryId as string, options),
-    true,
+    {
+      title: 'Drop delivery',
+      description:
+        "Stops one exact delivery that will be tried again in the lane this window is bound to, or drops one dead-letter delivery and its retained payload. Every other stop is the person's.",
+      inputSchema: z.strictObject({ deliveryId: z.string().min(1) }),
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    },
+    async (args, ctx) => reply(await dropDelivery(args.deliveryId, await scoped(ctx))),
   );
   strictControlTool(
     'events_held_list',
@@ -548,12 +562,16 @@ function buildEventsMcpServer(
   controlTool('events_rules_list', 'List event rules', 'Lists immutable local event rule versions.', {}, () =>
     rulesList(options),
   );
-  controlTool(
+  // Review of 0.32.0, finding 8: the window is named, so a lane it is not bound to keeps its counts to itself.
+  server.registerTool(
     'events_rule_show',
-    'Show event rule',
-    'Shows immutable versions of one event rule.',
-    { ruleId: z.string() },
-    (args) => ruleShow(args.ruleId as string, options),
+    {
+      title: 'Show event rule',
+      description: 'Shows immutable versions of one event rule.',
+      inputSchema: { ruleId: z.string() },
+      annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args, ctx) => reply(await ruleShow(args.ruleId, await scoped(ctx))),
   );
   controlTool(
     'events_rule_create',

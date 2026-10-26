@@ -83,6 +83,8 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'migrateSecrets', wireOperation: 'migrateSecrets', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'dryrunList', wireOperation: 'dryrun-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'dryrunShow', wireOperation: 'dryrun-show', desktopCallable: true, family: 'owner' },
+  // One delivery's details (0.32.0, owner feedback §3.5): the person's, from the CLI and the app; no tool reaches it.
+  { capabilityOperation: 'deliveryShow', wireOperation: 'delivery-show', desktopCallable: true, family: 'owner' },
   // The action queue (0.30.0). list and show carry item content and are CLI-only; the rest are content-free.
   { capabilityOperation: 'queueList', wireOperation: 'queue-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'queueShow', wireOperation: 'queue-show', desktopCallable: true, family: 'owner' },
@@ -108,6 +110,21 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   },
   { capabilityOperation: 'laneWait', wireOperation: 'lane-wait', desktopCallable: false, family: 'owner' },
   { capabilityOperation: 'laneItem', wireOperation: 'lane-item', desktopCallable: false, family: 'owner' },
+  // A story per message (0.32.0): the person's read of what happened to each observed event, CLI and app only.
+  { capabilityOperation: 'messagesList', wireOperation: 'messages-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'messageShow', wireOperation: 'message-show', desktopCallable: true, family: 'owner' },
+  // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step, and
+  // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
+  // origin only; the provider list says only whether each has a key.
+  { capabilityOperation: 'judgeSetup', wireOperation: 'judge-setup', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'providerList', wireOperation: 'provider-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'providerKeySet', wireOperation: 'provider-key-set', desktopCallable: true, family: 'owner' },
+  {
+    capabilityOperation: 'providerKeyRemove',
+    wireOperation: 'provider-key-remove',
+    desktopCallable: true,
+    family: 'owner',
+  },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

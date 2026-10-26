@@ -3,6 +3,155 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.32.0
+
+**What.** The app answers the owner's feedback of 2026-10-26, item by item:
+- **Judges and keys in the app:** Jev and a local model server are set up in Events → Judges, and Settings → AI providers
+  keeps the TypeSafe and OpenRouter keys.
+- **Readable rules and deliveries:** Rules and Deliveries read in plain words, and each one opens to show its details.
+- **The 1970 date is gone.**
+- **Messages:** a new screen shows what happened to each message that came in.
+- **Connections:** a new screen shows which apps have which servers.
+- **The test build tells you it is one.**
+
+The command line and the MCP servers gain the reads and fields these screens need.
+
+**Why.** The owner installed 0.30.0, opened the app and found it hard to use:
+- turning a judge on meant the Terminal;
+- a key had no home;
+- rules and deliveries were raw database rows ("mail subject version 1 state active and approval and activation", "the
+  next try is always 1970");
+- nothing answered the question they care about most: "something has come in. Did we acknowledge it? Did we reply to
+  it? Is it something that has been passed over to a session, or was it proactively read by a session?"
+
+The screens were drawn first, as a prototype the owner approved ("perfect"), kept in the repository at
+`docs/prototypes/2026-10-26-0320/`.
+
+**Impact.** A minor release. Everything is added; nothing is renamed or removed.
+- **Migrations:** three database migrations in the event service run on their own: provider keys, a queue item's
+  history, and clearing `next_at`.
+- **Behaviour changes to know about:**
+  - **The dry-run log** (`dryrun list` and `dryrun show`) is now readable with `--json` outside an MCP server, so the
+    app can show it, like the queue's content since 0.30.0.
+  - **`delivery drop`** also stops a delivery that is waiting or will be tried again.
+  - **Every MCP server marks its own process,** so commands only the person may run refuse inside any of them.
+  - **Approvals from the app:** a change can now be approved in the desktop app. That covers turning a judge on, and
+    adding a server to an app from Connections. The audit records it as approved in the app. Everything else stays at
+    the terminal, as before.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients.
+
+**In the desktop app**
+- **Events → Judges:**
+  - **Set up…** for Jev, choosing OpenRouter or TypeSafe directly (a provider without a key is greyed out), and for a
+    local model server (Ollama's System One, on this Mac).
+  - Turn off applies at once.
+  - Laya reads "Not available yet".
+- **Settings → AI providers:** add, replace or remove the TypeSafe and OpenRouter keys. A key is never shown again
+  once saved, and removing one a judge uses names that judge first.
+- **Events → Rules:**
+  - one card per rule, with the rule as a sentence, its state and its week;
+  - opening it shows what it watches, which messages, the judge, where they go, what's kept, the limit, its versions
+    and, folded away, the technical ids explained.
+- **Events → Deliveries:**
+  - "rule → where it went", with the state in plain words, and no 1970;
+  - a delivery's page shows the message, why it was passed on, a dry run's record (the sender's words marked as
+    outside text) and its tries, with Try now and Stop trying.
+- **Messages** (new): each message that came in, how far it got, and the steps on the way. Opening one shows its story,
+  built from what Agent Comms saw.
+- **Connections** (new):
+  - Claude Code, Claude Desktop, Codex and Cursor against the six servers, and when each was last used;
+  - who can reach the servers: local windows yes, cloud sessions no;
+  - Change… adds a server once you approve it in the app, and removes one at once.
+- **The test build:** an orange "TEST BUILD" band naming its branch and commit, the name "Agent Comms Test" and the
+  test profile's folder, and its tray says so too. A released app looks as before.
+
+**Activity ties a reply to the message it answers** (Task E of the owner's 2026-10-26 feedback, for the app's Messages
+screen).
+
+- **New ids on existing activity lines.** Every field is new, and none was removed or renamed.
+  - Gmail: a reply draft (`gmail.draft.reply`) names the message it answers and its thread (`replyTo`), and the draft
+    it made (`draftId`). A forward answers nothing, so it has no `replyTo`.
+  - Gmail: preparing a send (`gmail.send.prepare`) names its `draftId`. When the draft answers a message in this
+    mailbox, it also names that message (`replyTo`). The prepare already proves this, so Gmail is asked nothing more.
+  - Gmail: a send (`gmail.send.execute`) names the draft it sent (`draftId`) and the thread Gmail filed it in
+    (`threadId`).
+  - Slack: a post (`slack.post.send`) names its conversation by id (`channelId`) and the thread it went into
+    (`thread`: the parent's ts, or null for a new message).
+  - Slack: a history read (`slack.read`) names its conversation by id (`channelId`), beside the name it already kept.
+  - Slack: an acknowledgement under a standing approval (`slack.ack`) says what it did (`act`: `reply` or `reaction`),
+    so a message an agent answered reads apart from one it only marked seen.
+- **`agentcomms activity items [--since <ms>] [--ids <id,…>] --json`** lists every call that names an item, grouped
+  by the item. A Gmail message keeps its id, and a Slack message is `<channelId>/<ts>`. Each line names the window
+  (key, folder, client), the operation, when it ran and how it ended, with `replyTo`, `thread`, `draftId` and `act`
+  where it has them. A line appears under each item it names and each item it links to, so a message leads to its
+  reply draft, and that draft to its send. Subjects and senders are the sender's words, returned in the
+  untrusted-content envelope. It is the person's view: refused inside an MCP server's process (exit 10), with no MCP
+  tool, like `agentcomms activity show`.
+- **Every MCP server marks its own process as it starts.** Core's server and the Gmail, Slack, Resend and WhatsApp
+  servers now set `AGENTCOMMS_MCP_SERVER`, as the event service's already did, and `@agentcomms/gmail-mcp` does too.
+  Every program a server starts inherits the mark, so `agentcomms activity items` and the event service's person-only
+  reads refuse there as well. Your terminal is not marked, and nor is a shell an agent's client runs itself.
+- **`agentcomms mcp uninstall --client <c> --server <s>`**, and `comms_server_uninstall` from a chat, take one server
+  out of one client. They remove every user-scope entry that starts it, whatever it is called. This is a tightening:
+  it applies at once and asks nobody. Each removed entry is saved first, owner-only, and the change is audited.
+  - A project's own entry is left in place, and the result says where it is.
+  - A config file with comments is left as it was, and so is an entry whose client command can't be found. The result
+    names each.
+  - The client keeps the server running until it restarts. `agentcomms mcp prune` is unchanged: it removes
+    runtimes, never a registration.
+
+**What happened to a message, in the event service.** The owner asked: "something has come in. Did we acknowledge it?
+Did we reply to it? Is it something that has been passed over to a session, or was it proactively read by a session?"
+The event service now keeps and gives the part it sees; the app's Messages screen comes after the owner's feedback on
+its prototype.
+
+- **`agent-events messages list --json`** gives each message the event service observed, newest first: what each rule
+  decided and what its judge answered, where each delivery went, the queue item it became and what happened to that
+  item. It looks back 30 days and gives 100 at a time by default (`--since`, `--before`, `--limit`), with a `next` to
+  pass back for the page after.
+- **`agent-events message show <event-id> --json`** gives one of them, with every line of its queue item's history.
+- **Each message carries its source's own ids:** a Gmail message id, a Slack channel and ts, a WhatsApp chat and
+  message id, a Resend email id. These are what the app joins a message to its Gmail or Slack link and to the activity
+  log with. When the queue kept a summary, it also carries the sender and subject, marked as from outside.
+- **Queue items keep a history:** woken (a lane's bound window was woken for it), read (that window read it), done,
+  dismissed and reopened, each saying whether an agent window did it, and which, or you did, at the terminal or in the
+  app. It goes when the item goes.
+- **Only you see it.** Both commands refuse inside the event service's MCP server, and no MCP tool returns a message's
+  story or an item's history. The history never enters the activity log, so no agent's activity view can name an item
+  in a lane bound to another window.
+- **One automatic database change** adds the history table and two indexes. Nothing is asked of you.
+
+**Rules and deliveries you can read.** The owner opened the app's Events screens and found raw database rows: "mail
+subject version 1 state active and approval and activation", and a next try "always 1970".
+
+- **No more 1970.** A delivered dry-run, queue or SSE delivery kept the "due now" time it started with, which the app
+  showed as a next try on 1 January 1970. Delivering now clears it, and a migration clears it on the rows already
+  delivered, cancelled or expired.
+- **A rule in plain words.** `agent-events rule show <rule-id>` (and `events_rule_show`) gives each version with when
+  it was switched on, replaced or revoked, a one-sentence `summary` such as "When mail arrives in cue/gmail with
+  'invoice' in the subject, ask Jev '…'. If it says yes, put it in the Queue, lane billing.", and what it did in the
+  last 7 days: matched, judged yes and no, held, delivered and failed (over MCP, not for a lane the window isn't
+  bound to). Every word the rule's author wrote is marked as theirs. The approval preview at the terminal says the rule the same way, above the JSON you approve, the author's
+  text in escaped double quotes it cannot close. These fields
+  are added: nothing is renamed or removed.
+- **Deliveries say where they went.** `deliveries list` rows gain the target's kind, the last try's answer, the
+  decision and event they came from, when they were delivered where a log keeps that, and when one failed for good.
+- **One delivery's details:** `agent-events delivery show <delivery-id>` gives its decision and the judge's answer, the
+  message it came from by its own ids (a Gmail message id, a Slack channel and ts), and where it went (a webhook by its
+  host only). It is yours, at a terminal or in the app: inside the event service's MCP server it is refused, and no
+  tool reads it.
+- **Stop trying.** `agent-events delivery drop <delivery-id>` (and `events_delivery_drop`) now also stops a delivery
+  that is waiting or will be tried again: it is cancelled at once, its payload and next try gone, and no later tick
+  tries it. A dead letter's drop is unchanged. One being sent right now is refused with the reason
+  `DELIVERY_IN_FLIGHT`. Stopping is yours, at a terminal or in the app, like clearing the queue: over MCP a window
+  may stop only a delivery in the lane it is bound to (it can't even see another lane's), and `delivery drop` inside
+  the event service's MCP server stops none. A dead letter's drop works over MCP as before.
+- **The dry-run log in the app.** `dryrun list` and `dryrun show` worked only at an interactive terminal, so the app,
+  which reads with `--json`, could not open the log the design gives it. They now refuse only inside the event
+  service's MCP server, like the queue's own content reads; `dryrun show --json` gives the record as data, each field
+  the sender controls, addresses included, inside the untrusted-content envelope, for the app to show as outside text. As with the queue, a shell an agent runs as you is not refused. The log keeps each entry 24
+  hours at most.
+
 ## 0.31.0
 
 **Routing: a lane wakes the agent window you bind to it.** The third step the owner asked for, after activity and the

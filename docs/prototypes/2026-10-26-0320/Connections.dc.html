@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Connections</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:980px}
+.app button,.app input{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h3{margin:0 0 10px;font-size:12px;font-weight:500;color:var(--text3)}
+.card{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s2)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.tbl{width:100%;border-collapse:collapse;min-width:640px}
+.tbl th{font-weight:500;color:var(--text3);font-size:12px;text-align:center;padding:6px 4px}
+.tbl th:first-child{text-align:left}
+.tbl td{padding:12px 4px;text-align:center;border-top:1px solid var(--s2)}
+.tbl td:first-child{text-align:left}
+.yes{color:var(--ok);font-weight:600}
+.no{color:var(--text3)}
+.dim{opacity:.55}
+.boxes{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:10px 0}
+.boxes label{display:flex;align-items:center;gap:8px;background:var(--s2);border-radius:8px;padding:8px 10px;cursor:pointer}
+.boxes input{accent-color:var(--accent)}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni on" href="Connections.dc.html" aria-current="page">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div>
+    <h1 class="h1">Connections</h1>
+    <p class="muted" style="margin: 0">The apps on this Mac that can use Agent Comms, and which parts each one has. An app sees a change after you restart it.</p>
+  </div>
+
+  <section class="card" aria-labelledby="apps">
+    <h2 id="apps" class="h3">Apps</h2>
+    <div style="overflow-x: auto">
+      <table class="tbl">
+        <thead><tr><th scope="col">App</th><th scope="col">Core</th><th scope="col">Gmail</th><th scope="col">Slack</th><th scope="col">Resend</th><th scope="col">WhatsApp</th><th scope="col">Events</th><th scope="col"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Actions</span></th></tr></thead>
+        <tbody>
+          <tr>
+            <td><div style="font-weight: 500">Claude Code</div><div class="faint">Every folder · used 2 minutes ago</div></td>
+            <td class="yes" aria-label="Yes">✓</td><td class="yes" aria-label="Yes">✓</td><td class="yes" aria-label="Yes">✓</td><td class="no" aria-label="No">–</td><td class="no" aria-label="No">–</td><td class="yes" aria-label="Yes">✓</td>
+            <td style="text-align: right"><button type="button" class="btn" onClick="{{edit}}">Change…</button></td>
+          </tr>
+          <tr>
+            <td><div style="font-weight: 500">Claude Desktop</div><div class="faint">Not connected</div></td>
+            <td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td>
+            <td style="text-align: right"><button type="button" class="btn">Add…</button></td>
+          </tr>
+          <tr>
+            <td><div style="font-weight: 500">Codex</div><div class="faint">Not connected</div></td>
+            <td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td>
+            <td style="text-align: right"><button type="button" class="btn">Add…</button></td>
+          </tr>
+          <tr class="dim">
+            <td><div style="font-weight: 500">Cursor</div><div class="faint">Not installed on this Mac</div></td>
+            <td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td><td class="no">–</td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <sc-if value="{{editing}}" hint-placeholder-val="{{ false }}">
+      <div style="background: var(--s2); border-radius: 12px; padding: 12px 14px; margin-top: 12px">
+        <div style="font-weight: 500">Claude Code: which parts?</div>
+        <div class="boxes">
+          <label><input type="checkbox" checked>Core</label>
+          <label><input type="checkbox" checked>Gmail</label>
+          <label><input type="checkbox" checked>Slack</label>
+          <label><input type="checkbox">Resend</label>
+          <label><input type="checkbox">WhatsApp</label>
+          <label><input type="checkbox" checked>Events</label>
+        </div>
+        <div class="row" style="flex-wrap: wrap"><span class="faint">Removing a part applies at once. Adding one shows you what it lets agents do, first.</span><span style="margin-left: auto; display: flex; gap: 6px"><button type="button" class="btn q" onClick="{{done}}">Cancel</button><button type="button" class="btn p" onClick="{{done}}">Save</button></span></div>
+      </div>
+    </sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="where">
+    <h2 id="where" class="h3">Who can reach them</h2>
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <div class="row" style="align-items: flex-start"><span class="chip c-ok">Yes</span><span>Agent windows on this Mac, in the apps above. That includes a Claude Code window on this Mac that you drive from your phone with Remote Control.</span></div>
+      <div class="row" style="align-items: flex-start"><span class="chip c-n">No</span><span>Cloud sessions, such as Claude on the web or Claude Code in the cloud. They run on other computers, and these servers run only on this Mac.</span></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="recent">
+    <div class="row" style="margin-bottom: 10px"><h2 id="recent" class="h3" style="margin: 0">Used recently</h2><a class="faint" href="#" style="margin-left: auto">See Activity ›</a></div>
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <div class="row"><span style="flex: 1">~/work/cue++/acme</span><span class="faint">Claude Code · Gmail, Events</span><span class="faint" style="width: 80px; text-align: right">2 min ago</span></div>
+      <div class="row"><span style="flex: 1">~/work/ops</span><span class="faint">Claude Code · Slack</span><span class="faint" style="width: 80px; text-align: right">1 hour ago</span></div>
+      <div class="row"><span style="flex: 1">~/work/personal</span><span class="faint">Claude Code · Gmail</span><span class="faint" style="width: 80px; text-align: right">Yesterday</span></div>
+    </div>
+  </section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { editing: false }; }
+renderVals() {
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+editing: this.state.editing,
+edit: () => this.setState({ editing: true }),
+done: () => this.setState({ editing: false })
+};
+}
+}
+</script>
+</body>
+</html>

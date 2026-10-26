@@ -128,7 +128,7 @@ describe('Queue', () => {
       const names = within(navigation)
         .getAllByRole('button')
         .map((button) => button.textContent?.trim());
-      expect(names.slice(0, 3)).toEqual(['Overview', 'Queue', 'Accounts']);
+      expect(names.slice(0, 2)).toEqual(['Overview', 'Queue']);
       fireEvent.click(within(navigation).getByRole('button', { name: 'Queue' }));
       expect(await screen.findByRole('heading', { level: 1, name: 'Queue' })).toBeTruthy();
       expect(await within(main()).findByText(COPY.updateToUse)).toBeTruthy();

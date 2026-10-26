@@ -202,6 +202,21 @@
         {
           "type": "object",
           "additionalProperties": false,
+          "required": ["judgeId", "version", "kind", "provider", "model", "endpoint", "promptTemplate", "protocol"],
+          "properties": {
+            "judgeId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "typesafe" },
+            "provider": { "const": "openrouter" },
+            "model": { "const": "typesafe/jev-1.14" },
+            "endpoint": { "const": "https://openrouter.ai/api/v1/systemone" },
+            "promptTemplate": { "$ref": "#/$defs/id" },
+            "protocol": { "const": "noul" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
           "required": [
             "judgeId",
             "version",
@@ -786,7 +801,7 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
-            "operation": { "enum": ["retryDelivery", "dropDelivery", "dryrun-show"] },
+            "operation": { "enum": ["retryDelivery", "dropDelivery", "dryrun-show", "delivery-show"] },
             "args": {
               "type": "object",
               "additionalProperties": false,
@@ -879,6 +894,84 @@
               "additionalProperties": false,
               "required": ["lane"],
               "properties": { "lane": { "$ref": "#/$defs/laneName" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "messages-list" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "since": { "$ref": "#/$defs/milliseconds" },
+                "before": { "anyOf": [{ "$ref": "#/$defs/milliseconds" }, { "$ref": "#/$defs/messagesCursor" }] },
+                "limit": { "type": "integer", "minimum": 1, "maximum": 500 }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "message-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["eventId"],
+              "properties": { "eventId": { "$ref": "#/$defs/eventId" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "judge-setup" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind"],
+              "properties": {
+                "kind": { "enum": ["typesafe", "local-endpoint"] },
+                "provider": { "$ref": "#/$defs/aiProvider" },
+                "url": { "type": "string", "minLength": 1, "maxLength": 256 },
+                "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "provider-list" },
+            "args": { "type": "object", "additionalProperties": false, "properties": {} },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "enum": ["provider-key-set", "provider-key-remove"] },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provider"],
+              "properties": { "provider": { "$ref": "#/$defs/aiProvider" } }
             },
             "origin": { "$ref": "#/$defs/id" }
           }
@@ -1158,6 +1251,27 @@
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
+    "aiProvider": { "enum": ["typesafe", "openrouter"] },
+    "judgeLimits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["callsPerRollingHour", "inputTokensPerRolling30Days", "concurrency"],
+      "properties": {
+        "callsPerRollingHour": { "$ref": "#/$defs/positive" },
+        "inputTokensPerRolling30Days": { "$ref": "#/$defs/positive" },
+        "concurrency": { "$ref": "#/$defs/positive" }
+      }
+    },
+    "providerKeyResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "hasKey", "judges"],
+      "properties": {
+        "provider": { "$ref": "#/$defs/aiProvider" },
+        "hasKey": { "type": "boolean" },
+        "judges": { "type": "integer", "minimum": 0 }
+      }
+    },
     "laneSessionId": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
@@ -1404,6 +1518,324 @@
             "untrusted": { "type": "array", "items": { "$ref": "#/$defs/id" } },
             "representation": { "enum": ["plain", "enveloped"] }
           }
+        }
+      }
+    },
+    "nullableCount": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
+    "nullableId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue"] },
+    "milliseconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+    "eventId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "messagesCursor": { "type": "string", "pattern": "^[0-9]{1,16}:[0-9a-f]{32}$" },
+    "messageSource": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "messageId"],
+          "properties": { "channel": { "const": "gmail" }, "messageId": { "type": "string", "minLength": 1 } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "channelId", "ts"],
+          "properties": {
+            "channel": { "const": "slack" },
+            "channelId": { "type": "string", "minLength": 1 },
+            "ts": { "type": "string", "pattern": "^[0-9]+\\.[0-9]{6}$" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "chatId", "messageId"],
+          "properties": {
+            "channel": { "const": "whatsapp" },
+            "chatId": { "type": "string", "minLength": 1 },
+            "messageId": { "type": "string", "minLength": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["channel", "emailId"],
+          "properties": { "channel": { "const": "resend" }, "emailId": { "type": "string", "minLength": 1 } }
+        }
+      ]
+    },
+    "messageHistoryLine": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["at", "kind", "actor", "windowKey"],
+          "properties": {
+            "at": { "$ref": "#/$defs/milliseconds" },
+            "kind": { "enum": ["woken", "read", "done", "dismissed", "reopened"] },
+            "actor": { "const": "window" },
+            "windowKey": { "$ref": "#/$defs/laneActivityKey" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["at", "kind", "actor", "windowKey"],
+          "properties": {
+            "at": { "$ref": "#/$defs/milliseconds" },
+            "kind": { "enum": ["done", "dismissed", "reopened"] },
+            "actor": { "const": "person" },
+            "windowKey": { "type": "null" }
+          }
+        }
+      ]
+    },
+    "messageEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "eventId",
+        "type",
+        "channel",
+        "accountId",
+        "occurredAt",
+        "observedAt",
+        "source",
+        "decisions",
+        "deliveries",
+        "queueItem",
+        "kept"
+      ],
+      "properties": {
+        "eventId": { "$ref": "#/$defs/eventId" },
+        "type": { "type": "string", "minLength": 1 },
+        "channel": { "type": "string", "minLength": 1 },
+        "accountId": { "$ref": "#/$defs/id" },
+        "occurredAt": { "$ref": "#/$defs/milliseconds" },
+        "observedAt": { "$ref": "#/$defs/milliseconds" },
+        "source": { "anyOf": [{ "$ref": "#/$defs/messageSource" }, { "type": "null" }] },
+        "decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ruleId", "ruleVersion", "outcome", "judge"],
+            "properties": {
+              "ruleId": { "$ref": "#/$defs/id" },
+              "ruleVersion": { "$ref": "#/$defs/positive" },
+              "outcome": { "enum": ["matched", "no-match", "mapping-rejected", "retention-expired", "hold"] },
+              "judge": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "answer", "confidence", "calibrated"],
+                    "properties": {
+                      "kind": { "type": "string", "minLength": 1 },
+                      "answer": { "enum": ["yes", "no"] },
+                      "confidence": { "type": "number" },
+                      "calibrated": { "type": "boolean" }
+                    }
+                  },
+                  { "type": "null" }
+                ]
+              }
+            }
+          }
+        },
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["deliveryId", "targetKind", "targetId", "lane", "state"],
+            "properties": {
+              "deliveryId": { "$ref": "#/$defs/id" },
+              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue"] },
+              "targetId": { "$ref": "#/$defs/id" },
+              "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] },
+              "state": {
+                "enum": [
+                  "queued",
+                  "retryable",
+                  "disclosing",
+                  "delivered",
+                  "dead-lettered",
+                  "retention-expired",
+                  "cancelled",
+                  "content-unreadable",
+                  "in-flight-at-disable",
+                  "in-flight-at-account-removal"
+                ]
+              }
+            }
+          }
+        },
+        "queueItem": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["itemId", "state", "stateAt", "lane", "history"],
+              "properties": {
+                "itemId": { "$ref": "#/$defs/queueItemId" },
+                "state": { "$ref": "#/$defs/queueState" },
+                "stateAt": { "$ref": "#/$defs/milliseconds" },
+                "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] },
+                "history": { "type": "array", "items": { "$ref": "#/$defs/messageHistoryLine" } }
+              }
+            },
+            { "type": "null" }
+          ]
+        },
+        "kept": {
+          "anyOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["from"],
+              "properties": {
+                "from": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": { "$ref": "#/$defs/untrustedText" },
+                    "address": { "$ref": "#/$defs/untrustedText" }
+                  }
+                },
+                "subject": { "$ref": "#/$defs/untrustedText" }
+              }
+            },
+            { "type": "null" }
+          ]
+        }
+      }
+    },
+    "deliveryRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "deliveryId",
+        "accountId",
+        "ruleId",
+        "ruleVersion",
+        "targetId",
+        "targetVersion",
+        "subscriberId",
+        "subscriberVersion",
+        "attempts",
+        "nextAt",
+        "expiresAt",
+        "state",
+        "switchGeneration",
+        "deadLetterExpiresAt",
+        "targetKind",
+        "lastErrorCode",
+        "lastStatus",
+        "decisionId",
+        "eventId",
+        "deliveredAt",
+        "deadLetteredAt"
+      ],
+      "properties": {
+        "deliveryId": { "$ref": "#/$defs/id" },
+        "accountId": { "$ref": "#/$defs/id" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "$ref": "#/$defs/positive" },
+        "targetId": { "$ref": "#/$defs/id" },
+        "targetVersion": { "$ref": "#/$defs/positive" },
+        "subscriberId": { "$ref": "#/$defs/nullableId" },
+        "subscriberVersion": { "$ref": "#/$defs/nullableCount" },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "nextAt": { "$ref": "#/$defs/nullableCount" },
+        "expiresAt": { "type": "integer", "minimum": 0 },
+        "state": { "$ref": "#/$defs/id" },
+        "switchGeneration": { "type": "integer", "minimum": 0 },
+        "deadLetterExpiresAt": { "$ref": "#/$defs/nullableCount" },
+        "targetKind": { "$ref": "#/$defs/deliveryTargetKind" },
+        "lastErrorCode": { "$ref": "#/$defs/nullableId" },
+        "lastStatus": { "$ref": "#/$defs/nullableCount" },
+        "decisionId": { "$ref": "#/$defs/id" },
+        "eventId": { "$ref": "#/$defs/nullableId" },
+        "deliveredAt": { "$ref": "#/$defs/nullableCount" },
+        "deadLetteredAt": { "$ref": "#/$defs/nullableCount" }
+      }
+    },
+    "deliveryShow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["delivery", "decision", "event", "target", "dryRun"],
+      "properties": {
+        "delivery": { "$ref": "#/$defs/deliveryRow" },
+        "decision": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["outcome", "decidedAt", "judge"],
+              "properties": {
+                "outcome": { "$ref": "#/$defs/id" },
+                "decidedAt": { "$ref": "#/$defs/nullableCount" },
+                "judge": {
+                  "oneOf": [
+                    { "type": "null" },
+                    {
+                      "type": "object",
+                      "additionalProperties": false,
+                      "required": ["kind", "answer", "confidence", "calibrated"],
+                      "properties": {
+                        "kind": { "$ref": "#/$defs/id" },
+                        "answer": { "enum": ["yes", "no", null] },
+                        "confidence": { "type": ["number", "null"] },
+                        "calibrated": { "type": ["boolean", "null"] }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "event": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["eventId", "type", "accountId", "occurredAt", "observedAt", "source"],
+              "properties": {
+                "eventId": { "$ref": "#/$defs/id" },
+                "type": { "$ref": "#/$defs/id" },
+                "accountId": { "$ref": "#/$defs/id" },
+                "occurredAt": { "type": "integer", "minimum": 0 },
+                "observedAt": { "type": "integer", "minimum": 0 },
+                "source": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/messageSource" }] }
+              }
+            }
+          ]
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "id", "version"],
+          "properties": {
+            "kind": { "$ref": "#/$defs/deliveryTargetKind" },
+            "id": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "host": { "$ref": "#/$defs/id" },
+            "lane": { "$ref": "#/$defs/laneName" }
+          }
+        },
+        "dryRun": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["expiresAt"],
+              "properties": { "expiresAt": { "$ref": "#/$defs/nullableCount" } }
+            }
+          ]
         }
       }
     },
@@ -1704,6 +2136,7 @@
         "migrateSecrets": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "dryrun-list": { "type": "array", "items": { "$ref": "#/$defs/json" } },
         "dryrun-show": { "$ref": "#/$defs/dryrunRecord" },
+        "delivery-show": { "$ref": "#/$defs/deliveryShow" },
         "queue-list": {
           "type": "object",
           "additionalProperties": false,
@@ -1805,6 +2238,92 @@
           "required": ["lane", "unbound"],
           "properties": { "lane": { "$ref": "#/$defs/laneName" }, "unbound": { "const": true } }
         },
+        "message-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["message"],
+          "properties": { "message": { "$ref": "#/$defs/messageEntry" } }
+        },
+        "messages-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["messages", "next"],
+          "properties": {
+            "messages": { "type": "array", "maxItems": 500, "items": { "$ref": "#/$defs/messageEntry" } },
+            "next": { "anyOf": [{ "$ref": "#/$defs/messagesCursor" }, { "type": "null" }] }
+          }
+        },
+        "judge-setup": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "enabled", "enabledNow", "judge", "budget", "key", "destination", "approvedBy"],
+          "properties": {
+            "kind": { "enum": ["typesafe", "local-endpoint"] },
+            "enabled": { "const": true },
+            "enabledNow": { "type": "boolean" },
+            "judge": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["judgeId", "version", "provider", "model", "endpoint", "created"],
+              "properties": {
+                "judgeId": { "$ref": "#/$defs/id" },
+                "version": { "$ref": "#/$defs/positive" },
+                "provider": { "$ref": "#/$defs/id" },
+                "model": { "$ref": "#/$defs/id" },
+                "endpoint": { "type": "string", "minLength": 1 },
+                "created": { "type": "boolean" }
+              }
+            },
+            "budget": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["version", "approvedNow", "global", "provider"],
+              "properties": {
+                "version": { "$ref": "#/$defs/positive" },
+                "approvedNow": { "type": "boolean" },
+                "global": { "$ref": "#/$defs/judgeLimits" },
+                "provider": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["provider", "callsPerRollingHour", "inputTokensPerRolling30Days", "concurrency"],
+                  "properties": {
+                    "provider": { "$ref": "#/$defs/id" },
+                    "callsPerRollingHour": { "$ref": "#/$defs/positive" },
+                    "inputTokensPerRolling30Days": { "$ref": "#/$defs/positive" },
+                    "concurrency": { "$ref": "#/$defs/positive" }
+                  }
+                }
+              }
+            },
+            "key": { "enum": ["stored", "unchanged", "none"] },
+            "destination": { "type": "string", "minLength": 1 },
+            "approvedBy": {
+              "enum": ["desktop-app", "desktop-app (test build)", "desktop-app (unattested)", "terminal"]
+            }
+          }
+        },
+        "provider-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["providers"],
+          "properties": {
+            "providers": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["id", "name", "hasKey"],
+                "properties": {
+                  "id": { "$ref": "#/$defs/aiProvider" },
+                  "name": { "type": "string", "minLength": 1 },
+                  "hasKey": { "type": "boolean" }
+                }
+              }
+            }
+          }
+        },
+        "provider-key-set": { "$ref": "#/$defs/providerKeyResult" },
+        "provider-key-remove": { "$ref": "#/$defs/providerKeyResult" },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -1896,6 +2415,7 @@
                     "dropDelivery",
                     "dryrun-list",
                     "dryrun-show",
+                    "delivery-show",
                     "queue-list",
                     "queue-show",
                     "queue-items",
@@ -1906,7 +2426,13 @@
                     "queue-clear",
                     "lane-list",
                     "lane-bind",
-                    "lane-unbind"
+                    "lane-unbind",
+                    "messages-list",
+                    "message-show",
+                    "judge-setup",
+                    "provider-list",
+                    "provider-key-set",
+                    "provider-key-remove"
                   ]
                 }
               }
@@ -2054,6 +2580,10 @@
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/dryrun-show" } } }
             },
             {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "delivery-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/delivery-show" } } }
+            },
+            {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "queue-list" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/queue-list" } } }
             },
@@ -2096,6 +2626,32 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "lane-unbind" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/lane-unbind" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "messages-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/messages-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "message-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/message-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "judge-setup" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/judge-setup" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "provider-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "provider-key-set" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-key-set" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "provider-key-remove" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/provider-key-remove" } } }
             }
           ]
         },

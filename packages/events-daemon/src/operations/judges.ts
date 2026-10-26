@@ -1,4 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
+import type { PersonSetupOrigin } from '../domain/judge-setup.ts';
 import type { LayaModelStatus } from '../runtime/laya/contracts.ts';
 import type { B3JudgeUnavailableV1 } from './b3-contract.ts';
 
@@ -43,4 +44,27 @@ export function judgeModelStatus(options: Options = {}): Promise<unknown> {
 }
 export function removeJudgeModel(options: Options = {}): Promise<LayaModelStatus | B3JudgeUnavailableV1> {
   return request('removeJudgeModel', {}, options) as Promise<LayaModelStatus | B3JudgeUnavailableV1>;
+}
+
+/**
+ * `judge setup <kind>` (owner decision 2026-10-26): Jev, or a model server on this machine, set up and turned on in one
+ * step — the judge, its key from the provider's stored key, the daemon-wide budget when there is none for its provider,
+ * and the kind's enablement, which this command approves as the person's own act. The CLI refuses an agent and the MCP
+ * server before it calls this; no MCP tool reaches it.
+ */
+export function judgeSetup(
+  kind: string,
+  input: {
+    readonly provider?: string | undefined;
+    readonly url?: string | undefined;
+    readonly model?: string | undefined;
+  } = {},
+  options: Options & { readonly origin: PersonSetupOrigin },
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir, clientName: options.origin }).request('judge-setup', {
+    kind,
+    ...(input.provider === undefined ? {} : { provider: input.provider }),
+    ...(input.url === undefined ? {} : { url: input.url }),
+    ...(input.model === undefined ? {} : { model: input.model }),
+  });
 }

@@ -120,6 +120,7 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_budget_show',
           'events_budget_update',
           'events_judge_kinds_list',
+          'events_provider_list',
           'events_judge_kind_enable',
           'events_judge_kind_disable',
           'events_judge_model_status',

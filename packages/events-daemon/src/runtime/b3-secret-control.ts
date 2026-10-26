@@ -1,16 +1,19 @@
 import { randomBytes } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
-import type { SecretStore } from '@agentcomms/core';
+import { type SecretStore, sha256Hex } from '@agentcomms/core';
 import type { HumanSecret } from '../domain/human-secret.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { canonicalWebhookTarget, secretWebhookUrlDescriptor } from '../domain/webhook-target.ts';
 import {
+  EVENT_SECRET_PROVIDERS,
   type EventSecretMigrationResult,
   type EventSecretOwner,
+  type EventSecretProvider,
   type EventSecretPurpose,
   type EventSecretStore,
   type EventSecretStoreKind,
   migrateEventSecrets,
+  providerSecretOwner,
 } from '../store/event-secrets.ts';
 import type { EventRecordCipher } from '../store/records.ts';
 import type { EventPaths } from './paths.ts';
@@ -28,6 +31,21 @@ export type SecretReceipt =
       readonly generation: number;
     }
   | { readonly kind: 'judge-key'; readonly judgeId: string; readonly version: number; readonly generation: number };
+
+/** What a provider key operation did: never the key, nor any part of it (owner decision 2026-10-26). */
+export interface ProviderKeyReceipt {
+  readonly provider: EventSecretProvider;
+  readonly hasKey: boolean;
+  /** How many live Jev judge versions of this provider now hold this key, or, after a removal, hold none. */
+  readonly judges: number;
+}
+
+/** A live Jev judge version, and the provider that serves it (a document from before 2026-10-26 names no provider: TypeSafe serves it). */
+interface HostedJudgeVersion {
+  readonly judgeId: string;
+  readonly version: number;
+  readonly provider: string;
+}
 
 /**
  * A generated credential has no JSON representation until the terminal owner consumes it.  Keeping the material on a
@@ -309,6 +327,120 @@ export class B3SecretControl {
     const generation = currentGeneration(this.#database, owner, purpose);
     if (generation === null) throw new Error('the exact secret slot has no current generation to rotate');
     return generation;
+  }
+
+  /** Whether each AI provider has a key: a closed, content-free list. */
+  providerKeys(): readonly { readonly provider: EventSecretProvider; readonly hasKey: boolean }[] {
+    return EVENT_SECRET_PROVIDERS.map((provider) => ({
+      provider,
+      hasKey: currentGeneration(this.#database, providerSecretOwner(provider), 'provider-key') !== null,
+    }));
+  }
+
+  /**
+   * Stores a provider's key, replacing any it had, and gives the same key to every live Jev judge version that provider
+   * serves, so a replaced key takes effect at once. The key arrives as hidden input and is consumed once.
+   */
+  async providerKeySet(input: {
+    readonly provider: EventSecretProvider;
+    readonly hidden: HumanSecret;
+  }): Promise<ProviderKeyReceipt> {
+    return this.#quiescer.withExclusive(async () => {
+      const owner = providerSecretOwner(input.provider);
+      const material = input.hidden.consume();
+      const judges = this.#hostedJudgesOf(input.provider);
+      const prior = currentGeneration(this.#database, owner, 'provider-key');
+      const rotating = prior !== null || judges.some((judge) => this.#judgeKeyDigest(judge) !== null);
+      const retired = rotating ? await this.#secrets.currentMaster() : undefined;
+      if (rotating) await this.#cipher.rotateAndReencrypt();
+      await this.#store(owner, 'provider-key', material, prior, true);
+      for (const judge of judges) await this.#giveJudgeKey(judge, material);
+      if (rotating && retired !== undefined) {
+        await this.#secrets.reconcileRetiredGenerations(this.#cipher);
+        await this.#secrets.destroyRetiredMaster({
+          keyId: retired.keyId,
+          cipher: this.#cipher,
+          quiescer: this.#quiescer,
+        });
+      }
+      return { provider: input.provider, hasKey: true, judges: judges.length };
+    });
+  }
+
+  /**
+   * Removes a provider's key, and the copy each live Jev judge version of that provider holds: those judges are then
+   * missing their key, and a call to them is refused before it is made, until a key is added again.
+   */
+  async providerKeyRemove(input: { readonly provider: EventSecretProvider }): Promise<ProviderKeyReceipt> {
+    return this.#quiescer.withExclusive(async () => {
+      const owner = providerSecretOwner(input.provider);
+      await this.#secrets.retireCurrentGeneration({ owner, purpose: 'provider-key' });
+      const judges = this.#hostedJudgesOf(input.provider);
+      for (const judge of judges)
+        await this.#secrets.retireCurrentGeneration({
+          owner: exactOwner(this.#database, 'judge', judge.judgeId, judge.version),
+          purpose: 'judge-key',
+        });
+      await this.#secrets.reconcileRetiredGenerations(this.#cipher);
+      return { provider: input.provider, hasKey: false, judges: judges.length };
+    });
+  }
+
+  /**
+   * Gives one Jev judge version its provider's stored key (judge setup). Returns `unchanged` when it holds that key
+   * already; refuses when the provider has no key, before anything is written.
+   */
+  async syncJudgeKeyFromProvider(input: {
+    readonly judgeId: string;
+    readonly version: number;
+    readonly provider: EventSecretProvider;
+  }): Promise<'stored' | 'unchanged'> {
+    return this.#quiescer.withExclusive(async () => {
+      const owner = providerSecretOwner(input.provider);
+      const current = (
+        await this.#secrets.readLiveGenerations({ owner, purpose: 'provider-key', cipher: this.#cipher })
+      ).find((generation) => generation.lifecycle === 'current');
+      if (current === undefined) throw new Error('the AI provider has no key to give its judge');
+      const judge = { judgeId: input.judgeId, version: input.version, provider: input.provider };
+      this.#hostedJudge(judge.judgeId, judge.version);
+      if (this.#judgeKeyDigest(judge) === current.secretDigest) return 'unchanged';
+      await this.#giveJudgeKey(judge, current.material);
+      await this.#secrets.reconcileRetiredGenerations(this.#cipher);
+      return 'stored';
+    });
+  }
+
+  /** Every live Jev judge version the provider serves. */
+  #hostedJudgesOf(provider: EventSecretProvider): readonly HostedJudgeVersion[] {
+    const rows = this.#database
+      .prepare(
+        'SELECT judge_id, version, document FROM judge_versions WHERE revoked_at IS NULL ORDER BY judge_id, version',
+      )
+      .all() as Array<{ judge_id: string; version: number; document: string }>;
+    return rows.flatMap((row) => {
+      const document = JSON.parse(row.document) as { kind?: unknown; provider?: unknown };
+      if (document.kind !== JUDGE_KIND_TYPESAFE || document.provider !== provider) return [];
+      return [{ judgeId: row.judge_id, version: row.version, provider }];
+    });
+  }
+
+  /** The digest of the key a judge version holds now, or null when it holds none. */
+  #judgeKeyDigest(judge: HostedJudgeVersion): string | null {
+    const row = this.#database
+      .prepare(
+        `SELECT secret_digest FROM event_secret_generations
+         WHERE owner_kind = 'judge' AND owner_id = ? AND owner_version = ? AND purpose = 'judge-key' AND lifecycle = 'current'`,
+      )
+      .get(judge.judgeId, judge.version) as { secret_digest: string } | undefined;
+    return row?.secret_digest ?? null;
+  }
+
+  /** Puts `material` in the judge version's slot, retiring what it held; nothing when it holds that key already. */
+  async #giveJudgeKey(judge: HostedJudgeVersion, material: string): Promise<void> {
+    if (this.#judgeKeyDigest(judge) === sha256Hex(material)) return;
+    const owner = this.#hostedJudge(judge.judgeId, judge.version);
+    const prior = currentGeneration(this.#database, owner, 'judge-key');
+    await this.#store(owner, 'judge-key', material, prior, true);
   }
 
   #hostedJudge(judgeId: string, version: number): ExactOwner {

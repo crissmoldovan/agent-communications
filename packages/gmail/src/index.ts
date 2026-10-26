@@ -22,7 +22,7 @@ export {
 import { VERSION } from './version.ts';
 
 /** How a command is rendered for a person: in a sentence, or as a value of its own (CUE-403). */
-export { type Handoff, handoffSentence, handoffText } from '@agentcomms/core';
+export { type Handoff, handoffSentence, handoffText, markMcpServerProcess } from '@agentcomms/core';
 export { VERSION };
 export const PACKAGE_NAME = '@agentcomms/gmail';
 

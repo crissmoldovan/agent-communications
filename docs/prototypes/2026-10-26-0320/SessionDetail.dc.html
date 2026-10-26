@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>One agent session</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1100px}
+.app button,.app textarea{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.wide{max-width:1040px;margin:0 auto}
+.cols{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.convo{flex:999 1 520px;min-width:0;background:var(--s1);border-radius:14px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.aside{flex:1 1 260px;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sec{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.h3{margin:0 0 10px;font-size:12px;font-weight:500;color:var(--text3)}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--accentSoft);border-top-color:var(--accent);animation:spin 900ms linear infinite;box-sizing:border-box;display:inline-block}
+@keyframes spin{to{transform:rotate(360deg)}}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-n{background:var(--s2);color:var(--text2)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.tabs{display:flex;gap:2px;padding:8px 10px 0;border-bottom:1px solid var(--s2)}
+.tab{height:32px;padding:0 12px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none;border-bottom:2px solid transparent}
+.tab.on{color:var(--text);border-bottom-color:var(--accent)}
+.msgs{padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.you{align-self:flex-end;max-width:80%;background:var(--accentSoft);border-radius:12px 12px 4px 12px;padding:8px 12px}
+.ag{max-width:85%;background:var(--s2);border-radius:12px 12px 12px 4px;padding:8px 12px}
+.tool{display:inline-flex;align-items:center;gap:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11.5px;color:var(--text2);background:var(--s1);border:1px solid var(--s3);border-radius:7px;padding:2px 8px;margin:2px 4px 2px 0}
+.ev{align-self:center;color:var(--text3);font-size:12px;background:var(--s2);border-radius:10px;padding:3px 10px}
+.compose{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--s2);align-items:flex-end}
+.ta{flex:1;border:0;border-radius:10px;background:var(--s2);padding:8px 10px;resize:none;min-height:38px;box-sizing:border-box}
+.qi{display:flex;flex-direction:column;gap:2px;padding:8px 0;border-top:1px solid var(--s2)}
+.qi:first-of-type{border-top:0}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:0 6px}
+.kv{display:grid;grid-template-columns:110px minmax(0,1fr);gap:6px 10px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.spin{animation:none}}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="wide">
+  <a href="AgentSessions.dc.html" class="faint" style="text-decoration: none">‹ Agents · Sessions</a>
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 16px">
+    <span class="spin" role="img" aria-label="Working"></span>
+    <h1 class="h1">~/work/cue++/acme</h1>
+    <span class="chip c-n">Claude Code 2.1.310 · in Terminal</span>
+    <span class="chip c-acc">lane billing</span>
+    <span style="margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap"><span class="faint" style="align-self: center">Open in</span><a class="btn" href="#">VS Code</a><a class="btn" href="#">Terminal</a><a class="btn" href="#">Claude app</a></span>
+  </div>
+
+  <div class="cols">
+    <section class="convo" aria-label="The session">
+      <nav class="tabs" aria-label="Session">
+        <a class="tab on" href="#" aria-current="page">Conversation</a>
+        <a class="tab" href="#">Agent Comms activity</a>
+        <a class="tab" href="#">Details</a>
+      </nav>
+      <div class="msgs">
+        <div class="you">Watch lane billing and handle invoice requests. Draft replies; never send without me.</div>
+        <div class="ag">Watching lane billing.<div><span class="tool">events_watch · lane billing</span></div></div>
+        <div class="ev">11:40 · 1 new item in lane billing, from the rule invoices</div>
+        <div class="ag"><div><span class="tool">events_lane_item</span><span class="tool">gmail_message_get</span></div>David Example asks for the March invoice. I found it in Stripe (INV-0342, €1,200).</div>
+        <div class="ag"><div><span class="tool">gmail_draft_reply</span><span class="tool">gmail_send_prepare</span></div>I've drafted a reply with INV-0342 attached. It's waiting for your approval.</div>
+        <div class="ev">11:52 · 1 more item is waiting for this session: it's busy</div>
+        <div class="ag" style="display: flex; align-items: center; gap: 8px"><span class="spin" aria-hidden="true"></span><span class="muted">Waiting for the send approval…</span></div>
+      </div>
+      <form class="compose" aria-label="Send to this session">
+        <label for="say" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Message</label>
+        <textarea id="say" class="ta" placeholder="Send a message to this session…"></textarea>
+        <button type="button" class="btn p">Send</button>
+      </form>
+    </section>
+
+    <aside class="aside">
+      <section class="sec" aria-labelledby="wait">
+        <h2 id="wait" class="h3">Waiting for this session (2)</h2>
+        <div class="qi"><span><span class="ext">David Example</span> · invoices</span><span class="faint">Queued 11:52 because the session was busy · given when it's free</span></div>
+        <div class="qi"><span>build-alerts · from CI</span><span class="faint">Queued 11:58 · given when it's free</span></div>
+        <div style="display: flex; gap: 6px; margin-top: 8px"><button type="button" class="btn">Give the next one now</button></div>
+      </section>
+      <section class="sec" aria-labelledby="det">
+        <h2 id="det" class="h3">This session</h2>
+        <div class="kv">
+          <span class="faint">Started</span><span>09:41, by you</span>
+          <span class="faint">Model</span><span>Claude Opus</span>
+          <span class="faint">Permissions</span><span>Asks before acting</span>
+          <span class="faint">Today</span><span>Read 4 messages · drafted 2 · sent 1</span>
+        </div>
+      </section>
+    </aside>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1100}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

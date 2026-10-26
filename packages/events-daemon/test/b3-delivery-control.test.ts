@@ -4,15 +4,19 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { CommsError, canonicalJson, sha256Hex } from '@agentcomms/core';
 import { B3OperatorControl } from '../src/runtime/b3-operator-control.ts';
+import { EventExpiry } from '../src/runtime/expiry.ts';
+import { EventLifecycle } from '../src/runtime/lifecycle.ts';
+import { EventScheduler } from '../src/runtime/scheduler.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 function seedDelivery(
   store: EventDatabase,
   input: {
     readonly id: string;
-    readonly state: 'retryable' | 'dead-lettered';
+    readonly state: 'queued' | 'retryable' | 'disclosing' | 'dead-lettered';
     readonly source?: 'gmail' | 'slack' | 'whatsapp';
     readonly whatsappMessageId?: string;
   },
@@ -363,4 +367,162 @@ test('B3 retry refuses immutable state, deadline and generation changes', {
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }
+});
+
+// 0.32.0 (owner feedback §3.5, approved in the prototype): the app's "Stop trying" on a delivery that will try again.
+// Dropping a queued or retryable delivery is a tightening: it applies at once and cancels it, as the cancel paths do.
+
+async function withDeliveryControl(
+  seed: readonly { readonly id: string; readonly state: 'queued' | 'retryable' | 'disclosing' | 'dead-lettered' }[],
+  work: (store: EventDatabase, control: B3OperatorControl, fenced: string[]) => Promise<void>,
+): Promise<void> {
+  const stateDir = await shortTempDir('aev-b3-delivery-stop-');
+  try {
+    const store = await openEventDatabase({ stateDir });
+    try {
+      for (const entry of seed) seedDelivery(store, entry);
+      const fenced: string[] = [];
+      const control = new B3OperatorControl({
+        store,
+        ports: retryFencePorts(store, async (input, apply) => {
+          fenced.push(`${String(input.operation)}:${String(input.deliveryId)}`);
+          return apply();
+        }),
+        now: () => 500,
+      });
+      await work(store, control, fenced);
+    } finally {
+      store.close();
+    }
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+}
+
+const deliveryRow = (store: EventDatabase, id: string) =>
+  ({
+    ...(store.database
+      .prepare('SELECT state, encrypted_record, next_at, lease_until, attempts FROM deliveries WHERE id = ?')
+      .get(id) as Record<string, unknown>),
+  }) as Record<string, unknown>;
+
+test('0.32 B7: dropping a queued delivery cancels it at once, through the shared delivery fence', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withDeliveryControl([{ id: 'queued-delivery', state: 'queued' }], async (store, control, fenced) => {
+    assert.deepEqual(await control.handle({ operation: 'dropDelivery', args: { deliveryId: 'queued-delivery' } }), {
+      kind: 'delivery-dropped',
+      deliveryId: 'queued-delivery',
+    });
+    assert.deepEqual(fenced, ['drop:queued-delivery'], 'the drop enters the one shared delivery write fence');
+    assert.deepEqual(deliveryRow(store, 'queued-delivery'), {
+      state: 'cancelled',
+      encrypted_record: null,
+      next_at: null,
+      lease_until: null,
+      attempts: 3,
+    });
+  });
+});
+
+test('0.32 B7: a dropped retryable delivery is never tried again', { skip: WINDOWS_SKIP }, async () => {
+  await withDeliveryControl([{ id: 'retry-delivery', state: 'retryable' }], async (store, control) => {
+    const dispatched: string[] = [];
+    let clock = 500;
+    const scheduler = new EventScheduler({
+      store,
+      lifecycle: new EventLifecycle(store, () => clock),
+      activations: { resumeClaimedCompletions: async () => undefined } as never,
+      dispatcher: {
+        recoverLeases: async () => [],
+        dispatch: async (deliveryId: string) => {
+          dispatched.push(deliveryId);
+          return { state: 'busy', deliveryId };
+        },
+      } as never,
+      expiry: new EventExpiry(store, () => clock),
+      cipher: {} as never,
+      writerQuiescer: testWriterQuiescer(),
+      approvals: {} as never,
+      config: {
+        load: async () => ({ inboxes: { 'test/gmail': { id: 'acc-delivery', provider: 'gmail' } }, accounts: {} }),
+      } as never,
+      taint: {} as never,
+      gmailSourceFor: async () => {
+        throw new Error('this test polls no mailbox');
+      },
+      mailboxLock: {} as never,
+      now: () => clock,
+    });
+    // The control: the delivery is due (next_at 123), so a tick tries it.
+    await scheduler.tick();
+    assert.deepEqual(dispatched, ['retry-delivery'], 'before the drop, the scheduler tries the delivery');
+    assert.deepEqual(await control.handle({ operation: 'dropDelivery', args: { deliveryId: 'retry-delivery' } }), {
+      kind: 'delivery-dropped',
+      deliveryId: 'retry-delivery',
+    });
+    assert.deepEqual(deliveryRow(store, 'retry-delivery'), {
+      state: 'cancelled',
+      encrypted_record: null,
+      next_at: null,
+      lease_until: null,
+      attempts: 3,
+    });
+    for (const later of [600, 60_000, 86_400_000]) {
+      clock = later;
+      await scheduler.tick();
+    }
+    assert.deepEqual(dispatched, ['retry-delivery'], 'after the drop, no tick tries it again');
+    // A cancelled delivery cannot be retried back to life either.
+    await assert.rejects(
+      () => control.handle({ operation: 'retryDelivery', args: { deliveryId: 'retry-delivery' } }),
+      (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+    );
+  });
+});
+
+test('0.32 B7: a delivery being sent right now is refused, with its reason, and left as it was', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withDeliveryControl([{ id: 'sending-delivery', state: 'disclosing' }], async (store, control) => {
+    store.database.exec("UPDATE deliveries SET lease_until = 9999999999999 WHERE id = 'sending-delivery'");
+    const before = deliveryRow(store, 'sending-delivery');
+    await assert.rejects(
+      () => control.handle({ operation: 'dropDelivery', args: { deliveryId: 'sending-delivery' } }),
+      (error: unknown) =>
+        error instanceof CommsError &&
+        error.code === 'APPROVAL_VOID' &&
+        error.details?.reason === 'DELIVERY_IN_FLIGHT' &&
+        /being sent right now/u.test(error.message),
+    );
+    assert.deepEqual(deliveryRow(store, 'sending-delivery'), before, 'an attempt in flight is not touched');
+  });
+});
+
+test('0.32 B7: a finished delivery cannot be dropped; a dead-letter drop is as before', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withDeliveryControl(
+    [
+      { id: 'dead-delivery', state: 'dead-lettered' },
+      { id: 'done-delivery', state: 'queued' },
+    ],
+    async (store, control) => {
+      store.database.exec(
+        "UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, next_at = NULL WHERE id = 'done-delivery'",
+      );
+      await assert.rejects(
+        () => control.handle({ operation: 'dropDelivery', args: { deliveryId: 'done-delivery' } }),
+        (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
+      );
+      assert.equal(deliveryRow(store, 'done-delivery').state, 'delivered');
+      assert.deepEqual(await control.handle({ operation: 'dropDelivery', args: { deliveryId: 'dead-delivery' } }), {
+        kind: 'delivery-dropped',
+        deliveryId: 'dead-delivery',
+      });
+      const dropped = deliveryRow(store, 'dead-delivery');
+      assert.equal(dropped.state, 'dead-lettered', 'a dead letter stays a dead letter: only its payload goes');
+      assert.equal(dropped.encrypted_record, null);
+    },
+  );
 });

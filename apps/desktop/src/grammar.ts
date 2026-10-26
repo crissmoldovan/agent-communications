@@ -19,6 +19,9 @@ const QUEUE_ITEM_ID = new RegExp(grammar.queueItemId, 'u');
 const RULE_ID = new RegExp(grammar.ruleId, 'u');
 const LANE_NAME = new RegExp(grammar.laneName, 'u');
 const WINDOW_ID = new RegExp(grammar.windowId, 'u');
+const DELIVERY_ID = new RegExp(grammar.deliveryId, 'u');
+const LOOPBACK_URL = new RegExp(grammar.loopbackUrl, 'u');
+const LOCAL_MODEL = new RegExp(grammar.localModel, 'u');
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -84,6 +87,29 @@ export function isLaneName(value: string): boolean {
  */
 export function isWindowId(value: string): boolean {
   return isPlainValue(value) && WINDOW_ID.test(value);
+}
+
+/**
+ * A delivery's id, as the Deliveries screen names one (0.32.0): a letter or digit, then up to 127 letters, digits, `_`
+ * or `-`. The event service makes each a lowercase UUID; a delivery whose id is outside it is shown, and never opened.
+ */
+export function isDeliveryId(value: string): boolean {
+  return isPlainValue(value) && DELIVERY_ID.test(value);
+}
+
+/**
+ * A local model server's URL, as `judge setup local-endpoint --url` takes it (0.32.0): plain HTTP to the literal
+ * 127.0.0.1 or [::1], a port from 1 to 65535, and no path but `/` or `/v1/systemone`.
+ */
+export function isLoopbackUrl(value: string): boolean {
+  if (!isPlainValue(value)) return false;
+  const port = LOOPBACK_URL.exec(value)?.[1];
+  return port !== undefined && Number(port) >= 1 && Number(port) <= 65_535;
+}
+
+/** A local model's name: a letter or digit, then up to 127 letters, digits, `.`, `_`, `:`, `/` or `-`. */
+export function isLocalModel(value: string): boolean {
+  return isPlainValue(value) && LOCAL_MODEL.test(value);
 }
 
 /** The acts a rule can allow, in the order the form shows them. */

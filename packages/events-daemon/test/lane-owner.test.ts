@@ -591,6 +591,31 @@ test('LANE-E: a lane target’s deliveries are listed over MCP only to the windo
       ['dry-david'],
       'a window not bound to the lane sees none of its target’s deliveries',
     );
+    // 0.32.0 (§3.5): the rows gain their target's kind, last answer, decision and event, additively; a delivered row
+    // has no next try; and the new fields reveal no lane delivery to a window that is not bound to it.
+    const shaped = (rows: unknown) =>
+      (rows as Array<Record<string, unknown>>)
+        .map((row) => ({
+          targetId: row.targetId,
+          targetKind: row.targetKind,
+          state: row.state,
+          nextAt: row.nextAt,
+          lastErrorCode: row.lastErrorCode,
+          lastStatus: row.lastStatus,
+          decision: typeof row.decisionId,
+          event: typeof row.eventId,
+          delivered: typeof row.deliveredAt,
+        }))
+        .sort((left, right) => String(left.targetId).localeCompare(String(right.targetId)));
+    const common = { state: 'delivered', nextAt: null, lastErrorCode: null, lastStatus: null };
+    const kinds = { decision: 'string', event: 'string', delivered: 'number' };
+    assert.deepEqual(shaped(person), [
+      { targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds },
+      { targetId: 'lane-david', targetKind: 'queue', ...common, ...kinds },
+    ]);
+    const others = listed(await tool(other, 'events_deliveries_list'));
+    assert.deepEqual(shaped(others), [{ targetId: 'dry-david', targetKind: 'dry-run', ...common, ...kinds }]);
+    assert.doesNotMatch(JSON.stringify(others), /lane-david|"queue"/u, 'no lane delivery is named to the other window');
   });
 });
 
@@ -639,5 +664,286 @@ test('LANE-E: the approval preview of a rule sending to a bound lane names the w
       digest: planned.binding.digest,
     });
     assert.doesNotMatch(JSON.stringify(viewed), /david-project|claude-code/u);
+  });
+});
+
+// 0.32.0 (owner feedback §3.5): one delivery as the person reads it, through a real owner, with no terminal and --json
+// as the app runs it. The source ids come from the event's dedupe key; a lane target names its lane.
+test('0.32 B3: delivery show --json gives a delivery’s decision, event, source ids and target; an unknown one is 66', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const messageId = harness.mailbox.send('A delivery the person opens');
+    for (let index = 0; index < 10 && (await harness.openCount()) === 0; index += 1) await harness.tick();
+    const rows = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Array<{
+      deliveryId: string;
+      targetKind: string;
+    }>;
+    const dry = rows.find((row) => row.targetKind === 'dry-run')?.deliveryId as string;
+    const queued = rows.find((row) => row.targetKind === 'queue')?.deliveryId as string;
+    const shown = await cli(harness.stateDir, ['delivery', 'show', dry, '--json']);
+    assert.equal(shown.code, 0, shown.err);
+    t.diagnostic(`delivery show --json (dry-run): ${shown.out.trim()}`);
+    const detail = JSON.parse(shown.out) as {
+      delivery: Record<string, unknown>;
+      decision: Record<string, unknown>;
+      event: Record<string, unknown>;
+      target: Record<string, unknown>;
+      dryRun: { expiresAt: number | null } | null;
+    };
+    assert.deepEqual(Object.keys(detail), ['delivery', 'decision', 'event', 'target', 'dryRun']);
+    assert.equal(detail.delivery.deliveryId, dry);
+    assert.equal(detail.delivery.state, 'delivered');
+    assert.equal(detail.delivery.nextAt, null);
+    assert.deepEqual({ ...detail.decision, decidedAt: null }, { outcome: 'matched', decidedAt: null, judge: null });
+    assert.equal(detail.event.type, 'gmail.message.received');
+    assert.equal(detail.event.accountId, ACCOUNT);
+    assert.deepEqual(detail.event.source, { channel: 'gmail', messageId });
+    assert.deepEqual(detail.target, { kind: 'dry-run', id: 'dry-david', version: 1 });
+    assert.equal(typeof detail.dryRun?.expiresAt, 'number');
+    assert.doesNotMatch(shown.out, new RegExp(`${SENDER}|${SENDER_NAME}|A delivery the person opens`, 'u'));
+
+    const inLane = JSON.parse((await cli(harness.stateDir, ['delivery', 'show', queued, '--json'])).out) as {
+      target: unknown;
+      dryRun: unknown;
+    };
+    assert.deepEqual(inLane.target, { kind: 'queue', id: 'lane-david', version: 1, lane: 'david' });
+    assert.equal(inLane.dryRun, null);
+
+    const unknown = await cli(harness.stateDir, ['delivery', 'show', 'delivery-that-never-was', '--json']);
+    assert.equal(unknown.code, 66, unknown.err);
+    const marked = await cli(harness.stateDir, ['delivery', 'show', dry, '--json'], {
+      AGENTCOMMS_MCP_SERVER: 'events',
+    });
+    assert.equal(marked.code, 10, marked.err);
+  });
+});
+
+// 0.32.0 (§3.5): the dry-run log as the app reads it, with --json and no terminal, through a real owner. The record comes
+// back as data: the would-be CloudEvent parsed, its sender-written fields named in agentcommsuntrusted. The terminal
+// view still wraps the record in the untrusted-content envelope.
+test('0.32 B4: dryrun list and show --json give the app the log as data; the terminal view keeps the envelope', {
+  skip: WINDOWS_SKIP,
+}, async (t) => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const messageId = harness.mailbox.send('Dry-run subject the app shows as outside text');
+    for (let index = 0; index < 10 && (await harness.openCount()) === 0; index += 1) await harness.tick();
+    const listed = await cli(harness.stateDir, ['dryrun', 'list', '--json']);
+    assert.equal(listed.code, 0, listed.err);
+    t.diagnostic(`dryrun list --json: ${listed.out.trim()}`);
+    const entries = JSON.parse(listed.out) as Array<Record<string, unknown>>;
+    assert.equal(entries.length, 1);
+    assert.deepEqual(Object.keys(entries[0] ?? {}).sort(), [
+      'accountId',
+      'deliveredAt',
+      'deliveryId',
+      'eventId',
+      'expiresAt',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+    ]);
+    assert.doesNotMatch(listed.out, /Dry-run subject/u, 'the list is content-free');
+    const deliveryId = entries[0]?.deliveryId as string;
+
+    const shown = await cli(harness.stateDir, ['dryrun', 'show', deliveryId, '--json']);
+    assert.equal(shown.code, 0, shown.err);
+    t.diagnostic(`dryrun show --json: ${shown.out.trim()}`);
+    const record = JSON.parse(shown.out) as Record<string, unknown> & {
+      record: { data: Record<string, unknown>; agentcommsuntrusted?: unknown; type: string; dataschema: string };
+    };
+    assert.deepEqual(Object.keys(record), [
+      'deliveryId',
+      'ruleId',
+      'ruleVersion',
+      'targetId',
+      'targetVersion',
+      'eventId',
+      'accountId',
+      'deliveredAt',
+      'expiresAt',
+      'record',
+    ]);
+    assert.equal(record.deliveryId, deliveryId);
+    assert.equal(record.ruleId, RULE);
+    // Review of 0.32.0, finding 2: an agent's shell runs as the person, so each sender-written field leaves enveloped,
+    // as `queue show --json` gives it; the app unwraps the envelope into its From outside box.
+    const subject = String(record.record.data.subject);
+    assert.match(
+      subject,
+      /^<untrusted-content boundary="[^"]+" field="event" id="[^"]+">\nDry-run subject the app shows as outside text\n<\/untrusted-content boundary="[^"]+">$/u,
+    );
+    assert.match(String((record.record.data.from as { name: unknown }).name), /^<untrusted-content /u);
+    assert.match(
+      String((record.record.data.from as { address: unknown }).address),
+      /^<untrusted-content [^\n]*>\ndavid\.sender@example\.test\n/u,
+      'a From address is the sender’s too, as the queue gives it',
+    );
+    assert.match(String(record.record.data.snippet), /^<untrusted-content /u);
+    assert.equal(record.record.data.messageId, messageId, 'an id the sender did not write is left as it is');
+    assert.ok(record.record.agentcommsuntrusted !== undefined, 'the event names its sender-written fields');
+
+    const terminal = await cli(harness.stateDir, ['dryrun', 'show', deliveryId]);
+    assert.equal(terminal.code, 0, terminal.err);
+    assert.match(terminal.out, /<untrusted-content/u, 'the terminal view keeps the envelope');
+    assert.match(terminal.out, /^Local dry-run delivery /mu);
+  });
+});
+
+// 0.32.0: `delivery drop` now stops a delivery that will be tried again. Over MCP a window that is not bound to a lane
+// cannot stop, drop or even confirm a delivery to that lane (routing B4): for it, the delivery is not there.
+test('0.32 B7: over MCP, a window not bound to a lane cannot drop its deliveries; the bound one and the person reach them', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A delivery only the lane may touch');
+    const rows = JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Array<{
+      deliveryId: string;
+      targetId: string;
+    }>;
+    const laneDelivery = rows.find((row) => row.targetId === 'lane-david')?.deliveryId as string;
+    const dryDelivery = rows.find((row) => row.targetId === 'dry-david')?.deliveryId as string;
+    const unbound = await tool(other, 'events_delivery_drop', { deliveryId: laneDelivery });
+    assert.equal(unbound.result?.isError, true);
+    assert.match(resultText(unbound), /the delivery does not exist/u, 'the other window learns nothing of it');
+    // The bound window and the person reach it: it is delivered, so there is nothing to stop.
+    const bound = await tool(david, 'events_delivery_drop', { deliveryId: laneDelivery });
+    assert.equal(bound.result?.isError, true);
+    assert.match(resultText(bound), /can be dropped/u);
+    assert.doesNotMatch(resultText(bound), /does not exist/u);
+    const person = await cli(harness.stateDir, ['delivery', 'drop', laneDelivery, '--json']);
+    assert.equal(person.code, 10, person.err);
+    assert.match(person.err, /can be dropped/u);
+    // A delivery outside any lane is reached by every window, as the list shows it to every window.
+    const outside = await tool(other, 'events_delivery_drop', { deliveryId: dryDelivery });
+    assert.match(resultText(outside), /can be dropped/u);
+  });
+});
+
+// Review of 0.32.0, finding 4: stopping a delivery that will be tried again is the person's — CLI and app — like
+// `queue clear`. Over MCP a window may stop only a delivery in the lane it is bound to; a dead letter's payload can be
+// dropped as before. A cap of one delivery an hour keeps each rule's second delivery queued, to be stopped.
+test('0.32 R4: over MCP only the bound window stops its lane’s queued delivery; every other stop is the person’s', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    const capped = (ruleId: string, targets: readonly Record<string, unknown>[]) => ({
+      ...rule(1, targets),
+      ruleId,
+      deliveryRateCap: 1,
+    });
+    for (const target of [dryRun, lane(1)]) await harness.control.request('target-add', { document: target });
+    for (const [ruleId, targets] of [
+      ['lane-capped', [lane(1)]],
+      ['dry-capped', [dryRun]],
+    ] as const) {
+      await harness.control.request('rule-create', { document: capped(ruleId, targets) });
+      const planned = (await harness.control.request('rule-enable', { ruleId, version: 1 })) as { approvalId: string };
+      const challenge = (await harness.control.request('approve-challenge', {
+        approvalId: planned.approvalId,
+      })) as string;
+      await harness.control.request('approve', { approvalId: planned.approvalId, answer: challenge });
+    }
+    const enabled = (await harness.control.request('enable-all')) as { approvalId: string };
+    const challenge = (await harness.control.request('approve-challenge', {
+      approvalId: enabled.approvalId,
+    })) as string;
+    await harness.control.request('approve', { approvalId: enabled.approvalId, answer: challenge });
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    harness.mailbox.send('First: delivered within the cap');
+    harness.mailbox.send('Second: waits for the cap');
+    type Row = { deliveryId: string; ruleId: string; state: string };
+    const list = async () => JSON.parse((await cli(harness.stateDir, ['deliveries', 'list', '--json'])).out) as Row[];
+    for (let index = 0; index < 10 && (await list()).filter((row) => row.state === 'queued').length < 2; index += 1)
+      await harness.tick();
+    const queued = (ruleId: string) =>
+      list().then((rows) => rows.find((row) => row.ruleId === ruleId && row.state === 'queued')?.deliveryId as string);
+    const laneQueued = await queued('lane-capped');
+    const dryQueued = await queued('dry-capped');
+    assert.ok(laneQueued && dryQueued, 'each rule has a delivery waiting for its cap');
+    const stateOf = async (id: string) => (await list()).find((row) => row.deliveryId === id)?.state;
+
+    // A delivery outside any lane: no window may stop it, and the CLI inside an MCP server's process may not either.
+    for (const window of [david, other]) {
+      const refused = await tool(window, 'events_delivery_drop', { deliveryId: dryQueued });
+      assert.equal(refused.result?.isError, true);
+      assert.match(resultText(refused), /for a person, at a terminal or in the app/u);
+    }
+    const marked = await cli(harness.stateDir, ['delivery', 'drop', dryQueued, '--json'], {
+      AGENTCOMMS_MCP_SERVER: 'events',
+    });
+    assert.equal(marked.code, 10, marked.err);
+    assert.match(marked.err, /for a person, at a terminal or in the app/u);
+    assert.equal(await stateOf(dryQueued), 'queued', 'no refused stop changed it');
+    // The person stops it, at a terminal or in the app.
+    const person = await cli(harness.stateDir, ['delivery', 'drop', dryQueued, '--json']);
+    assert.equal(person.code, 0, person.err);
+    assert.equal(await stateOf(dryQueued), 'cancelled');
+
+    // A lane's delivery: the other window learns nothing of it; the bound window may stop it.
+    assert.match(
+      resultText(await tool(other, 'events_delivery_drop', { deliveryId: laneQueued })),
+      /the delivery does not exist/u,
+    );
+    const bound = structured(await tool(david, 'events_delivery_drop', { deliveryId: laneQueued }));
+    assert.deepEqual(bound, { kind: 'delivery-dropped', deliveryId: laneQueued });
+    assert.equal(await stateOf(laneQueued), 'cancelled');
+
+    // A finished delivery outside a lane is not a stop: every window gets the drop's own answer, as before.
+    const delivered = (await list()).find((row) => row.ruleId === 'dry-capped' && row.state === 'delivered');
+    const finished = await tool(other, 'events_delivery_drop', { deliveryId: delivered?.deliveryId as string });
+    assert.match(resultText(finished), /can be dropped/u);
+    assert.doesNotMatch(resultText(finished), /for a person/u);
+  });
+});
+
+// Review of 0.32.0, finding 8: what a rule did in the last 7 days tells how much reached its lane. Over MCP a window
+// not bound to that lane gets the rule without `counts7d`; the bound window, the person's CLI and the app keep it.
+test('0.32 R8: events_rule_show leaves out counts7d of a lane rule for a window not bound to its lane', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withOwner(async (harness) => {
+    await setUp(harness, [dryRun, lane(1)]);
+    await harness.control.request('rule-create', { document: { ...rule(1, [dryRun]), ruleId: 'dry-only' } });
+    const david = await harness.window(DAVID);
+    const other = await harness.window(OTHER);
+    for (const window of [david, other]) structured(await tool(window, 'events_lane_whoami'));
+    assert.equal(
+      (await cli(harness.stateDir, ['lane', 'bind', 'david', '--window', DAVID.sessionId as string])).code,
+      0,
+    );
+    await deliver(harness, 'A match the lane counts');
+    type Entry = { document: { ruleId: string }; counts7d?: { matched: number }; summary?: unknown };
+    const shown = async (window: RawClient, ruleId: string) => {
+      const message = await tool(window, 'events_rule_show', { ruleId });
+      assert.notEqual(message.result?.isError, true, resultText(message));
+      return JSON.parse(resultText(message)) as Entry[];
+    };
+    const unbound = await shown(other, RULE);
+    assert.equal(unbound.length, 1);
+    assert.equal('counts7d' in (unbound[0] as object), false, 'no count of a lane the window is not bound to');
+    assert.ok(unbound[0]?.summary !== undefined, 'the rule itself is still shown');
+    assert.equal((await shown(david, RULE))[0]?.counts7d?.matched, 1, 'the bound window sees its lane’s counts');
+    const person = JSON.parse((await cli(harness.stateDir, ['rule', 'show', RULE, '--json'])).out) as Entry[];
+    assert.equal(person[0]?.counts7d?.matched, 1, 'the person sees every count');
+    // A rule with no lane keeps its counts for every window.
+    assert.ok((await shown(other, 'dry-only'))[0]?.counts7d !== undefined);
   });
 });

@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>The test build</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--test:#B4540A;--testText:#FFFFFF;--testSoft:rgba(180,84,10,.10);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--test:#F59E3B;--testText:#1A1206;--testSoft:rgba(245,158,59,.14);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);min-height:820px;display:flex;flex-direction:column}
+.band{background:var(--test);color:var(--testText);display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:8px 16px;font-weight:500}
+.band a{color:var(--testText)}
+.body{display:flex;flex-wrap:wrap;flex:1}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px;box-shadow:inset 3px 0 0 var(--test)}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni.on{background:var(--s3);color:var(--text)}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tile{background:var(--s1);border-radius:14px;padding:16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:6px}
+.faint{color:var(--text3);font-size:12px}
+.muted{color:var(--text2)}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+  <div class="band" role="note" aria-label="Test build">
+    <span style="font-weight: 600; letter-spacing: 0.02em">TEST BUILD</span>
+    <span>feat/0.32 · a1b2c3d · built Oct 26, 14:05</span>
+    <span style="opacity: .9">Uses the test profile, not your real accounts</span>
+    <a href="#" style="margin-left: auto">What is this?</a>
+  </div>
+  <div class="body">
+    <nav aria-label="Sections" class="nav">
+      <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+        <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--test); color: var(--testText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">T</span>
+        <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms Test</span>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 2px">
+        <a class="ni on" href="#" aria-current="page">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages</a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections</a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+      </div>
+      <div style="margin-top: auto; padding: 0 10px; display: flex; flex-direction: column; gap: 2px">
+        <span class="faint">Test profile</span>
+        <span style="font-size: 12px">~/.agentcomms-test</span>
+      </div>
+    </nav>
+    <main class="main">
+      <div class="col">
+        <h1 class="h1">Overview</h1>
+        <p class="muted" style="margin: 0 0 18px">This is a test build of Agent Comms. Try anything here: it can't reach your real accounts, rules or settings.</p>
+        <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px">
+          <div class="tile"><span class="faint">Accounts</span><span style="font-size: 24px; font-weight: 600">0</span><span class="faint">Add a test account to try mail</span></div>
+          <div class="tile"><span class="faint">Event service</span><span style="font-size: 24px; font-weight: 600">Running</span><span class="faint">Its own, on the test profile</span></div>
+          <div class="tile"><span class="faint">This build</span><span style="font-size: 24px; font-weight: 600">0.32.0</span><span class="faint">No automatic updates</span></div>
+        </div>
+      </div>
+    </main>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":820}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

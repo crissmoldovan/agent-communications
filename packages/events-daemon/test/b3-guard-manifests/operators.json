@@ -86,6 +86,54 @@
       "loadedMarker": "drop-clears-retained-payload"
     },
     {
+      "case": "drop-refuses-a-delivery-in-flight",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",
+      "test": "packages/events-daemon/test/b3-delivery-control.test.ts",
+      "mutation": {
+        "from": "      if (row.state === 'disclosing') throw deliveryInFlight();\n",
+        "to": ""
+      },
+      "mutationTest": "0.32 B7: a delivery being sent right now is refused, with its reason, and left as it was",
+      "loadedMarker": "drop-refuses-a-delivery-in-flight"
+    },
+    {
+      "case": "drop-reaches-no-lane-delivery-for-an-unbound-window",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);\n",
+        "to": "      void caller;\n"
+      },
+      "mutationTest": "0.32 B7: over MCP, a window not bound to a lane cannot drop its deliveries; the bound one and the person reach them",
+      "loadedMarker": "drop-reaches-no-lane-delivery-for-an-unbound-window"
+    },
+    {
+      "case": "agent-stops-only-its-own-lane-delivery",
+      "operation": "dropDelivery",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      lanes.assertAgentMayStop(args.deliveryId, caller);\n",
+        "to": "      void caller;\n"
+      },
+      "mutationTest": "0.32 R4: over MCP only the bound window stops its lane’s queued delivery; every other stop is the person’s",
+      "loadedMarker": "agent-stops-only-its-own-lane-delivery"
+    },
+    {
+      "case": "rule-show-hides-a-foreign-lane-counts",
+      "operation": "ruleShow",
+      "productionEntry": "packages/events-daemon/src/runtime/owner.ts",
+      "test": "packages/events-daemon/test/lane-owner.test.ts",
+      "mutation": {
+        "from": "      return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);\n",
+        "to": "      return entries;\n"
+      },
+      "mutationTest": "0.32 R8: events_rule_show leaves out counts7d of a lane rule for a window not bound to its lane",
+      "loadedMarker": "rule-show-hides-a-foreign-lane-counts"
+    },
+    {
       "case": "retry-delegates-account-identity-fence",
       "operation": "retryDelivery",
       "productionEntry": "packages/events-daemon/src/runtime/b3-operator-control.ts",

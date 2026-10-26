@@ -28,6 +28,12 @@ pub const LINK_HOSTS: [&str; 3] = [
 pub const JUDGES_HELP: &str =
     "https://github.com/crissmoldovan/agent-communications/blob/main/packages/events-daemon/README.md#judges";
 
+/// Where a person gets each AI provider's key (0.32.0), as Settings → AI providers links them: TypeSafe's console, named
+/// by its quickstart (docs.typesafe.ai/introduction/quickstart), and OpenRouter's key settings, named by its Jev page
+/// (openrouter.ai/docs/guides/community/jev); both read 2026-10-26. Exactly these, as `JUDGES_HELP` is.
+pub const TYPESAFE_KEYS: &str = "https://console.typesafe.ai/keys";
+pub const OPENROUTER_KEYS: &str = "https://openrouter.ai/settings/keys";
+
 /// The longest link the app opens.
 const LINK_LIMIT: usize = 2048;
 
@@ -68,7 +74,7 @@ fn checked_host(url: &str) -> Option<String> {
 /// before it asks (`allowedLink`, `src/screens/Doctor.tsx`), and sends the link as its URL parser writes it. Besides
 /// those, `JUDGES_HELP` exactly.
 pub fn allowed_link(url: &str) -> bool {
-    if url == JUDGES_HELP {
+    if url == JUDGES_HELP || url == TYPESAFE_KEYS || url == OPENROUTER_KEYS {
         return true;
     }
     checked_host(url).is_some_and(|host| LINK_HOSTS.contains(&host.as_str()))
@@ -121,7 +127,7 @@ pub fn may_open(url: &str) -> bool {
 pub fn open_link(app: &AppHandle, url: &str) -> Result<(), AppError> {
     if !may_open(url) {
         return Err(AppError::refused(
-            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, and a queue item's message as the event service links it, on mail.google.com or app.slack.com",
+            "the app opens only https links to the pages doctor fixes name (api.slack.com, myaccount.google.com and console.cloud.google.com), the events service's README at its Judges section, where TypeSafe and OpenRouter give out API keys, and a queue item's message as the event service links it, on mail.google.com or app.slack.com",
         ));
     }
     app.opener()
@@ -308,6 +314,32 @@ mod tests {
         }
         let long = format!("https://slack.com/{}", "a".repeat(4096));
         assert!(!allowed_link(&long));
+    }
+
+    /// Settings → AI providers (0.32.0) opens the two pages where a person gets a key, exactly, and nothing else on
+    /// either host: not TypeSafe's or OpenRouter's other pages, not the same page another way.
+    #[test]
+    fn links_allow_the_two_provider_key_pages_and_nothing_else_there() {
+        assert_eq!(TYPESAFE_KEYS, "https://console.typesafe.ai/keys");
+        assert_eq!(OPENROUTER_KEYS, "https://openrouter.ai/settings/keys");
+        assert!(allowed_link(TYPESAFE_KEYS) && may_open(TYPESAFE_KEYS));
+        assert!(allowed_link(OPENROUTER_KEYS) && may_open(OPENROUTER_KEYS));
+        for url in [
+            "https://console.typesafe.ai/",
+            "https://console.typesafe.ai/keys/",
+            "https://console.typesafe.ai/keys?x=1",
+            "https://console.typesafe.ai/billing",
+            "https://typesafe.ai/keys",
+            "https://openrouter.ai/",
+            "https://openrouter.ai/settings/keys/",
+            "https://openrouter.ai/settings/credits",
+            "https://openrouter.ai/keys",
+            "http://openrouter.ai/settings/keys",
+            "https://openrouter.ai.evil.example/settings/keys",
+            "https://OpenRouter.ai/settings/keys",
+        ] {
+            assert!(!may_open(url), "{url} was allowed");
+        }
     }
 
     /// The Judges section's "How to set it up" (0.27.1) opens one fixed page: the events service's README at its

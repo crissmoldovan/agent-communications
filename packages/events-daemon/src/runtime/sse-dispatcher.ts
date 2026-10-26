@@ -337,7 +337,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
         );
       const settled = this.#store.database
         .prepare(
-          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL
+          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes;
@@ -370,7 +370,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
   #cancel(claim: ClaimedDelivery): void {
     const changed = this.#store.database
       .prepare(
-        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL
+        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
       .run(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes;
@@ -380,7 +380,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
   #expire(claim: ClaimedDelivery): void {
     const changed = this.#store.database
       .prepare(
-        `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+        `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
       .run(claim.id, claim.attemptId, claim.leaseToken, claim.leaseUntil).changes;

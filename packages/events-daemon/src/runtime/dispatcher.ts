@@ -568,7 +568,7 @@ export class DryRunDispatcher {
         );
       const settled = this.#store.database
         .prepare(
-          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL
+          `UPDATE deliveries SET state = 'delivered', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
@@ -581,7 +581,7 @@ export class DryRunDispatcher {
   #cancel(row: ClaimedDelivery): void {
     const changed = this.#store.database
       .prepare(
-        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL
+        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
       .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
@@ -591,7 +591,7 @@ export class DryRunDispatcher {
   #expire(row: ClaimedDelivery): void {
     const changed = this.#store.database
       .prepare(
-        `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL
+        `UPDATE deliveries SET state = 'retention-expired', encrypted_record = NULL, lease_until = NULL, next_at = NULL
          WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
       )
       .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;
@@ -603,7 +603,7 @@ export class DryRunDispatcher {
       this.#store.database.prepare('DELETE FROM dryrun_log WHERE delivery_id = ?').run(row.id);
       const changed = this.#store.database
         .prepare(
-          `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL
+          `UPDATE deliveries SET state = 'content-unreadable', encrypted_record = NULL, lease_until = NULL, next_at = NULL
            WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
         )
         .run(row.id, row.attemptId, row.leaseToken, row.leaseUntil).changes;

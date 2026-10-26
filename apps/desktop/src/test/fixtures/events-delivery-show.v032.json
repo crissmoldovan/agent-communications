@@ -1,0 +1,302 @@
+{
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b01": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b01",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "ruleId": "invoices",
+      "ruleVersion": 2,
+      "targetId": "billing-queue",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 1,
+      "nextAt": 0,
+      "expiresAt": 1793533200000,
+      "state": "delivered",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": null,
+      "targetKind": "queue",
+      "lastErrorCode": null,
+      "lastStatus": null,
+      "decisionId": "dec-01",
+      "eventId": "evt-01",
+      "deliveredAt": 1792928400000,
+      "deadLetteredAt": null
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": 1792928398000,
+      "judge": {
+        "kind": "typesafe",
+        "answer": "yes",
+        "confidence": 0.86,
+        "calibrated": true
+      }
+    },
+    "event": {
+      "eventId": "evt-01",
+      "type": "gmail.message.received",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "occurredAt": 1792928340000,
+      "observedAt": 1792928395000,
+      "source": {
+        "channel": "gmail",
+        "messageId": "18c0ffee00example1"
+      }
+    },
+    "target": {
+      "kind": "queue",
+      "id": "billing-queue",
+      "version": 1,
+      "lane": "billing"
+    },
+    "dryRun": null
+  },
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b02": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b02",
+      "accountId": "acc_01EXAMPLE000000000000001",
+      "ruleId": "david-on-slack",
+      "ruleVersion": 1,
+      "targetId": "david-queue",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 1,
+      "nextAt": null,
+      "expiresAt": 1793532660000,
+      "state": "delivered",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": null,
+      "targetKind": "queue",
+      "lastErrorCode": null,
+      "lastStatus": null,
+      "decisionId": "dec-02",
+      "eventId": "evt-02",
+      "deliveredAt": 1792927860000,
+      "deadLetteredAt": null
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": null,
+      "judge": null
+    },
+    "event": {
+      "eventId": "evt-02",
+      "type": "slack.message.posted",
+      "accountId": "acc_01EXAMPLE000000000000001",
+      "occurredAt": 1792927857000,
+      "observedAt": 1792927859000,
+      "source": {
+        "channel": "slack",
+        "channelId": "D0EXAMPLE",
+        "ts": "1792927860.000100"
+      }
+    },
+    "target": {
+      "kind": "queue",
+      "id": "david-queue",
+      "version": 1,
+      "lane": "david"
+    },
+    "dryRun": null
+  },
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b03": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b03",
+      "accountId": "in_01EXAMPLE0000000000000099",
+      "ruleId": "mail-subject",
+      "ruleVersion": 1,
+      "targetId": "mail-subject-log",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 1,
+      "nextAt": 0,
+      "expiresAt": 1793008920000,
+      "state": "delivered",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": null,
+      "targetKind": "dry-run",
+      "lastErrorCode": null,
+      "lastStatus": null,
+      "decisionId": "dec-03",
+      "eventId": "evt-03",
+      "deliveredAt": 1792922520000,
+      "deadLetteredAt": null
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": null,
+      "judge": null
+    },
+    "event": {
+      "eventId": "evt-03",
+      "type": "gmail.message.received",
+      "accountId": "in_01EXAMPLE0000000000000099",
+      "occurredAt": 1792922460000,
+      "observedAt": 1792922518000,
+      "source": {
+        "channel": "gmail",
+        "messageId": "18c0ffee00example3"
+      }
+    },
+    "target": {
+      "kind": "dry-run",
+      "id": "mail-subject-log",
+      "version": 1
+    },
+    "dryRun": {
+      "expiresAt": 1793008920000
+    }
+  },
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b04": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b04",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "ruleId": "build-alerts",
+      "ruleVersion": 1,
+      "targetId": "ci-hook",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 3,
+      "nextAt": 1792930200000,
+      "expiresAt": 1793101920000,
+      "state": "retryable",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": null,
+      "targetKind": "webhook",
+      "lastErrorCode": "HTTP_NON_SUCCESS",
+      "lastStatus": 503,
+      "decisionId": "dec-04",
+      "eventId": "evt-04",
+      "deliveredAt": null,
+      "deadLetteredAt": null
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": null,
+      "judge": null
+    },
+    "event": {
+      "eventId": "evt-04",
+      "type": "gmail.message.received",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "occurredAt": 1792929060000,
+      "observedAt": 1792929116000,
+      "source": {
+        "channel": "gmail",
+        "messageId": "18c0ffee00example4"
+      }
+    },
+    "target": {
+      "kind": "webhook",
+      "id": "ci-hook",
+      "version": 1,
+      "host": "hooks.ci.example"
+    },
+    "dryRun": null
+  },
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b05": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b05",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "ruleId": "build-alerts",
+      "ruleVersion": 1,
+      "targetId": "ci-hook",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 5,
+      "nextAt": null,
+      "expiresAt": 1793088900000,
+      "state": "dead-lettered",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": 1793523600000,
+      "targetKind": "webhook",
+      "lastErrorCode": "HTTP_NON_SUCCESS",
+      "lastStatus": 500,
+      "decisionId": "dec-05",
+      "eventId": "evt-05",
+      "deliveredAt": null,
+      "deadLetteredAt": 1792918800000
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": null,
+      "judge": null
+    },
+    "event": {
+      "eventId": "evt-05",
+      "type": "gmail.message.received",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "occurredAt": 1792916040000,
+      "observedAt": 1792916096000,
+      "source": {
+        "channel": "gmail",
+        "messageId": "18c0ffee00example5"
+      }
+    },
+    "target": {
+      "kind": "webhook",
+      "id": "ci-hook",
+      "version": 1,
+      "host": "hooks.ci.example"
+    },
+    "dryRun": null
+  },
+  "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b06": {
+    "delivery": {
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b06",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "ruleId": "invoices",
+      "ruleVersion": 2,
+      "targetId": "billing-queue",
+      "targetVersion": 1,
+      "subscriberId": null,
+      "subscriberVersion": null,
+      "attempts": 0,
+      "nextAt": 0,
+      "expiresAt": 1793534280000,
+      "state": "queued",
+      "switchGeneration": 3,
+      "deadLetterExpiresAt": null,
+      "targetKind": "queue",
+      "lastErrorCode": null,
+      "lastStatus": null,
+      "decisionId": "dec-06",
+      "eventId": "evt-06",
+      "deliveredAt": null,
+      "deadLetteredAt": null
+    },
+    "decision": {
+      "outcome": "matched",
+      "decidedAt": 1792929479000,
+      "judge": {
+        "kind": "typesafe",
+        "answer": "yes",
+        "confidence": 0.74,
+        "calibrated": true
+      }
+    },
+    "event": {
+      "eventId": "evt-06",
+      "type": "gmail.message.received",
+      "accountId": "in_01EXAMPLE0000000000000000",
+      "occurredAt": 1792929420000,
+      "observedAt": 1792929477000,
+      "source": {
+        "channel": "gmail",
+        "messageId": "18c0ffee00example6"
+      }
+    },
+    "target": {
+      "kind": "queue",
+      "id": "billing-queue",
+      "version": 1,
+      "lane": "billing"
+    },
+    "dryRun": null
+  }
+}

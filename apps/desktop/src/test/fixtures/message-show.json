@@ -1,0 +1,75 @@
+{
+  "message": {
+    "eventId": "e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1e1",
+    "type": "gmail.message.received",
+    "channel": "gmail",
+    "accountId": "in_01EXAMPLE0000000000000000",
+    "occurredAt": 1792928400000,
+    "observedAt": 1792928402000,
+    "source": {
+      "channel": "gmail",
+      "messageId": "18c2f0a1b2c3d4e5"
+    },
+    "decisions": [
+      {
+        "ruleId": "invoices",
+        "ruleVersion": 1,
+        "outcome": "matched",
+        "judge": {
+          "kind": "typesafe",
+          "answer": "yes",
+          "confidence": 0.86,
+          "calibrated": true
+        }
+      }
+    ],
+    "deliveries": [
+      {
+        "deliveryId": "dl_01EXAMPLE0000000000000001",
+        "targetKind": "queue",
+        "targetId": "billing-queue",
+        "lane": "billing",
+        "state": "delivered"
+      }
+    ],
+    "queueItem": {
+      "itemId": "qi_01J9Z8QF0000000000000000AB",
+      "state": "done",
+      "stateAt": 1792928720000,
+      "lane": "billing",
+      "history": [
+        {
+          "at": 1792928405000,
+          "kind": "woken",
+          "actor": "window",
+          "windowKey": "3f9a1c2e7b4d5a60"
+        },
+        {
+          "at": 1792928460000,
+          "kind": "read",
+          "actor": "window",
+          "windowKey": "3f9a1c2e7b4d5a60"
+        },
+        {
+          "at": 1792928640000,
+          "kind": "read",
+          "actor": "window",
+          "windowKey": "3f9a1c2e7b4d5a60"
+        },
+        {
+          "at": 1792928720000,
+          "kind": "done",
+          "actor": "window",
+          "windowKey": "3f9a1c2e7b4d5a60"
+        }
+      ]
+    },
+    "kept": {
+      "from": {
+        "name": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"m5gT2kQa\">",
+        "address": "<untrusted-content boundary=\"m5gT2kQa\" field=\"from-address\">\ndavid@example.com\n</untrusted-content boundary=\"m5gT2kQa\">"
+      },
+      "subject": "<untrusted-content boundary=\"m5gT2kQa\" field=\"subject\">\nCan you send the March invoice?\n</untrusted-content boundary=\"m5gT2kQa\">"
+    }
+  }
+}

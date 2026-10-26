@@ -1,11 +1,16 @@
 //! The allow-list (DA4, plan "Global Constraints"): every call the app may make, each argument checked against core's
 //! grammars before a word is built. A value that does not match never constructs, so the invoke that carried it fails
-//! before anything runs. No call carries `--approval`, and none is `approve`: the app never approves (DA1, DA10).
+//! before anything runs. No call carries `--approval`, and none is `approve` (DA1, DA10). Two approvals are the
+//! person's in the app (0.32.0, DA10's notes of 2026-10-26): a judge's setup, and adding a server to an app, whose
+//! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`).
 
+use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
 use crate::grammar;
 use crate::ipc::AppError;
 use crate::launchers::Product;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 macro_rules! checked_word {
@@ -84,6 +89,13 @@ checked_word!(
     "a rule id"
 );
 checked_word!(
+    /// A delivery's id (0.32.0, owner feedback §3.5): a word of letters, digits, `_` and `-`, as the event service's
+    /// lowercase UUIDs are.
+    DeliveryId,
+    grammar::delivery_id,
+    "a delivery id"
+);
+checked_word!(
     /// A lane's name (0.31.0, design 2026-10-25-routing §3.1): 1 to 40 lowercase letters, digits and `-`.
     LaneName,
     grammar::lane_name,
@@ -95,6 +107,111 @@ checked_word!(
     WindowId,
     grammar::window_id,
     "a window id"
+);
+checked_word!(
+    /// An observed event's id (0.32.0, spec §3.6): 32 lowercase hex digits, as the event service derives it
+    /// (`packages/events/src/identity/event-id.ts`).
+    EventId,
+    event_id,
+    "an event id"
+);
+checked_word!(
+    /// A message as core's `activity items` names one (0.32.0, spec §3.6): a Gmail message's id, or a Slack message's
+    /// `<channel>/<ts>`. Neither has a comma, so a list of them is one `--ids` word.
+    ItemId,
+    item_id,
+    "a message's id"
+);
+
+checked_word!(
+    /// Where the last page of `messages list` ended, as the event service gave it in `next` (0.32.0):
+    /// `<observedAt ms>:<eventId>`, the time in 2020 to 2099.
+    MessagesCursor,
+    messages_cursor,
+    "a messages cursor"
+);
+
+/// A messages cursor: the 13 digits of a time in 2020 to 2099, in milliseconds, `:`, and an event id.
+static MESSAGES_CURSOR: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^([1-9][0-9]{12}):[0-9a-f]{32}$").expect("a pattern"));
+
+fn messages_cursor(value: &str) -> bool {
+    grammar::plain(value)
+        && MESSAGES_CURSOR
+            .captures(value)
+            .and_then(|parts| parts.get(1)?.as_str().parse::<u64>().ok())
+            .is_some_and(|ms| EpochMs::try_from(ms).is_ok())
+}
+
+impl MessagesCursor {
+    /// The time the cursor's page ended at.
+    fn ms(&self) -> u64 {
+        self.0
+            .split(':')
+            .next()
+            .and_then(|ms| ms.parse().ok())
+            .unwrap_or(0)
+    }
+}
+
+/// Where a page of `messages list` ends (`--before`): a time, or the cursor the last page gave.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum PageBefore {
+    At(EpochMs),
+    Cursor(MessagesCursor),
+}
+
+impl PageBefore {
+    fn ms(&self) -> u64 {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms),
+            PageBefore::Cursor(cursor) => cursor.ms(),
+        }
+    }
+
+    /// As `--before` takes it: the time, or the cursor as it came.
+    fn word(&self) -> String {
+        match self {
+            PageBefore::At(ms) => u64::from(*ms).to_string(),
+            PageBefore::Cursor(cursor) => cursor.as_str().to_string(),
+        }
+    }
+}
+
+/// An event id: 32 lowercase hex digits (D3's truncated SHA-256).
+static EVENT_ID_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^[0-9a-f]{32}$").expect("a pattern"));
+
+/// A Gmail message's id, as the activity log and a queue item's link carry one: 1 to 128 letters, digits, `_` and `-`.
+static GMAIL_MESSAGE_ID: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new("^[0-9A-Za-z_-]{1,128}$").expect("a pattern"));
+
+/// A Slack message, as an event and `activity items` name one: the conversation's id (`C…`, `G…` or `D…`), `/`, and
+/// its ts, seconds and six digits of microseconds.
+static SLACK_ITEM: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^[CDG][A-Z0-9]{2,31}/[0-9]{1,12}\.[0-9]{6}$").expect("a pattern")
+});
+
+fn event_id(value: &str) -> bool {
+    grammar::plain(value) && EVENT_ID_PATTERN.is_match(value)
+}
+
+fn item_id(value: &str) -> bool {
+    grammar::plain(value) && (GMAIL_MESSAGE_ID.is_match(value) || SLACK_ITEM.is_match(value))
+}
+checked_word!(
+    /// A local model server's URL, for judge setup (0.32.0): plain HTTP to the literal `127.0.0.1` or `[::1]`, with
+    /// its port. The event service checks it again.
+    LoopbackUrl,
+    grammar::loopback_url,
+    "a local model server's URL on this machine: http://127.0.0.1:<port> or http://[::1]:<port>"
+);
+checked_word!(
+    /// A local model's name, for judge setup (0.32.0): letters, digits and `._:/-`.
+    LocalModel,
+    grammar::local_model,
+    "a local model's name"
 );
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
@@ -180,6 +297,27 @@ impl EndpointJudgeKind {
         match self {
             EndpointJudgeKind::Typesafe => "typesafe",
             EndpointJudgeKind::LocalEndpoint => "local-endpoint",
+        }
+    }
+}
+
+/// The AI providers whose keys Jev uses (0.32.0, owner decision 2026-10-26): TypeSafe itself, and OpenRouter, which
+/// serves TypeSafe's Jev. Closed: Settings → AI providers lists exactly these, and Jev's setup chooses one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AiProvider {
+    Typesafe,
+    Openrouter,
+}
+
+impl AiProvider {
+    pub const ALL: [AiProvider; 2] = [AiProvider::Typesafe, AiProvider::Openrouter];
+
+    /// The provider as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            AiProvider::Typesafe => "typesafe",
+            AiProvider::Openrouter => "openrouter",
         }
     }
 }
@@ -402,6 +540,105 @@ impl From<QueueLimit> for u64 {
     }
 }
 
+/// The most messages one `messages list` reads: the event service caps it there (plan, Task C).
+pub const MESSAGES_LIMIT_MAX: u64 = 500;
+
+/// How many messages `messages list --limit` reads: a whole number from 1 to `MESSAGES_LIMIT_MAX`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct MessagesLimit(u64);
+
+impl TryFrom<u64> for MessagesLimit {
+    type Error = AppError;
+
+    fn try_from(limit: u64) -> Result<Self, Self::Error> {
+        if (1..=MESSAGES_LIMIT_MAX).contains(&limit) {
+            Ok(MessagesLimit(limit))
+        } else {
+            Err(AppError::refused("a messages list reads 1 to 500 messages"))
+        }
+    }
+}
+
+impl From<MessagesLimit> for u64 {
+    fn from(limit: MessagesLimit) -> u64 {
+        limit.0
+    }
+}
+
+/// The first and the last millisecond a Messages time may be: 2020 to the end of 2099.
+const EARLIEST_MS: u64 = 1_577_836_800_000;
+const LATEST_MS: u64 = 4_102_444_800_000;
+
+/// A moment as the Messages screen's reads take one (`--since`, `--before`): whole milliseconds since the epoch, in
+/// 2020 to 2099. It is written as the number it is; no text the window sends reaches the words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "u64", into = "u64")]
+pub struct EpochMs(u64);
+
+impl TryFrom<u64> for EpochMs {
+    type Error = AppError;
+
+    fn try_from(ms: u64) -> Result<Self, Self::Error> {
+        if (EARLIEST_MS..LATEST_MS).contains(&ms) {
+            Ok(EpochMs(ms))
+        } else {
+            Err(AppError::refused(
+                "a time is whole milliseconds since 1970, in 2020 to 2099",
+            ))
+        }
+    }
+}
+
+impl From<EpochMs> for u64 {
+    fn from(ms: EpochMs) -> u64 {
+        ms.0
+    }
+}
+
+/// The most messages one `activity items --ids` names.
+pub const ITEM_IDS_MAX: usize = 50;
+
+/// The messages `activity items --ids` reads: 1 to `ITEM_IDS_MAX` ids, none twice, written as one comma list.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<ItemId>", into = "Vec<ItemId>")]
+pub struct ItemIds(Vec<ItemId>);
+
+impl TryFrom<Vec<ItemId>> for ItemIds {
+    type Error = AppError;
+
+    fn try_from(ids: Vec<ItemId>) -> Result<Self, Self::Error> {
+        let repeated = ids
+            .iter()
+            .enumerate()
+            .any(|(index, id)| ids[..index].contains(id));
+        if ids.is_empty() || ids.len() > ITEM_IDS_MAX || repeated {
+            Err(AppError::refused(
+                "an activity read names 1 to 50 messages, each once",
+            ))
+        } else {
+            Ok(ItemIds(ids))
+        }
+    }
+}
+
+impl From<ItemIds> for Vec<ItemId> {
+    fn from(ids: ItemIds) -> Vec<ItemId> {
+        ids.0
+    }
+}
+
+impl ItemIds {
+    /// The ids as `--ids` takes them: one comma list.
+    fn word(&self) -> String {
+        self.0
+            .iter()
+            .map(ItemId::as_str)
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
 /// The first and the last second a start of today may be: 2020 to the end of 2099.
 const EARLIEST_TODAY: u64 = 1_577_836_800;
 const LATEST_TODAY: u64 = 4_102_444_800;
@@ -605,6 +842,96 @@ pub enum Call {
     /// and gives nothing, a tightening, so the app applies it itself (DA10); the screen asks first. Binding is never a
     /// call: the person binds at a terminal (`TerminalCommand::LaneBind`), so no agent can bind itself.
     LaneUnbind { lane: LaneName },
+    /// The events service's `rule show <rule>` (0.32.0, owner feedback §3.4): each version of one rule, its document,
+    /// its times, its sentence in parts and its counts of the last 7 days. Content-free and read-only. The rules
+    /// calls are named outside `EventsJudge…`, which E2's static boundary keeps for Laya's two.
+    EventsRuleShow { rule_id: RuleId },
+    /// The events service's `rule disable <rule>` (0.32.0): turns a rule off at once. It takes away and gives nothing,
+    /// a tightening, so the app applies it itself (DA10). Turning one on is never a call: the person approves it.
+    EventsRuleDisable { rule_id: RuleId },
+    /// The events service's `rule remove <rule>` (0.32.0): removes a rule at once, a tightening, as disable is. The
+    /// screen asks first.
+    EventsRuleRemove { rule_id: RuleId },
+    /// The events service's `delivery show <delivery>` (0.32.0, §3.5): one delivery, its decision, its event's ids and
+    /// times, and its target's kind and host. The person's read, refused inside an MCP server's process.
+    EventsDeliveryShow { delivery_id: DeliveryId },
+    /// The events service's `dryrun show <delivery>` (0.32.0, §3.5): one dry-run log entry, the would-be record as
+    /// data. The person's read (D7, "at the terminal or in the app"); the screen shows each field a sender wrote as
+    /// outside text.
+    EventsDryrunShow { delivery_id: DeliveryId },
+    /// The events service's `delivery retry <delivery>`: tries a delivery that will try again now, rather than at its
+    /// next try. It sends nothing a rule did not already pass on, so the app applies it itself (DA10).
+    EventsDeliveryRetry { delivery_id: DeliveryId },
+    /// The events service's `delivery drop <delivery>`: stops a delivery that waits to be tried or will try again (its
+    /// 0.32.0; one being sent is refused), or deletes a failed one's kept message. A tightening, applied at once; the
+    /// screen asks first.
+    EventsDeliveryDrop { delivery_id: DeliveryId },
+    /// The events service's `provider list` (0.32.0): whether TypeSafe and OpenRouter each have a key, and never a key.
+    /// Read-only; it takes no argument.
+    ProviderList {},
+    /// The events service's `provider key remove <provider>` (0.32.0): takes the person's key away, and the copy its
+    /// Jev judges hold. Setting a key is never a call: the key goes to `provider_key_set`, which hands it to the CLI on
+    /// stdin, so no word of it is ever a `Call`'s.
+    ProviderKeyRemove { provider: AiProvider },
+    /// The events service's `judge setup typesafe --provider <provider>`, or `judge setup local-endpoint --url <url>
+    /// [--model <name>]` (0.32.0, owner decision 2026-10-26): the person's own setup, which turns the kind on and
+    /// approves its enablements as their act. Jev names its provider, whose stored key it uses; a local model server
+    /// names its loopback URL. No other combination builds.
+    JudgeSetup {
+        judge_kind: EndpointJudgeKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider: Option<AiProvider>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        url: Option<LoopbackUrl>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model: Option<LocalModel>,
+    },
+    /// Core `channels` (0.32.0's Connections, spec 2026-10-26-owner-feedback-0320 §3.3): every declared server, where it
+    /// is installed, each client entry that starts it, and the client configs core could not read. Read-only, and it
+    /// never returns an entry's `env`. It takes no argument.
+    Channels {},
+    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app.
+    /// It prepares a change: core answers with its preview, and the person approves it in Terminal (DA10). Both words
+    /// are closed (`connections`), and nothing else rides along.
+    McpInstall {
+        client: McpClient,
+        server: McpServer,
+    },
+    /// Core `mcp uninstall --client <client> --server <server>` (0.32.0): takes one server away from one app. It gives an
+    /// agent nothing, a tightening, which core applies at once.
+    McpUninstall {
+        client: McpClient,
+        server: McpServer,
+    },
+    /// Core `mcp install --client <client> --server <server> --app-approval <id>` (0.32.0, spec §3.3 and §5 question 3):
+    /// the person approved, in the app, the install the app prepared with `McpInstall` — core approves that change
+    /// through the app channel and applies it. Only an approval `cli` recorded for an equal `McpInstall` is answered
+    /// (`connections::run_app_approval`), once.
+    McpInstallApproved {
+        client: McpClient,
+        server: McpServer,
+        approval_id: ApprovalId,
+    },
+    /// The events service's `messages list --since <ms> [--before <ms|cursor>] [--limit <n>]` (0.32.0, spec §3.6): the
+    /// events it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
+    /// person's read, refused inside an MCP server; every argument is a checked number or the cursor the last page
+    /// gave, and a page ends after its window starts.
+    EventsMessagesList {
+        since: EpochMs,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        before: Option<PageBefore>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<MessagesLimit>,
+    },
+    /// The events service's `message show <eventId>` (0.32.0): one event's entry, with its queue item's full history.
+    EventsMessageShow { event_id: EventId },
+    /// Core's `activity items --since <ms> [--ids <id,…>]` (0.32.0, spec §3.6): every activity line that names a
+    /// message, grouped by the message's id. The person's read, like `activity show`; the ids are checked ones.
+    ActivityItems {
+        since: EpochMs,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ids: Option<ItemIds>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -627,6 +954,18 @@ pub const QUEUE_VERSION: &str = "0.30.0";
 /// The first release of the events service with lanes (design 2026-10-25-routing): its `lane list`, `lane unbind` and
 /// `lane bind`. An older one says "Needs 0.31.0 or later" (DA12).
 pub const LANES_VERSION: &str = "0.31.0";
+
+/// The first release of the events service whose `delivery show` exists and whose `dryrun show --json` answers the app
+/// (owner feedback 0.32.0, §3.5). An older one says "Needs 0.32.0 or later" (DA12).
+pub const DELIVERY_DETAIL_VERSION: &str = "0.32.0";
+
+/// The first release of the events service with judge setup and AI provider keys (owner decision 2026-10-26): its
+/// `judge setup`, `provider list` and `provider key set|remove`. An older one keeps Turn on in Terminal (DA12).
+pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
+
+/// The first release with the Messages screen's reads (spec 2026-10-26-owner-feedback-0320 §3.6): the events service's
+/// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
+pub const MESSAGES_VERSION: &str = "0.32.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -653,7 +992,11 @@ pub struct Words {
 }
 
 const TIMEOUT: Duration = Duration::from_secs(30);
+/// An install the person approved in the app: it may fetch a runtime and start the server to prove it (0.32.0).
+const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
+/// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
+const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn core(words: &[&str]) -> Words {
     Words {
@@ -868,17 +1211,153 @@ impl Call {
             Call::QueueClear {} => events(&["queue", "clear"]),
             Call::LaneList {} => events(&["lane", "list"]),
             Call::LaneUnbind { lane } => events(&["lane", "unbind", lane.as_str()]),
+            Call::EventsRuleShow { rule_id } => events(&["rule", "show", rule_id.as_str()]),
+            Call::EventsRuleDisable { rule_id } => events(&["rule", "disable", rule_id.as_str()]),
+            Call::EventsRuleRemove { rule_id } => events(&["rule", "remove", rule_id.as_str()]),
+            Call::EventsDeliveryShow { delivery_id } => {
+                events(&["delivery", "show", delivery_id.as_str()])
+            }
+            Call::EventsDryrunShow { delivery_id } => {
+                events(&["dryrun", "show", delivery_id.as_str()])
+            }
+            Call::EventsDeliveryRetry { delivery_id } => {
+                events(&["delivery", "retry", delivery_id.as_str()])
+            }
+            Call::EventsDeliveryDrop { delivery_id } => {
+                events(&["delivery", "drop", delivery_id.as_str()])
+            }
+            Call::ProviderList {} => events(&["provider", "list"]),
+            Call::ProviderKeyRemove { provider } => {
+                events(&["provider", "key", "remove", provider.word()])
+            }
+            Call::JudgeSetup {
+                judge_kind,
+                provider,
+                url,
+                model,
+            } => {
+                let words = match judge_kind {
+                    EndpointJudgeKind::Typesafe => {
+                        if url.is_some() || model.is_some() {
+                            return Err(AppError::refused(
+                                "Jev's setup takes its provider, not a URL or a model",
+                            ));
+                        }
+                        let Some(provider) = provider else {
+                            return Err(AppError::refused("Jev's setup names its provider"));
+                        };
+                        events(&["judge", "setup", "typesafe", "--provider", provider.word()])
+                    }
+                    EndpointJudgeKind::LocalEndpoint => {
+                        if provider.is_some() {
+                            return Err(AppError::refused(
+                                "a local model server's setup takes its URL, not a provider",
+                            ));
+                        }
+                        let Some(url) = url else {
+                            return Err(AppError::refused(
+                                "a local model server's setup names its URL",
+                            ));
+                        };
+                        with(
+                            events(&["judge", "setup", "local-endpoint", "--url", url.as_str()]),
+                            model.iter().flat_map(|name| {
+                                ["--model".to_string(), name.as_str().to_string()]
+                            }),
+                        )
+                    }
+                };
+                Words {
+                    timeout: SETUP_TIMEOUT,
+                    ..words
+                }
+            }
+            Call::Channels {} => core(&["channels"]),
+            // A first install may read the release's document and verify it before it shows its preview.
+            Call::McpInstall { client, server } => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&[
+                    "mcp",
+                    "install",
+                    "--client",
+                    client.word(),
+                    "--server",
+                    server.word(),
+                ])
+            },
+            Call::McpUninstall { client, server } => core(&[
+                "mcp",
+                "uninstall",
+                "--client",
+                client.word(),
+                "--server",
+                server.word(),
+            ]),
+            // It registers, fetches a runtime when one is needed, and proves the server starts.
+            Call::McpInstallApproved {
+                client,
+                server,
+                approval_id,
+            } => Words {
+                timeout: INSTALL_TIMEOUT,
+                ..core(&[
+                    "mcp",
+                    "install",
+                    "--client",
+                    client.word(),
+                    "--server",
+                    server.word(),
+                    "--app-approval",
+                    approval_id.as_str(),
+                ])
+            },
+            Call::EventsMessagesList {
+                since,
+                before,
+                limit,
+            } => {
+                if before
+                    .as_ref()
+                    .is_some_and(|before| before.ms() <= u64::from(*since))
+                {
+                    return Err(AppError::refused(
+                        "a page of messages ends after its window starts",
+                    ));
+                }
+                let option = |flag: &str, value: Option<String>| {
+                    value
+                        .map(|value| [flag.to_string(), value])
+                        .into_iter()
+                        .flatten()
+                };
+                with(
+                    events(&["messages", "list", "--since"]),
+                    std::iter::once(u64::from(*since).to_string())
+                        .chain(option("--before", before.as_ref().map(PageBefore::word)))
+                        .chain(option(
+                            "--limit",
+                            limit.map(|limit| u64::from(limit).to_string()),
+                        )),
+                )
+            }
+            Call::EventsMessageShow { event_id } => events(&["message", "show", event_id.as_str()]),
+            Call::ActivityItems { since, ids } => with(
+                core(&["activity", "items", "--since"]),
+                std::iter::once(u64::from(*since).to_string())
+                    .chain(ids.iter().flat_map(|ids| ["--ids".to_string(), ids.word()])),
+            ),
         })
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the five change shapes, and only those.
+    /// (DA10): the six change shapes, and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
             Call::UpdateLevel { .. }
                 | Call::UpdateRollback {}
                 | Call::UpdateBackgroundJob { on: true }
+                | Call::McpInstall { .. }
                 | Call::BehaviourAllow { .. }
                 | Call::BehaviourClear { .. }
         )
@@ -910,6 +1389,17 @@ impl Call {
             | Call::QueueReopen { .. }
             | Call::QueueClear {} => Some(QUEUE_VERSION),
             Call::LaneList {} | Call::LaneUnbind { .. } => Some(LANES_VERSION),
+            Call::EventsDeliveryShow { .. } | Call::EventsDryrunShow { .. } => {
+                Some(DELIVERY_DETAIL_VERSION)
+            }
+            Call::ProviderList {} | Call::ProviderKeyRemove { .. } | Call::JudgeSetup { .. } => {
+                Some(JUDGE_SETUP_VERSION)
+            }
+            Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
+            Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
+            Call::EventsMessagesList { .. }
+            | Call::EventsMessageShow { .. }
+            | Call::ActivityItems { .. } => Some(MESSAGES_VERSION),
             _ => None,
         }
     }
@@ -920,6 +1410,13 @@ impl Call {
 /// would stop it at its timeout. Only `event_service` starts it, detached.
 pub fn service_run() -> Words {
     events(&["run"])
+}
+
+/// The events service's `provider key set <provider>` (0.32.0, owner decision 2026-10-26): the one command whose input
+/// is a secret. It is no `Call`, so no word the window sends can carry a key: `provider_key_set` builds these words and
+/// hands the key to the CLI on stdin (`runner::run_with_input`), never in argv.
+pub fn provider_key_set(provider: AiProvider) -> Words {
+    events(&["provider", "key", "set", provider.word()])
 }
 
 /// One of every call the allow-list knows, with the JSON the UI sends for it: the rows of the plan's table.
@@ -1014,6 +1511,35 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "queueClear" }),
         json!({ "kind": "laneList" }),
         json!({ "kind": "laneUnbind", "lane": "david" }),
+        json!({ "kind": "eventsRuleShow", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsRuleDisable", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsRuleRemove", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsDeliveryShow", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDryrunShow", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDeliveryRetry", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDeliveryDrop", "deliveryId": DELIVERY }),
+        json!({ "kind": "providerList" }),
+        json!({ "kind": "providerKeyRemove", "provider": "typesafe" }),
+        json!({ "kind": "providerKeyRemove", "provider": "openrouter" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "typesafe" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" }),
+        json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434" }),
+        json!({
+            "kind": "judgeSetup",
+            "judgeKind": "local-endpoint",
+            "url": "http://[::1]:8080",
+            "model": "nimble"
+        }),
+        json!({ "kind": "channels" }),
+        json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+        json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
+        json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": BEFORE_MS, "limit": 100 }),
+        json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": "1792972800000:0123456789abcdef0123456789abcdef" }),
+        json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+        json!({ "kind": "activityItems", "since": SINCE_MS }),
+        json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"] }),
     ];
     values
         .into_iter()
@@ -1096,9 +1622,23 @@ pub(crate) const SESSION: &str = "3f9a1c2e7b4d5a60";
 #[cfg(test)]
 pub(crate) const QUEUE_ITEM: &str = "qi_01J9Z8QF0000000000000000AB";
 
+/// A well-formed delivery id, for the tests: a lowercase UUID, as the event service makes one.
+#[cfg(test)]
+pub(crate) const DELIVERY: &str = "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70";
+
 /// The start of 2026-10-25 in UTC, as seconds since the epoch: a today, for the tests.
 #[cfg(test)]
 pub(crate) const TODAY: u64 = 1_792_886_400;
+
+/// A well-formed event id, for the tests: 32 lowercase hex digits, as the event service makes them.
+#[cfg(test)]
+pub(crate) const EVENT_ID: &str = "0123456789abcdef0123456789abcdef";
+
+/// The start of 2026-10-25 in UTC, and of the next day, as milliseconds: a window for the Messages screen's tests.
+#[cfg(test)]
+pub(crate) const SINCE_MS: u64 = 1_792_886_400_000;
+#[cfg(test)]
+pub(crate) const BEFORE_MS: u64 = 1_792_972_800_000;
 
 #[cfg(test)]
 mod tests {
@@ -1753,7 +2293,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_five_change_shapes_prepare() {
+    fn only_the_six_change_shapes_prepare() {
         let preparing: Vec<serde_json::Value> = samples()
             .into_iter()
             .filter(|(call, _)| call.prepares_change())
@@ -1771,6 +2311,7 @@ mod tests {
                 json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+                json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
             ]
         );
     }
@@ -2761,6 +3302,681 @@ mod tests {
             refused(json!({ "kind": kind, "lane": "david" }));
             refused(json!({ "kind": kind, "lane": "david", "window": SESSION }));
         }
+    }
+
+    /// The rules' and deliveries' calls (0.32.0, owner feedback §3.4 and §3.5): `rule show`, `rule disable` and `rule
+    /// remove` for one rule, and `delivery show`, `dryrun show`, `delivery retry` and `delivery drop` for one delivery;
+    /// each the events launcher, its words, `--json` and the pins, and nothing else.
+    #[test]
+    fn rule_and_delivery_calls_build_exactly_their_words() {
+        let longest_rule = "r".repeat(128);
+        for rule in [
+            "mail-subject",
+            "invoices",
+            "rule_example",
+            "team:rule@1",
+            "rule.v2",
+            "r",
+            longest_rule.as_str(),
+        ] {
+            for (kind, verb) in [
+                ("eventsRuleShow", "show"),
+                ("eventsRuleDisable", "disable"),
+                ("eventsRuleRemove", "remove"),
+            ] {
+                assert_eq!(
+                    events_line(json!({ "kind": kind, "ruleId": rule })),
+                    ["rule", verb, rule]
+                );
+            }
+        }
+        let longest_delivery = "d".repeat(128);
+        for delivery in [DELIVERY, "dlv_example_1", "D", longest_delivery.as_str()] {
+            for (kind, noun, verb) in [
+                ("eventsDeliveryShow", "delivery", "show"),
+                ("eventsDryrunShow", "dryrun", "show"),
+                ("eventsDeliveryRetry", "delivery", "retry"),
+                ("eventsDeliveryDrop", "delivery", "drop"),
+            ] {
+                assert_eq!(
+                    events_line(json!({ "kind": kind, "deliveryId": delivery })),
+                    [noun, verb, delivery]
+                );
+            }
+        }
+        // `delivery show` and `dryrun show --json` from the app are 0.32.0's; the rest are as old as the event service.
+        // None prepares a change: Turn off and Remove are tightenings, and Try now and Stop trying act on one delivery,
+        // each applied by the app itself (DA10).
+        for (value, needs) in [
+            (
+                json!({ "kind": "eventsRuleShow", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsRuleDisable", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsRuleRemove", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsDeliveryShow", "deliveryId": DELIVERY }),
+                Some("0.32.0"),
+            ),
+            (
+                json!({ "kind": "eventsDryrunShow", "deliveryId": DELIVERY }),
+                Some("0.32.0"),
+            ),
+            (
+                json!({ "kind": "eventsDeliveryRetry", "deliveryId": DELIVERY }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsDeliveryDrop", "deliveryId": DELIVERY }),
+                None,
+            ),
+        ] {
+            assert_eq!(call(value.clone()).needs(), needs, "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(DELIVERY_DETAIL_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", DELIVERY_DETAIL_VERSION));
+        assert!(!crate::version::at_least("0.31.9", DELIVERY_DETAIL_VERSION));
+        assert!(crate::version::at_least("0.32.0", DELIVERY_DETAIL_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32",
+            DELIVERY_DETAIL_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches a rule's or a delivery's words unchecked: each id is a word of the grammar's,
+    /// never an option or two words; each call names exactly its one field; and nothing enables, creates, updates or
+    /// tests a rule, or lists the dry-run log: switching a rule on is the person's approval, at a terminal.
+    #[test]
+    fn rule_and_delivery_calls_refuse_bad_ids_and_extra_fields() {
+        let rule_kinds = ["eventsRuleShow", "eventsRuleDisable", "eventsRuleRemove"];
+        let delivery_kinds = [
+            "eventsDeliveryShow",
+            "eventsDryrunShow",
+            "eventsDeliveryRetry",
+            "eventsDeliveryDrop",
+        ];
+        for rule in [
+            json!(""),
+            json!("-r"),
+            json!("--json"),
+            json!("--all"),
+            json!("rule 1"),
+            json!("mail-subject --json"),
+            json!("mail-subject\n"),
+            json!("mail-subject\u{202e}"),
+            json!("mail-subject\u{200b}"),
+            json!(" mail-subject"),
+            json!("../mail-subject"),
+            json!("mail/subject"),
+            json!("_rule"),
+            json!(".rule"),
+            json!("r".repeat(129)),
+            json!(7),
+            json!(null),
+            json!(["mail-subject"]),
+            json!({ "id": "mail-subject" }),
+        ] {
+            for kind in rule_kinds {
+                refused(json!({ "kind": kind, "ruleId": rule }));
+            }
+        }
+        for delivery in [
+            json!(""),
+            json!("-d"),
+            json!("--json"),
+            json!("--all"),
+            json!("_dlv"),
+            json!("dlv 1"),
+            json!("dlv.1"),
+            json!("dlv:1"),
+            json!("dlv@1"),
+            json!("dlv/1"),
+            json!("../dlv"),
+            json!("dlv_1 --json"),
+            json!("dlv_1\n"),
+            json!("dlv_1\u{202e}"),
+            json!("dlv_1\u{200b}"),
+            json!(" dlv_1"),
+            json!("d".repeat(129)),
+            json!(7),
+            json!(null),
+            json!([DELIVERY]),
+            json!({ "id": DELIVERY }),
+        ] {
+            for kind in delivery_kinds {
+                refused(json!({ "kind": kind, "deliveryId": delivery }));
+            }
+        }
+        // Each id is never left out, and is named exactly: `ruleId` for a rule, `deliveryId` for a delivery.
+        for kind in rule_kinds {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "rule": "mail-subject" }));
+            refused(json!({ "kind": kind, "id": "mail-subject" }));
+            refused(json!({ "kind": kind, "deliveryId": DELIVERY }));
+        }
+        for kind in delivery_kinds {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "delivery": DELIVERY }));
+            refused(json!({ "kind": kind, "id": DELIVERY }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject" }));
+        }
+        for (field, value) in [
+            ("version", json!(2)),
+            ("approval", json!(ID)),
+            ("approvalId", json!(ID)),
+            ("args", json!(["--all"])),
+            ("json", json!(false)),
+            ("force", json!(true)),
+            ("all", json!(true)),
+        ] {
+            for kind in rule_kinds {
+                let mut given = json!({ "kind": kind, "ruleId": "mail-subject" });
+                given[field] = value.clone();
+                refused(given);
+            }
+            for kind in delivery_kinds {
+                let mut given = json!({ "kind": kind, "deliveryId": DELIVERY });
+                given[field] = value.clone();
+                refused(given);
+            }
+        }
+        for kind in [
+            "eventsRuleEnable",
+            "eventsRuleCreate",
+            "eventsRuleUpdate",
+            "eventsRuleTest",
+            "eventsRuleTestRetained",
+            "eventsDryrunList",
+            "eventsDeliveryList",
+            "eventsDeliveries2",
+            "ruleShow",
+            "deliveryShow",
+            "dryrunShow",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject" }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject", "version": 2 }));
+            refused(json!({ "kind": kind, "deliveryId": DELIVERY }));
+        }
+    }
+
+    /// Judge setup and AI provider keys (0.32.0, owner decision 2026-10-26): the provider list and a key's removal, each
+    /// the events launcher, its words, `--json` and the pins; and Jev's or a local model server's setup, with its
+    /// longer timeout. Each needs 0.32.0, and none prepares a change: the person's setup is applied by the CLI itself.
+    #[test]
+    fn setup_calls_build_exactly_their_words() {
+        assert_eq!(
+            events_line(json!({ "kind": "providerList" })),
+            ["provider", "list"]
+        );
+        for provider in AiProvider::ALL {
+            assert_eq!(
+                events_line(json!({ "kind": "providerKeyRemove", "provider": provider.word() })),
+                ["provider", "key", "remove", provider.word()]
+            );
+        }
+        let setup = |value: serde_json::Value| {
+            let built = call(value.clone()).words().expect("words");
+            assert_eq!(built.product, Product::EventsDaemon, "{value}");
+            assert_eq!(built.shape, Shape::Bare, "{value}");
+            assert!(built.pins && built.quiet_updates, "{value}");
+            assert_eq!(built.timeout, Duration::from_secs(60), "{value}");
+            built.words
+        };
+        assert_eq!(
+            setup(
+                json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" })
+            ),
+            ["judge", "setup", "typesafe", "--provider", "openrouter"]
+        );
+        assert_eq!(
+            setup(json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "typesafe" })),
+            ["judge", "setup", "typesafe", "--provider", "typesafe"]
+        );
+        assert_eq!(
+            setup(
+                json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434" })
+            ),
+            [
+                "judge",
+                "setup",
+                "local-endpoint",
+                "--url",
+                "http://127.0.0.1:11434"
+            ]
+        );
+        assert_eq!(
+            setup(json!({
+                "kind": "judgeSetup",
+                "judgeKind": "local-endpoint",
+                "url": "http://[::1]:8080",
+                "model": "nimble"
+            })),
+            [
+                "judge",
+                "setup",
+                "local-endpoint",
+                "--url",
+                "http://[::1]:8080",
+                "--model",
+                "nimble"
+            ]
+        );
+        for value in [
+            json!({ "kind": "providerList" }),
+            json!({ "kind": "providerKeyRemove", "provider": "openrouter" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.32.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(JUDGE_SETUP_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", JUDGE_SETUP_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32-judges",
+            JUDGE_SETUP_VERSION
+        ));
+    }
+
+    /// No key is ever a call's: there is no `providerKeySet` call, and no setup call takes a key, a free word, Laya, a
+    /// URL that is not on this machine, or a provider and a URL together.
+    #[test]
+    fn setup_calls_refuse_a_key_laya_a_remote_url_and_mixed_shapes() {
+        for kind in ["providerKeySet", "providerKey", "providerKeyAdd"] {
+            refused(json!({ "kind": kind, "provider": "openrouter" }));
+            refused(json!({ "kind": kind, "provider": "openrouter", "key": "fake-key" }));
+        }
+        for (field, value) in [
+            ("key", json!("fake-key")),
+            ("apiKey", json!("fake-key")),
+            ("hidden", json!("fake-key")),
+            ("stdin", json!("fake-key")),
+        ] {
+            let mut setup =
+                json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter" });
+            setup[field] = value.clone();
+            refused(setup);
+            let mut remove = json!({ "kind": "providerKeyRemove", "provider": "openrouter" });
+            remove[field] = value.clone();
+            refused(remove);
+            let mut list = json!({ "kind": "providerList" });
+            list[field] = value;
+            refused(list);
+        }
+        for provider in [
+            json!("someone-else"),
+            json!("TypeSafe"),
+            json!(""),
+            json!(1),
+            json!(["typesafe"]),
+        ] {
+            refused(json!({ "kind": "providerKeyRemove", "provider": provider.clone() }));
+            refused(json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": provider }));
+        }
+        refused(json!({ "kind": "providerKeyRemove", "provider": null }));
+        refused(json!({ "kind": "providerKeyRemove" }));
+        refused(json!({ "kind": "judgeSetup", "judgeKind": "laya" }));
+        refused(json!({ "kind": "judgeSetup", "judgeKind": "laya", "provider": "typesafe" }));
+        for url in [
+            "http://192.168.1.20:11434",
+            "http://localhost:11434",
+            "https://127.0.0.1:11434",
+            "http://127.0.0.1",
+            "http://127.0.0.1:11434/api/generate",
+            "http://127.0.0.1:11434 --model x",
+            "-http://127.0.0.1:11434",
+        ] {
+            refused(json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": url }));
+        }
+        refused(json!({
+            "kind": "judgeSetup",
+            "judgeKind": "local-endpoint",
+            "url": "http://127.0.0.1:11434",
+            "model": "--json"
+        }));
+        // Shapes that deserialise, but name the wrong words for their kind, build nothing.
+        for value in [
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter", "url": "http://127.0.0.1:11434" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "typesafe", "provider": "openrouter", "model": "nimble" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "url": "http://127.0.0.1:11434", "provider": "typesafe" }),
+            json!({ "kind": "judgeSetup", "judgeKind": "local-endpoint", "model": "nimble" }),
+        ] {
+            assert_eq!(
+                call(value.clone()).words().expect_err("refused").code,
+                "APP_REFUSED",
+                "{value}"
+            );
+        }
+    }
+
+    /// The Messages screen's calls (0.32.0, spec §3.6): the events service's `messages list` and `message show`, and
+    /// core's `activity items`, each read for the same window. Each is its launcher, its words, `--json` and the pins,
+    /// and nothing else; none prepares a change, and each needs the release that ships it.
+    #[test]
+    fn messages_calls_build_exactly_their_words() {
+        let since = SINCE_MS.to_string();
+        let before = BEFORE_MS.to_string();
+        assert_eq!(
+            events_line(json!({ "kind": "eventsMessagesList", "since": SINCE_MS })),
+            ["messages", "list", "--since", since.as_str()]
+        );
+        assert_eq!(
+            events_line(json!({
+                "kind": "eventsMessagesList",
+                "since": SINCE_MS,
+                "before": BEFORE_MS,
+                "limit": 100
+            })),
+            [
+                "messages",
+                "list",
+                "--since",
+                since.as_str(),
+                "--before",
+                before.as_str(),
+                "--limit",
+                "100"
+            ]
+        );
+        // The next page, by the cursor the last one gave: `<observedAt ms>:<eventId>`, passed on as it came.
+        let cursor = format!("{BEFORE_MS}:{EVENT_ID}");
+        assert_eq!(
+            events_line(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ),
+            [
+                "messages",
+                "list",
+                "--since",
+                since.as_str(),
+                "--before",
+                cursor.as_str()
+            ]
+        );
+        assert_eq!(
+            serde_json::to_value(call(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+            ))
+            .expect("json"),
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor })
+        );
+        for (limit, word) in [(1u64, "1"), (100, "100"), (500, "500")] {
+            assert_eq!(
+                events_line(
+                    json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "limit": limit })
+                ),
+                [
+                    "messages",
+                    "list",
+                    "--since",
+                    since.as_str(),
+                    "--limit",
+                    word
+                ]
+            );
+        }
+        // The earliest and the latest a time may be: 2020, and the last millisecond before 2100.
+        for at in [1_577_836_800_000u64, 4_102_444_799_999] {
+            let word = at.to_string();
+            assert_eq!(
+                events_line(json!({ "kind": "eventsMessagesList", "since": at })),
+                ["messages", "list", "--since", word.as_str()]
+            );
+        }
+        assert_eq!(
+            events_line(json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID })),
+            ["message", "show", EVENT_ID]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activityItems", "since": SINCE_MS })),
+            ["activity", "items", "--since", since.as_str()]
+        );
+        assert_eq!(
+            whole_line(json!({
+                "kind": "activityItems",
+                "since": SINCE_MS,
+                "ids": ["18c2f0a1b2c3d4e5", "C0123ABCD/1792886400.000100"]
+            })),
+            [
+                "activity",
+                "items",
+                "--since",
+                since.as_str(),
+                "--ids",
+                "18c2f0a1b2c3d4e5,C0123ABCD/1792886400.000100"
+            ]
+        );
+        let fifty: Vec<String> = (0..50).map(|n| format!("18c2f0a1b2c3{n:04}")).collect();
+        let line = whole_line(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": fifty }));
+        assert_eq!(line[4], "--ids");
+        assert_eq!(line[5], fifty.join(","));
+        // A field left out, or given as null, is no option: the words carry none.
+        assert_eq!(
+            events_line(
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": null, "limit": null })
+            ),
+            ["messages", "list", "--since", since.as_str()]
+        );
+        assert_eq!(
+            whole_line(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": null })),
+            ["activity", "items", "--since", since.as_str()]
+        );
+        for value in [
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+            json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+            json!({ "kind": "activityItems", "since": SINCE_MS }),
+        ] {
+            assert_eq!(call(value.clone()).needs(), Some("0.32.0"), "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(MESSAGES_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", MESSAGES_VERSION));
+        assert!(!crate::version::at_least("0.31.9", MESSAGES_VERSION));
+        assert!(crate::version::at_least("0.32.0", MESSAGES_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32",
+            MESSAGES_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches the Messages calls' words unchecked: each time is a whole number of milliseconds
+    /// in 2020 to 2099, `before` after `since`, the limit 1 to 500, the event id the event service's 32 lowercase hex
+    /// digits, each item id a Gmail message's or a Slack `<channel>/<ts>`, at most fifty and none twice; and no call
+    /// takes a field it does not name.
+    #[test]
+    fn messages_calls_refuse_bad_numbers_ids_and_extra_fields() {
+        for since in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!(1_577_836_799_999u64),
+            json!(4_102_444_800_000u64),
+            json!(u64::MAX),
+            json!("1792886400000"),
+            json!("30d"),
+            json!(null),
+            json!([SINCE_MS]),
+            json!({ "ms": SINCE_MS }),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": since }));
+            refused(json!({ "kind": "activityItems", "since": since }));
+            // `before` is optional, so a null one is no option (above); any other of these is refused.
+            if !since.is_null() {
+                refused(
+                    json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": since }),
+                );
+            }
+        }
+        // The window is always said: the two reads cover the same one.
+        refused(json!({ "kind": "eventsMessagesList" }));
+        refused(json!({ "kind": "activityItems" }));
+        refused(json!({ "kind": "activityItems", "ids": ["18c2f0a1b2c3d4e5"] }));
+        // A page ends after the window starts, by a time or by a cursor.
+        for before in [
+            json!(SINCE_MS),
+            json!(SINCE_MS - 1),
+            json!(format!("{SINCE_MS}:{EVENT_ID}")),
+            json!(format!("{}:{EVENT_ID}", SINCE_MS - 1)),
+        ] {
+            assert!(
+                call(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": before }))
+                    .words()
+                    .is_err(),
+                "before {before}"
+            );
+        }
+        // A cursor is exactly the event service's: whole milliseconds in 2020 to 2099, `:`, and an event id.
+        for cursor in [
+            format!("{BEFORE_MS}:"),
+            format!(":{EVENT_ID}"),
+            format!("{BEFORE_MS}:{}", EVENT_ID.to_uppercase()),
+            format!("{BEFORE_MS}:{}", &EVENT_ID[1..]),
+            format!("{BEFORE_MS}:{EVENT_ID}0"),
+            format!("{BEFORE_MS}:{EVENT_ID}:x"),
+            format!("{BEFORE_MS}-{EVENT_ID}"),
+            format!("{BEFORE_MS} :{EVENT_ID}"),
+            format!("-{BEFORE_MS}:{EVENT_ID}"),
+            format!("{BEFORE_MS}:{EVENT_ID}\n"),
+            format!("{BEFORE_MS}:{EVENT_ID} --limit 5"),
+            format!("0{BEFORE_MS}:{EVENT_ID}"),
+            format!("4102444800000:{EVENT_ID}"),
+            format!("1577836799999:{EVENT_ID}"),
+            "next".to_string(),
+            String::new(),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": cursor }));
+        }
+        for limit in [
+            json!(0),
+            json!(501),
+            json!(-1),
+            json!(1.5),
+            json!("100"),
+            json!([100]),
+        ] {
+            refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "limit": limit }));
+        }
+        let long_hex = "a".repeat(33);
+        for event in [
+            json!(""),
+            json!("0123456789abcdef0123456789abcde"),
+            json!(long_hex),
+            json!("0123456789ABCDEF0123456789ABCDEF"),
+            json!("0123456789abcdef0123456789abcdeg"),
+            json!("-123456789abcdef0123456789abcdef"),
+            json!("0123456789abcdef0123456789abcdef\n"),
+            json!(" 0123456789abcdef0123456789abcdef"),
+            json!("0123456789abcdef0123456789abcdef --json"),
+            json!("qi_01J9Z8QF0000000000000000AB"),
+            json!("../0123456789abcdef0123456789ab"),
+            json!(7),
+            json!(null),
+            json!([EVENT_ID]),
+            json!({ "id": EVENT_ID }),
+        ] {
+            refused(json!({ "kind": "eventsMessageShow", "eventId": event }));
+        }
+        // The event is never left out, and is named `eventId`, nothing else.
+        refused(json!({ "kind": "eventsMessageShow" }));
+        refused(json!({ "kind": "eventsMessageShow", "id": EVENT_ID }));
+        refused(json!({ "kind": "eventsMessageShow", "event": EVENT_ID }));
+        let long_id = "a".repeat(129);
+        for id in [
+            json!(""),
+            json!("-18c2f0a1b2c3d4e5"),
+            json!("--json"),
+            json!("18c2f0a1b2c3d4e5,18c2f0a1b2c3d4e6"),
+            json!("18c2 f0a1"),
+            json!("18c2f0a1b2c3d4e5\n"),
+            json!("18c2f0a1b2c3d4e5\u{202e}"),
+            json!("18c2f0a1/../x"),
+            json!(long_id),
+            json!("C0123ABCD/1792886400"),
+            json!("C0123ABCD/1792886400.00010"),
+            json!("c0123abcd/1792886400.000100"),
+            json!("X0123ABCD/1792886400.000100"),
+            json!("C0123ABCD/1792886400.000100/x"),
+            json!("C0123ABCD/"),
+            json!(7),
+            json!(null),
+            json!(["18c2f0a1b2c3d4e5"]),
+        ] {
+            refused(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": [id] }));
+        }
+        let fifty_one: Vec<String> = (0..51).map(|n| format!("18c2f0a1b2c3{n:04}")).collect();
+        for ids in [
+            json!([]),
+            json!(fifty_one),
+            json!(["18c2f0a1b2c3d4e5", "18c2f0a1b2c3d4e5"]),
+            json!("18c2f0a1b2c3d4e5"),
+            json!("18c2f0a1b2c3d4e5,C0123ABCD/1792886400.000100"),
+            json!(7),
+        ] {
+            refused(json!({ "kind": "activityItems", "since": SINCE_MS, "ids": ids }));
+        }
+        for (field, value) in [
+            ("approval", json!(ID)),
+            ("approvalId", json!(ID)),
+            ("args", json!(["--all"])),
+            ("json", json!(false)),
+            ("session", json!(SESSION)),
+            ("channel", json!("gmail")),
+            ("account", json!("example/gmail")),
+            ("cursor", json!("next")),
+            ("all", json!(true)),
+            ("content", json!(true)),
+        ] {
+            for base in [
+                json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
+                json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID }),
+                json!({ "kind": "activityItems", "since": SINCE_MS }),
+            ] {
+                let mut given = base;
+                given[field] = value.clone();
+                refused(given);
+            }
+        }
+        refused(json!({ "kind": "eventsMessageShow", "eventId": EVENT_ID, "since": SINCE_MS }));
+        refused(json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "eventId": EVENT_ID }));
+        refused(
+            json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "ids": ["18c2f0a1b2c3d4e5"] }),
+        );
+        refused(json!({ "kind": "activityItems", "since": SINCE_MS, "before": BEFORE_MS }));
+        refused(json!({ "kind": "activityItems", "since": SINCE_MS, "limit": 100 }));
+        // What the two services have besides, the app never calls from here.
+        for kind in [
+            "eventsMessages",
+            "eventsMessage",
+            "eventsMessagesShow",
+            "eventsMessageList",
+            "messagesList",
+            "messageShow",
+            "activityItem",
+            "activityItemsAll",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "since": SINCE_MS }));
+            refused(json!({ "kind": kind, "eventId": EVENT_ID }));
+        }
+        assert_eq!(
+            MessagesLimit::try_from(0).expect_err("none").code,
+            "APP_REFUSED"
+        );
+        assert_eq!(
+            MessagesLimit::try_from(MESSAGES_LIMIT_MAX)
+                .map(u64::from)
+                .ok(),
+            Some(500)
+        );
     }
 
     /// Today's start is written as core reads an ISO time, in UTC, for any day from 2020 to 2099.

@@ -18,6 +18,8 @@ import {
 import type { QueueChannel } from '../domain/queue-target.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
+import { recordQueueHistory } from './queue-history.ts';
+import type { RuleShowEntryV1 } from './rule-show.ts';
 
 /**
  * Routing's lanes in the owner (routing design 2026-10-25, §3 and §6): which window the person bound to each lane, who
@@ -34,6 +36,9 @@ import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.
  *   high-water mark (append time, then id), and moves the mark to it. The mark is kept here, in memory: after a restart
  *   a window may be woken again for an item still open, and no item is ever missed. Tasks live here too, and end on
  *   completion, cancellation, unbinding or the service stopping; none times out by itself.
+ * - **History** (0.32.0 §3.6): a wake writes `woken` on the item it names, and a read through `events_lane_item` writes
+ *   `read`, each with the window's activity session key, in the event service's own database and never in core's
+ *   activity log.
  */
 
 const TASK_ID = /^lt_[0-9a-f]{32}$/u;
@@ -463,6 +468,58 @@ export class LaneService {
     });
   }
 
+  /**
+   * Whether an agent may stop this delivery (review of 0.32.0, finding 4). Stopping a delivery that will be tried again
+   * is the person's, as `queue clear` is: an agent window may stop only one in the lane it is bound to, and the CLI
+   * inside an MCP server's process (no window) none. A finished delivery stays finished, so its drop — a dead letter's
+   * payload — goes on to the operation's own answer, as before; one being sent may still turn into one that will be
+   * tried again, so it is refused here too.
+   */
+  assertAgentMayStop(deliveryId: unknown, caller: LaneWindowIdentity | undefined): void {
+    if (typeof deliveryId !== 'string') return;
+    const row = this.#store.database
+      .prepare(
+        `SELECT delivery.state, json_extract(target.document, '$.lane.name') AS lane
+           FROM deliveries AS delivery
+           LEFT JOIN target_versions AS target
+             ON target.target_id = delivery.target_id AND target.version = delivery.target_version
+          WHERE delivery.id = ?`,
+      )
+      .get(deliveryId) as { state: string; lane: string | null } | undefined;
+    if (row === undefined || !['queued', 'retryable', 'disclosing'].includes(row.state)) return;
+    const mine = caller === undefined ? null : (this.#bindingFor(caller)?.lane ?? null);
+    if (row.lane !== null && row.lane === mine) return;
+    throw new CommsError(
+      'APPROVAL_REQUIRED',
+      'stopping a delivery that will be tried again is for a person, at a terminal or in the app — an agent window may stop one only in the lane it is bound to',
+      {
+        hint: 'The person stops it in the app (Events → Deliveries) or at their terminal.',
+        details: { reason: 'PERSON_ONLY_STOP' },
+      },
+    );
+  }
+
+  /**
+   * `rule show` for an agent window (review of 0.32.0, finding 8): a version's `counts7d` says how much reached its
+   * lane, so a version with a lane target other than the window's own is shown without it. Everything else — the
+   * document, its times and its summary — is the window's to read, as before.
+   */
+  ruleVersionsForWindow(entries: readonly RuleShowEntryV1[], caller: LaneWindowIdentity): readonly unknown[] {
+    const mine = this.#bindingFor(caller)?.lane ?? null;
+    return entries.map((entry) => {
+      const targets = (entry.document as { readonly targets?: unknown }).targets;
+      const foreign =
+        Array.isArray(targets) &&
+        targets.some((target) => {
+          const lane = (target as { readonly lane?: { readonly name?: unknown } } | null)?.lane?.name;
+          return typeof lane === 'string' && lane !== mine;
+        });
+      if (!foreign) return entry;
+      const { counts7d: _hidden, ...rest } = entry;
+      return rest;
+    });
+  }
+
   /** What an MCP caller may see of the queue (B3, B4): items outside lanes, and its own lane's since it was bound. */
   scopeFor(window: LaneWindowIdentity): QueueScope {
     const binding = this.#bindingFor(window);
@@ -532,7 +589,7 @@ export class LaneService {
     if (first === undefined) return notBoundHere(lane);
     // A caller that has gone takes no item: an aborted wait ends before it looks, and as soon as it is aborted.
     if (signal?.aborted) throw waitCancelled();
-    const woke = this.#wake(first);
+    const woke = this.#wake(first, caller.activityKey);
     if (woke !== null) return { pointer: woke };
     if (this.#stopped) throw stopped();
     return new Promise<LaneWaitResultV1>((resolve, reject) => {
@@ -559,7 +616,7 @@ export class LaneService {
             });
             return;
           }
-          const pointer = this.#wake(binding);
+          const pointer = this.#wake(binding, caller.activityKey);
           if (pointer !== null) finish(() => resolve({ pointer }));
         },
         stop: (error) => finish(() => reject(error)),
@@ -577,7 +634,10 @@ export class LaneService {
     this.seen(caller);
     const binding = this.#bindingFor(caller);
     if (binding === undefined) return noLaneHere();
-    return this.#queue.laneItem(itemId, binding.lane, binding.since);
+    const read = await this.#queue.laneItem(itemId, binding.lane, binding.since);
+    // Only an item the window was given is read; a refusal above names nothing and records nothing.
+    this.#record(read.item.id, 'read', caller.activityKey);
+    return read;
   }
 
   /** The queue's delivery boundary appended an item: settle every watch and long-poll now rather than on its next look. */
@@ -613,7 +673,7 @@ export class LaneService {
       this.#end(task, 'cancelled', `lane ${task.lane} was unbound from this window, so this watch ended`);
       return;
     }
-    const pointer = this.#wake(binding);
+    const pointer = this.#wake(binding, task.owner.activityKey);
     if (pointer === null) return;
     task.pointer = pointer;
     this.#end(task, 'completed', pointer.text);
@@ -625,10 +685,15 @@ export class LaneService {
     task.lastUpdatedAt = this.#now();
   }
 
-  /** The oldest open item of the binding's lane, after its `since` and past its mark — and the mark moves to it. */
-  #wake(binding: BindingRow): LanePointerResultV1 | null {
+  /**
+   * The oldest open item of the binding's lane, after its `since` and past its mark — and the mark moves to it, and the
+   * item's history says the window with `windowKey` was woken for it.
+   */
+  #wake(binding: BindingRow, windowKey: string): LanePointerResultV1 | null {
     const { next, waiting } = this.#queue.laneWake(binding.lane, binding.since, this.#marks.get(binding.binding_id));
     if (next === undefined) return null;
+    // The line first: a write that fails leaves the mark where it was, so the item wakes the window on its next look.
+    this.#record(next.id, 'woken', windowKey);
     this.#marks.set(binding.binding_id, { appendedAt: next.appendedAt, id: next.id });
     const pointer = { lane: binding.lane, itemId: next.id, channel: next.channel, ruleId: next.ruleId, waiting };
     return {
@@ -639,6 +704,14 @@ export class LaneService {
       waiting,
       text: lanePointerText(pointer),
     };
+  }
+
+  /** One line of an item's history, by the window with this activity session key. */
+  #record(itemId: string, kind: 'woken' | 'read', windowKey: string): void {
+    const at = this.#now();
+    this.#store.immediate(() =>
+      recordQueueHistory(this.#store.database, { itemId, at, kind, by: { actor: 'window', windowKey } }),
+    );
   }
 
   #prune(): void {

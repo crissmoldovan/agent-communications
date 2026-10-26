@@ -277,7 +277,13 @@ export async function claimChangeApproval(
       target: binding.target,
       policy: decided,
       paths: binding.loosened.map((loosening) => loosening.path),
-      reason: decided === 'confirm' ? 'approved at a terminal' : 'approved in chat',
+      // Where the person approved it: in the desktop app (0.32.0), at a terminal, or, under `chat`, in the chat.
+      reason:
+        record.approvedVia === 'app'
+          ? 'approved in the desktop app'
+          : decided === 'confirm'
+            ? 'approved at a terminal'
+            : 'approved in chat',
     });
     // `binding.loosened` digests to what the record holds — the claim refused otherwise — so these are exactly the
     // loosenings the person approved.
@@ -395,6 +401,82 @@ export async function finishChangeApproval(
 }
 
 /**
+ * Approves a change through the desktop app's channel (0.32.0), only when the approval is for exactly `request`: the
+ * change the caller has just planned, from the configuration as it is now, which must be one that needs approval. The
+ * approval is checked first — a change approval, still waiting, whose stored digest is this request's — and only then
+ * is its code issued and answered, with this request's digest as the live binding, so the store voids it rather than
+ * approve anything that moved under its lock. An approval prepared for another change is left as it was.
+ *
+ * The release's security review (2026-10-26): answering first and planning after left an approval approved whenever
+ * the plan then refused, for any other change to claim.
+ */
+export async function approveChangeInApp(
+  core: Core,
+  approvalId: string,
+  request: ChangeSpec,
+  options: ChangeOptions & { approvedBy: NonNullable<AuditRecord['approvedBy']> },
+): Promise<ApprovalRecord> {
+  let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
+  // Set once the code is being issued and answered: from then on, anything that throws revokes the approval.
+  let answering = false;
+  try {
+    const binding = bindChange(request, '');
+    if (binding.loosened.length === 0 && binding.effects.length === 0) {
+      throw new CommsError('USAGE', 'nothing was approved: this change needs no approval, so the app approves none', {
+        details: { approvalId },
+      });
+    }
+    record = await changeRecord(core, approvalId);
+    const digest = changeDigest(binding);
+    if (record.contentDigest !== digest) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'nothing was approved: that approval was prepared for another change, not this one',
+        { hint: 'Prepare this change again, and approve the approval it gives.', details: { approvalId } },
+      );
+    }
+    answering = true;
+    const challenge = await core.approvals.issueChallenge(approvalId, 'change', options.platform);
+    const approved = await core.approvals.approve(
+      approvalId,
+      'app',
+      { draftMessageId: digest, contentDigest: digest },
+      challenge,
+      'change',
+      options.platform,
+    );
+    await auditChange(core, {
+      operation: 'change.approve',
+      outcome: 'ok',
+      surface: options.surface,
+      approvalId,
+      target: record.change.target,
+      policy: changePolicyOf(record),
+      paths: record.change.loosened.map((loosening) => loosening.path),
+      reason: 'approved in the desktop app',
+      approvedBy: options.approvedBy,
+    });
+    return approved;
+  } catch (error) {
+    // Never left approved: an answer whose audit line, or anything after it, failed is revoked first (the second look
+    // at the release, 2026-10-26, F4). A record already spent or voided refuses the revoke, which changes nothing.
+    if (answering) {
+      await revokeChange(core, approvalId, 'answered in the desktop app and then not completed', {
+        surface: options.surface,
+        disposition: 'person',
+      }).catch(() => undefined);
+    }
+    await auditRefusal(core, 'change.approve', error, {
+      surface: options.surface,
+      approvalId,
+      target: record?.change.target ?? null,
+      policy: record ? changePolicyOf(record) : undefined,
+    });
+    throw error;
+  }
+}
+
+/**
  * Records that a person was refused the chance to approve a change at all — an agent ran the command, or there was no
  * terminal — before anything touched the approval.
  *
@@ -482,6 +564,8 @@ interface ChangeAuditEntry {
   policy?: ChangePolicy | undefined;
   paths?: readonly string[] | undefined;
   reason?: string | undefined;
+  /** Who approved it, when it was the person in the desktop app (0.32.0). */
+  approvedBy?: AuditRecord['approvedBy'] | undefined;
 }
 
 /**
@@ -501,6 +585,7 @@ async function auditChange(core: Core, entry: ChangeAuditEntry): Promise<void> {
     ...(entry.policy ? { policy: entry.policy } : {}),
     ...(entry.paths && entry.paths.length > 0 ? { ids: { paths: [...entry.paths] } } : {}),
     ...(entry.reason ? { reason: truncateDisplay(entry.reason, 300) } : {}),
+    ...(entry.approvedBy ? { approvedBy: entry.approvedBy } : {}),
   });
 }
 

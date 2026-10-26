@@ -85,6 +85,7 @@ export { type ExternalCommand, externalCommand } from './command-brands.ts';
 export * from './compose-profile.ts';
 export * from './config.ts';
 export * from './core.ts';
+export * from './desktop-origin.ts';
 export * from './digest.ts';
 export * from './errors.ts';
 export * from './fs.ts';
@@ -121,6 +122,8 @@ export * from './ledger.ts';
 export * from './lock.ts';
 export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
+/* The mark an MCP server sets in its own process, so a person's reads refuse inside it and everything it starts. */
+export * from './mcp-marker.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
 // The notification on the person's screen for each standing act (design 2026-10-19-standing-approvals, S10).

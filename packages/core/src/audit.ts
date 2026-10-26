@@ -32,6 +32,13 @@ export interface AuditRecord {
   /** The requesting client surface; autonomous work is `daemon`/`daemon`. */
   origin?: 'cli' | 'mcp' | 'app' | 'daemon';
   /**
+   * Who approved a change, when it was the person in the desktop app (0.32.0): the approval answered through the app
+   * channel, as judge setup's disclosures are (`approvedVia: 'app'` on the record). `desktop-app` when the release app
+   * started the command (`desktopAppOrigin`, macOS); `desktop-app (test build)` for the local test build, which speaks
+   * only for a test profile; `desktop-app (unattested)` on Windows and Linux, where nothing is checked.
+   */
+  approvedBy?: 'desktop-app' | 'desktop-app (test build)' | 'desktop-app (unattested)';
+  /**
    * The policy that decided how this was approved. Written by change approvals, where it is the whole question
    * afterwards: a loosening a person typed a code for and one an agent claimed after a yes in chat look the same in
    * the configuration, and only this line tells them apart.

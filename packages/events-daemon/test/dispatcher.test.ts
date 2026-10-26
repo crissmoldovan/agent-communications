@@ -734,3 +734,24 @@ test('DEL-B1: a dry-run read re-fences after decryption and returns nothing a re
     }
   }
 });
+
+// 0.32.0 (owner feedback §3.5): a delivered row has no next try. Every delivery starts with next_at = 0 ("due now"), and
+// the app showed that 0 as 1 January 1970 on every delivered dry-run.
+test('0.32 B1: a delivered dry-run row clears next_at, so it has no next try to show', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const setup = await fixture();
+  try {
+    setup.insert('one');
+    setup.store.database.exec("UPDATE deliveries SET next_at = 0 WHERE id = 'one'");
+    assert.deepEqual(await setup.dispatcher().dispatch('one'), { state: 'delivered', deliveryId: 'one' });
+    const row = setup.store.database.prepare("SELECT state, next_at FROM deliveries WHERE id = 'one'").get() as {
+      state: string;
+      next_at: number | null;
+    };
+    assert.deepEqual({ ...row }, { state: 'delivered', next_at: null });
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});

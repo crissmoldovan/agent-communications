@@ -37,20 +37,59 @@ export const JUDGE_BUDGET_ID = 'judge-budget';
 export const APPROVED_TYPESAFE_MODELS = ['jev-1.13.0'] as const;
 type ApprovedTypeSafeModel = (typeof APPROVED_TYPESAFE_MODELS)[number];
 
+/**
+ * Jev through OpenRouter (owner decision 2026-10-26): the same System One request as TypeSafe's own endpoint, at
+ * OpenRouter's (https://openrouter.ai/docs/guides/community/jev, read 2026-10-26). Only the concrete model id is
+ * approved; the `~typesafe/jev-latest` alias could change under an approval and is refused, as `jev-latest` is.
+ */
+export const OPENROUTER_SYSTEM_ONE_ENDPOINT = 'https://openrouter.ai/api/v1/systemone';
+export const APPROVED_OPENROUTER_JEV_MODELS = ['typesafe/jev-1.14'] as const;
+type ApprovedOpenRouterJevModel = (typeof APPROVED_OPENROUTER_JEV_MODELS)[number];
+
+/** Who serves a Jev judge: TypeSafe itself, or OpenRouter, which passes the request to TypeSafe's Jev. */
+export const JEV_PROVIDERS: readonly [typeof JUDGE_KIND_TYPESAFE, 'openrouter'] = [JUDGE_KIND_TYPESAFE, 'openrouter'];
+export type JevProvider = (typeof JEV_PROVIDERS)[number];
+
+export function isJevProvider(value: unknown): value is JevProvider {
+  return typeof value === 'string' && (JEV_PROVIDERS as readonly string[]).includes(value);
+}
+
+/** The endpoint and model each Jev provider's judge document names; the provider sets both. */
+export const JEV_PROVIDER_ROUTES: Readonly<
+  Record<JevProvider, { readonly endpoint: string; readonly model: string; readonly name: string }>
+> = Object.freeze({
+  typesafe: { endpoint: TYPESAFE_SYSTEM_ONE_ENDPOINT, model: APPROVED_TYPESAFE_MODELS[0], name: 'TypeSafe' },
+  openrouter: {
+    endpoint: OPENROUTER_SYSTEM_ONE_ENDPOINT,
+    model: APPROVED_OPENROUTER_JEV_MODELS[0],
+    name: 'OpenRouter',
+  },
+});
+
 export type JudgeProtocol =
   | { readonly protocol: 'noul' }
   | { readonly protocol: 'json-score'; readonly scorePointer: string };
 
-export interface TypeSafeJudgeDocument {
+interface JevJudgeBase {
   readonly judgeId: string;
   readonly version: number;
   readonly kind: typeof JUDGE_KIND_TYPESAFE;
-  readonly provider: typeof JUDGE_KIND_TYPESAFE;
-  readonly model: ApprovedTypeSafeModel;
-  readonly endpoint: typeof TYPESAFE_SYSTEM_ONE_ENDPOINT;
   readonly promptTemplate: string;
   readonly protocol: 'noul';
 }
+
+/** Jev, the TypeSafe judge kind: served by TypeSafe itself, or through OpenRouter (2026-10-26). */
+export type TypeSafeJudgeDocument =
+  | (JevJudgeBase & {
+      readonly provider: typeof JUDGE_KIND_TYPESAFE;
+      readonly model: ApprovedTypeSafeModel;
+      readonly endpoint: typeof TYPESAFE_SYSTEM_ONE_ENDPOINT;
+    })
+  | (JevJudgeBase & {
+      readonly provider: 'openrouter';
+      readonly model: ApprovedOpenRouterJevModel;
+      readonly endpoint: typeof OPENROUTER_SYSTEM_ONE_ENDPOINT;
+    });
 
 interface LocalEndpointJudgeBase {
   readonly judgeId: string;
@@ -389,6 +428,7 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
       ['judgeId', 'version', 'kind', 'provider', 'model', 'endpoint', 'promptTemplate', 'protocol'],
       'a typesafe judge document',
     );
+    if (judge.provider === 'openrouter') return openRouterJev(judge);
     if (judge.provider !== JUDGE_KIND_TYPESAFE) return fail('a typesafe judge names the TypeSafe Jev adapter');
     if (!(APPROVED_TYPESAFE_MODELS as readonly string[]).includes(judge.model as string))
       return fail('a typesafe judge names one concrete model listed in the provider record');
@@ -459,6 +499,28 @@ export function canonicalJudge(value: unknown): CanonicalJudgeDocument {
     if (error instanceof EventDomainError) throw error;
     return fail('a local judge has a literal loopback endpoint and its exact approved address');
   }
+}
+
+/**
+ * Jev through OpenRouter: the provider fixes the endpoint and the one approved concrete model, so a document cannot
+ * point an OpenRouter judge anywhere else or at a moving alias.
+ */
+function openRouterJev(judge: Record<string, unknown>): TypeSafeJudgeDocument {
+  if (!(APPROVED_OPENROUTER_JEV_MODELS as readonly string[]).includes(judge.model as string))
+    return fail('an OpenRouter Jev judge names one concrete approved model, never an alias');
+  if (judge.endpoint !== OPENROUTER_SYSTEM_ONE_ENDPOINT)
+    return fail('an OpenRouter Jev judge has its fixed System One endpoint');
+  const parsedProtocol = protocol({ protocol: judge.protocol }, 'a typesafe judge document');
+  if (parsedProtocol.protocol !== 'noul') return fail('a typesafe judge uses the noul protocol');
+  return {
+    ...identity(judge, 'a typesafe judge'),
+    kind: JUDGE_KIND_TYPESAFE,
+    provider: 'openrouter',
+    model: judge.model as ApprovedOpenRouterJevModel,
+    endpoint: OPENROUTER_SYSTEM_ONE_ENDPOINT,
+    promptTemplate: text(judge.promptTemplate, 'a typesafe judge prompt template'),
+    protocol: 'noul',
+  };
 }
 
 function limits(value: unknown, name: string): JudgeBudgetLimits {

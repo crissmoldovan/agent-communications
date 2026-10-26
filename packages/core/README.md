@@ -28,6 +28,9 @@ npx @agentcomms/core label style acme/slack labelled  # every agent message ther
 npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
+npx @agentcomms/core mcp uninstall --client cursor --server gmail   # take one server out of one client, at once
+npx @agentcomms/core activity sessions   # the agent windows that read or sent anything, newest first
+npx @agentcomms/core activity items --json   # every call that names a message, grouped by the message
 npx @agentcomms/core update --check  # what is behind the latest release; `update` brings it there, as one change
 npx @agentcomms/core update --status  # where updates stand here: level, pause, last check, versions, background job; asks npm nothing
 npx @agentcomms/core update --pause 7  # hold update notices for 1, 7 or 14 days (no approval); --resume ends it
@@ -52,11 +55,23 @@ A command that loosens something or cannot be undone — `policy chat`, `attach 
 `label style … labelled`, a `behaviour allow` or `behaviour clear` that lets an agent do more, `mcp install`,
 `mcp prune`, `update`, `secrets migrate`, `names migrate` — shows the change first (`policy confirm`,
 `attach roots remove`, `attach deny add`, `label rule add --as agent`, `label rule remove --as me`,
-`label style … app` and a `behaviour allow` that only narrows tighten, so they apply at once). At a terminal you approve it there; anything else gets the preview and an
+`label style … app`, `mcp uninstall` and a `behaviour allow` that only narrows tighten, so they apply at once). At a terminal you approve it there; anything else gets the preview and an
 approval id and exits `10`, and runs the same command again with `--approval <id>` once the person has agreed.
 Every channel CLI, and the declared events service through core, registers and prunes its server through the same change, so an approval
 `comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
 request, and the other way round.
+
+`mcp install` is also approved in the desktop app, as Connections adds a server to an app (0.32.0): the app shows
+core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`. That plans
+the install first, checks the approval is a waiting one for exactly that install, and only then approves it through
+the app channel (`approvedVia: app`) and applies it; an approval for anything else, or a plan that refuses, approves
+nothing. On macOS core checks that the app started this process: a speed bump against agents, not a boundary against code running as you. `desktopAppOrigin` has codesign verify the
+running parent, by its pid: the release, signed by the owner's team, audited `approvedBy: desktop-app`; or the local
+test build, ad-hoc signed, only for a test profile — a config folder holding `.agentcomms-test-profile`, which
+`scripts/local-test-release.sh` writes, and not your real, default one — audited `desktop-app (test build)`. Windows
+and Linux check nothing, a known limit: there it rests on the agent-marker checks, and the audit line says
+`desktop-app (unattested)`. `--app-approval` is always refused to an agent's shell and inside an MCP server's process,
+takes no `--approval`, and no MCP tool has it.
 
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,
@@ -70,6 +85,25 @@ directory works, but a directory redirected during an operation is refused befor
 not on `PATH`, the install result shows how to prepend it for the current shell without editing a profile. Windows
 shims are not offered yet because `.cmd` forwarding makes `cmd.exe` re-parse caller arguments; use the full-path
 command or the labelled PowerShell `&` line the result provides.
+
+## What your agents did: activity
+
+Core keeps a private log of what each agent window read, did and sent: `<state>/activity/`, a file a day, kept 30
+days. It holds ids, subjects, senders and file names, and never a message body, an attachment or a secret.
+
+- `agentcomms activity sessions` lists the agent windows, newest first; `agentcomms activity show <session>` lists
+  what one did.
+- `agentcomms activity items [--since <ms>] [--ids <id,…>] --json` lists every call that names an item, grouped by
+  the item: a Gmail message by its id, a Slack message as `<channelId>/<ts>`. Each line names the window (its key,
+  folder and client), the operation, when, and how it ended. A reply also links to what it answers: a Gmail reply
+  draft and its send's prepare carry `replyTo`, a send carries its `draftId` and `threadId`, a Slack post its
+  `thread` (null for a new message), and a Slack acknowledgement its `act`: `reply` or `reaction`. That is how the app
+  tells which message an agent read, answered or only marked seen. Subjects and senders are the sender's words, inside
+  the untrusted-content envelope. It is your view: refused inside an MCP server's process, with exit `10`, and has no
+  tool, as `agentcomms activity show` has none. Every MCP server of this suite marks its own process as it starts
+  (`AGENTCOMMS_MCP_SERVER`) — core's, each channel's and the event service's — so the refusal holds in any program one
+  of them starts.
+- An agent sees only its own window, through `comms_activity` (or `agentcomms activity mine`).
 
 ## What an agent may do, and how it writes
 
@@ -169,6 +203,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_channels_available` | which declared servers exist — core, Gmail, Resend, Slack, WhatsApp and events — which are installed and at which version, and which clients start each |
 | `comms_server_install` | register a declared channel or service server with a client; the server appears once the client restarts |
 | `comms_server_prune` | remove the managed runtimes old releases left behind: every managed server's, listed by server, or one `channel`'s; `dryRun` lists them |
+| `comms_server_uninstall` | take one `channel`'s server out of one `client`, at once, as `mcp uninstall`: every user-scope entry of it there, saved first; a project's own entry is left, and said |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |

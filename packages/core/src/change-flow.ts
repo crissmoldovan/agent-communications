@@ -1,6 +1,7 @@
 import { approvalWaitOf, approveAndWaitSentence } from './approval-handoffs.ts';
 import type { ApprovalObject } from './approval-outcome.ts';
 import {
+  approveChangeInApp,
   beginChangeApproval,
   type ChangeRequest,
   type ChangeSurface,
@@ -23,6 +24,7 @@ import {
 } from './cli-runtime.ts';
 import { type Config, classifyChange, type LooseningConsent } from './config.ts';
 import type { Core } from './core.ts';
+import { type DesktopOrigin, desktopAppOrigin } from './desktop-origin.ts';
 import { CommsError } from './errors.ts';
 import { type CliHandoffs, type Handoff, isCommand, requireHandoffs } from './handoffs.ts';
 
@@ -213,9 +215,18 @@ export async function gatedChangeAtTerminal<T>(
      * typed code is what that policy means. It counts only for a person; an agent still gets the approval id.
      */
     answered?: boolean | undefined;
+    /**
+     * The approval the desktop app prepared for this change and the person approved there (0.32.0, `mcp install
+     * --app-approval <id>`): approved through the app channel and claimed by this change, as judge setup's are. Refused
+     * to an agent's shell and inside an MCP server's process; never with `approvalId`.
+     */
+    appApproval?: string | undefined;
+    /** Where an app approval came from (`desktopAppOrigin`); injected by tests only. */
+    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
+  if (options.appApproval !== undefined) return appliedFromApp(core, change, options, options.appApproval);
   const streams = options.streams ?? defaultStreams;
   // Decided before anything is prepared, so the preview a person here reads says their yes is given here.
   const person =
@@ -364,6 +375,103 @@ export async function approveChangeAtTerminal(
 
 function cancelled(): CommsError {
   return new CommsError('USAGE', 'cancelled: nothing was changed');
+}
+
+/** The environment variable an MCP server sets in its own process, which every program it starts inherits. */
+const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
+
+/**
+ * A change the desktop app prepared, approved there by the person (0.32.0, design 2026-10-26-owner-feedback-0320
+ * §3.3, §5 question 3), as judge setup's enablements are approved through the app channel (events design D2's note of
+ * 2026-10-26): the app showed core's preview, the person pressed its confirm, and the app runs the same command with
+ * the approval it was given. The change is planned first, from the configuration as it is now; the approval is checked
+ * against it — a waiting change approval whose digest is this exact change's, which must need approval — and only then
+ * is its code issued and answered (`approveChangeInApp`), so the record says `approvedVia: 'app'` and the audit line
+ * `approvedBy: desktop-app`. This change then claims it, once, and applies; an approval answered and not applied is
+ * revoked. A plan that refuses or throws, or an approval for anything else, approves nothing (the release's security
+ * review, 2026-10-26).
+ *
+ * Who may: the person, in the Agent Comms app — on macOS a process the app itself started, as `desktopAppOrigin` checks
+ * (a speed bump against agents, not a boundary against code running as the person); on Windows and Linux, which check
+ * nothing (a known limit), any process without an agent's marker, said `desktop-app (unattested)`. Always refused to an agent's shell (its marker) and inside an MCP
+ * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
+ * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
+ */
+async function appliedFromApp<T>(
+  core: Core,
+  change: GatedChange<T>,
+  options: {
+    channel: string;
+    approvalId?: string | undefined;
+    env: NodeJS.ProcessEnv;
+    output: { platform?: NodeJS.Platform | undefined };
+    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+  },
+  approvalId: string,
+): Promise<T> {
+  const platform = options.output.platform;
+  if (options.approvalId !== undefined) {
+    throw new CommsError('USAGE', 'an approval given in the app is not carried with --approval as well', {
+      hint: 'Pass one of them: --app-approval is the app approving its own change.',
+    });
+  }
+  let origin: DesktopOrigin = { ok: false, reason: 'not-checked' };
+  try {
+    const marker = agentMarker(options.env);
+    if (marker !== null) {
+      throw new CommsError('APPROVAL_REQUIRED', 'only a person can approve a change in the app, not an agent', {
+        hint: 'Ask the person to approve it in the Agent Comms app, or at their own terminal.',
+        details: { marker },
+      });
+    }
+    const server = options.env[MCP_SERVER_MARKER];
+    if (server !== undefined && server !== '') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        "only a person can approve a change in the app, and an MCP server's process is not the app",
+        { details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER } },
+      );
+    }
+    // On macOS the process that started this one must be Agent Comms itself, its running code verified by its pid;
+    // Windows and Linux check nothing, and keep the checks above (known limit).
+    origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
+    if (!origin.ok && origin.reason !== 'unattested-platform') {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'only the Agent Comms app can approve a change in the app, and this was not started by it',
+        {
+          hint: 'Approve it in the Agent Comms app, or at your own terminal.',
+          details: { reason: origin.reason },
+        },
+      );
+    }
+  } catch (error) {
+    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app' });
+    throw error;
+  }
+  // Planned first, from the configuration as it is now: a plan that refuses or throws approves nothing.
+  const request = await change.plan(await core.config.load());
+  // Checked against the approval before it is answered: only this exact change, which must need approval.
+  await approveChangeInApp(core, approvalId, request, {
+    surface: 'app',
+    platform,
+    approvedBy: !origin.ok
+      ? 'desktop-app (unattested)'
+      : origin.build === 'test'
+        ? 'desktop-app (test build)'
+        : 'desktop-app',
+  });
+  try {
+    const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });
+    return await change.apply(consent, request);
+  } catch (error) {
+    // Approved and then not applied: never left approved for anything else to claim.
+    await revokeChange(core, approvalId, 'approved in the desktop app and not applied', {
+      surface: 'app',
+      disposition: 'person',
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function askLine(streams: Streams, question: string): Promise<string> {

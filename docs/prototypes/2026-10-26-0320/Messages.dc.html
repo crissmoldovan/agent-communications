@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Messages</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:980px}
+.app button,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sub{margin:0 0 16px;color:var(--text2)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.pill{height:28px;padding:0 10px;border-radius:14px;border:0;background:transparent;color:var(--text2);font-weight:500;cursor:pointer}
+.pill.on{background:var(--s3);color:var(--text)}
+.sel{height:28px;border:0;border-radius:8px;background:var(--s2);padding:0 8px;margin-left:auto}
+.m{display:block;text-decoration:none;background:var(--s1);border-radius:14px;padding:12px 16px;box-shadow:var(--shadow);transition:background-color 160ms ease}
+.m:hover{background:var(--s2)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:0 6px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.steps{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin-top:8px;color:var(--text2);font-size:12px}
+.steps .s{background:var(--s2);border-radius:6px;padding:1px 7px}
+.steps .x{color:var(--text3)}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue<span class="cnt">5</span></a><a class="ni on" href="Messages.dc.html" aria-current="page">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Messages</h1>
+  <p class="sub">What happened to each message that came in: whether a rule caught it, whether an agent read it, and whether anyone replied.</p>
+
+  <div class="bar">
+    <div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap">
+      <button type="button" class="pill on" aria-pressed="true">All</button>
+      <button type="button" class="pill" aria-pressed="false">Waiting for you 1</button>
+      <button type="button" class="pill" aria-pressed="false">Handled by an agent 2</button>
+      <button type="button" class="pill" aria-pressed="false">No agent has seen 2</button>
+    </div>
+    <label for="acct" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Account</label>
+    <select id="acct" class="sel"><option>All accounts</option><option>cue/gmail</option><option>cue/slack</option><option>personal/gmail</option></select>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 10px">
+
+    <a class="m" href="MessageTimeline.dc.html">
+      <div class="row"><span class="faint">Gmail · cue/gmail</span><span class="chip c-ok" style="margin-left: auto">Replied</span><span class="faint" style="width: 60px; text-align: right">11:40</span></div>
+      <div style="margin-top: 6px"><span class="ext" style="font-weight: 500">David Example</span> <span class="ext">Can you send the March invoice?</span></div>
+      <div class="steps"><span class="s">Rule invoices</span><span class="x">›</span><span class="s">Jev: yes</span><span class="x">›</span><span class="s">Queue, lane billing</span><span class="x">›</span><span class="s">Read by the agent in ~/work/cue++/acme</span><span class="x">›</span><span class="s">Reply sent 11:45, after your approval</span></div>
+    </a>
+
+    <a class="m" href="MessageTimeline.dc.html">
+      <div class="row"><span class="faint">Slack · cue/slack · direct message</span><span class="chip c-acc" style="margin-left: auto">Acknowledged</span><span class="faint" style="width: 60px; text-align: right">11:31</span></div>
+      <div style="margin-top: 6px"><span class="ext" style="font-weight: 500">David Example</span> <span class="ext">Can you look at the deploy before 5? It fails on the second step.</span></div>
+      <div class="steps"><span class="s">Rule david-on-slack</span><span class="x">›</span><span class="s">Woke the agent bound to lane david</span><span class="x">›</span><span class="s">Read 11:32</span><span class="x">›</span><span class="s">Acknowledged with a reaction</span><span class="x">›</span><span class="s">No reply yet</span></div>
+    </a>
+
+    <a class="m" href="MessageTimeline.dc.html">
+      <div class="row"><span class="faint">WhatsApp · personal/whatsapp</span><span class="chip c-warn" style="margin-left: auto">Waiting for you</span><span class="faint" style="width: 60px; text-align: right">Yesterday</span></div>
+      <div style="margin-top: 6px"><span class="ext" style="font-weight: 500">Mum</span> <span class="ext">Are you coming on Sunday?</span></div>
+      <div class="steps"><span class="s">Rule family-chat</span><span class="x">›</span><span class="s">Queue</span><span class="x">›</span><span class="s">No agent has read it</span></div>
+    </a>
+
+    <a class="m" href="MessageTimeline.dc.html">
+      <div class="row"><span class="faint">Gmail · personal/gmail</span><span class="chip c-n" style="margin-left: auto">Read by an agent</span><span class="faint" style="width: 60px; text-align: right">10:55</span></div>
+      <div style="margin-top: 6px"><span class="ext" style="font-weight: 500">Receipts</span> <span class="ext">Your receipt #1042</span></div>
+      <div class="steps"><span class="s">No rule</span><span class="x">›</span><span class="s">Read by the agent in ~/work/personal, while searching your mail</span></div>
+    </a>
+
+    <a class="m" href="MessageTimeline.dc.html">
+      <div class="row"><span class="faint">Gmail · cue/gmail</span><span class="chip c-n" style="margin-left: auto">Not seen</span><span class="faint" style="width: 60px; text-align: right">09:40</span></div>
+      <div style="margin-top: 6px"><span class="muted">A Gmail message. No rule kept its sender or subject, so open it in Gmail to see it.</span></div>
+      <div class="steps"><span class="s">No rule matched</span><span class="x">›</span><span class="s">No agent has read it</span></div>
+    </a>
+
+  </div>
+  <p class="faint" style="margin: 16px 0 0">Shown: messages in the accounts the event service watches, and any message an agent read through Agent Comms. Kept 30 days. The message itself stays in Gmail, Slack or WhatsApp.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

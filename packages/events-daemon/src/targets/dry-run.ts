@@ -1,4 +1,6 @@
 import { agentMarker, CommsError, canPrompt, newBoundary, renderFencedBody, wrapUntrusted } from '@agentcomms/core';
+import { isJsonValue, type JsonValue, parsePointer } from '@agentcomms/events';
+import { allStringPointers, senderWrittenDataPointers } from '../domain/sender-fields.ts';
 import type { DryRunRecord } from '../runtime/dispatcher.ts';
 
 export interface TerminalGateStreams {
@@ -25,7 +27,99 @@ export function assertHumanTerminal(
   if (!canPrompt(env, streams, { json })) throw new CommsError('APPROVAL_REQUIRED', wording.terminal);
 }
 
-/** Renders the already-authorised local record as untrusted terminal text, never as machine-readable output. */
+/** `dryrun show --json` (0.32.0, owner feedback §3.5): the record's metadata and the would-be CloudEvent itself. */
+export interface DryRunRecordDataV1 {
+  readonly deliveryId: string;
+  readonly ruleId: string;
+  readonly ruleVersion: number;
+  readonly targetId: string;
+  readonly targetVersion: number;
+  readonly eventId: string;
+  readonly accountId: string;
+  readonly deliveredAt: number;
+  readonly expiresAt: number;
+  /**
+   * The would-be CloudEvent, parsed. Every field of its `data` the sender controls — what `agentcommsuntrusted` names,
+   * and every address and other field the queue shows from the sender — is inside the untrusted-content envelope, one
+   * boundary for the response, as `queue show --json` gives a sender's fields; the rest is as the target received it.
+   */
+  readonly record: JsonValue;
+}
+
+/** Wraps the string at `pointer` in `data`, in place; a pointer that names no string is left alone. */
+function wrapAt(data: unknown, pointer: string, wrap: (text: string) => string): unknown {
+  const parsed = parsePointer(pointer);
+  if (!parsed.ok) return data;
+  const tokens = parsed.value;
+  if (tokens.length === 0) return typeof data === 'string' ? wrap(data) : data;
+  let parent: unknown = data;
+  for (const token of tokens.slice(0, -1)) {
+    // Own properties only: a pointer never walks into a prototype.
+    if (typeof parent !== 'object' || parent === null || !Object.hasOwn(parent, token)) return data;
+    parent = (parent as Record<string, unknown>)[token];
+  }
+  const last = tokens.at(-1) as string;
+  if (typeof parent !== 'object' || parent === null || !Object.hasOwn(parent, last)) return data;
+  const holder = parent as Record<string, unknown>;
+  if (typeof holder[last] === 'string') holder[last] = wrap(holder[last] as string);
+  return data;
+}
+
+/** The rule version that made a record: its event type, and the mapping that says where each output came from. */
+export interface DryRunRuleV1 {
+  readonly event: { readonly type: string; readonly version: number };
+  readonly mapping: unknown;
+}
+
+/**
+ * The record as data for the person's app, which renders every sender-written field as outside text. This is the
+ * person's read only: the CLI refuses it inside an MCP server's process, and no MCP result ever carries it (D7). An
+ * agent's shell runs as the person and is not refused, so the sender's fields leave enveloped (review of 0.32.0, 2):
+ * those the rule's mapping copied from what the sender controls (`senderWrittenDataPointers`), and, when the rule
+ * version cannot be read, every string of the record.
+ */
+export function dryRunRecordAsData(record: DryRunRecord, rule: DryRunRuleV1 | null): DryRunRecordDataV1 {
+  let event: unknown;
+  try {
+    event = JSON.parse(record.record.cloudEventBytes);
+  } catch {
+    throw new CommsError('BAD_DATA', 'the retained local record is not a JSON event');
+  }
+  if (!isJsonValue(event)) throw new CommsError('BAD_DATA', 'the retained local record is not a JSON event');
+  if (typeof event === 'object' && event !== null && 'data' in event) {
+    const holder = event as { data: JsonValue };
+    const sender =
+      rule === null
+        ? allStringPointers(holder.data)
+        : senderWrittenDataPointers({
+            eventType: rule.event.type,
+            eventVersion: rule.event.version,
+            mapping: rule.mapping,
+            data: holder.data,
+          });
+    // An `enveloped` target already wrapped the fields `agentcommsuntrusted` names when it built the event; a `plain`
+    // one did not. Neither wrapped an address.
+    const enveloped = new Set(record.record.representation === 'enveloped' ? record.record.untrusted : []);
+    const boundary = newBoundary();
+    const wrap = (text: string) => wrapUntrusted(text, { field: 'event', id: record.deliveryId }, boundary);
+    for (const pointer of new Set([...record.record.untrusted, ...sender]))
+      if (!enveloped.has(pointer)) holder.data = wrapAt(holder.data, pointer, wrap) as JsonValue;
+  }
+  return {
+    deliveryId: record.deliveryId,
+    ruleId: record.ruleId,
+    ruleVersion: record.ruleVersion,
+    targetId: record.targetId,
+    targetVersion: record.targetVersion,
+    eventId: record.eventId,
+    accountId: record.accountId,
+    deliveredAt: record.deliveredAt,
+    expiresAt: record.expiresAt,
+    record: event,
+  };
+}
+
+/** Renders the already-authorised local record as untrusted terminal text: the terminal view keeps the envelope. */
 export function renderDryRunRecord(record: DryRunRecord): string {
   const boundary = newBoundary();
   const body = wrapUntrusted(record.record.cloudEventBytes, { field: 'event', id: record.deliveryId }, boundary);
@@ -37,7 +131,7 @@ export function renderDryRunRecord(record: DryRunRecord): string {
   ].join('\n');
 }
 
-/** Lists content-free local record metadata for the same interactive-human surface. */
+/** Lists content-free local record metadata for a person at a terminal. */
 export function renderDryRunList(
   entries: readonly {
     readonly deliveryId: string;
