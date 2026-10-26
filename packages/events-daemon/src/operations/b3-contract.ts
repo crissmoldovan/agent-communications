@@ -2187,6 +2187,8 @@ function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
         : `the ${provider} session behind the agent window bound to lane ${target.find.lane}`;
     const lines = [
       `${named}: each match's mapped fields and the context below go to ${where}, a coding agent there, which may act: ${SESSION_MODE_PREVIEW[target.mode] ?? target.mode}.`,
+      // Security review of 0.33.0: what the relay keeps is outside Agent Comms' retention, and the person is told so.
+      `${named}: claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.`,
       target.ifNone === 'start'
         ? `${named}: if there is no such session, one is started with ${provider} in that folder.`
         : 'lane' in target.find

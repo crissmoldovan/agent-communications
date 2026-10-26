@@ -212,7 +212,15 @@ test('SESSION-O1: with none in the folder, one is started there, and the fixed f
     assert.match(prompt, /field="model" id="[^"]+">\nSummary of /u, 'a model’s words are enveloped too');
     assert.match(prompt, /From the rule:\nCheck the invoice against Stripe before replying\./u);
     assert.match(prompt, /left out, because the model took too long\./u);
-    assert.match(prompt, /----- begin file -----\n# How we invoice\nAlways check Stripe\.\n\n----- end file -----/u);
+    assert.match(
+      prompt,
+      /HOW-WE-INVOICE\.md, as it reads now:\n<untrusted-content boundary="([^"]+)" field="file" id="[^"]+">\n# How we invoice\nAlways check Stripe\.\n\n<\/untrusted-content boundary="\1">/u,
+      'a file’s text is inside the envelope, under the prompt’s one boundary',
+    );
+    const boundaries = new Set(
+      [...prompt.matchAll(/<untrusted-content boundary="([^"]+)"/gu)].map((match) => match[1]),
+    );
+    assert.equal(boundaries.size, 1, 'one boundary for the whole prompt');
     assert.match(prompt, /GONE\.md: left out, because it is not there\./u);
     assert.match(prompt, /big\.md: left out, because it is larger than 64 KB\./u);
     assert.ok(prompt.endsWith('The rule’s instruction:\nReply to the sender with what you found.'));

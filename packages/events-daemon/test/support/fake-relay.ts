@@ -24,6 +24,7 @@ export interface FakeSession {
   activeRunId?: string;
   requestedMode?: string;
   attached?: 'observer';
+  executor?: { generation: number; state: 'active' | 'fenced' | 'moved' };
   capabilities: Record<string, boolean>;
 }
 
@@ -79,6 +80,8 @@ export class FakeRelay {
   resendBoundary = true;
   /** When set, the next run start is made and its answer lost — the connection drops — as a crash or a blip would. */
   dropNextRunAnswer = false;
+  /** When set, the next run start is refused as busy — another client's run won the race — and nothing is started. */
+  refuseNextRunAsBusy = false;
 
   constructor(options: FakeRelayOptions = {}) {
     this.#options = options;
@@ -148,6 +151,16 @@ export class FakeRelay {
     run.endedAt = new Date().toISOString();
     delete session.activeRunId;
     this.#publish({ sessionId, runId: run.id, type: `run.${status}` });
+  }
+
+  /** Publishes a run-end record for the session without ending anything: a relay that repeats or invents them. */
+  publishRunEnd(sessionId: string, status = 'completed'): void {
+    this.#publish({ sessionId, runId: `run_${uuid()}`, type: `run.${status}` });
+  }
+
+  /** Writes `text` as it is to every open follow stream: a relay that sends what no record is. */
+  writeRaw(text: string): void {
+    for (const stream of this.#streams) stream.write(text);
   }
 
   /** Drops every open follow stream, as a relay restart or a network blip does; followers resume. */
@@ -285,6 +298,12 @@ export class FakeRelay {
       if (typeof input.startId === 'string' && repeated !== undefined)
         return send(200, { run: repeated, repeated: true });
       if (session.attached === 'observer') return refuse(409, 'conflict', 'a watched session takes no prompt');
+      if (session.executor !== undefined && session.executor.state !== 'active')
+        return refuse(409, `session_${session.executor.state}`, `session ${session.id} is ${session.executor.state}`);
+      if (this.refuseNextRunAsBusy) {
+        this.refuseNextRunAsBusy = false;
+        return refuse(409, 'conflict', `session ${session.id} already has active run run_${uuid()}`);
+      }
       if (session.activeRunId !== undefined)
         return refuse(409, 'conflict', `session ${session.id} already has active run ${session.activeRunId}`);
       const made = this.#newRun(session.id, input.prompt, input);

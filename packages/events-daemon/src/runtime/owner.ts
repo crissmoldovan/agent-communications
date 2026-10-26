@@ -1227,6 +1227,17 @@ async function startOwnerWithLock(
   const agentSessions = new AgentSessionService({
     store: database,
     homeDirectory: options.agentSessions?.homeDirectory ?? homeDirectory(),
+    // Agent Comms' own folders: no session works in them, and no file part is read from them (review of 0.33.0, 4).
+    deniedFolders: [
+      ...new Set([
+        core.paths.configDir,
+        core.paths.stateDir,
+        core.paths.secretsDir,
+        core.paths.dataDir,
+        stateDir,
+        ...(options.dataDir === undefined ? [] : [options.dataDir]),
+      ]),
+    ],
     audit: core.audit,
     now,
   });

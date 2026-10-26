@@ -24,7 +24,7 @@ import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
 import { EventExpiry } from './expiry.ts';
 import { queueItemLocation, ruleFor } from './queue-dispatcher.ts';
 import type { RelaySessionV1, RelaySnapshotV1 } from './relay-client.ts';
-import { RelayError } from './relay-client.ts';
+import { isPromptableSession, RelayError } from './relay-client.ts';
 import type { ContextGenerator } from './session-context.ts';
 import { resolveContextParts } from './session-context.ts';
 import { enqueueSessionDeliveryInTransaction, type SessionQueueFollower } from './session-queue.ts';
@@ -264,8 +264,14 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     if (made !== undefined) return this.#delivered(delivery, made.id);
     if (snapshot.session.activeRunId !== undefined) return this.#busy(delivery, sessionId);
     await this.#refence(delivery);
-    const prompt = await this.#prompt(delivery, ready);
-    if (prompt === null) return this.#deadLetter(delivery, 'PROMPT_TOO_LARGE');
+    // The prompt is written once per delivery — its model parts run once, its files are read once — and kept sealed in
+    // the delivery's own record, so a busy session's next try sends the same words (security review of 0.33.0, 3).
+    let prompt = delivery.record.prompt ?? null;
+    if (prompt === null) {
+      prompt = await this.#prompt(delivery, ready);
+      if (prompt === null) return this.#deadLetter(delivery, 'PROMPT_TOO_LARGE');
+      if (!(await this.#keepPrompt(delivery, prompt))) return { state: 'terminal', deliveryId: delivery.claim.id };
+    }
     const visible = await this.#visible(delivery);
     if (!visible) {
       this.#finish(delivery.claim, { state: 'cancelled' });
@@ -274,6 +280,31 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     const result = await ready.client.startRun(sessionId, { prompt, requestedMode: target.mode, startId });
     if (result.kind === 'busy') return this.#busy(delivery, sessionId);
     return this.#delivered(delivery, result.run.id);
+  }
+
+  /**
+   * Seals the written prompt into the delivery's own record, beside what it was written from, inside a transaction that
+   * proves the claim is still this attempt's. The record goes when the delivery ends, as before.
+   */
+  async #keepPrompt(delivery: Delivery, prompt: string): Promise<boolean> {
+    const record: SessionDeliveryRecord = { ...delivery.record, prompt };
+    const sealed = await this.#cipher.encrypt(deliveryLocation(delivery.claim.id), Buffer.from(JSON.stringify(record)));
+    return this.#store.immediate(
+      () =>
+        isCurrentDeliveryClaim(this.#store.database, delivery.claim) &&
+        this.#store.database
+          .prepare(
+            `UPDATE deliveries SET encrypted_record = ?
+              WHERE id = ? AND state = 'disclosing' AND attempt_id = ? AND lease_token = ? AND lease_until = ?`,
+          )
+          .run(
+            sealed,
+            delivery.claim.id,
+            delivery.claim.attemptId,
+            delivery.claim.leaseToken,
+            delivery.claim.leaseUntil,
+          ).changes === 1,
+    );
   }
 
   /** The run is made: the delivery is done, its record purged, and the run it made recorded beside the session. */
@@ -291,10 +322,14 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       .get(delivery.claim.id) as { relay_session_id: string } | undefined;
     if (row === undefined) return null;
     const snapshot = await ready.client.snapshot(row.relay_session_id);
-    if (snapshot === null)
+    // Gone, or since become one the relay only watches, or fenced or moved away: it takes no prompt, so another is
+    // found — never waited on (security review of 0.33.0, finding 3).
+    if (snapshot === null || !isPromptableSession(snapshot.session)) {
       this.#store.immediate(() =>
         this.#store.database.prepare('DELETE FROM session_deliveries WHERE delivery_id = ?').run(delivery.claim.id),
       );
+      return null;
+    }
     return snapshot;
   }
 
@@ -319,11 +354,11 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
         throw new RelayError('RELAY_REFUSED', 'the session folder is not there');
       }
       candidates = sessions.filter(
-        (session) => session.cwd === folder && session.provider === target.provider && session.attached !== 'observer',
+        (session) => session.cwd === folder && session.provider === target.provider && isPromptableSession(session),
       );
     } else {
       const bound = sessions.filter((session) => session.nativeSessionId === laneSession);
-      if (bound.some((session) => session.attached === 'observer')) return 'observed';
+      if (bound.some((session) => !isPromptableSession(session))) return 'observed';
       candidates = bound.filter((session) => session.provider === target.provider);
     }
     if (candidates.length === 0) return null;
@@ -358,6 +393,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       parts: delivery.target.context,
       values: delivery.record.values,
       fileRoots: await this.#sessions.fileRoots(ready),
+      deniedFolders: this.#sessions.deniedFolders(),
       generate: this.#generate,
     });
     const boundary = newBoundary();
@@ -368,7 +404,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       parts,
       ...(delivery.target.instruction === undefined ? {} : { instruction: delivery.target.instruction }),
       envelope: (text, source) =>
-        wrapUntrusted(text, { field: source === 'model' ? 'model' : 'event', id: delivery.claim.id }, boundary),
+        wrapUntrusted(text, { field: source === 'message' ? 'event' : source, id: delivery.claim.id }, boundary),
     });
     return built.ok ? built.value : null;
   }
@@ -386,6 +422,9 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
   async #busy(delivery: Delivery, relaySessionId: string): Promise<DispatchResult> {
     if (delivery.target.ifBusy === 'queue-only')
       return this.#leaveInQueue(delivery, 'lane' in delivery.target.find ? delivery.target.find.lane : undefined);
+    // Each time it finds the session busy is a try: a session never free for it fails the delivery, as a relay that
+    // keeps refusing does (security review of 0.33.0, finding 3).
+    if (delivery.row.attempts >= SESSION_RETRY_LIMIT) return this.#deadLetter(delivery, 'SESSION_BUSY');
     const now = this.#now();
     const queued = this.#store.immediate(() => {
       const database = this.#store.database;
@@ -541,7 +580,8 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
 
   /** A relay failure: tried again with a backoff, dead-lettered after `SESSION_RETRY_LIMIT` tries. */
   #retry(delivery: Delivery, code: string): DispatchResult {
-    const attempts = delivery.row.attempts + 1;
+    // The claim already counted this try.
+    const attempts = delivery.row.attempts;
     if (attempts >= SESSION_RETRY_LIMIT) return this.#deadLetter(delivery, code);
     const nextAt = this.#now() + Math.min(1_000 * 2 ** Math.max(0, attempts - 1), MAX_BACKOFF_MS);
     if (nextAt >= delivery.claim.expiresAt) {
@@ -693,11 +733,13 @@ function sessionRecord(value: Buffer): SessionDeliveryRecord | null {
       if (content === null) return null;
       item = content;
     }
+    if (parsed.prompt !== undefined && (typeof parsed.prompt !== 'string' || parsed.prompt.length === 0)) return null;
     return {
       kind: 'session-message',
       values: parsed.values as Readonly<Record<string, JsonValue>>,
       ...(item === undefined ? {} : { item }),
       released: parsed.released,
+      ...(parsed.prompt === undefined ? {} : { prompt: parsed.prompt }),
     };
   } catch {
     return null;

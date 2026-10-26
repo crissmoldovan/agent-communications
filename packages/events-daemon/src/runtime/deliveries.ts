@@ -50,13 +50,16 @@ export interface QueueDeliveryRecord {
 /**
  * An agent-session delivery's payload (0.33.0 design §3.5–§3.6): the mapped values its context reads, by pointer, and
  * nothing else of the match; the queue item it leaves in the Queue when it falls back there, when it can; and whether
- * a person let a held decision through. The prompt is written from it at dispatch, never stored.
+ * a person let a held decision through. The prompt is written from it at the first dispatch that reaches an idle session,
+ * and kept in the same sealed record from then on.
  */
 export interface SessionDeliveryRecord {
   readonly kind: 'session-message';
   readonly values: Readonly<Record<string, JsonValue>>;
   readonly item?: QueueItemContent | undefined;
   readonly released: boolean;
+  /** The prompt, once written: kept so a later try sends the same words, and no model part runs twice. */
+  readonly prompt?: string | undefined;
 }
 
 /**

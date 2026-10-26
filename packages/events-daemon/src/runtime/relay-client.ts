@@ -1,3 +1,4 @@
+import { constants } from 'node:fs';
 import { lstat, open } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { inspect } from 'node:util';
@@ -10,6 +11,7 @@ import {
   requestBytesForPinnedConnection,
   streamPinnedResponseTo,
 } from '../network/pinned-connection.ts';
+import { type ListenerAttestor, listenerOwners, listenersAreYours } from './relay-listener.ts';
 
 /**
  * Agent Comms as one more client of the claude-stream relay the person already runs (0.33.0 design §3.5, §6). It speaks
@@ -18,7 +20,8 @@ import {
  * of the event service it uses no fetch: HTTP/1.1 over the pinned path, to 127.0.0.1 alone.
  *
  * The token goes only into the `Authorization` header of a request this module makes: never into argv, a URL, a log
- * line, a result or an error. A token file others can read is refused, as the relay itself refuses one.
+ * line, a result or an error. A token file others can read is refused, as the relay itself refuses one, and the token
+ * is sent only once the system says the port is held by this user's own process (`relay-listener.ts`).
  */
 
 /** The relay protocol this client relies on (`GET /v1/relay`'s `protocol`). */
@@ -54,6 +57,8 @@ const MAX_TOKEN_FILE_BYTES = 4_096;
 const MAX_RECORD_BYTES = 4_096;
 const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 const MAX_SSE_LINE = 512 * 1024;
+/** One event-stream record's data, at most: a run-end record is well under a kilobyte; a larger one is dropped. */
+const MAX_SSE_FRAME = 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 10_000;
 /** The relay answers on loopback only (claude-stream refuses a non-loopback bind): 127.0.0.1, the one approved address. */
 const LOOPBACK = '127.0.0.1';
@@ -62,6 +67,7 @@ const LOOPBACK = '127.0.0.1';
 export type RelayRefusal =
   | 'RELAY_NOT_FOUND'
   | 'RELAY_TOKEN_UNSAFE'
+  | 'RELAY_NOT_YOURS'
   | 'RELAY_NOT_LOOPBACK'
   | 'RELAY_UNREACHABLE'
   | 'RELAY_PROTOCOL'
@@ -206,32 +212,55 @@ export async function locateRelay(settings: RelaySettings, homeDirectory: string
 
 /**
  * Reads the relay's `control.token` as the same user. Refused unless it is a regular file — not a link — that this
- * user owns and nobody else can read or write: the relay writes it at 0600 and refuses such a file itself.
+ * user owns and nobody else can read or write: the relay writes it at 0600 and refuses such a file itself. The file is
+ * opened without following a link and without waiting on a FIFO, and what is checked is the opened file itself, so
+ * nothing swapped in after a check is read (security review of 0.33.0, finding 8).
  */
 export async function readRelayToken(home: string, platform: NodeJS.Platform = process.platform): Promise<RelayToken> {
   const path = join(home, 'control.token');
-  let info: Awaited<ReturnType<typeof lstat>>;
   try {
-    info = await lstat(path);
-  } catch {
+    if ((await lstat(path)).isSymbolicLink())
+      throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not a regular file (a link is refused)");
+  } catch (error) {
+    if (error instanceof RelayError) throw error;
     throw new RelayError('RELAY_NOT_FOUND', "the relay's home holds no control token");
   }
-  if (!info.isFile())
-    throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not a regular file (a link is refused)");
-  if (platform !== 'win32') {
-    const uid = process.getuid?.();
-    if (uid !== undefined && info.uid !== uid)
-      throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token belongs to another user");
-    if ((info.mode & 0o077) !== 0)
-      throw new RelayError(
-        'RELAY_TOKEN_UNSAFE',
-        `others can read or write the relay's control token (mode ${(info.mode & 0o777).toString(8)}); the relay writes it at 600: chmod 600 it, or restart the relay`,
-      );
+  const flags =
+    platform === 'win32' ? constants.O_RDONLY : constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK;
+  let handle: Awaited<ReturnType<typeof open>>;
+  try {
+    handle = await open(path, flags);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') throw new RelayError('RELAY_NOT_FOUND', "the relay's home holds no control token");
+    // ELOOP: a link swapped in after the look.
+    throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token could not be opened as a regular file");
   }
-  const bytes = await readSmall(path, MAX_TOKEN_FILE_BYTES);
-  const value = bytes?.toString('utf8').trim() ?? '';
-  if (!TOKEN.test(value)) throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not one");
-  return new RelayToken(value);
+  try {
+    const info = await handle.stat();
+    if (!info.isFile())
+      throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not a regular file (a link is refused)");
+    if (platform !== 'win32') {
+      const uid = process.getuid?.();
+      if (uid !== undefined && info.uid !== uid)
+        throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token belongs to another user");
+      if ((info.mode & 0o077) !== 0)
+        throw new RelayError(
+          'RELAY_TOKEN_UNSAFE',
+          `others can read or write the relay's control token (mode ${(info.mode & 0o777).toString(8)}); the relay writes it at 600: chmod 600 it, or restart the relay`,
+        );
+    }
+    if (info.size > MAX_TOKEN_FILE_BYTES)
+      throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not one");
+    const buffer = Buffer.alloc(MAX_TOKEN_FILE_BYTES + 1);
+    const { bytesRead } = await handle.read(buffer, 0, MAX_TOKEN_FILE_BYTES + 1, 0);
+    const value = bytesRead > MAX_TOKEN_FILE_BYTES ? '' : buffer.subarray(0, bytesRead).toString('utf8').trim();
+    buffer.fill(0);
+    if (!TOKEN.test(value)) throw new RelayError('RELAY_TOKEN_UNSAFE', "the relay's control token is not one");
+    return new RelayToken(value);
+  } finally {
+    await handle.close();
+  }
 }
 
 /** The loopback base URL a client may use: `http://127.0.0.1:<port>` or `http://[::1]:<port>`, and nothing else. */
@@ -270,6 +299,16 @@ export interface RelaySessionV1 {
   readonly activeRunId?: string | undefined;
   readonly requestedMode?: string | undefined;
   readonly attached?: 'observer' | undefined;
+  /** Who runs it (claude-stream 0b): absent, or `active`, is this relay; `fenced` or `moved` takes no prompt here. */
+  readonly executor?: { readonly state: string } | undefined;
+}
+
+/**
+ * Whether a session can take a prompt from this client: one the relay runs here — not one it only watches
+ * (`attached: observer`, which answers a prompt with 409), and not one fenced or moved to another executor.
+ */
+export function isPromptableSession(session: RelaySessionV1): boolean {
+  return session.attached !== 'observer' && (session.executor === undefined || session.executor.state === 'active');
 }
 
 export interface RelayRunV1 {
@@ -341,6 +380,9 @@ function session(value: unknown): RelaySessionV1 {
     ...(activeRunId === undefined ? {} : { activeRunId }),
     ...(optionalText(value.requestedMode) === undefined ? {} : { requestedMode: value.requestedMode as string }),
     ...(value.attached === 'observer' ? { attached: 'observer' as const } : {}),
+    ...(isRecord(value.executor) && typeof value.executor.state === 'string'
+      ? { executor: { state: value.executor.state } }
+      : {}),
   };
 }
 
@@ -363,6 +405,8 @@ export interface RelayClientOptions {
   readonly url: string;
   readonly token: RelayToken;
   readonly timeoutMs?: number | undefined;
+  /** Who listens on the relay's port; the system's answer by default (`relay-listener.ts`). A seam for tests. */
+  readonly attestListener?: ListenerAttestor | undefined;
 }
 
 /** What a follow is told: each new record once, and the stream's own gap and close notices. */
@@ -380,11 +424,13 @@ export class RelayClient {
   readonly #url: URL;
   readonly #token: RelayToken;
   readonly #timeoutMs: number;
+  readonly #attest: ListenerAttestor;
 
   constructor(options: RelayClientOptions) {
     this.#url = assertLoopbackRelayUrl(options.url);
     this.#token = options.token;
     this.#timeoutMs = options.timeoutMs ?? REQUEST_TIMEOUT_MS;
+    this.#attest = options.attestListener ?? ((port) => listenerOwners(port));
   }
 
   /** `GET /v1/relay`: the relay's protocol and capabilities, refused unless they are the ones this client relies on. */
@@ -476,7 +522,16 @@ export class RelayClient {
       { ...input, sender: AGENT_COMMS_SENDER },
       [200, 202, 409],
     );
-    if (body.status === 409) return { kind: 'busy' };
+    if (body.status === 409) {
+      // Busy is the relay's one refusal of a live run: `conflict`, "… already has active run …". Every other 409 — a
+      // watched session, a fenced or moved one, a stale generation — is a refusal, retried or failed, never waited on
+      // (security review of 0.33.0, finding 3).
+      const error = isRecord(body.value) && isRecord(body.value.error) ? body.value.error : {};
+      const code = typeof error.code === 'string' ? error.code : undefined;
+      const message = typeof error.message === 'string' ? error.message : '';
+      if (code === 'conflict' && /\balready has active run\b/u.test(message)) return { kind: 'busy' };
+      throw refusedBy(409, code ?? null);
+    }
     if (!isRecord(body.value)) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a started run oddly');
     return { kind: 'started', run: run(body.value.run), repeated: body.value.repeated === true };
   }
@@ -497,11 +552,16 @@ export class RelayClient {
   }): Promise<number> {
     const query = new URLSearchParams({ follow: '1', after: String(input.after), types: input.types.join(',') });
     let cursor = input.lastEventId ?? input.after;
-    let frame: { event?: string; data: string[] } = { data: [] };
+    let frame: { event?: string; data: string[]; size: number; dropped: boolean } = {
+      data: [],
+      size: 0,
+      dropped: false,
+    };
     const dispatch = () => {
       const current = frame;
-      frame = { data: [] };
-      if (current.data.length === 0) return;
+      frame = { data: [], size: 0, dropped: false };
+      // A record larger than any this client reads is dropped whole, never held (security review of 0.33.0, finding 8).
+      if (current.dropped || current.data.length === 0) return;
       if (current.event === 'relay-gap') {
         input.handlers.onGap?.();
         return;
@@ -531,9 +591,18 @@ export class RelayClient {
     };
     let buffered = '';
     const decoder = new TextDecoder();
+    let skipping = false;
     const lines = (text: string) => {
       buffered += text;
-      if (buffered.length > MAX_SSE_LINE && !/[\r\n]/u.test(buffered)) throw new StreamClosed();
+      if (skipping) {
+        const end = buffered.search(/\r\n|\n|\r/u);
+        if (end === -1) {
+          buffered = '';
+          return;
+        }
+        buffered = buffered.slice(end + (buffered.startsWith('\r\n', end) ? 2 : 1));
+        skipping = false;
+      }
       let newline = buffered.search(/\r\n|\n|\r/u);
       while (newline !== -1) {
         const line = buffered.slice(0, newline);
@@ -544,8 +613,13 @@ export class RelayClient {
           const field = colon === -1 ? line : line.slice(0, colon);
           const raw = colon === -1 ? '' : line.slice(colon + 1);
           const value = raw.startsWith(' ') ? raw.slice(1) : raw;
-          if (field === 'data') frame.data.push(value);
-          else if (field === 'event') frame.event = value;
+          if (field === 'data') {
+            frame.size += value.length + 1;
+            if (frame.size > MAX_SSE_FRAME) {
+              frame.dropped = true;
+              frame.data = [];
+            } else if (!frame.dropped) frame.data.push(value);
+          } else if (field === 'event') frame.event = value;
           else if (field === 'id') {
             const id = Number(value);
             if (Number.isSafeInteger(id) && id > cursor) cursor = id;
@@ -553,9 +627,18 @@ export class RelayClient {
         }
         newline = buffered.search(/\r\n|\n|\r/u);
       }
+      // What is left is one unfinished line. One longer than any record is dropped, with the record it is in, as it
+      // comes — never held, and never a reason to follow the stream again only to be sent it again.
+      if (buffered.length > MAX_SSE_LINE) {
+        buffered = '';
+        skipping = true;
+        frame.dropped = true;
+        frame.data = [];
+      }
     };
     try {
       await exchange(this.#url, {
+        attest: this.#attest,
         method: 'GET',
         path: `/v1/events?${query.toString()}`,
         headers: {
@@ -586,6 +669,7 @@ export class RelayClient {
     accepted: readonly number[] = [200],
   ): Promise<{ readonly status: number; readonly value: unknown }> {
     const response = await exchange(this.#url, {
+      attest: this.#attest,
       method,
       path,
       headers: {
@@ -697,6 +781,7 @@ class ChunkedDecoder {
 async function exchange(
   base: URL,
   input: {
+    readonly attest: ListenerAttestor;
     readonly method: 'GET' | 'POST';
     readonly path: string;
     readonly headers: Readonly<Record<string, string>>;
@@ -726,6 +811,22 @@ async function exchange(
     throw new RelayError(
       'RELAY_UNREACHABLE',
       'the claude-stream relay could not be reached: is it running (or is the Pilot app open)?',
+    );
+  }
+  // Before a byte of the request — its token — is sent: the port is held by this user's own process, or nothing is sent.
+  let yours: boolean | 'unknown';
+  try {
+    yours = listenersAreYours(await input.attest(connection.port), process.getuid?.());
+  } catch {
+    yours = 'unknown';
+  }
+  if (yours !== true) {
+    socket.destroy();
+    throw new RelayError(
+      'RELAY_NOT_YOURS',
+      yours === 'unknown'
+        ? "who holds the relay's port could not be checked, so its control token was not sent"
+        : "the relay's port is not held by a relay you run, so its control token was not sent: is claude-stream running as you?",
     );
   }
   let head: HttpHead | undefined;

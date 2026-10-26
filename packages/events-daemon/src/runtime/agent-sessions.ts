@@ -55,6 +55,12 @@ export function isSettingsFolder(value: unknown): value is string {
   return isSessionFolder(value);
 }
 
+/** A root that confines nothing: `/`, or the person's home folder itself. */
+export function isTooWideRoot(root: string, homeDirectory: string): boolean {
+  const normal = normalize(root).replace(/\/+$/u, '') || '/';
+  return normal === '/' || normal === normalize(homeDirectory).replace(/\/+$/u, '');
+}
+
 /** Whether `path` is `folder` or inside it, comparing normal absolute paths segment by segment. */
 export function isInside(path: string, folder: string): boolean {
   if (!isAbsolute(path) || !isAbsolute(folder)) return false;
@@ -65,6 +71,11 @@ export function isInside(path: string, folder: string): boolean {
 export interface AgentSessionServiceOptions {
   readonly store: EventDatabase;
   readonly homeDirectory: string;
+  /**
+   * Agent Comms' own configuration, state, secrets and data folders (security review of 0.33.0, finding 4): no file
+   * part is read from them and no session works in them, whatever the roots say.
+   */
+  readonly deniedFolders?: readonly string[] | undefined;
   readonly audit?: Pick<AuditLog, 'append'> | undefined;
   readonly now?: (() => number) | undefined;
 }
@@ -79,12 +90,14 @@ export interface ReadyRelay {
 export class AgentSessionService {
   readonly #store: EventDatabase;
   readonly #homeDirectory: string;
+  readonly #deniedFolders: readonly string[];
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
   readonly #now: () => number;
 
   constructor(options: AgentSessionServiceOptions) {
     this.#store = options.store;
     this.#homeDirectory = options.homeDirectory;
+    this.#deniedFolders = options.deniedFolders ?? [];
     this.#audit = options.audit;
     this.#now = options.now ?? Date.now;
   }
@@ -103,7 +116,9 @@ export class AgentSessionService {
     return {
       relayHome: row.relay_home,
       relayPort: row.relay_port,
-      allowedFolders: Array.isArray(folders) ? folders.filter(isSettingsFolder) : [],
+      allowedFolders: Array.isArray(folders)
+        ? folders.filter((folder) => isSettingsFolder(folder) && !isTooWideRoot(folder, this.#homeDirectory))
+        : [],
     };
   }
 
@@ -120,15 +135,27 @@ export class AgentSessionService {
     return { client, location, info };
   }
 
-  /** The relay's allowed roots when it is ready and says them (claude-stream's `session-files`); null otherwise. */
+  /**
+   * The relay's allowed roots when it is ready and says them (claude-stream's `session-files`); null otherwise. A relay
+   * with no root policy says `/`, and one may name the home folder itself: either confines nothing, so then the relay's
+   * roots are not used at all, and only the folders the person added are (security review of 0.33.0, finding 4).
+   */
   async relayAllowedRoots(ready?: ReadyRelay): Promise<readonly string[] | null> {
+    let roots: readonly string[] | null;
     try {
       const relay = ready ?? (await this.relay());
-      return await relay.client.allowedRoots();
+      roots = await relay.client.allowedRoots();
     } catch (error) {
       if (error instanceof RelayError) return null;
       throw error;
     }
+    if (roots === null || roots.some((root) => isTooWideRoot(root, this.#homeDirectory))) return null;
+    return roots;
+  }
+
+  /** Agent Comms' own folders, never read and never worked in. */
+  deniedFolders(): readonly string[] {
+    return this.#deniedFolders;
   }
 
   /**
@@ -159,9 +186,15 @@ export class AgentSessionService {
     }
     const sessionRoots = await this.sessionRoots(ready);
     const fileRoots = await this.fileRoots(ready);
+    const denied = (path: string) => this.#deniedFolders.some((folder) => isInside(path, folder));
     for (const target of targets) {
       if ('folder' in target.find) {
         const folder = target.find.folder;
+        if (denied(folder))
+          throw new EventDomainError(
+            'VERSION_DOCUMENT_INVALID',
+            `the session folder ${folder} is one of Agent Comms' own folders, which no session works in`,
+          );
         if (sessionRoots.length === 0)
           throw new EventDomainError(
             'VERSION_DOCUMENT_INVALID',
@@ -173,12 +206,18 @@ export class AgentSessionService {
             `the session folder ${folder} is not inside the relay's allowed roots`,
           );
       }
-      for (const file of sessionTargetFiles(target))
+      for (const file of sessionTargetFiles(target)) {
+        if (denied(file))
+          throw new EventDomainError(
+            'VERSION_DOCUMENT_INVALID',
+            `the file ${file} is in one of Agent Comms' own folders, which a session's context never reads`,
+          );
         if (!fileRoots.some((root) => isInside(file, root)))
           throw new EventDomainError(
             'VERSION_DOCUMENT_INVALID',
             `the file ${file} is not under a folder a session's context may be read from: the relay's allowed roots, or one added with integration set agent-sessions --allow-folder`,
           );
+      }
     }
   }
 
@@ -247,7 +286,7 @@ export class AgentSessionService {
     }
     try {
       const current = this.settings();
-      const next = settingsFrom(args, current);
+      const next = settingsFrom(args, current, this.#homeDirectory);
       this.#store.immediate(() =>
         this.#store.database
           .prepare(
@@ -275,6 +314,7 @@ function usage(message: string): never {
 export function settingsFrom(
   args: Readonly<Record<string, unknown>>,
   current: AgentSessionSettingsV1,
+  homeDirectory?: string,
 ): AgentSessionSettingsV1 {
   for (const key of Object.keys(args))
     if (!['relayHome', 'relayPort', 'allowFolders', 'removeFolders'].includes(key))
@@ -300,6 +340,11 @@ export function settingsFrom(
     return value as readonly string[];
   };
   const removed = new Set(list(args.removeFolders, 'a folder to remove'));
+  if (
+    homeDirectory !== undefined &&
+    list(args.allowFolders, 'a folder to allow').some((f) => isTooWideRoot(f, homeDirectory))
+  )
+    usage('a folder a file part may be read from is never / or your home folder itself: name the folder inside it');
   const folders = [...new Set([...current.allowedFolders, ...list(args.allowFolders, 'a folder to allow')])].filter(
     (folder) => !removed.has(folder),
   );
