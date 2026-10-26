@@ -94,8 +94,8 @@ export const EVENTS_COPY = {
 function Fact({ name, children }: { name: string; children: ReactNode }) {
   return (
     <Line>
-      <span className="text-fg-muted">{name}</span>
-      <span className="ml-auto text-right text-fg">{children}</span>
+      <span className="shrink-0 text-fg-muted">{name}</span>
+      <span className="ml-auto min-w-0 break-words text-right text-fg">{children}</span>
     </Line>
   );
 }
