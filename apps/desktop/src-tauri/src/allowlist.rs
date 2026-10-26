@@ -89,6 +89,13 @@ checked_word!(
     "a rule id"
 );
 checked_word!(
+    /// A delivery's id (0.32.0, owner feedback §3.5): a word of letters, digits, `_` and `-`, as the event service's
+    /// lowercase UUIDs are.
+    DeliveryId,
+    grammar::delivery_id,
+    "a delivery id"
+);
+checked_word!(
     /// A lane's name (0.31.0, design 2026-10-25-routing §3.1): 1 to 40 lowercase letters, digits and `-`.
     LaneName,
     grammar::lane_name,
@@ -835,6 +842,30 @@ pub enum Call {
     /// and gives nothing, a tightening, so the app applies it itself (DA10); the screen asks first. Binding is never a
     /// call: the person binds at a terminal (`TerminalCommand::LaneBind`), so no agent can bind itself.
     LaneUnbind { lane: LaneName },
+    /// The events service's `rule show <rule>` (0.32.0, owner feedback §3.4): each version of one rule, its document,
+    /// its times, its sentence in parts and its counts of the last 7 days. Content-free and read-only. The rules
+    /// calls are named outside `EventsJudge…`, which E2's static boundary keeps for Laya's two.
+    EventsRuleShow { rule_id: RuleId },
+    /// The events service's `rule disable <rule>` (0.32.0): turns a rule off at once. It takes away and gives nothing,
+    /// a tightening, so the app applies it itself (DA10). Turning one on is never a call: the person approves it.
+    EventsRuleDisable { rule_id: RuleId },
+    /// The events service's `rule remove <rule>` (0.32.0): removes a rule at once, a tightening, as disable is. The
+    /// screen asks first.
+    EventsRuleRemove { rule_id: RuleId },
+    /// The events service's `delivery show <delivery>` (0.32.0, §3.5): one delivery, its decision, its event's ids and
+    /// times, and its target's kind and host. The person's read, refused inside an MCP server's process.
+    EventsDeliveryShow { delivery_id: DeliveryId },
+    /// The events service's `dryrun show <delivery>` (0.32.0, §3.5): one dry-run log entry, the would-be record as
+    /// data. The person's read (D7, "at the terminal or in the app"); the screen shows each field a sender wrote as
+    /// outside text.
+    EventsDryrunShow { delivery_id: DeliveryId },
+    /// The events service's `delivery retry <delivery>`: tries a delivery that will try again now, rather than at its
+    /// next try. It sends nothing a rule did not already pass on, so the app applies it itself (DA10).
+    EventsDeliveryRetry { delivery_id: DeliveryId },
+    /// The events service's `delivery drop <delivery>`: stops a delivery that waits to be tried or will try again (its
+    /// 0.32.0; one being sent is refused), or deletes a failed one's kept message. A tightening, applied at once; the
+    /// screen asks first.
+    EventsDeliveryDrop { delivery_id: DeliveryId },
     /// The events service's `provider list` (0.32.0): whether TypeSafe and OpenRouter each have a key, and never a key.
     /// Read-only; it takes no argument.
     ProviderList {},
@@ -923,6 +954,10 @@ pub const QUEUE_VERSION: &str = "0.30.0";
 /// The first release of the events service with lanes (design 2026-10-25-routing): its `lane list`, `lane unbind` and
 /// `lane bind`. An older one says "Needs 0.31.0 or later" (DA12).
 pub const LANES_VERSION: &str = "0.31.0";
+
+/// The first release of the events service whose `delivery show` exists and whose `dryrun show --json` answers the app
+/// (owner feedback 0.32.0, §3.5). An older one says "Needs 0.32.0 or later" (DA12).
+pub const DELIVERY_DETAIL_VERSION: &str = "0.32.0";
 
 /// The first release of the events service with judge setup and AI provider keys (owner decision 2026-10-26): its
 /// `judge setup`, `provider list` and `provider key set|remove`. An older one keeps Turn on in Terminal (DA12).
@@ -1176,6 +1211,21 @@ impl Call {
             Call::QueueClear {} => events(&["queue", "clear"]),
             Call::LaneList {} => events(&["lane", "list"]),
             Call::LaneUnbind { lane } => events(&["lane", "unbind", lane.as_str()]),
+            Call::EventsRuleShow { rule_id } => events(&["rule", "show", rule_id.as_str()]),
+            Call::EventsRuleDisable { rule_id } => events(&["rule", "disable", rule_id.as_str()]),
+            Call::EventsRuleRemove { rule_id } => events(&["rule", "remove", rule_id.as_str()]),
+            Call::EventsDeliveryShow { delivery_id } => {
+                events(&["delivery", "show", delivery_id.as_str()])
+            }
+            Call::EventsDryrunShow { delivery_id } => {
+                events(&["dryrun", "show", delivery_id.as_str()])
+            }
+            Call::EventsDeliveryRetry { delivery_id } => {
+                events(&["delivery", "retry", delivery_id.as_str()])
+            }
+            Call::EventsDeliveryDrop { delivery_id } => {
+                events(&["delivery", "drop", delivery_id.as_str()])
+            }
             Call::ProviderList {} => events(&["provider", "list"]),
             Call::ProviderKeyRemove { provider } => {
                 events(&["provider", "key", "remove", provider.word()])
@@ -1339,6 +1389,9 @@ impl Call {
             | Call::QueueReopen { .. }
             | Call::QueueClear {} => Some(QUEUE_VERSION),
             Call::LaneList {} | Call::LaneUnbind { .. } => Some(LANES_VERSION),
+            Call::EventsDeliveryShow { .. } | Call::EventsDryrunShow { .. } => {
+                Some(DELIVERY_DETAIL_VERSION)
+            }
             Call::ProviderList {} | Call::ProviderKeyRemove { .. } | Call::JudgeSetup { .. } => {
                 Some(JUDGE_SETUP_VERSION)
             }
@@ -1458,6 +1511,13 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "queueClear" }),
         json!({ "kind": "laneList" }),
         json!({ "kind": "laneUnbind", "lane": "david" }),
+        json!({ "kind": "eventsRuleShow", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsRuleDisable", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsRuleRemove", "ruleId": "mail-subject" }),
+        json!({ "kind": "eventsDeliveryShow", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDryrunShow", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDeliveryRetry", "deliveryId": DELIVERY }),
+        json!({ "kind": "eventsDeliveryDrop", "deliveryId": DELIVERY }),
         json!({ "kind": "providerList" }),
         json!({ "kind": "providerKeyRemove", "provider": "typesafe" }),
         json!({ "kind": "providerKeyRemove", "provider": "openrouter" }),
@@ -1561,6 +1621,10 @@ pub(crate) const SESSION: &str = "3f9a1c2e7b4d5a60";
 /// A well-formed queue item id, for the tests: `qi_` and 26 of Crockford's letters.
 #[cfg(test)]
 pub(crate) const QUEUE_ITEM: &str = "qi_01J9Z8QF0000000000000000AB";
+
+/// A well-formed delivery id, for the tests: a lowercase UUID, as the event service makes one.
+#[cfg(test)]
+pub(crate) const DELIVERY: &str = "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70";
 
 /// The start of 2026-10-25 in UTC, as seconds since the epoch: a today, for the tests.
 #[cfg(test)]
@@ -3237,6 +3301,209 @@ mod tests {
             refused(json!({ "kind": kind }));
             refused(json!({ "kind": kind, "lane": "david" }));
             refused(json!({ "kind": kind, "lane": "david", "window": SESSION }));
+        }
+    }
+
+    /// The rules' and deliveries' calls (0.32.0, owner feedback §3.4 and §3.5): `rule show`, `rule disable` and `rule
+    /// remove` for one rule, and `delivery show`, `dryrun show`, `delivery retry` and `delivery drop` for one delivery;
+    /// each the events launcher, its words, `--json` and the pins, and nothing else.
+    #[test]
+    fn rule_and_delivery_calls_build_exactly_their_words() {
+        let longest_rule = "r".repeat(128);
+        for rule in [
+            "mail-subject",
+            "invoices",
+            "rule_example",
+            "team:rule@1",
+            "rule.v2",
+            "r",
+            longest_rule.as_str(),
+        ] {
+            for (kind, verb) in [
+                ("eventsRuleShow", "show"),
+                ("eventsRuleDisable", "disable"),
+                ("eventsRuleRemove", "remove"),
+            ] {
+                assert_eq!(
+                    events_line(json!({ "kind": kind, "ruleId": rule })),
+                    ["rule", verb, rule]
+                );
+            }
+        }
+        let longest_delivery = "d".repeat(128);
+        for delivery in [DELIVERY, "dlv_example_1", "D", longest_delivery.as_str()] {
+            for (kind, noun, verb) in [
+                ("eventsDeliveryShow", "delivery", "show"),
+                ("eventsDryrunShow", "dryrun", "show"),
+                ("eventsDeliveryRetry", "delivery", "retry"),
+                ("eventsDeliveryDrop", "delivery", "drop"),
+            ] {
+                assert_eq!(
+                    events_line(json!({ "kind": kind, "deliveryId": delivery })),
+                    [noun, verb, delivery]
+                );
+            }
+        }
+        // `delivery show` and `dryrun show --json` from the app are 0.32.0's; the rest are as old as the event service.
+        // None prepares a change: Turn off and Remove are tightenings, and Try now and Stop trying act on one delivery,
+        // each applied by the app itself (DA10).
+        for (value, needs) in [
+            (
+                json!({ "kind": "eventsRuleShow", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsRuleDisable", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsRuleRemove", "ruleId": "mail-subject" }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsDeliveryShow", "deliveryId": DELIVERY }),
+                Some("0.32.0"),
+            ),
+            (
+                json!({ "kind": "eventsDryrunShow", "deliveryId": DELIVERY }),
+                Some("0.32.0"),
+            ),
+            (
+                json!({ "kind": "eventsDeliveryRetry", "deliveryId": DELIVERY }),
+                None,
+            ),
+            (
+                json!({ "kind": "eventsDeliveryDrop", "deliveryId": DELIVERY }),
+                None,
+            ),
+        ] {
+            assert_eq!(call(value.clone()).needs(), needs, "{value}");
+            assert!(!call(value.clone()).prepares_change(), "{value}");
+        }
+        assert_eq!(DELIVERY_DETAIL_VERSION, "0.32.0");
+        assert!(!crate::version::at_least("0.31.0", DELIVERY_DETAIL_VERSION));
+        assert!(!crate::version::at_least("0.31.9", DELIVERY_DETAIL_VERSION));
+        assert!(crate::version::at_least("0.32.0", DELIVERY_DETAIL_VERSION));
+        assert!(crate::version::at_least(
+            "0.32.0-feat-0.32",
+            DELIVERY_DETAIL_VERSION
+        ));
+    }
+
+    /// Nothing the window sends reaches a rule's or a delivery's words unchecked: each id is a word of the grammar's,
+    /// never an option or two words; each call names exactly its one field; and nothing enables, creates, updates or
+    /// tests a rule, or lists the dry-run log: switching a rule on is the person's approval, at a terminal.
+    #[test]
+    fn rule_and_delivery_calls_refuse_bad_ids_and_extra_fields() {
+        let rule_kinds = ["eventsRuleShow", "eventsRuleDisable", "eventsRuleRemove"];
+        let delivery_kinds = [
+            "eventsDeliveryShow",
+            "eventsDryrunShow",
+            "eventsDeliveryRetry",
+            "eventsDeliveryDrop",
+        ];
+        for rule in [
+            json!(""),
+            json!("-r"),
+            json!("--json"),
+            json!("--all"),
+            json!("rule 1"),
+            json!("mail-subject --json"),
+            json!("mail-subject\n"),
+            json!("mail-subject\u{202e}"),
+            json!("mail-subject\u{200b}"),
+            json!(" mail-subject"),
+            json!("../mail-subject"),
+            json!("mail/subject"),
+            json!("_rule"),
+            json!(".rule"),
+            json!("r".repeat(129)),
+            json!(7),
+            json!(null),
+            json!(["mail-subject"]),
+            json!({ "id": "mail-subject" }),
+        ] {
+            for kind in rule_kinds {
+                refused(json!({ "kind": kind, "ruleId": rule }));
+            }
+        }
+        for delivery in [
+            json!(""),
+            json!("-d"),
+            json!("--json"),
+            json!("--all"),
+            json!("_dlv"),
+            json!("dlv 1"),
+            json!("dlv.1"),
+            json!("dlv:1"),
+            json!("dlv@1"),
+            json!("dlv/1"),
+            json!("../dlv"),
+            json!("dlv_1 --json"),
+            json!("dlv_1\n"),
+            json!("dlv_1\u{202e}"),
+            json!("dlv_1\u{200b}"),
+            json!(" dlv_1"),
+            json!("d".repeat(129)),
+            json!(7),
+            json!(null),
+            json!([DELIVERY]),
+            json!({ "id": DELIVERY }),
+        ] {
+            for kind in delivery_kinds {
+                refused(json!({ "kind": kind, "deliveryId": delivery }));
+            }
+        }
+        // Each id is never left out, and is named exactly: `ruleId` for a rule, `deliveryId` for a delivery.
+        for kind in rule_kinds {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "rule": "mail-subject" }));
+            refused(json!({ "kind": kind, "id": "mail-subject" }));
+            refused(json!({ "kind": kind, "deliveryId": DELIVERY }));
+        }
+        for kind in delivery_kinds {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "delivery": DELIVERY }));
+            refused(json!({ "kind": kind, "id": DELIVERY }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject" }));
+        }
+        for (field, value) in [
+            ("version", json!(2)),
+            ("approval", json!(ID)),
+            ("approvalId", json!(ID)),
+            ("args", json!(["--all"])),
+            ("json", json!(false)),
+            ("force", json!(true)),
+            ("all", json!(true)),
+        ] {
+            for kind in rule_kinds {
+                let mut given = json!({ "kind": kind, "ruleId": "mail-subject" });
+                given[field] = value.clone();
+                refused(given);
+            }
+            for kind in delivery_kinds {
+                let mut given = json!({ "kind": kind, "deliveryId": DELIVERY });
+                given[field] = value.clone();
+                refused(given);
+            }
+        }
+        for kind in [
+            "eventsRuleEnable",
+            "eventsRuleCreate",
+            "eventsRuleUpdate",
+            "eventsRuleTest",
+            "eventsRuleTestRetained",
+            "eventsDryrunList",
+            "eventsDeliveryList",
+            "eventsDeliveries2",
+            "ruleShow",
+            "deliveryShow",
+            "dryrunShow",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject" }));
+            refused(json!({ "kind": kind, "ruleId": "mail-subject", "version": 2 }));
+            refused(json!({ "kind": kind, "deliveryId": DELIVERY }));
         }
     }
 

@@ -4,6 +4,7 @@
 //! (`operations/label.ts`), and an activity session's key (`activity.ts`). Two are the event service's (0.30.0, design
 //! 2026-10-25-action-queue §8): a queue item's id, and a rule's id as the Queue screen filters by one. Two are its
 //! lanes' (0.31.0, design 2026-10-25-routing §3.1 and B1): a lane's name, and the id of the agent window bound to one.
+//! One is a delivery's (0.32.0, owner feedback §3.5): its id, as the Deliveries screen opens, retries or drops one.
 //! Two are judge setup's (0.32.0, owner decision 2026-10-26): a local model server's URL on this machine, and its
 //! model's name, as `judge setup local-endpoint` takes them.
 
@@ -30,6 +31,7 @@ struct Source {
     rule_id: String,
     lane_name: String,
     window_id: String,
+    delivery_id: String,
     loopback_url: String,
     local_model: String,
 }
@@ -47,6 +49,7 @@ struct Grammar {
     rule_id: Regex,
     lane_name: Regex,
     window_id: Regex,
+    delivery_id: Regex,
     loopback_url: Regex,
     local_model: Regex,
 }
@@ -69,6 +72,7 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         rule_id: pattern(&source.rule_id),
         lane_name: pattern(&source.lane_name),
         window_id: pattern(&source.window_id),
+        delivery_id: pattern(&source.delivery_id),
         loopback_url: pattern(&source.loopback_url),
         local_model: pattern(&source.local_model),
     }
@@ -158,6 +162,13 @@ pub fn lane_name(value: &str) -> bool {
 /// UUID; or an activity session's key, sixteen lowercase hex digits, as core makes it.
 pub fn window_id(value: &str) -> bool {
     plain(value) && GRAMMAR.window_id.is_match(value)
+}
+
+/// A delivery's id, as the Deliveries screen names one (0.32.0): a letter or digit, then up to 127 letters, digits,
+/// `_` or `-`. The event service makes each a lowercase UUID; a delivery whose id is outside this is shown, and is never
+/// named in a call.
+pub fn delivery_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.delivery_id.is_match(value)
 }
 
 /// A local model server's URL, as `judge setup local-endpoint --url` takes it (0.32.0): plain HTTP to the literal
@@ -259,6 +270,41 @@ mod tests {
             " qi_0123456789ABCDEFGHJKMNPQRS",
         ] {
             assert!(!queue_item_id(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn delivery_ids_are_a_word_of_letters_digits_underscores_and_hyphens() {
+        let longest = "d".repeat(128);
+        for good in [
+            "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70",
+            "dlv_example_1",
+            "D",
+            "7",
+            longest.as_str(),
+        ] {
+            assert!(delivery_id(good), "{good}");
+        }
+        let too_long = "d".repeat(129);
+        for bad in [
+            "",
+            "-dlv",
+            "--json",
+            "_dlv",
+            "dlv.1",
+            "dlv:1",
+            "dlv@1",
+            "dlv/1",
+            "../dlv",
+            "dlv 1",
+            "dlv_1 --json",
+            "dlv_1\n",
+            "dlv_1\u{202e}",
+            "dlv_1\u{200b}",
+            " dlv_1",
+            too_long.as_str(),
+        ] {
+            assert!(!delivery_id(bad), "{bad:?}");
         }
     }
 
