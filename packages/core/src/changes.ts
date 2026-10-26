@@ -359,24 +359,20 @@ export async function beginChangeApproval(
   }
 }
 
-/**
- * Records the approval, if the code typed back is the one shown. `via` is where the person approved it: at a terminal,
- * or in the desktop app (0.32.0, `gatedChangeAtTerminal`'s `appApproval`), which the record and its audit line say.
- */
+/** Records the approval, if the code typed back is the one shown. */
 export async function finishChangeApproval(
   core: Core,
   approvalId: string,
   answer: string,
-  options: ChangeOptions & { via?: 'terminal' | 'app' | undefined },
+  options: ChangeOptions,
 ): Promise<ApprovalRecord> {
   let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
-  const via = options.via ?? 'terminal';
   try {
     record = await changeRecord(core, approvalId);
     const digest = changeDigest(record.change);
     const approved = await core.approvals.approve(
       approvalId,
-      via,
+      'terminal',
       { draftMessageId: digest, contentDigest: digest },
       answer,
       'change',
@@ -390,8 +386,72 @@ export async function finishChangeApproval(
       target: record.change.target,
       policy: changePolicyOf(record),
       paths: record.change.loosened.map((loosening) => loosening.path),
-      reason: via === 'app' ? 'approved in the desktop app' : 'approved at a terminal',
-      ...(via === 'app' ? { approvedBy: 'desktop-app' as const } : {}),
+      reason: 'approved at a terminal',
+    });
+    return approved;
+  } catch (error) {
+    await auditRefusal(core, 'change.approve', error, {
+      surface: options.surface,
+      approvalId,
+      target: record?.change.target ?? null,
+      policy: record ? changePolicyOf(record) : undefined,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Approves a change through the desktop app's channel (0.32.0), only when the approval is for exactly `request`: the
+ * change the caller has just planned, from the configuration as it is now, which must be one that needs approval. The
+ * approval is checked first — a change approval, still waiting, whose stored digest is this request's — and only then
+ * is its code issued and answered, with this request's digest as the live binding, so the store voids it rather than
+ * approve anything that moved under its lock. An approval prepared for another change is left as it was.
+ *
+ * The release's security review (2026-10-26): answering first and planning after left an approval approved whenever
+ * the plan then refused, for any other change to claim.
+ */
+export async function approveChangeInApp(
+  core: Core,
+  approvalId: string,
+  request: ChangeSpec,
+  options: ChangeOptions & { approvedBy: NonNullable<AuditRecord['approvedBy']> },
+): Promise<ApprovalRecord> {
+  let record: (ApprovalRecord & { change: ChangeBinding }) | undefined;
+  try {
+    const binding = bindChange(request, '');
+    if (binding.loosened.length === 0 && binding.effects.length === 0) {
+      throw new CommsError('USAGE', 'nothing was approved: this change needs no approval, so the app approves none', {
+        details: { approvalId },
+      });
+    }
+    record = await changeRecord(core, approvalId);
+    const digest = changeDigest(binding);
+    if (record.contentDigest !== digest) {
+      throw new CommsError(
+        'APPROVAL_REQUIRED',
+        'nothing was approved: that approval was prepared for another change, not this one',
+        { hint: 'Prepare this change again, and approve the approval it gives.', details: { approvalId } },
+      );
+    }
+    const challenge = await core.approvals.issueChallenge(approvalId, 'change', options.platform);
+    const approved = await core.approvals.approve(
+      approvalId,
+      'app',
+      { draftMessageId: digest, contentDigest: digest },
+      challenge,
+      'change',
+      options.platform,
+    );
+    await auditChange(core, {
+      operation: 'change.approve',
+      outcome: 'ok',
+      surface: options.surface,
+      approvalId,
+      target: record.change.target,
+      policy: changePolicyOf(record),
+      paths: record.change.loosened.map((loosening) => loosening.path),
+      reason: 'approved in the desktop app',
+      approvedBy: options.approvedBy,
     });
     return approved;
   } catch (error) {
@@ -494,7 +554,7 @@ interface ChangeAuditEntry {
   paths?: readonly string[] | undefined;
   reason?: string | undefined;
   /** Who approved it, when it was the person in the desktop app (0.32.0). */
-  approvedBy?: 'desktop-app' | undefined;
+  approvedBy?: AuditRecord['approvedBy'] | undefined;
 }
 
 /**

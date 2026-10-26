@@ -1,6 +1,7 @@
 import { approvalWaitOf, approveAndWaitSentence } from './approval-handoffs.ts';
 import type { ApprovalObject } from './approval-outcome.ts';
 import {
+  approveChangeInApp,
   beginChangeApproval,
   type ChangeRequest,
   type ChangeSurface,
@@ -380,13 +381,16 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * A change the desktop app prepared, approved there by the person (0.32.0, design 2026-10-26-owner-feedback-0320
  * §3.3, §5 question 3), as judge setup's enablements are approved through the app channel (events design D2's note of
  * 2026-10-26): the app showed core's preview, the person pressed its confirm, and the app runs the same command with
- * the approval it was given. This issues the approval's code and answers it at once, so the record says
- * `approvedVia: 'app'` and the audit line `approvedBy: desktop-app`; then this change claims it, once, and applies.
+ * the approval it was given. The change is planned first, from the configuration as it is now; the approval is checked
+ * against it — a waiting change approval whose digest is this exact change's, which must need approval — and only then
+ * is its code issued and answered (`approveChangeInApp`), so the record says `approvedVia: 'app'` and the audit line
+ * `approvedBy: desktop-app`. This change then claims it, once, and applies; an approval answered and not applied is
+ * revoked. A plan that refuses or throws, or an approval for anything else, approves nothing (the release's security
+ * review, 2026-10-26).
  *
  * Who may: the person, and only where an agent is not — refused to an agent's shell (its marker) and inside an MCP
- * server's process, before the approval is touched, and the refusal audited. As at a terminal, that is a speed bump an
- * agent's shell could get past, not a boundary. What: only the change the approval was prepared for — the claim voids
- * it for any other — and only on a command that passes this option (`mcp install`); no MCP tool does.
+ * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
+ * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
  */
 async function appliedFromApp<T>(
   core: Core,
@@ -425,16 +429,21 @@ async function appliedFromApp<T>(
     await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app' });
     throw error;
   }
-  const prompt = await beginChangeApproval(core, approvalId, { surface: 'app', platform });
-  await finishChangeApproval(core, approvalId, prompt.challenge, { surface: 'app', platform, via: 'app' });
-  const outcome = await gatedChange(core, change, {
-    surface: 'app',
-    channel: options.channel,
-    approvalId,
-    platform,
-  });
-  if (outcome.status !== 'applied') throw new CommsError('UNEXPECTED', 'the approved change asked for approval again');
-  return outcome.result;
+  // Planned first, from the configuration as it is now: a plan that refuses or throws approves nothing.
+  const request = await change.plan(await core.config.load());
+  // Checked against the approval before it is answered: only this exact change, which must need approval.
+  await approveChangeInApp(core, approvalId, request, { surface: 'app', platform, approvedBy: 'desktop-app' });
+  try {
+    const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });
+    return await change.apply(consent, request);
+  } catch (error) {
+    // Approved and then not applied: never left approved for anything else to claim.
+    await revokeChange(core, approvalId, 'approved in the desktop app and not applied', {
+      surface: 'app',
+      disposition: 'person',
+    }).catch(() => undefined);
+    throw error;
+  }
 }
 
 async function askLine(streams: Streams, question: string): Promise<string> {
