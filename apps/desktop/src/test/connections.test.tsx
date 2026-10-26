@@ -442,6 +442,35 @@ describe('Connections (spec §3.3)', () => {
     },
   );
 
+  it('in the test build Connections only shows: no Change… or Add…, and it says why', SLOW, async () => {
+    const bridge = bridgeAt();
+    bridge.appBuild = async () => ({
+      identifier: 'com.cueplusplus.agentcomms.test',
+      isTest: true,
+      commit: 'a1b2c3d feat/0.32',
+      builtAt: '2026-10-26T14:05:00Z',
+    });
+    const view = await openConnections(bridge);
+    // The table is there, as it is in a release.
+    expect((await rowOf('Claude Code')).cells[SERVER_COLUMN.core]?.textContent).toBe('✓Yes');
+    expect(await view.findByText(CONNECTIONS_COPY.testBuildOnly)).toBeTruthy();
+    expect(CONNECTIONS_COPY.testBuildOnly).toBe(
+      "In the test build, Connections only shows. Changing it would edit your real apps' settings.",
+    );
+    expect(view.queryByRole('button', { name: 'Change…' })).toBeNull();
+    expect(view.queryByRole('button', { name: 'Add…' })).toBeNull();
+    expect(view.queryByRole('group', { name: /which parts\?/ })).toBeNull();
+    expect(changes(bridge)).toEqual([]);
+    expect(approvedInApp(bridge)).toEqual([]);
+  });
+
+  it('a release build has no such line, and its Change… and Add…', SLOW, async () => {
+    const view = await openConnections(bridgeAt());
+    expect(await view.findAllByRole('button', { name: 'Change…' })).not.toHaveLength(0);
+    expect(view.getAllByRole('button', { name: 'Add…' })).not.toHaveLength(0);
+    expect(view.queryByText(CONNECTIONS_COPY.testBuildOnly)).toBeNull();
+  });
+
   it("says what went wrong when core's channels cannot be read", SLOW, async () => {
     const bridge = createFakeBridge(
       { installation: async () => ({ ...EXAMPLE_INSTALLATION, version: '0.32.0' }) },

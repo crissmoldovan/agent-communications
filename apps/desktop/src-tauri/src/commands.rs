@@ -79,6 +79,8 @@ pub async fn cli(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<CliResult, AppError> {
+    // In the test build, nothing edits the person's real apps' settings (0.32.0).
+    connections::refuse_in_test_build(&call, &app.config().identifier)?;
     let ctx = context(&state);
     let counts = matches!(call, Call::ApprovalsPending {});
     let asked = call.clone();
@@ -108,6 +110,8 @@ pub async fn open_in_terminal(
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<TerminalOutcome, AppError> {
+    // In the test build, nothing edits the person's real apps' settings, at a terminal either (0.32.0).
+    connections::refuse_terminal_in_test_build(&command, &app.config().identifier)?;
     let ctx = context(&state);
     let prepared = state.prepared.clone();
     blocking(move || terminal::open(&app, command, &ctx, &prepared)).await?
