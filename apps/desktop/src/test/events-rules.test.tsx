@@ -109,9 +109,10 @@ describe('Events → Rules', () => {
     expect(within(invoices).getByText('invoices')).toBeTruthy();
     expect(within(invoices).getByText('On')).toBeTruthy();
     const said = await sentence('invoices');
-    // The account is named as the Accounts screen names it; the author's words are boxed as theirs; values stand out.
+    // The event service's own sentence (`describeRule`), its account named as the Accounts screen names it; the
+    // author's words are boxed as theirs; values stand out.
     expect(said.textContent).toBe(
-      'When mail arrives in example/gmail with invoice or payment in the subject, ask Jev Is this asking me to pay or send something?. If it says yes, put it in the Queue, lane billing.',
+      "When mail arrives in example/gmail with 'invoice' or 'payment' in the subject, ask Jev 'Is this asking me to pay or send something?'. If it says yes, put it in the Queue, lane billing.",
     );
     expect([...said.querySelectorAll('[data-part="untrusted"]')].map((each) => each.textContent)).toEqual([
       'invoice',
@@ -119,7 +120,6 @@ describe('Events → Rules', () => {
       'Is this asking me to pay or send something?',
     ]);
     expect([...said.querySelectorAll('[data-part="value"]')].map((each) => each.textContent)).toEqual([
-      'mail',
       'example/gmail',
       'Jev',
       'Queue',
@@ -177,7 +177,9 @@ describe('Events → Rules', () => {
     expect(within(page).getByRole('heading', { name: 'invoices' })).toBeTruthy();
     expect(within(page).getByText('On')).toBeTruthy();
     const words = within(page).getByRole('region', { name: 'In plain words' });
-    expect(words.textContent).toContain('When mail arrives in example/gmail with invoice or payment in the subject');
+    expect(words.textContent).toContain(
+      "When mail arrives in example/gmail with 'invoice' or 'payment' in the subject",
+    );
 
     const panel = (name: string) => within(page).getByRole('region', { name });
     expect(panel('What it watches').textContent).toBe('What it watchesGmail · example/gmailNew mail in the inbox');
@@ -192,7 +194,7 @@ describe('Events → Rules', () => {
       'Where they goQueue, lane billingWakes the agent window bound to that lane',
     );
     expect(panel("What's kept").textContent).toBe(
-      "What's keptIt keeps the sender, the subject, the first words, the message idIn the Queue for 30 days, then deleted",
+      "What's keptIt keeps the sender, the subject, the preview, the message idIn the Queue for 30 days, then deleted",
     );
     expect(panel('The limit').textContent).toBe(
       'The limitAt most 60 an hourThe limit you approved with the rule · its judge is asked at most 30 times an hour',
@@ -205,7 +207,7 @@ describe('Events → Rules', () => {
     expect(stat('matched')).toBe('15');
     expect(stat('Jev said yes')).toBe('10');
     expect(stat('Jev said no')).toBe('5');
-    expect(stat('passed on')).toBe('10');
+    expect(stat('delivered')).toBe('10');
     expect(stat('problems')).toBe('0');
 
     const versions = panel('Versions');

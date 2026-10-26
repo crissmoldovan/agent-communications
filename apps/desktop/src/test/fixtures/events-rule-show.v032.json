@@ -104,19 +104,11 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When ",
+          "text": "When mail arrives in ",
           "kind": "plain"
         },
         {
-          "text": "mail",
-          "kind": "value"
-        },
-        {
-          "text": " arrives in ",
-          "kind": "plain"
-        },
-        {
-          "text": "in_01EXAMPLE0000000000000000",
+          "text": "example/gmail",
           "kind": "value"
         },
         {
@@ -124,11 +116,27 @@
           "kind": "plain"
         },
         {
+          "text": "'",
+          "kind": "plain"
+        },
+        {
           "text": "invoice",
           "kind": "untrusted"
         },
         {
-          "text": " in the subject, ask ",
+          "text": "'",
+          "kind": "plain"
+        },
+        {
+          "text": " in ",
+          "kind": "plain"
+        },
+        {
+          "text": "the subject",
+          "kind": "plain"
+        },
+        {
+          "text": ", ask ",
           "kind": "plain"
         },
         {
@@ -136,7 +144,7 @@
           "kind": "value"
         },
         {
-          "text": " ",
+          "text": " '",
           "kind": "plain"
         },
         {
@@ -144,7 +152,11 @@
           "kind": "untrusted"
         },
         {
-          "text": ". If it says yes, put it in the ",
+          "text": "'. If it says yes, ",
+          "kind": "plain"
+        },
+        {
+          "text": "put it in the ",
           "kind": "plain"
         },
         {
@@ -287,19 +299,11 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When ",
+          "text": "When mail arrives in ",
           "kind": "plain"
         },
         {
-          "text": "mail",
-          "kind": "value"
-        },
-        {
-          "text": " arrives in ",
-          "kind": "plain"
-        },
-        {
-          "text": "in_01EXAMPLE0000000000000000",
+          "text": "example/gmail",
           "kind": "value"
         },
         {
@@ -307,11 +311,23 @@
           "kind": "plain"
         },
         {
+          "text": "'",
+          "kind": "plain"
+        },
+        {
           "text": "invoice",
           "kind": "untrusted"
         },
         {
+          "text": "'",
+          "kind": "plain"
+        },
+        {
           "text": " or ",
+          "kind": "plain"
+        },
+        {
+          "text": "'",
           "kind": "plain"
         },
         {
@@ -319,7 +335,19 @@
           "kind": "untrusted"
         },
         {
-          "text": " in the subject, ask ",
+          "text": "'",
+          "kind": "plain"
+        },
+        {
+          "text": " in ",
+          "kind": "plain"
+        },
+        {
+          "text": "the subject",
+          "kind": "plain"
+        },
+        {
+          "text": ", ask ",
           "kind": "plain"
         },
         {
@@ -327,7 +355,7 @@
           "kind": "value"
         },
         {
-          "text": " ",
+          "text": " '",
           "kind": "plain"
         },
         {
@@ -335,7 +363,11 @@
           "kind": "untrusted"
         },
         {
-          "text": ". If it says yes, put it in the ",
+          "text": "'. If it says yes, ",
+          "kind": "plain"
+        },
+        {
+          "text": "put it in the ",
           "kind": "plain"
         },
         {
@@ -379,18 +411,18 @@
           }
         },
         "event": {
-          "type": "slack.message.received",
+          "type": "slack.message.posted",
           "version": 1
         },
         "condition": {
-          "path": "/user",
+          "path": "/author/userId",
           "op": "equals",
           "value": "U0DAVIDEX",
           "caseSensitive": true
         },
         "mapping": {
           "from": {
-            "$path": "/user"
+            "$path": "/author/name"
           },
           "text": {
             "$path": "/text"
@@ -400,6 +432,9 @@
           },
           "channel": {
             "$path": "/channel/id"
+          },
+          "ts": {
+            "$path": "/ts"
           }
         },
         "targets": [
@@ -437,23 +472,59 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When ",
+          "text": "When a message is posted in ",
+          "kind": "plain"
+        },
+        {
+          "text": "example/slack",
+          "kind": "value"
+        },
+        {
+          "text": " (in ",
+          "kind": "plain"
+        },
+        {
+          "text": "D0EXAMPLE",
+          "kind": "untrusted"
+        },
+        {
+          "text": ")",
+          "kind": "plain"
+        },
+        {
+          "text": " where ",
+          "kind": "plain"
+        },
+        {
+          "text": "the author",
+          "kind": "plain"
+        },
+        {
+          "text": " is ",
+          "kind": "plain"
+        },
+        {
+          "text": "'",
           "kind": "plain"
         },
         {
           "text": "U0DAVIDEX",
-          "kind": "value"
+          "kind": "untrusted"
         },
         {
-          "text": " writes in ",
+          "text": "'",
           "kind": "plain"
         },
         {
-          "text": "acc_01EXAMPLE000000000000001",
-          "kind": "value"
+          "text": " (matching case)",
+          "kind": "plain"
         },
         {
-          "text": ", put it in the ",
+          "text": ", ",
+          "kind": "plain"
+        },
+        {
+          "text": "put it in the ",
           "kind": "plain"
         },
         {
@@ -469,7 +540,7 @@
           "kind": "value"
         },
         {
-          "text": ". No judge.",
+          "text": ".",
           "kind": "plain"
         }
       ],
@@ -513,6 +584,9 @@
           },
           "subject": {
             "$path": "/subject"
+          },
+          "messageId": {
+            "$path": "/messageId"
           }
         },
         "targets": [
@@ -545,15 +619,7 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When ",
-          "kind": "plain"
-        },
-        {
-          "text": "mail",
-          "kind": "value"
-        },
-        {
-          "text": " arrives in ",
+          "text": "When mail arrives in ",
           "kind": "plain"
         },
         {
@@ -565,19 +631,39 @@
           "kind": "plain"
         },
         {
+          "text": "'",
+          "kind": "plain"
+        },
+        {
           "text": "test",
           "kind": "untrusted"
         },
         {
-          "text": " in the subject, write what it would deliver to the ",
+          "text": "'",
           "kind": "plain"
         },
         {
-          "text": "dry-run log",
+          "text": " in ",
+          "kind": "plain"
+        },
+        {
+          "text": "the subject",
+          "kind": "plain"
+        },
+        {
+          "text": ", ",
+          "kind": "plain"
+        },
+        {
+          "text": "record it in the ",
+          "kind": "plain"
+        },
+        {
+          "text": "Dry-run log",
           "kind": "value"
         },
         {
-          "text": " on this Mac.",
+          "text": ".",
           "kind": "plain"
         }
       ],
@@ -661,23 +747,43 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When mail from ",
+          "text": "When mail arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "example/gmail",
+          "kind": "value"
+        },
+        {
+          "text": " where ",
+          "kind": "plain"
+        },
+        {
+          "text": "the sender's address",
+          "kind": "plain"
+        },
+        {
+          "text": " is at ",
+          "kind": "plain"
+        },
+        {
+          "text": "'",
           "kind": "plain"
         },
         {
           "text": "ci.example",
-          "kind": "value"
+          "kind": "untrusted"
         },
         {
-          "text": " arrives in ",
+          "text": "'",
           "kind": "plain"
         },
         {
-          "text": "in_01EXAMPLE0000000000000000",
-          "kind": "value"
+          "text": ", ",
+          "kind": "plain"
         },
         {
-          "text": ", send it to the webhook at ",
+          "text": "send it to ",
           "kind": "plain"
         },
         {
@@ -772,7 +878,27 @@
       "revokedAt": null,
       "summary": [
         {
-          "text": "When mail from ",
+          "text": "When mail arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "example/gmail",
+          "kind": "value"
+        },
+        {
+          "text": " where ",
+          "kind": "plain"
+        },
+        {
+          "text": "the sender's address",
+          "kind": "plain"
+        },
+        {
+          "text": " is ",
+          "kind": "plain"
+        },
+        {
+          "text": "'",
           "kind": "plain"
         },
         {
@@ -780,15 +906,15 @@
           "kind": "untrusted"
         },
         {
-          "text": " arrives in ",
+          "text": "'",
           "kind": "plain"
         },
         {
-          "text": "in_01EXAMPLE0000000000000000",
-          "kind": "value"
+          "text": ", ",
+          "kind": "plain"
         },
         {
-          "text": ", send its sender and subject to the webhook at ",
+          "text": "send it to ",
           "kind": "plain"
         },
         {
@@ -877,7 +1003,19 @@
       "revokedAt": 1792486800000,
       "summary": [
         {
-          "text": "When mail with ",
+          "text": "When mail arrives in ",
+          "kind": "plain"
+        },
+        {
+          "text": "example/gmail",
+          "kind": "value"
+        },
+        {
+          "text": " with ",
+          "kind": "plain"
+        },
+        {
+          "text": "'",
           "kind": "plain"
         },
         {
@@ -885,15 +1023,23 @@
           "kind": "untrusted"
         },
         {
-          "text": " in its first words arrives in ",
+          "text": "'",
           "kind": "plain"
         },
         {
-          "text": "in_01EXAMPLE0000000000000000",
-          "kind": "value"
+          "text": " in ",
+          "kind": "plain"
         },
         {
-          "text": ", put it in the ",
+          "text": "the preview",
+          "kind": "plain"
+        },
+        {
+          "text": ", ",
+          "kind": "plain"
+        },
+        {
+          "text": "put it in the ",
           "kind": "plain"
         },
         {

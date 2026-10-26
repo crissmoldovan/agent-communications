@@ -295,7 +295,7 @@ function Week({ versions, onDeliveries }: { versions: readonly RuleVersionView[]
         {judge === null ? null : <Count value={counts.judgedYes} label={`${judge} said yes`} />}
         {judge === null ? null : <Count value={counts.judgedNo} label={`${judge} said no`} />}
         {counts.held === 0 ? null : <Count value={counts.held} label="waited for you" />}
-        <Count value={counts.delivered} label="passed on" />
+        <Count value={counts.delivered} label="delivered" />
         <Count value={counts.failed} label={counts.failed === 1 ? 'problem' : 'problems'} />
       </div>
     </Part>

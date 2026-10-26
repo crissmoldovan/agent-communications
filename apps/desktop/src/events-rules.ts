@@ -249,7 +249,7 @@ const authored = (value: string): RulePart => ({ text: value, kind: 'untrusted' 
  */
 const FIELD_NAMES: Readonly<Record<string, string>> = {
   '/subject': 'the subject',
-  '/snippet': 'the first words',
+  '/snippet': 'the preview',
   '/body': 'the body',
   '/text': 'the text',
   '/from': 'the sender',
@@ -260,6 +260,8 @@ const FIELD_NAMES: Readonly<Record<string, string>> = {
   '/cc': 'the copied',
   '/labels': 'the labels',
   '/user': 'who wrote it',
+  '/author/userId': 'who wrote it',
+  '/author/name': "the author's name",
   '/channel': 'the channel',
   '/channel/id': 'the channel',
   '/workspaceId': 'the workspace',
