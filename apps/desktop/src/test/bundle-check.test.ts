@@ -297,3 +297,16 @@ it('E2 desktop Laya contract: the bundle check refuses a built file over its siz
   rmSync(target);
   expect(bundleProblems({ app })).toEqual([]);
 });
+
+it('the bundle check refuses a font inlined as a data: URI, which the content policy would refuse', () => {
+  const app = builtApp();
+  const face = (src: string) => `@font-face{font-family:"Inter Variable";src:url(${src})format("woff2-variations")}\n`;
+  // A face served from the app's own assets, as Vite writes it, passes.
+  expect(planted(app, 'dist/assets/index.css', face('/assets/inter-latin-wght-normal-Dx4kXJAl.woff2'))).toEqual([]);
+  const problems = planted(app, 'dist/assets/index.css', face('data:font/woff2;base64,d09GMgABAAAAAA'));
+  expect(problems).toEqual([
+    'dist/assets/index.css inlines a font as a data: URI, which the content policy refuses: it must be a file',
+  ]);
+  // A data: image elsewhere in the stylesheet is the policy's `img-src data:`, and is not a font.
+  expect(planted(app, 'dist/assets/index.css', 'a{background:url("data:image/svg+xml,%3Csvg%3E")}\n')).toEqual([]);
+});
