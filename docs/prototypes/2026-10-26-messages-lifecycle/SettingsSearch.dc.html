@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Settings, Search on this Mac</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.av{width:28px;height:28px;border-radius:8px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11.5px;flex:none}
+.av.lg{width:44px;height:44px;border-radius:12px;font-size:15px}
+.av.out{background:var(--warnSoft);color:var(--warn)}
+.av.n{background:var(--s2);color:var(--text2)}
+.quote{margin:0;border-radius:10px;padding:10px 12px;background:var(--s2);overflow-wrap:anywhere}
+.back{align-self:flex-start;text-decoration:none;color:var(--text2);font-weight:500}
+.back:hover{color:var(--text)}
+.words{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 14px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:150px;flex:none;color:var(--text2)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.arrow{color:var(--text3)}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--s2)}
+.setrow.first{border-top:0;padding-top:2px}
+.setrow .grow{display:flex;flex-direction:column;gap:3px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:0;background:var(--s2);text-align:left;cursor:pointer;width:100%;box-sizing:border-box;transition:background-color 160ms ease}
+.opt:hover{background:var(--s3)}
+.opt[aria-checked="true"]{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.opt .grow{display:flex;flex-direction:column;gap:2px}
+.rb{width:14px;height:14px;border-radius:50%;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .rb{border:4px solid var(--accent)}
+.cb{width:14px;height:14px;border-radius:4px;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .cb{border:0;background:var(--accent)}
+.sel{height:30px;border-radius:8px;border:0;background:var(--s2);padding:0 8px;cursor:pointer}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:62px 14px minmax(0,1fr);column-gap:10px;position:relative;padding-bottom:13px}
+.ev .t{color:var(--text3);font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin-top:4px;position:relative;z-index:1;justify-self:center;box-shadow:0 0 0 3px var(--s1)}
+.ev .ln{position:absolute;left:78px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.ev .w{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500}
+.d-grey{background:var(--text3)}
+.d-acc{background:var(--accent)}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+.note{background:var(--s2);border-radius:10px;padding:10px 12px;color:var(--text2);display:flex;gap:8px;align-items:flex-start}
+.ta{width:100%;box-sizing:border-box;min-height:84px;border-radius:10px;border:0;background:var(--s2);padding:10px 12px;resize:vertical;line-height:1.5}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.app textarea{font:inherit;color:inherit}
+.app .link{color:var(--accent)}
+.local{display:flex;align-items:center;gap:8px;margin:0;padding:8px 12px;border-radius:10px;background:var(--okSoft);color:var(--text)}
+.local svg{color:var(--ok);flex:none}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1640px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Messages.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="Person.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.9-3.6 3.6-5.5 7-5.5s6.1 1.9 7 5.5"></path></svg><span>People</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Projects.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg><span>Projects</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni on" href="SettingsTaking.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Settings</h1>
+  <nav aria-label="Settings" class="tabs">
+    <a class="tab" href="Main.dc.html">This app</a>
+    <a class="tab" href="Main.dc.html">Folders</a>
+    <a class="tab" href="Main.dc.html">AI providers</a>
+    <a class="tab" href="Main.dc.html">Integrations</a>
+    <a class="tab" href="SettingsTaking.dc.html">Taking messages <span class="new">new</span></a>
+    <a class="tab on" href="SettingsSearch.dc.html" aria-current="page">Search on this Mac <span class="new">new</span></a>
+  </nav>
+
+  <section class="card" aria-labelledby="srch">
+    <div class="row" style="align-items: flex-start; gap: 12px">
+      <div class="grow">
+        <div class="row"><h2 id="srch" class="h2">Search on this Mac</h2><span class="new">new</span></div>
+        <p class="muted p0" style="margin-top: 4px">Keeps what came in and what was done with it, so you can ask about past messages in Messages → Ask, and see what each person asked in People.</p>
+      </div>
+      <button type="button" role="switch" class="sw" aria-checked="{{on}}" aria-label="Search on this Mac" onClick="{{flip}}"></button>
+    </div>
+    <sc-if value="{{on}}" hint-placeholder-val="{{ true }}">
+      <div class="row wrap"><span class="chip {{statusClass}}">{{statusChip}}</span><span class="muted">{{statusLine}}</span></div>
+    </sc-if>
+    <sc-if value="{{off}}" hint-placeholder-val="{{ false }}">
+      <div class="empty">Switched off: nothing new is kept, and Ask and People’s search are hidden. {{offLine}}</div>
+    </sc-if>
+    <sc-if value="{{askOn}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-on">
+        <div>
+          <h3 id="ask-on" class="t">Keep the words of messages on this Mac, to search them? Approve it</h3>
+          <p class="muted p0">From now on, the words of new messages in acme/slack and acme/gmail are kept on this Mac for 30 days, with what was done to each. Activity keeps no message’s words; this would.</p>
+        </div>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveOn}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+      </div>
+    </sc-if>
+    <p class="local"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg><span><span style="font-weight: 500">Searched on this Mac: nothing leaves it.</span> <span class="muted">No AI provider is asked, to make it searchable or to answer.</span></span></p>
+    <sc-if value="{{saidTop}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidTop}}</p></sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="kept">
+    <h2 id="kept" class="h2">What is kept</h2>
+    <dl class="words">
+      <dt>The message’s words</dt><dd>A Slack message’s text; an email’s subject and text. Never its attachments.</dd>
+      <dt>Who and where</dt><dd>The sender, the account, and the channel or thread.</dd>
+      <dt>What was done</dt><dd>Who read it, who took it or handed it back and why, the reply that was sent, and when it was done.</dd>
+      <dt>A one-line summary</dt><dd>Such as “Asked about the invoice for October”, for People and Messages.</dd>
+    </dl>
+    <div class="note">Activity keeps no message’s words, only subjects and senders. Search keeps the words, on this Mac, for as long as Activity keeps its entries.</div>
+    <div>
+      <span class="lbl">From these accounts</span>
+      <sc-for list="{{accounts}}" as="a" hint-placeholder-count="3">
+        <div class="setrow">
+          <div class="grow"><span style="font-weight: 500">{{a.name}}</span><span class="faint">{{a.line}}</span></div>
+          <button type="button" role="switch" class="sw" aria-checked="{{a.on}}" aria-label="{{a.label}}" onClick="{{a.flip}}"></button>
+        </div>
+      </sc-for>
+    </div>
+    <sc-if value="{{askAccount}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-acc">
+        <div>
+          <h3 id="ask-acc" class="t">Keep personal/gmail’s messages too? Approve it</h3>
+          <p class="muted p0">The words of new emails in personal/gmail would be kept on this Mac for 30 days, to search.</p>
+        </div>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveAccount}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{saidKept}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidKept}}</p></sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="long">
+    <h2 id="long" class="h2">How long</h2>
+    <div class="row wrap"><span class="grow">30 days, the same as Activity. Older entries are deleted each night, with Activity’s.</span><a class="link" href="Main.dc.html">Change it in Activity ›</a></div>
+  </section>
+
+  <section class="card" aria-labelledby="model">
+    <h2 id="model" class="h2">How it’s made searchable</h2>
+    <p class="muted p0">A small model turns each message into a list of numbers, called a vector, so Ask finds messages by what they mean: “invoice” also finds “bill” and “quote”.</p>
+    <div>
+      <div class="kv"><span>The model</span><span class="grow">Built in, about 90 MB, downloaded once.</span><span class="chip c-ok">Runs on this Mac</span></div>
+      <div class="kv"><span>Summaries</span><span class="grow">Written by your local model server, if you set one up for a judge. Without one, the line is the message’s first words.</span><a class="link" href="Main.dc.html">Events → Judges ›</a></div>
+      <div class="kv"><span>Where it’s kept</span><span class="grow">A database in Agent Comms’ data folder, encrypted like the Queue’s items.</span></div>
+      <div class="kv"><span>Sent anywhere</span><span class="grow">Nothing, for the vectors or for Ask.</span></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="sess">
+    <div class="setrow first">
+      <div class="grow"><span id="sess" style="font-weight: 500">Let sessions ask too</span><span class="faint">A session could ask about past messages through Agent Comms, as you do in Ask. What comes back is marked as from outside, like any message.</span></div>
+      <button type="button" role="switch" class="sw" aria-checked="{{sessions}}" aria-label="Let sessions ask too" onClick="{{flipSessions}}"></button>
+    </div>
+    <sc-if value="{{askSessions}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-sess">
+        <div>
+          <h3 id="ask-sess" class="t">Let sessions ask about past messages? Approve it</h3>
+          <p class="muted p0">Any session connected to Agent Comms could search the last 30 days of acme/slack and acme/gmail, and read what it finds.</p>
+        </div>
+        <div class="row wrap"><button type="button" class="btn p" onClick="{{approveSessions}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button><span class="faint" style="margin-left: auto">On Windows and Linux, Approve opens Terminal and you approve it there.</span></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{saidSess}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidSess}}</p></sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="again">
+    <h2 id="again" class="h2">Start again</h2>
+    <div class="row wrap"><button type="button" class="btn" disabled="{{off}}" onClick="{{rebuild}}">Rebuild</button><span class="faint grow">Makes the last 30 days searchable again. Ask keeps working meanwhile.</span></div>
+    <div class="row wrap"><button type="button" class="btn d" disabled="{{empty}}" onClick="{{askDelete}}">Delete everything…</button><span class="faint grow">Removes the words, summaries and vectors Search keeps. The messages stay in Slack and Gmail.</span></div>
+    <sc-if value="{{askDel}}" hint-placeholder-val="{{ false }}">
+      <div class="ask" role="group" aria-labelledby="ask-del">
+        <div>
+          <h3 id="ask-del" class="t">Delete everything Search keeps?</h3>
+          <p class="muted p0">The words, summaries and vectors of 1,284 messages. Activity, the Queue, and the messages in Slack and Gmail aren’t touched.</p>
+        </div>
+        <div class="row wrap"><button type="button" class="btn d" onClick="{{confirmDelete}}">Delete</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button></div>
+      </div>
+    </sc-if>
+    <sc-if value="{{saidAgain}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{saidAgain}}</p></sc-if>
+  </section>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"searchOn":{"editor":"boolean","default":true},"$preview":{"width":1280,"height":1640}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { on: props.searchOn !== false, empty: false, sessions: false, acc: { 'acme/slack': true, 'acme/gmail': true, 'personal/gmail': false }, asking: null, said: null, saidAt: null, saidTone: 'ok' };
+}
+renderVals() {
+const s = this.state;
+const say = (at, text, tone, patch) => this.setState(Object.assign({ asking: null, said: text, saidAt: at, saidTone: tone || 'ok' }, patch || {}));
+const at = (where) => (s.saidAt === where ? s.said : null);
+const LINES = { 'acme/slack': 'Slack · workspace acme', 'acme/gmail': 'Gmail · chris@acme.example', 'personal/gmail': 'Gmail · your own mail' };
+const accounts = Object.keys(s.acc).map((name) => ({
+name, line: LINES[name], on: s.acc[name], label: 'Keep messages from ' + name,
+flip: () => s.acc[name]
+? say('kept', 'Left out at once: nothing new from ' + name + ' is kept, and what was kept from it is deleted.', 'ok', { acc: Object.assign({}, s.acc, { [name]: false }) })
+: this.setState({ asking: 'account', pending: name, said: null })
+}));
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+saidClass: s.saidTone === 'ok' ? 'said' : 'said n',
+saidTop: at('top'), saidKept: at('kept'), saidSess: at('sess'), saidAgain: at('again'),
+on: s.on, off: !s.on, empty: s.empty,
+statusClass: s.empty ? 'c-n' : 'c-ok',
+statusChip: s.empty ? 'Empty' : 'Up to date',
+statusLine: s.empty ? 'Nothing kept yet. New messages are kept as they arrive.' : '1,284 messages from the last 30 days · 38 MB · last added at 11:41',
+offLine: s.empty ? 'Nothing is kept.' : 'What was kept stays until it’s 30 days old, or you delete it below.',
+askOn: s.asking === 'on', askAccount: s.asking === 'account', askSessions: s.asking === 'sessions', askDel: s.asking === 'delete',
+flip: () => s.on ? say('top', 'Switched off at once. Nothing new is kept.', 'ok', { on: false }) : this.setState({ asking: 'on', said: null }),
+approveOn: () => say('top', 'Approved. New messages in acme/slack and acme/gmail are kept on this Mac, to search.', 'ok', { on: true }),
+accounts,
+approveAccount: () => say('kept', 'Approved. New emails in personal/gmail are kept too.', 'ok', { acc: Object.assign({}, s.acc, { 'personal/gmail': true }) }),
+sessions: s.sessions,
+flipSessions: () => s.sessions ? say('sess', 'Applied at once: sessions can no longer ask about past messages.', 'ok', { sessions: false }) : this.setState({ asking: 'sessions', said: null }),
+approveSessions: () => say('sess', 'Approved. Sessions can ask about past messages; what they get is marked as from outside.', 'ok', { sessions: true }),
+rebuild: () => say('again', 'Rebuilding from the last 30 days: 1,284 messages, about 3 minutes. Ask keeps working meanwhile.', 'n', { empty: false }),
+askDelete: () => this.setState({ asking: 'delete', said: null }),
+confirmDelete: () => say('again', 'Deleted at once. Search starts again with new messages.', 'ok', { empty: true }),
+cancel: () => say({ on: 'top', account: 'kept', sessions: 'sess', delete: 'again' }[s.asking] || 'top', 'Cancelled: nothing was changed.', 'n')
+};
+}
+}
+</script>
+</body>
+</html>

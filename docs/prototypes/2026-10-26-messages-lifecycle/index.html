@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Messages, arrival to answer</title>
+<style>
+:root{--bg:#F7F7F8;--s1:#FFFFFF;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10)}
+@media (prefers-color-scheme: dark){:root{--bg:#0E0E10;--s1:#18181B;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16)}}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:15px;margin:28px 0 8px}
+p{color:var(--text2);margin:0 0 8px}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+li a{display:block;background:var(--s1);border-radius:10px;padding:10px 14px;text-decoration:none;color:var(--text)}
+li a:hover{color:var(--accent)}
+.state{color:var(--text3);font-weight:400;font-size:12px}
+.new{display:inline-block;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:0 6px}
+code{font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Comms: messages, from arrival to answer</h1>
+<p>Drawn on 2026-10-26 for the owner’s feedback, before anything is built: where a message came from, which session took it, what each session did, what one person asked, asking about past messages, and projects, so a message reaches the right session. Each screen is clickable. Add <code>?theme=dark</code> to a screen’s address for its dark look.</p>
+<p>A small <span class="new">new</span> chip on a screen marks what the app can’t do yet. Everything else is there today.</p>
+
+<h2>0 · Start here</h2>
+<ul>
+<li><a href="Main.dc.html">Start here: messages, from arrival to answer</a> — every board, what to look at, and what to tell the lead</li>
+</ul>
+
+<h2>1 · One message, from arrival to answer</h2>
+<ul>
+<li><a href="MessageStory.dc.html?case=event">A message’s story, through an event <span class="state">rule → lane → session took it → 👀 → replied → done</span></a></li>
+<li><a href="MessageStory.dc.html?case=direct">A message’s story, no event <span class="state">a session read it itself, took it, replied; later readers see it’s taken</span></a></li>
+<li><a href="MessageStory.dc.html?case=handback">A message’s story, handed back <span class="state">billing · Codex: “not mine”; acme-site · Claude Code took it</span></a></li>
+<li><a href="MessageStory.dc.html?case=routed">A message’s story, routed <span class="state">also its own board: MessageRouted</span></a></li>
+<li><a href="Messages.dc.html">Messages, with who has each one <span class="state">filter by state</span></a></li>
+<li><a href="Messages.dc.html?show=handed">Messages, only those handed back</a></li>
+</ul>
+
+<h2>2 · What one person asked, and asking about past messages</h2>
+<ul>
+<li><a href="Person.dc.html">People → David Park</a></li>
+<li><a href="Search.dc.html">Ask about past messages <span class="state">what did David ask about invoices?</span></a></li>
+<li><a href="Search.dc.html?q=which%20messages%20were%20handed%20back%3F">Ask about past messages <span class="state">which messages were handed back?</span></a></li>
+</ul>
+
+<h2>3 · Settings: taking messages, and search on this Mac</h2>
+<ul>
+<li><a href="SettingsTaking.dc.html">Settings → Taking messages</a></li>
+<li><a href="SettingsSearch.dc.html">Settings → Search on this Mac</a></li>
+<li><a href="SettingsSearch.dc.html?searchOn=false">Settings → Search on this Mac, switched off</a></li>
+</ul>
+
+<h2>4 · Projects, and a message routed to one</h2>
+<ul>
+<li><a href="Projects.dc.html">Projects</a></li>
+<li><a href="Projects.dc.html?justAdded=true">Projects, just after adding booking-app</a></li>
+<li><a href="AddProject.dc.html">Add a project from GitHub <span class="state">four steps on one page</span></a></li>
+<li><a href="MessageRouted.dc.html">A message’s story, routed to a project</a></li>
+</ul>
+</main>
+</body>
+</html>

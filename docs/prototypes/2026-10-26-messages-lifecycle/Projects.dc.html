@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Projects</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.av{width:28px;height:28px;border-radius:8px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11.5px;flex:none}
+.av.lg{width:44px;height:44px;border-radius:12px;font-size:15px}
+.av.out{background:var(--warnSoft);color:var(--warn)}
+.av.n{background:var(--s2);color:var(--text2)}
+.quote{margin:0;border-radius:10px;padding:10px 12px;background:var(--s2);overflow-wrap:anywhere}
+.back{align-self:flex-start;text-decoration:none;color:var(--text2);font-weight:500}
+.back:hover{color:var(--text)}
+.words{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 14px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:150px;flex:none;color:var(--text2)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.arrow{color:var(--text3)}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--s2)}
+.setrow.first{border-top:0;padding-top:2px}
+.setrow .grow{display:flex;flex-direction:column;gap:3px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:0;background:var(--s2);text-align:left;cursor:pointer;width:100%;box-sizing:border-box;transition:background-color 160ms ease}
+.opt:hover{background:var(--s3)}
+.opt[aria-checked="true"]{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.opt .grow{display:flex;flex-direction:column;gap:2px}
+.rb{width:14px;height:14px;border-radius:50%;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .rb{border:4px solid var(--accent)}
+.cb{width:14px;height:14px;border-radius:4px;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .cb{border:0;background:var(--accent)}
+.sel{height:30px;border-radius:8px;border:0;background:var(--s2);padding:0 8px;cursor:pointer}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:62px 14px minmax(0,1fr);column-gap:10px;position:relative;padding-bottom:13px}
+.ev .t{color:var(--text3);font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin-top:4px;position:relative;z-index:1;justify-self:center;box-shadow:0 0 0 3px var(--s1)}
+.ev .ln{position:absolute;left:78px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.ev .w{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500}
+.d-grey{background:var(--text3)}
+.d-acc{background:var(--accent)}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+.note{background:var(--s2);border-radius:10px;padding:10px 12px;color:var(--text2);display:flex;gap:8px;align-items:flex-start}
+.ta{width:100%;box-sizing:border-box;min-height:84px;border-radius:10px;border:0;background:var(--s2);padding:10px 12px;resize:vertical;line-height:1.5}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.app textarea{font:inherit;color:inherit}
+.app .link{color:var(--accent)}
+.pgrid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);gap:12px 20px}
+.pgrid .sec.wide{grid-column:1 / -1}
+.cline{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-top:1px solid var(--s2)}
+.cline:first-of-type{border-top:0}
+.d-idle{background:var(--text3)}
+.d-busy{background:var(--warn)}
+.sec{display:flex;flex-direction:column;gap:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1620px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Messages.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="Person.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.9-3.6 3.6-5.5 7-5.5s6.1 1.9 7 5.5"></path></svg><span>People</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni on" href="Projects.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg><span>Projects</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="SettingsTaking.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div class="row" style="align-items: flex-start; gap: 12px">
+    <div class="grow">
+      <div class="row"><h1 class="h1">Projects</h1><span class="new">new</span></div>
+      <p class="sub">The code you work on, where it is on this Mac, and the sessions working in it. Agent Comms uses these to hand a message to the right session.</p>
+    </div>
+    <a class="btn p" href="AddProject.dc.html">Add a project…</a>
+  </div>
+  <sc-if value="{{justAdded}}" hint-placeholder-val="{{ false }}">
+    <p role="status" class="said">Added booking-app. A message about it can now go to a session working in ~/work/booking-app.</p>
+  </sc-if>
+
+  <sc-for list="{{projects}}" as="p" hint-placeholder-count="2">
+    <section class="card" aria-label="{{p.name}}">
+      <div class="row" style="gap: 12px">
+        <span aria-hidden="true" class="av lg">{{p.initial}}</span>
+        <div class="grow" style="display: flex; flex-direction: column; gap: 2px">
+          <div class="row wrap"><h2 class="h2">{{p.name}}</h2><span class="faint">{{p.repo}}</span></div>
+          <span class="faint">{{p.added}}</span>
+        </div>
+        <sc-if value="{{p.waiting}}" hint-placeholder-val="{{ false }}"><a class="chip c-warn" style="text-decoration: none" href="MessageRouted.dc.html">{{p.waiting}}</a></sc-if>
+        <button type="button" class="btn sm" onClick="{{p.openGitHub}}">Open on GitHub</button>
+      </div>
+      <div class="pgrid">
+        <div class="sec wide">
+          <span class="lbl">What Agent Comms knows about it</span>
+          <sc-if value="{{p.editing}}" hint-placeholder-val="{{ false }}">
+            <textarea class="ta" aria-label="Profile of {{p.name}}" onInput="{{p.typed}}">{{p.profile}}</textarea>
+            <div class="row"><button type="button" class="btn sm p" onClick="{{p.save}}">Save</button><button type="button" class="btn sm q" onClick="{{p.stopEdit}}">Cancel</button></div>
+          </sc-if>
+          <sc-if value="{{p.notEditing}}" hint-placeholder-val="{{ true }}">
+            <p class="quote" style="background: var(--accentSoft)">{{p.profile}}</p>
+            <div class="row wrap"><span class="faint grow">{{p.profileLine}}</span><button type="button" class="btn sm q" onClick="{{p.edit}}">Edit</button><button type="button" class="btn sm q" onClick="{{p.analyse}}">Analyse again</button></div>
+          </sc-if>
+        </div>
+        <div class="sec">
+          <span class="lbl">On this Mac</span>
+          <div>
+            <sc-for list="{{p.checkouts}}" as="c" hint-placeholder-count="2">
+              <div class="cline"><span class="mono">{{c.folder}}</span><span class="chip c-n">{{c.branch}}</span><span class="faint">{{c.line}}</span></div>
+            </sc-for>
+          </div>
+          <button type="button" class="link" style="align-self: flex-start" onClick="{{p.addFolder}}">Add another folder…</button>
+        </div>
+        <div class="sec">
+          <span class="lbl">Sessions working in it</span>
+          <div>
+            <sc-for list="{{p.sessions}}" as="x" hint-placeholder-count="2">
+              <div class="cline">
+                <span aria-hidden="true" class="dot {{x.dot}}"></span><span style="font-weight: 500">{{x.name}}</span><span class="muted">{{x.state}}</span>
+                <sc-if value="{{x.waitHref}}" hint-placeholder-val="{{ false }}"><a class="link" href="{{x.waitHref}}">See what’s waiting ›</a></sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <sc-if value="{{p.noSessions}}" hint-placeholder-val="{{ false }}"><span class="muted">No session is working in it now.</span></sc-if>
+        </div>
+      </div>
+      <div class="row wrap" style="border-top: 1px solid var(--s2); padding-top: 10px"><span class="faint grow">{{p.routedLine}}</span><a class="link" href="Messages.dc.html">See them in Messages ›</a></div>
+      <sc-if value="{{p.said}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{p.saidClass}}">{{p.said}}</p></sc-if>
+    </section>
+  </sc-for>
+
+  <section class="card" aria-labelledby="loose">
+    <h2 id="loose" class="h2">Sessions not in a project</h2>
+    <div class="cline">
+      <span aria-hidden="true" class="dot d-idle"></span><span style="font-weight: 500">docs · Claude Code</span><span class="mono">~/work/docs</span><span class="muted">idle</span>
+      <span class="grow"></span><a class="btn sm" href="AddProject.dc.html">Make it a project…</a>
+    </div>
+    <span class="faint">A message can’t be routed to a session until its folder is part of a project. It can still read messages, and take one.</span>
+  </section>
+
+  <p class="faint p0">Your claude-stream runs the sessions; Agent Comms chooses the project and hands the message over. Busy: working on something now, so a message for it waits its turn. Idle: open, and free.</p>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"justAdded":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":1620}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { editing: null, profiles: {}, said: null, saidAt: null, saidTone: 'ok' };
+this.drafts = {};
+}
+renderVals() {
+const s = this.state;
+const LIST = [
+{ name: 'acme-site', initial: 'A', repo: 'github.com/acme/acme-site', added: 'Added Oct 24 · analysed by your Claude subscription', waiting: '1 waiting', who: 'Claude',
+profile: 'A Next.js site for Acme’s customers: the pricing page, the October invoice pages and the booking flow. David Park asks about its pages and invoices.',
+profileLine: 'Written on Oct 24 by your Claude subscription, then edited by you.',
+checkouts: [{ folder: '~/work/acme-site', branch: 'main', line: 'changed today' }, { folder: '~/work/acme-site-wt/pricing', branch: 'feat/pricing-v2', line: 'changed yesterday' }],
+sessions: [{ name: 'acme-site · Claude Code', state: 'busy, 1 waiting', dot: 'd-busy', waitHref: 'MessageRouted.dc.html' }, { name: 'pricing · Claude Code', state: 'idle', dot: 'd-idle', waitHref: null }],
+routedLine: '6 messages routed here this week, 5 of them from David Park.' },
+{ name: 'billing', initial: 'B', repo: 'github.com/acme/billing', added: 'Added Oct 24 · analysed by your Codex subscription', waiting: null, who: 'Codex',
+profile: 'Makes Acme’s monthly invoices and statements. David Park and acme’s accounts team ask about invoices and payments.',
+profileLine: 'Written on Oct 24 by your Codex subscription.',
+checkouts: [{ folder: '~/work/billing', branch: 'main', line: 'changed today' }],
+sessions: [{ name: 'billing · Codex', state: 'idle', dot: 'd-idle', waitHref: null }],
+routedLine: '3 messages routed here this week; billing · Codex handed 1 back.' }
+];
+if (this.props.justAdded === true) {
+LIST.push({ name: 'booking-app', initial: 'BA', repo: 'github.com/acme/booking-app', added: 'Added just now · analysed by your Claude subscription', waiting: null, who: 'Claude',
+profile: 'A React Native app for booking Acme’s services: the booking flow, reminders and payments. David Park has asked about its booking page.',
+profileLine: 'Written just now by your Claude subscription.',
+checkouts: [{ folder: '~/work/booking-app', branch: 'main', line: 'changed 3 days ago' }],
+sessions: [], routedLine: 'No messages routed here yet.' });
+}
+const say = (at, text, tone, patch) => this.setState(Object.assign({ said: text, saidAt: at, saidTone: tone || 'ok' }, patch || {}));
+const projects = LIST.map((p) => {
+const profile = s.profiles[p.name] ?? p.profile;
+return Object.assign({}, p, {
+profile,
+profileLine: s.profiles[p.name] ? 'Edited by you just now.' : p.profileLine,
+editing: s.editing === p.name, notEditing: s.editing !== p.name,
+noSessions: p.sessions.length === 0,
+typed: (e) => { this.drafts[p.name] = e.target.value; },
+edit: () => { this.drafts[p.name] = profile; this.setState({ editing: p.name, said: null }); },
+stopEdit: () => say(p.name, 'Cancelled: the profile is as it was.', 'n', { editing: null }),
+save: () => say(p.name, 'Saved. From now on Agent Comms routes by these words.', 'ok', { editing: null, profiles: Object.assign({}, s.profiles, { [p.name]: this.drafts[p.name] ?? profile }) }),
+analyse: () => say(p.name, 'Analysing ' + p.checkouts[0].folder + ' again with your ' + p.who + ' subscription. You’ll see the new profile beside this one, and choose.', 'n'),
+addFolder: () => say(p.name, 'In the app, this opens a folder picker. The folder has to be a checkout of ' + p.repo + '.', 'n'),
+openGitHub: () => say(p.name, 'In the app, this opens ' + p.repo + ' in your browser.', 'n'),
+said: s.saidAt === p.name ? s.said : null,
+saidClass: s.saidTone === 'ok' ? 'said' : 'said n'
+});
+});
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+justAdded: this.props.justAdded === true,
+projects
+};
+}
+}
+</script>
+</body>
+</html>
