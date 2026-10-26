@@ -252,10 +252,30 @@ test('REVIEW-4c: Agent Comms’ own folders are never read, even under an allowe
 });
 
 test('REVIEW-4d: `/` and the home folder itself confine nothing, so they are never roots', () => {
-  for (const root of ['/', '/example/home', '/example/home/'])
+  for (const root of ['/', '//', '/example/home', '/example/home/'])
     assert.equal(isTooWideRoot(root, '/example/home'), true, root);
   for (const root of ['/example/home/work', '/example'])
     assert.equal(isTooWideRoot(root, '/example/home'), false, root);
+  // Windows' styles, read the same on every platform: a drive's or a share's root, with or without the \\?\ prefix,
+  // and the user profile, compared without case.
+  const profile = 'C:\\Users\\Example';
+  for (const root of [
+    'C:\\',
+    'c:/',
+    'C:',
+    '\\\\?\\C:\\',
+    '\\\\.\\D:\\',
+    '\\\\server\\share',
+    '\\\\server\\share\\',
+    '\\\\?\\UNC\\server\\share\\',
+    profile,
+    'c:\\users\\example\\',
+    'C:/Users/Example',
+    '\\\\?\\C:\\Users\\EXAMPLE',
+  ])
+    assert.equal(isTooWideRoot(root, profile), true, root);
+  for (const root of ['C:\\Users\\Example\\work', 'D:\\data', '\\\\server\\share\\work', '\\\\?\\C:\\Users'])
+    assert.equal(isTooWideRoot(root, profile), false, root);
   assert.throws(
     () =>
       settingsFrom(

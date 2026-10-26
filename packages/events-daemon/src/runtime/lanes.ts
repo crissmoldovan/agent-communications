@@ -130,7 +130,10 @@ export interface LaneServiceOptions {
   readonly now?: (() => number) | undefined;
   /** How often a long-poll looks again without being told of an append (an item reopened, say). */
   readonly recheckMs?: number | undefined;
-  /** The person's home folder, shown as `~` in a binding's folder; the process's own by default. */
+  /**
+   * The person's home folder, shown as `~` in a binding's folder; the process's own by default, found the first time a
+   * binding is shown, so a service that shows none never reads it.
+   */
   readonly home?: string | undefined;
 }
 
@@ -252,7 +255,7 @@ export class LaneService {
   readonly #queue: LaneServiceOptions['queue'];
   readonly #now: () => number;
   readonly #recheckMs: number;
-  readonly #home: string;
+  #home: string | undefined;
   readonly #tasks = new Map<string, Task>();
   /**
    * Per binding, its high-water mark: the last item a wake named. Wakes name only items past it, oldest first, so none
@@ -262,12 +265,17 @@ export class LaneService {
   readonly #waiters = new Set<Waiter>();
   #stopped = false;
 
+  #homeFolder(): string {
+    this.#home ??= homeDirectory();
+    return this.#home;
+  }
+
   constructor(options: LaneServiceOptions) {
     this.#store = options.store;
     this.#queue = options.queue;
     this.#now = options.now ?? Date.now;
     this.#recheckMs = options.recheckMs ?? 1_000;
-    this.#home = options.home ?? homeDirectory();
+    this.#home = options.home;
   }
 
   /**
@@ -348,7 +356,7 @@ export class LaneService {
             rules: [...entry.rules].sort().map((id) => ({ id })),
             channels: [...entry.channels].sort(),
             open: open.get(name) ?? 0,
-            binding: binding === undefined ? null : bindingView(binding, this.#home),
+            binding: binding === undefined ? null : bindingView(binding, this.#homeFolder()),
           };
         }),
     };
@@ -430,7 +438,7 @@ export class LaneService {
           row.since,
         );
     });
-    return { lane, binding: bindingView(row, this.#home) };
+    return { lane, binding: bindingView(row, this.#homeFolder()) };
   }
 
   /**
