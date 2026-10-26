@@ -11,13 +11,19 @@ import type { Screen } from './copy.ts';
  * Messages opens the story whether or not the event is on the list's first page (it reads `message show` for it); an
  * event the event service no longer keeps says so, and an id that is no event id opens the list. Back goes to the
  * Messages list.
+ *
+ * Accounts opens one account's page, by its name (0.34.0: Your agents' "Open in Accounts ›"), on its channel's tab, once
+ * that channel's list has it; without a name, or with one no list has, it opens the lists. Your agents opens as it
+ * is, from an account page's line about the exceptions that live there.
  */
 export type Destination =
   | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' }
   | { readonly screen: 'events'; readonly tab: 'judges' }
   | { readonly screen: 'messages'; readonly eventId: string }
   // Accounts at one account's page (0.34.0), from Your agents' line for it; with no account, the list.
-  | { readonly screen: 'accounts'; readonly account?: string };
+  | { readonly screen: 'accounts'; readonly account?: string }
+  // Your agents as it opens, from an account page's line about what is set there for every account (0.34.0).
+  | { readonly screen: 'agent' };
 
 /** The destination asked for, until the screen it names reads it. */
 let pending: Destination | null = null;

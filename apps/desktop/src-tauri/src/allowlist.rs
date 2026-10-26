@@ -312,6 +312,25 @@ impl UpdateLevel {
     }
 }
 
+/// How an agent's messages look in a Slack workspace (`label style <workspace> app|labelled`, 0.34.0's account page):
+/// `app`, as the Agent Comms app with Slack's APP badge, a tightening applied at once; `labelled`, as the person, tagged
+/// in the message's words, a loosening the person approves. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlackStyle {
+    App,
+    Labelled,
+}
+
+impl SlackStyle {
+    pub fn word(self) -> &'static str {
+        match self {
+            SlackStyle::App => "app",
+            SlackStyle::Labelled => "labelled",
+        }
+    }
+}
+
 /// A judge kind whose judges name an endpoint, which the Judges section turns on (in the terminal) and off by name
 /// (0.27.1): TypeSafe's hosted Jev, and a model server on this machine. Closed: nothing else is a kind here. Laya is not
 /// one of them: its calls take no argument (`EventsJudgeModelStatus`, `EventsJudgeKindDisable`, and the terminal's
@@ -823,6 +842,37 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         conversation: Option<ConversationId>,
     },
+    /// Core `behaviour allow <account> <acts> [--conversation <id>] --app-approval <id>` (0.34.0's account page): the
+    /// person approved, in the app, the loosening the app prepared with an equal `BehaviourAllow`. Only an approval
+    /// `cli` recorded for that very change is answered (`connections::run_app_approval`), once.
+    BehaviourAllowApproved {
+        account: AccountName,
+        acts: Acts,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        approval_id: ApprovalId,
+    },
+    /// Core `behaviour clear <account> [--conversation <id>] --app-approval <id>` (0.34.0): as `BehaviourAllowApproved`,
+    /// for a removal the app prepared with an equal `BehaviourClear` whose fallback lets agents do more.
+    BehaviourClearApproved {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        approval_id: ApprovalId,
+    },
+    /// Core `label style <workspace> app|labelled` (0.34.0's account page; the command is 0.20.0's): `labelled`
+    /// prepares a change, and `app`, a tightening, applies at once.
+    LabelStyle {
+        account: AccountName,
+        style: SlackStyle,
+    },
+    /// Core `label style <workspace> labelled --app-approval <id>` (0.34.0): the person approved, in the app, the
+    /// `labelled` the app prepared with an equal `LabelStyle`. `app` is refused here: a tightening takes no approval.
+    LabelStyleApproved {
+        account: AccountName,
+        style: SlackStyle,
+        approval_id: ApprovalId,
+    },
     /// Core `profile <account>` (0.22.0).
     ProfileView { account: AccountName },
     /// Core `profile init [<account>] [--conversation <id>]` (0.22.0).
@@ -1196,6 +1246,10 @@ pub const COLLECTION_SWITCH_VERSION: &str = "0.34.0";
 /// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
 pub const MESSAGES_VERSION: &str = "0.32.0";
 
+/// The first core whose `behaviour allow|clear` and `label style` take the app's own approval, `--app-approval` (0.34.0,
+/// spec 2026-10-26-desktop-0340 §B2): an older one keeps Approve in Terminal for each loosening.
+pub const ACCOUNT_APP_APPROVAL_VERSION: &str = "0.34.0";
+
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -1259,6 +1313,11 @@ fn conversation(conversation: &Option<ConversationId>) -> Vec<String> {
         .iter()
         .flat_map(|id| ["--conversation".to_string(), id.as_str().to_string()])
         .collect()
+}
+
+/// `--app-approval <id>`: the person's press in the app, answering the approval the app prepared (0.34.0).
+fn app_approval(id: &ApprovalId) -> [String; 2] {
+    ["--app-approval".to_string(), id.as_str().to_string()]
 }
 
 impl Call {
@@ -1346,6 +1405,45 @@ impl Call {
                 core(&["behaviour", "clear", account.as_str()]),
                 conversation(id),
             ),
+            Call::BehaviourAllowApproved {
+                account,
+                acts,
+                conversation: id,
+                approval_id,
+            } => with(
+                core(&["behaviour", "allow", account.as_str(), acts.as_str()]),
+                conversation(id)
+                    .into_iter()
+                    .chain(app_approval(approval_id)),
+            ),
+            Call::BehaviourClearApproved {
+                account,
+                conversation: id,
+                approval_id,
+            } => with(
+                core(&["behaviour", "clear", account.as_str()]),
+                conversation(id)
+                    .into_iter()
+                    .chain(app_approval(approval_id)),
+            ),
+            Call::LabelStyle { account, style } => {
+                core(&["label", "style", account.as_str(), style.word()])
+            }
+            Call::LabelStyleApproved {
+                account,
+                style,
+                approval_id,
+            } => {
+                if *style != SlackStyle::Labelled {
+                    return Err(AppError::refused(
+                        "the app's style applies at once: it takes no approval",
+                    ));
+                }
+                with(
+                    core(&["label", "style", account.as_str(), style.word()]),
+                    app_approval(approval_id),
+                )
+            }
             Call::ProfileView { account } => core(&["profile", account.as_str()]),
             Call::ProfileInit {
                 account,
@@ -1745,7 +1843,8 @@ impl Call {
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the six change shapes, and the label's four changes without the app's approval (0.34.0), and only those.
+    /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
+    /// and a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1770,6 +1869,10 @@ impl Call {
                 }
                 | Call::LabelRuleRemove {
                     app_approval: None,
+                    ..
+                }
+                | Call::LabelStyle {
+                    style: SlackStyle::Labelled,
                     ..
                 }
         )
@@ -1820,6 +1923,9 @@ impl Call {
             Call::UpdateCheck {} | Call::Update {} | Call::UpdateApproved { .. } => {
                 Some(UPDATE_APP_APPROVAL_VERSION)
             }
+            Call::BehaviourAllowApproved { .. }
+            | Call::BehaviourClearApproved { .. }
+            | Call::LabelStyleApproved { .. } => Some(ACCOUNT_APP_APPROVAL_VERSION),
             Call::EventsMessagesList { .. }
             | Call::EventsMessageShow { .. }
             | Call::ActivityItems { .. } => Some(MESSAGES_VERSION),
@@ -1905,6 +2011,13 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
         json!({ "kind": "behaviourClear", "account": "example/slack" }),
         json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+        json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": ID }),
+        json!({ "kind": "behaviourAllowApproved", "account": "example/gmail", "acts": "reply", "conversation": "@example.com", "approvalId": ID }),
+        json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": ID }),
+        json!({ "kind": "behaviourClearApproved", "account": "example/gmail", "conversation": "@example.com", "approvalId": ID }),
+        json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }),
+        json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
+        json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": ID }),
         json!({ "kind": "profileView", "account": "example/gmail-work" }),
         json!({ "kind": "profileInit" }),
         json!({ "kind": "profileInit", "account": "example/gmail", "conversation": "someone@example.com" }),
@@ -2816,7 +2929,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_six_change_shapes_prepare() {
+    fn only_the_seven_change_shapes_prepare() {
         let preparing: Vec<serde_json::Value> = samples()
             .into_iter()
             .filter(|(call, _)| call.prepares_change())
@@ -2834,6 +2947,7 @@ mod tests {
                 json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+                json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
                 json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
                 json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
                 json!({ "kind": "update" }),

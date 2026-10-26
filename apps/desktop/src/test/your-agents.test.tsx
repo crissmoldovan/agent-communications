@@ -300,6 +300,8 @@ describe('Your agents: per account', () => {
     expect(gmail.textContent).toContain('Their messages go as you, with no tag.');
     fireEvent.click(slack);
     expect(await screen.findByRole('heading', { name: 'Accounts', level: 1 })).toBeTruthy();
-    expect(takeDestination('accounts')).toEqual({ screen: 'accounts', account: 'example/slack' });
+    // Accounts reads the destination as it opens, and opens that account's page (0.34.0's account page).
+    expect(await screen.findByRole('region', { name: 'example/slack' })).toBeTruthy();
+    expect(takeDestination('accounts')).toBeNull();
   });
 });

@@ -19,6 +19,8 @@
  * (`UPDATE_APP_APPROVAL_VERSION`). `collectionSwitch` is the events service's (`COLLECTION_SWITCH_VERSION`, 0.34.0):
  * Switch on… approved in the app, and Switch off. An events service with the rule editor but older than that still
  * prepares Switch on…, which is then approved in Terminal.
+ * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
+ * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -37,6 +39,7 @@ export const GATES = {
   severalServers: '0.34.0',
   bringUpToDate: '0.34.0',
   collectionSwitch: '0.34.0',
+  accountAppApproval: '0.34.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

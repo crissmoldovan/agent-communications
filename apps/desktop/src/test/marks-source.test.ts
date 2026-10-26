@@ -82,7 +82,7 @@ describe('the marks and the swipe, in the source', () => {
     const controls = files.flatMap(([path, text]) =>
       openingTags(text, 'SegmentedControl').map((tag) => [path, tag] as const),
     );
-    expect(controls).toHaveLength(19);
+    expect(controls).toHaveLength(20);
     for (const [path, tag] of controls) expect(sets(tag, 'indicator'), `${path}: ${tag}`).toBe(true);
   });
 
