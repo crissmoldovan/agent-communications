@@ -2828,6 +2828,21 @@
       "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
     },
     {
+      "id": "events-daemon.rule.approve",
+      "package": "events-daemon",
+      "cli": "rule approve",
+      "mcp": null,
+      "status": "exception",
+      "operation": "approveRuleFromApp",
+      "argv": [
+        "ap_00000000000000000000000000",
+        "--digest",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expect": { "approvalId": "ap_00000000000000000000000000" },
+      "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; at a terminal the person types the challenge with approve, and no tool performs either."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

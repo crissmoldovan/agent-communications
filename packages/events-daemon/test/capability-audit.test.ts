@@ -148,6 +148,14 @@ const EXPECTED_SETUP_ROWS = [
   ['events-daemon.provider-key.remove', 'provider key remove', null, 'exception', 'providerKeyRemove'],
 ] as const;
 
+/**
+ * Rules edited in the app (0.33.0 design §3.1): a rule's activation is approved by the person in the app, after its
+ * preview, the app's only path; at a terminal the person types the challenge with `approve`.
+ */
+const EXPECTED_RULE_APPROVAL_ROWS = [
+  ['events-daemon.rule.approve', 'rule approve', null, 'exception', 'approveRuleFromApp'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -174,6 +182,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_LANE_ROWS),
   ...shapedRows(EXPECTED_MESSAGE_ROWS),
   ...shapedRows(EXPECTED_SETUP_ROWS),
+  ...shapedRows(EXPECTED_RULE_APPROVAL_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 
@@ -303,6 +312,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.judge.setup',
     'events-daemon.provider-key.set',
     'events-daemon.provider-key.remove',
+    'events-daemon.rule.approve',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

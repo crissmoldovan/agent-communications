@@ -273,6 +273,18 @@ agent-events rule test-retained [options] <event-id>
 | `--rule <rule-id>` |  | — |
 | `--version <version>` |  | — |
 
+### `agent-events rule approve`
+
+approve a rule's activation from the Agent Comms app, after its preview, as the person
+
+```
+agent-events rule approve [options] <approval-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--digest <digest>` | the fingerprint of the activation the preview showed | — |
+
 ### `agent-events targets`
 
 inspect immutable local event target versions
