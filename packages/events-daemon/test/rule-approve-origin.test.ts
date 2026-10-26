@@ -13,8 +13,8 @@ import { WINDOWS_SKIP } from './support/short-temp.ts';
  * command, so `rule approve` took any process without an agent's marker as the app — an agent could prepare a rule's
  * activation over MCP and approve it with `env -u CLAUDECODE agent-events rule approve …`, recorded `approvedVia: app`.
  * Now an unattested origin is sent to the terminal, by the CLI and by the owner alike, with `APPROVAL_REQUIRED`, its
- * own reason and the exact command; only the attested app approves in the app, and each try is audited with where the
- * person was.
+ * own reason and the approval's own `approve <approval-id>`; only the attested app approves in the app, and each try is
+ * audited with where the person was.
  */
 
 const APPROVAL_EXIT = new CommsError('APPROVAL_REQUIRED', 'x').exitCode;
@@ -65,8 +65,10 @@ test('SEC-3: on Windows and Linux an agent-prepared rule activation is never app
       unattested,
     );
     assert.equal(ran.code, APPROVAL_EXIT, ran.err);
-    assert.match(ran.err, /approve the rule at your terminal with agent-events approve ap_[0-9A-Z]{26}/u);
-    assert.ok(ran.err.includes(`agent-events approve ${planned.approvalId}`), 'the exact command');
+    assert.ok(
+      ran.err.includes(`approve the rule at your terminal, with the event service's approve ${planned.approvalId}`),
+      'the exact words to type, with the approval id',
+    );
     assert.match(ran.err, /nothing on this platform attests that the Agent Comms app started this/u);
 
     // The owner refuses the same origin, should any client say it, and audits where the person was.
