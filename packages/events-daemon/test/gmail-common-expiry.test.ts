@@ -13,6 +13,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 import { testWriterQuiescer } from './support/writer-quiescer.ts';
 
 const ACCOUNT = 'ibx_ABCDEFGHIJKLMNOP';
@@ -199,6 +200,7 @@ test('D4a: owner startup expires a Gmail page before a control request or worker
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     owner = await startEventOwner({
+      ...noRealHome(stateDir),
       stateDir,
       configDir,
       gmailSourceFor: async () => {

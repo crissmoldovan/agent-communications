@@ -10,6 +10,7 @@ import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const ACCOUNT = 'ibx_QUEUEDOCTOR0000';
 
@@ -51,7 +52,12 @@ test('QUEUE-A: doctor counts the queue deliveries whose content was unreadable, 
     }
     let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
     try {
-      owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(stateDir), tickMs: 60_000 });
+      owner = await startEventOwner({
+        ...noRealHome(stateDir),
+        stateDir,
+        configDir: await emptyConfigDir(stateDir),
+        tickMs: 60_000,
+      });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip('EPERM: the sandbox blocks the owner Unix listener');

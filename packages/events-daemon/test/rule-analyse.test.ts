@@ -22,6 +22,7 @@ import {
   suggestion,
 } from './support/fake-model-provider.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /*
  * `rule analyse` in the event service (0.33.0 design §3.3), against a seeded database and a loopback fake of OpenRouter
@@ -651,7 +652,13 @@ test('ANALYSE-OWNER: through a real owner, a draft on stdin is analysed on the p
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000, analyseTransport: fake.transport() });
+  const owner = await startEventOwner({
+    ...noRealHome(stateDir),
+    stateDir,
+    configDir,
+    tickMs: 60_000,
+    analyseTransport: fake.transport(),
+  });
   try {
     fake.respond(() => httpResponse(200, openRouterAnswer(suggestion('Is the sender asking me to pay them?'))));
     const key = await cli(['--state-dir', stateDir, '--json', 'provider', 'key', 'set', 'openrouter'], {

@@ -13,6 +13,7 @@ import contract from './fixtures/judges/desktop-contract-judges-v1.json' with { 
 import { emptyConfigDir } from './support/config-dir.ts';
 import { macPlatform } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -134,6 +135,7 @@ async function startOwner(root: string): Promise<Running> {
   const configDir = await emptyConfigDir(root);
   const secretsDir = join(root, 'secrets');
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     dataDir,

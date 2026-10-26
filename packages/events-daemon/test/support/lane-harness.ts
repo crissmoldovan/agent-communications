@@ -15,6 +15,7 @@ import { openEventDatabase } from '../../src/store/database.ts';
 import { selectEventSecretStore } from '../../src/store/event-secrets.ts';
 import { type RawClient, type RawMessage, rawClient, resultText } from './raw-mcp.ts';
 import { shortTempDir } from './short-temp.ts';
+import { noRealHome } from './temp-home.ts';
 
 /**
  * A real owner with a fake Gmail mailbox, a lane the person approves, and agent windows that reach it through the
@@ -207,6 +208,7 @@ export async function withLaneOwner(
     };
   };
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     tickMs: 60_000,

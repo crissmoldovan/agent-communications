@@ -14,6 +14,7 @@ import {
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 const FIXTURES = join(import.meta.dirname, 'fixtures/b3-control-contract-v1');
 // A right-to-left override, a zero-width space, a C1 control, DEL and a Unicode tag character: each one changes what a
@@ -68,6 +69,7 @@ test('D13: the CLI writes a stored rule document to the terminal without its bid
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-terminal-output-');
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(stateDir),
     now: () => 1_000,
@@ -123,6 +125,7 @@ test('D13: a daemon error that quotes a document reaches the terminal with its b
 }, async () => {
   const stateDir = await shortTempDir('aev-b3-terminal-error-');
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir: await emptyConfigDir(stateDir),
     now: () => 1_000,

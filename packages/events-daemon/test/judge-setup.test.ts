@@ -12,6 +12,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { emptyConfigDir } from './support/config-dir.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /*
  * `judge setup`, `provider key set` and `provider key remove` (owner decision 2026-10-26): the person sets up and turns
@@ -151,7 +152,7 @@ test('judge setup carries where the person was: a terminal approves its enableme
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   try {
     // At a terminal: the kind and the budget are approved there, and the audit line says so.
     const typed = await cli(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434'], {
@@ -254,7 +255,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
   const opened = await openEventDatabase({ stateDir });
   await selectEventSecretStore(opened.database, 'file');
   opened.close();
-  const owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+  const owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
   const outputs: string[] = [];
   const ok = async (args: readonly string[], stdin?: string) => {
     const ran = await cli(['--json', ...args], { stateDir, ...(stdin === undefined ? {} : { stdin }) });

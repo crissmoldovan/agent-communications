@@ -24,6 +24,7 @@ import { startEventOwner } from '../src/runtime/owner.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import { selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 /**
  * Activity design S1 (§8 Task 2c): the event service writes one content-free "told" line for what each delivery came
@@ -456,6 +457,7 @@ test('S1: a real owner records a Gmail delivery as one told line and never the m
   };
   let emit = false;
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     tickMs: 60_000,

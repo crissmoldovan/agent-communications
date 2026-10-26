@@ -15,6 +15,7 @@ import { openEventDatabase } from '../src/store/database.ts';
 import { type EventSecretStoreKind, openEventSecretStore, selectEventSecretStore } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 class MemorySecretStore implements SecretStore {
   readonly kind: EventSecretStoreKind = 'file';
@@ -198,7 +199,7 @@ test('B3 production owner closes and aborts an admitted SSE stream before subscr
     }
 
     try {
-      owner = await startEventOwner({ stateDir, configDir, tickMs: 60_000 });
+      owner = await startEventOwner({ ...noRealHome(stateDir), stateDir, configDir, tickMs: 60_000 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'EPERM') {
         t.skip(

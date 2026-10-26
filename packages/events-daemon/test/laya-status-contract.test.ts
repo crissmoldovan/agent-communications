@@ -20,6 +20,7 @@ import frozenResults from './fixtures/b3-control-contract-v2/laya-results.json' 
 import { emptyConfigDir } from './support/config-dir.ts';
 import { LAYA, type LayaRig, layaRig, macPlatform, modelPath, treeListing } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -190,7 +191,13 @@ test('E2 laya status contract: the shipped placeholder lock says Laya is not off
   let owner: Awaited<ReturnType<typeof startEventOwner>> | undefined;
   try {
     // The production composition with the daemon's own shipped assets: no Laya seam at all.
-    owner = await startEventOwner({ stateDir, configDir: await emptyConfigDir(root), dataDir, tickMs: 60_000 });
+    owner = await startEventOwner({
+      ...noRealHome(stateDir),
+      stateDir,
+      configDir: await emptyConfigDir(root),
+      dataDir,
+      tickMs: 60_000,
+    });
     const control = new EventControlClient({ stateDir, clientName: 'events-e2-t6-dormant' });
     const status = (await control.request('judgeModelStatus')) as Record<string, unknown>;
     assertLayaModelStatusV1(status);

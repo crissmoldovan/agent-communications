@@ -27,6 +27,7 @@ import {
   treeListing,
 } from './support/laya-artifacts.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
+import { noRealHome } from './support/temp-home.ts';
 
 assertLoopbackSeal();
 
@@ -147,6 +148,7 @@ async function startOwner(
   const configDir = await emptyConfigDir(root);
   const secretsDir = join(root, 'secrets');
   const owner = await startEventOwner({
+    ...noRealHome(stateDir),
     stateDir,
     configDir,
     dataDir,
