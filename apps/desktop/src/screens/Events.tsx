@@ -1493,7 +1493,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
         <RulesTab lists={lists} nav={nav} onScreen={onScreen} />
       </Tabs.Panel>
       <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
-        <DeliveriesTab lists={lists} nav={nav} onScreen={onScreen} />
+        <DeliveriesTab lists={lists} nav={nav} />
       </Tabs.Panel>
     </Tabs.Root>
   );

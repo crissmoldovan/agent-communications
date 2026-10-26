@@ -6,6 +6,7 @@
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
+import { recordFields } from '../events-deliveries.ts';
 import type { Call } from '../ipc.ts';
 import { cliKinds, createFakeBridge, type FakeBridge, type Fixture, failed } from './fake-bridge.ts';
 import deliveries from './fixtures/events-deliveries.v032.json';
@@ -224,22 +225,29 @@ describe('Events → Deliveries', () => {
 
     const would = await within(page).findByRole('region', { name: 'What it would have delivered' });
     await waitFor(() => expect(would.textContent).toContain('data.subject'));
+    // Who wrote each field: the CloudEvent's own attributes are the event service's, shown plain; the fields its
+    // `agentcommsuntrusted` names are the sender's; the rest of `data` is unlisted, and boxed all the same.
     const fields = Object.fromEntries(
       [...would.querySelectorAll('[data-field]')].map((each) => [
         each.getAttribute('data-field'),
-        each.querySelector('[data-slot="from-outside"]') === null ? 'plain' : 'outside',
+        `${each.getAttribute('data-source')} ${each.querySelector('[data-slot="from-outside"]') === null ? 'plain' : 'boxed'}`,
       ]),
     );
     expect(fields).toEqual({
-      specversion: 'plain',
-      id: 'plain',
-      source: 'outside',
-      type: 'plain',
-      time: 'plain',
-      datacontenttype: 'plain',
-      'data.from.name': 'outside',
-      'data.from.address': 'outside',
-      'data.subject': 'outside',
+      agentcommsrule: 'attribute plain',
+      agentcommsuntrusted: 'attribute plain',
+      'data.from.address': 'unlisted boxed',
+      'data.from.name': 'sender boxed',
+      'data.messageId': 'unlisted boxed',
+      'data.subject': 'sender boxed',
+      datacontenttype: 'attribute plain',
+      dataschema: 'attribute plain',
+      id: 'attribute plain',
+      source: 'attribute plain',
+      specversion: 'attribute plain',
+      subject: 'attribute plain',
+      time: 'attribute plain',
+      type: 'attribute plain',
     });
     expect(would.textContent).toContain('Text the sender wrote is shown as plain text');
 
@@ -272,8 +280,8 @@ describe('Events → Deliveries', () => {
       '2026-10-25T12:10:00.000Z',
     );
     expect(tries.textContent).toContain('Earlier tries are counted, not kept one by one.');
-    // A delivery that will try again can be tried now; only a failed one can be stopped.
-    expect(within(page).queryByRole('button', { name: 'Stop trying…' })).toBeNull();
+    // A delivery that will try again can be tried now, or stopped (0.32.0).
+    expect(within(page).getByRole('button', { name: 'Stop trying…' })).toBeTruthy();
     // Its message: Open in Gmail, in the mailbox's own shape.
     const message = within(page).getByRole('region', { name: 'The message' });
     fireEvent.click(await within(message).findByRole('button', { name: 'Open in Gmail' }));
@@ -300,7 +308,9 @@ describe('Events → Deliveries', () => {
     await openTab('Deliveries');
     const page = await openDelivery(ID.failed);
     expect(await within(page).findByText('Failed')).toBeTruthy();
-    expect(within(page).getByRole('region', { name: 'Tries' }).textContent).toContain('gave up');
+    const tries = within(page).getByRole('region', { name: 'Tries' });
+    expect(tries.textContent).toContain('It gave up after 5 tries, at');
+    expect(tries.querySelector('time[datetime="2026-10-25T09:00:00.000Z"]')).not.toBeNull();
     expect(within(page).queryByRole('button', { name: 'Try now' })).toBeNull();
     const drops = () => cliCalls(bridge).filter((each) => each.kind === 'eventsDeliveryDrop');
     fireEvent.click(await within(page).findByRole('button', { name: 'Stop trying…' }));
@@ -312,6 +322,65 @@ describe('Events → Deliveries', () => {
     fireEvent.click(within(page).getByRole('button', { name: 'Stop trying…' }));
     fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Stop trying' }));
     await waitFor(() => expect(drops()).toEqual([{ kind: 'eventsDeliveryDrop', deliveryId: ID.failed }]));
+  });
+
+  it('Stop trying… on a delivery that will try again, or waits to be tried: asked first, then it is dropped', async () => {
+    const bridge = deliveriesBridge();
+    renderApp(bridge, { screen: 'events' });
+    await openTab('Deliveries');
+    const drops = () => cliCalls(bridge).filter((each) => each.kind === 'eventsDeliveryDrop');
+    let page = await openDelivery(ID.retry);
+    fireEvent.click(await within(page).findByRole('button', { name: 'Stop trying…' }));
+    let dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Stop trying this delivery?')).toBeTruthy();
+    expect(dialog.textContent).toContain('It is not tried again.');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(drops()).toEqual([]);
+    fireEvent.click(within(page).getByRole('button', { name: 'Stop trying…' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Stop trying' }));
+    await waitFor(() => expect(drops()).toEqual([{ kind: 'eventsDeliveryDrop', deliveryId: ID.retry }]));
+    fireEvent.click(within(page).getByRole('button', { name: 'All deliveries' }));
+
+    // One not tried yet: Stop trying…, and no Try now.
+    page = await openDelivery(ID.waiting);
+    expect(within(page).queryByRole('button', { name: 'Try now' })).toBeNull();
+    fireEvent.click(await within(page).findByRole('button', { name: 'Stop trying…' }));
+    dialog = await screen.findByRole('alertdialog');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Stop trying' }));
+    await waitFor(() => expect(drops()).toContainEqual({ kind: 'eventsDeliveryDrop', deliveryId: ID.waiting }));
+  });
+
+  it('a delivery being sent right now cannot be stopped: the page says so plainly, and reads it again', async () => {
+    const inner = deliveriesBridge();
+    const bridge = deliveriesBridge(
+      {},
+      {
+        cli: (call: Call) =>
+          call.kind === 'eventsDeliveryDrop'
+            ? Promise.resolve(
+                failed(
+                  'APPROVAL_VOID',
+                  'the delivery is being sent right now; it can be stopped once this try ends',
+                  'A try that fails becomes one that will be tried again, which can then be stopped.',
+                  1,
+                ),
+              )
+            : inner.cli(call),
+      },
+    );
+    renderApp(bridge, { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery(ID.retry);
+    const reads = () => cliCalls(bridge).filter((each) => each.kind === 'eventsDeliveryShow').length;
+    await waitFor(() => expect(reads()).toBeGreaterThan(0));
+    const before = reads();
+    fireEvent.click(await within(page).findByRole('button', { name: 'Stop trying…' }));
+    fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Stop trying' }));
+    expect((await within(page).findByRole('alert')).textContent).toBe(
+      'It is being sent right now, so it cannot be stopped yet. If this try fails, you can stop it then.',
+    );
+    await waitFor(() => expect(reads()).toBe(before + 1));
   });
 
   it("a queued message's page: the judge's answer, and Open in Slack in the workspace's own shape", async () => {
@@ -393,8 +462,10 @@ describe('Events → Deliveries', () => {
     expect(
       cliCalls(bridge).some((each) => each.kind === 'eventsDeliveryShow' || each.kind === 'eventsDryrunShow'),
     ).toBe(false);
-    // What the list knows is still said: its tries, and Try now.
+    // What the list knows is still said: its tries, and Try now. Stopping one that will try again is 0.32.0's.
     expect(within(page).getByRole('region', { name: 'Tries' }).textContent).toContain('Tried 3 of 5 times');
+    expect(within(page).getByRole('button', { name: 'Try now' })).toBeTruthy();
+    expect(within(page).queryByRole('button', { name: 'Stop trying…' })).toBeNull();
   });
 
   it("a rule's See its deliveries opens the Deliveries tab narrowed to that rule, and Show all widens it", async () => {
@@ -425,6 +496,34 @@ describe('Events → Deliveries', () => {
     const why = within(page).getByRole('region', { name: 'Why it was passed on' });
     expect(why.textContent).toContain('Rule rule with spaces');
     expect(within(why).queryByRole('button')).toBeNull();
+  });
+
+  it("a record's agentcommsuntrusted names its sender's fields by percent-encoded pointers; '' names all of data", () => {
+    const sources = (record: unknown) =>
+      Object.fromEntries(recordFields(record).map((field) => [field.name, field.source]));
+    const data = { to: [{ name: 'Jo', address: 'jo@example.com' }], 'a/b': 'slashed', note: 'kept' };
+    expect(sources({ id: 'x', agentcommsuntrusted: '%2Fa~1b,%2Fto%2F0%2Fname', data })).toEqual({
+      id: 'attribute',
+      agentcommsuntrusted: 'attribute',
+      'data.to[0].name': 'sender',
+      'data.to[0].address': 'unlisted',
+      'data.a/b': 'sender',
+      'data.note': 'unlisted',
+    });
+    expect(sources({ agentcommsuntrusted: '', data: 'all of it' })).toEqual({
+      agentcommsuntrusted: 'attribute',
+      data: 'sender',
+    });
+    // No list, or one that cannot be read, names nothing: every field of data is still boxed, as unlisted.
+    expect(sources({ data: { subject: 's' } })).toEqual({ 'data.subject': 'unlisted' });
+    expect(sources({ agentcommsuntrusted: '%E0%A4%A', data: { subject: 's' } })).toEqual({
+      agentcommsuntrusted: 'attribute',
+      'data.subject': 'unlisted',
+    });
+    // The bytes of an older answer are read as the event they hold.
+    expect(
+      sources({ cloudEventBytes: JSON.stringify({ agentcommsuntrusted: '%2Fsubject', data: { subject: 's' } }) }),
+    ).toEqual({ agentcommsuntrusted: 'attribute', 'data.subject': 'sender' });
   });
 
   it('an empty list says so, and a list in a shape the app does not know says it could not be read', async () => {

@@ -43,6 +43,8 @@ export interface DeliveryRow {
   decisionId: string | null;
   eventId: string | null;
   deliveredAt: number | null;
+  /** When it failed for good; null while it has not (and from an events service older than 0.32.0). */
+  deadLetteredAt: number | null;
 }
 
 function rowOf(value: unknown): DeliveryRow | null {
@@ -67,6 +69,7 @@ function rowOf(value: unknown): DeliveryRow | null {
     decisionId: text(value.decisionId),
     eventId: text(value.eventId),
     deliveredAt: moment(value.deliveredAt),
+    deadLetteredAt: moment(value.deadLetteredAt),
   };
 }
 
@@ -272,23 +275,51 @@ export function readDeliveryShow(value: unknown): DeliveryDetail | null {
   };
 }
 
-/** One field of a dry-run record: where it is in the record, and its value as text. */
+/**
+ * Who wrote one field of a dry-run record: the event service (`attribute`, the CloudEvent's own attributes), the
+ * message's sender (`sender`, a field the record's `agentcommsuntrusted` names), or no one the record says (`unlisted`,
+ * anything else in `data`), which the screen boxes as a sender's all the same.
+ */
+export type FieldSource = 'attribute' | 'sender' | 'unlisted';
+
+/** One field of a dry-run record: where it is in the record, its value as text, and who wrote it. */
 export interface RecordField {
   name: string;
   value: string;
-  /** Whether the event service wrote it (the CloudEvent's own attributes), rather than the message's sender. */
-  service: boolean;
+  source: FieldSource;
 }
 
-/** The attributes of the CloudEvent envelope, which the event service writes, never a sender. */
+/** The attributes of the CloudEvent envelope (`packages/events/src/wire/cloudevent.ts`): the event service writes them. */
 const CLOUD_EVENT_ATTRIBUTES: ReadonlySet<string> = new Set([
   'specversion',
   'id',
+  'source',
   'type',
   'time',
   'datacontenttype',
   'dataschema',
+  'subject',
+  'agentcommsrule',
+  'agentcommsuntrusted',
 ]);
+
+/**
+ * The sender-written fields `agentcommsuntrusted` names: a comma list of JSON pointers into `data`, each
+ * percent-encoded, as the event service writes it (`encodeUntrustedExtension`); `''` is the whole of `data`. A list that
+ * cannot be read names nothing, and every field of `data` is boxed regardless.
+ */
+export function untrustedPointers(event: unknown): string[] {
+  const extension = isRecord(event) ? event.agentcommsuntrusted : undefined;
+  if (typeof extension !== 'string') return [];
+  try {
+    return extension.split(',').map((each) => decodeURIComponent(each));
+  } catch {
+    return [];
+  }
+}
+
+/** A JSON pointer's token, escaped as RFC 6901 writes one. */
+const token = (key: string | number): string => String(key).replaceAll('~', '~0').replaceAll('/', '~1');
 
 /** The would-be record: the event itself, or, where the answer still carries its bytes, those bytes read as JSON. */
 function recordEvent(record: unknown): unknown {
@@ -302,29 +333,44 @@ function recordEvent(record: unknown): unknown {
   return record;
 }
 
-/** Every value of a dry-run record, flattened to `data.from.name`-style names, in the record's order. */
+/**
+ * Every value of a dry-run record, flattened to `data.from.name`-style names, in the record's order, each with who
+ * wrote it: a CloudEvent attribute is the event service's; a field of `data` is the sender's when `agentcommsuntrusted`
+ * names it (or a field above it), and unlisted otherwise.
+ */
 export function recordFields(record: unknown): RecordField[] {
+  const event = recordEvent(record);
+  const untrusted = untrustedPointers(event);
+  const named = (pointer: string) =>
+    untrusted.some((each) => each === '' || pointer === each || pointer.startsWith(`${each}/`));
   const fields: RecordField[] = [];
-  const walk = (node: unknown, name: string, top: boolean) => {
+  // `pointer` is the field's JSON pointer into `data`, or null outside it.
+  const walk = (node: unknown, name: string, pointer: string | null, top: boolean) => {
+    const leaf = (value: string) => {
+      const attribute = top && CLOUD_EVENT_ATTRIBUTES.has(name);
+      const source: FieldSource = attribute ? 'attribute' : pointer !== null && named(pointer) ? 'sender' : 'unlisted';
+      fields.push({ name: name === '' ? 'record' : name, value, source });
+    };
     if (Array.isArray(node)) {
-      if (node.length === 0) fields.push({ name, value: '[]', service: false });
-      for (const [index, each] of node.entries()) walk(each, `${name}[${index}]`, false);
+      if (node.length === 0) leaf('[]');
+      for (const [index, each] of node.entries()) {
+        walk(each, `${name}[${index}]`, pointer === null ? null : `${pointer}/${index}`, false);
+      }
       return;
     }
     if (isRecord(node)) {
       const entries = Object.entries(node);
-      if (entries.length === 0 && name !== '') fields.push({ name, value: '{}', service: false });
-      for (const [key, each] of entries) walk(each, name === '' ? key : `${name}.${key}`, top && name === '');
+      if (entries.length === 0 && name !== '') leaf('{}');
+      for (const [key, each] of entries) {
+        const inData =
+          name === '' ? (key === 'data' ? '' : null) : pointer === null ? null : `${pointer}/${token(key)}`;
+        walk(each, name === '' ? key : `${name}.${key}`, inData, top && name === '');
+      }
       return;
     }
-    const service = top && CLOUD_EVENT_ATTRIBUTES.has(name);
-    fields.push({
-      name: name === '' ? 'record' : name,
-      value: typeof node === 'string' ? node : JSON.stringify(node),
-      service,
-    });
+    leaf(typeof node === 'string' ? node : JSON.stringify(node));
   };
-  walk(recordEvent(record), '', true);
+  walk(event, '', null, true);
   return fields;
 }
 

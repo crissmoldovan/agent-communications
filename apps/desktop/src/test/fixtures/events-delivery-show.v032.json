@@ -20,7 +20,8 @@
       "lastStatus": null,
       "decisionId": "dec-01",
       "eventId": "evt-01",
-      "deliveredAt": 1792928400000
+      "deliveredAt": 1792928400000,
+      "deadLetteredAt": null
     },
     "decision": {
       "outcome": "matched",
@@ -72,7 +73,8 @@
       "lastStatus": null,
       "decisionId": "dec-02",
       "eventId": "evt-02",
-      "deliveredAt": 1792927860000
+      "deliveredAt": 1792927860000,
+      "deadLetteredAt": null
     },
     "decision": {
       "outcome": "matched",
@@ -81,7 +83,7 @@
     },
     "event": {
       "eventId": "evt-02",
-      "type": "slack.message.received",
+      "type": "slack.message.posted",
       "accountId": "acc_01EXAMPLE000000000000001",
       "occurredAt": 1792927857000,
       "observedAt": 1792927859000,
@@ -120,7 +122,8 @@
       "lastStatus": null,
       "decisionId": "dec-03",
       "eventId": "evt-03",
-      "deliveredAt": 1792922520000
+      "deliveredAt": 1792922520000,
+      "deadLetteredAt": null
     },
     "decision": {
       "outcome": "matched",
@@ -168,7 +171,8 @@
       "lastStatus": 503,
       "decisionId": "dec-04",
       "eventId": "evt-04",
-      "deliveredAt": null
+      "deliveredAt": null,
+      "deadLetteredAt": null
     },
     "decision": {
       "outcome": "matched",
@@ -215,7 +219,8 @@
       "lastStatus": 500,
       "decisionId": "dec-05",
       "eventId": "evt-05",
-      "deliveredAt": null
+      "deliveredAt": null,
+      "deadLetteredAt": 1792918800000
     },
     "decision": {
       "outcome": "matched",
@@ -262,7 +267,8 @@
       "lastStatus": null,
       "decisionId": "dec-06",
       "eventId": "evt-06",
-      "deliveredAt": null
+      "deliveredAt": null,
+      "deadLetteredAt": null
     },
     "decision": {
       "outcome": "matched",

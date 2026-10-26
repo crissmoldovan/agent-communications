@@ -666,8 +666,9 @@ pub enum Call {
     /// The events service's `delivery retry <delivery>`: tries a delivery that will try again now, rather than at its
     /// next try. It sends nothing a rule did not already pass on, so the app applies it itself (DA10).
     EventsDeliveryRetry { delivery_id: DeliveryId },
-    /// The events service's `delivery drop <delivery>`: deletes a failed delivery's kept message, so nothing tries it
-    /// again. A tightening, applied at once; the screen asks first.
+    /// The events service's `delivery drop <delivery>`: stops a delivery that waits to be tried or will try again (its
+    /// 0.32.0; one being sent is refused), or deletes a failed one's kept message. A tightening, applied at once; the
+    /// screen asks first.
     EventsDeliveryDrop { delivery_id: DeliveryId },
     /// The events service's `provider list` (0.32.0): whether TypeSafe and OpenRouter each have a key, and never a key.
     /// Read-only; it takes no argument.

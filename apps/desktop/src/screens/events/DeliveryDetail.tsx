@@ -2,7 +2,8 @@
  * One delivery's page (owner feedback 0.32.0, §3.5), from `delivery show`: the message — where and when, and its sender
  * and subject where a dry run kept them, as outside text — with Open in Gmail or Slack and a link to its story; why it
  * was passed on; for a dry run, the record it would have delivered, every field a sender wrote as outside text; for a
- * webhook, its host; and its tries, with Try now while it will try again and Stop trying… once it has failed.
+ * webhook, its host; and its tries, with Try now while it will try again, and Stop trying… while it waits or will try
+ * again (from the events service's 0.32.0) or once it has failed.
  *
  * `delivery show` and `dryrun show` answer the app from the events service's 0.32.0: before it, the page says so and
  * reads neither, and shows what the list knows. Earlier tries are not kept one by one, only their count and the last
@@ -15,7 +16,7 @@ import { aliasOf } from '../../account-aliases.ts';
 import { useBridge } from '../../bridge-context.tsx';
 import { productLabel } from '../../components/ApprovalCard.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
-import { COPY, needsLine, SCREEN_LABELS, type Screen } from '../../copy.ts';
+import { COPY, needsLine } from '../../copy.ts';
 import { type Loadable, useAppData } from '../../data.tsx';
 import {
   type DeliveryJudge,
@@ -64,7 +65,10 @@ export const DELIVERY_COPY = {
   tryNow: 'Try now',
   stopTrying: 'Stop trying…',
   stopTitle: 'Stop trying this delivery?',
-  stopBody: 'It failed, and the message it kept for it is deleted now. Nothing is sent for it.',
+  stopTryingBody:
+    'It is not tried again. The message it kept for its next try is deleted now, and nothing more is sent for it.',
+  stopFailedBody: 'It failed, and the message it kept for it is deleted now. Nothing is sent for it.',
+  inFlight: 'It is being sent right now, so it cannot be stopped yet. If this try fails, you can stop it then.',
   stopAction: 'Stop trying',
   unreadable: 'That answer could not be read.',
   gone: 'This delivery is no longer listed.',
@@ -90,12 +94,26 @@ function Part({ title, action, children }: { title: string; action?: ReactNode; 
   );
 }
 
-/** A name and what it says, in a two-column list. */
-function Pair({ name, children, field }: { name: string; children: ReactNode; field?: string }) {
+/** A name and what it says, in a two-column list; a record's field says which it is and who wrote it. */
+function Pair({
+  name,
+  children,
+  field,
+  source,
+}: {
+  name: string;
+  children: ReactNode;
+  field?: string;
+  source?: string;
+}) {
   return (
     <>
       <dt className="text-(length:--cue-text-label) text-fg-muted">{name}</dt>
-      <dd className="min-w-0 break-words text-fg" {...(field === undefined ? {} : { 'data-field': field })}>
+      <dd
+        className="min-w-0 break-words text-fg"
+        {...(field === undefined ? {} : { 'data-field': field })}
+        {...(source === undefined ? {} : { 'data-source': source })}
+      >
         {children}
       </dd>
     </>
@@ -128,67 +146,93 @@ function useRead<T>(
   };
 }
 
-/** Try now, while it will try again; Stop trying…, once it has failed; and what either came to when it failed. */
+/** The states Stop trying stops while a delivery will still be tried (from the events service's 0.32.0). */
+const STOPPABLE_WHILE_TRYING: ReadonlySet<string> = new Set(['queued', 'retryable']);
+
+/**
+ * Whether a refusal is the event service's for a delivery being sent right now (`deliveryInFlight`, in
+ * `b3-operator-control.ts`): its reason is not on the CLI's error line, so its words are read.
+ */
+export function refusedInFlight(result: { code: string; message: string }): boolean {
+  return result.code === 'APPROVAL_VOID' && /being sent right now/u.test(result.message);
+}
+
+/**
+ * Try now, while it will try again; Stop trying…, while it will be tried (from the events service's 0.32.0, which
+ * stops one at once) or once it has failed (its kept message deleted); and what either came to when it went wrong.
+ */
 function Actions({
   row,
+  stopsWhileTrying,
   onChanged,
   onProblem,
 }: {
   row: DeliveryRow;
+  /** Whether the events service stops a delivery that will be tried, not only a failed one (0.32.0). */
+  stopsWhileTrying: boolean;
   onChanged: () => Promise<void>;
   onProblem: (problem: string | null) => void;
 }) {
   const bridge = useBridge();
   const [busy, setBusy] = useState(false);
-  if (!row.openable || (row.state !== 'retryable' && row.state !== 'dead-lettered')) return null;
+  const tryNow = row.state === 'retryable';
+  const stop = row.state === 'dead-lettered' || (stopsWhileTrying && STOPPABLE_WHILE_TRYING.has(row.state));
+  if (!row.openable || (!tryNow && !stop)) return null;
   const apply = async (call: Call) => {
     setBusy(true);
     onProblem(null);
     try {
       const result = await bridge.cli(call);
       if (result.status === 'ok') await onChanged();
-      else onProblem(result.status === 'failed' ? result.message : DELIVERY_COPY.unreadable);
+      else if (result.status === 'failed' && refusedInFlight(result)) {
+        onProblem(DELIVERY_COPY.inFlight);
+        await onChanged();
+      } else onProblem(result.status === 'failed' ? result.message : DELIVERY_COPY.unreadable);
     } catch (error) {
       onProblem(errorMessage(error));
     } finally {
       setBusy(false);
     }
   };
-  if (row.state === 'retryable') {
-    return (
-      <Button
-        size="sm"
-        disabled={busy}
-        loading={busy}
-        onClick={() => void apply({ kind: 'eventsDeliveryRetry', deliveryId: row.id })}
-      >
-        {DELIVERY_COPY.tryNow}
-      </Button>
-    );
-  }
   return (
-    <AlertDialog.Root>
-      <AlertDialog.Trigger
-        render={
-          <Button size="sm" variant="danger-outline" disabled={busy} loading={busy}>
-            {DELIVERY_COPY.stopTrying}
-          </Button>
-        }
-      />
-      <AlertDialog.Content>
-        <AlertDialog.Title>{DELIVERY_COPY.stopTitle}</AlertDialog.Title>
-        <AlertDialog.Description>{DELIVERY_COPY.stopBody}</AlertDialog.Description>
-        <AlertDialog.Footer>
-          <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
-          <AlertDialog.Action
-            tone="danger"
-            onClick={() => void apply({ kind: 'eventsDeliveryDrop', deliveryId: row.id })}
-          >
-            {DELIVERY_COPY.stopAction}
-          </AlertDialog.Action>
-        </AlertDialog.Footer>
-      </AlertDialog.Content>
-    </AlertDialog.Root>
+    <span className="flex flex-wrap items-center gap-(--cue-space-2)">
+      {tryNow ? (
+        <Button
+          size="sm"
+          disabled={busy}
+          loading={busy}
+          onClick={() => void apply({ kind: 'eventsDeliveryRetry', deliveryId: row.id })}
+        >
+          {DELIVERY_COPY.tryNow}
+        </Button>
+      ) : null}
+      {stop ? (
+        <AlertDialog.Root>
+          <AlertDialog.Trigger
+            render={
+              <Button size="sm" variant="danger-outline" disabled={busy}>
+                {DELIVERY_COPY.stopTrying}
+              </Button>
+            }
+          />
+          <AlertDialog.Content>
+            <AlertDialog.Title>{DELIVERY_COPY.stopTitle}</AlertDialog.Title>
+            <AlertDialog.Description>
+              {row.state === 'dead-lettered' ? DELIVERY_COPY.stopFailedBody : DELIVERY_COPY.stopTryingBody}
+            </AlertDialog.Description>
+            <AlertDialog.Footer>
+              <AlertDialog.Cancel>{COPY.cancel}</AlertDialog.Cancel>
+              <AlertDialog.Action
+                tone="danger"
+                onClick={() => void apply({ kind: 'eventsDeliveryDrop', deliveryId: row.id })}
+              >
+                {DELIVERY_COPY.stopAction}
+              </AlertDialog.Action>
+            </AlertDialog.Footer>
+          </AlertDialog.Content>
+        </AlertDialog.Root>
+      ) : null}
+    </span>
   );
 }
 
@@ -210,10 +254,23 @@ function StateChip({ row, kind }: { row: DeliveryRow; kind: string | null }) {
   );
 }
 
-/** The link to the message's story (§3.6), when the app has its screen; until then, its words alone. */
-function Story({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined }) {
-  const routable = onScreen !== undefined && Object.keys(SCREEN_LABELS).includes('messages');
-  if (!routable) {
+/**
+ * What opens this message's story on the Messages screen (§3.6), at the message with this event id; null while the app
+ * cannot open it there, and the link is then its words alone.
+ *
+ * Null for now: the Messages screen is the Messages builder's (`feat/0.32-ui-messages`), not on this branch, and it
+ * reads no destination — its open story is its own state, keyed by its join. Once it is merged: `Destination`
+ * (`navigation.tsx`) gains `{ screen: 'messages'; eventId }`, Messages opens the story whose event has that id as it
+ * mounts (`takeDestination('messages')`), and this returns `() => navigate({ screen: 'messages', eventId })`.
+ */
+export function messageStoryOpener(_eventId: string | null): (() => void) | null {
+  return null;
+}
+
+/** The link to the message's story, when `messageStoryOpener` gives one; until then, its words alone. */
+function Story({ eventId }: { eventId: string | null }) {
+  const open = messageStoryOpener(eventId);
+  if (open === null) {
     return (
       <p data-slot="message-story" aria-disabled="true" className="text-(length:--cue-text-label) text-fg-muted">
         {DELIVERY_COPY.story}
@@ -222,7 +279,7 @@ function Story({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined
   }
   return (
     <p className="text-(length:--cue-text-label)">
-      <Link variant="underline" render={<button type="button" />} onClick={() => onScreen('messages' as Screen)}>
+      <Link variant="underline" render={<button type="button" />} onClick={open}>
         {DELIVERY_COPY.story}
       </Link>
     </p>
@@ -235,14 +292,12 @@ function Message({
   detail,
   record,
   lists,
-  onScreen,
   onProblem,
 }: {
   row: DeliveryRow;
   detail: Detail | null;
   record: unknown;
   lists: EventsLists;
-  onScreen?: ((screen: Screen) => void) | undefined;
   onProblem: (problem: string | null) => void;
 }) {
   const bridge = useBridge();
@@ -292,7 +347,7 @@ function Message({
           </Pair>
         )}
       </dl>
-      <Story onScreen={onScreen} />
+      <Story eventId={detail?.event?.eventId ?? row.eventId} />
     </Part>
   );
 }
@@ -359,8 +414,8 @@ function WouldHave({
         <>
           <dl className={PAIRS}>
             {(read.value?.fields ?? []).map((field) => (
-              <Pair key={field.name} name={field.name} field={field.name}>
-                {field.service ? (
+              <Pair key={field.name} name={field.name} field={field.name} source={field.source}>
+                {field.source === 'attribute' ? (
                   <span className="font-mono text-(length:--cue-text-label)">
                     <UntrustedText text={field.value} />
                   </span>
@@ -429,9 +484,19 @@ function Tries({
     <Part title={DELIVERY_COPY.tries} action={action}>
       <p className="text-fg">
         {count}
-        {row.state === 'dead-lettered'
-          ? ` It gave up after ${row.attempts} ${row.attempts === 1 ? 'try' : 'tries'}.`
-          : null}
+        {row.state === 'dead-lettered' ? (
+          <>
+            {` It gave up after ${row.attempts} ${row.attempts === 1 ? 'try' : 'tries'}`}
+            {row.deadLetteredAt === null ? (
+              '.'
+            ) : (
+              <>
+                {', at '}
+                <Short at={row.deadLetteredAt} />.
+              </>
+            )}
+          </>
+        ) : null}
         {row.state === 'delivered' && row.deliveredAt !== null ? (
           <>
             {' Delivered at '}
@@ -456,17 +521,7 @@ function Tries({
   );
 }
 
-export function DeliveryDetail({
-  id,
-  lists,
-  nav,
-  onScreen,
-}: {
-  id: string;
-  lists: EventsLists;
-  nav: EventsNav;
-  onScreen?: ((screen: Screen) => void) | undefined;
-}) {
+export function DeliveryDetail({ id, lists, nav }: { id: string; lists: EventsLists; nav: EventsNav }) {
   const { eventsVersion } = useAppData();
   const [problem, setProblem] = useState<string | null>(null);
   const installed = eventsVersion !== 'absent' && eventsVersion.state === 'ready' ? eventsVersion.value : null;
@@ -505,7 +560,7 @@ export function DeliveryDetail({
   const reload = async () => {
     await Promise.all([show.reload(), lists.reloadDeliveries()]);
   };
-  const action = <Actions row={row} onChanged={reload} onProblem={setProblem} />;
+  const action = <Actions row={row} stopsWhileTrying={supported} onChanged={reload} onProblem={setProblem} />;
   return (
     <section aria-label="Delivery" className="flex flex-col gap-(--cue-space-4)">
       {back}
@@ -536,7 +591,6 @@ export function DeliveryDetail({
         detail={detail}
         record={dry.read.state === 'ready' ? dry.read.value?.record : null}
         lists={lists}
-        onScreen={onScreen}
         onProblem={setProblem}
       />
       <Why row={row} detail={detail} lists={lists} nav={nav} />

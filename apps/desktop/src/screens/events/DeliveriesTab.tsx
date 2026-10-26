@@ -12,7 +12,7 @@ import { type ComponentType, type ReactNode, useState } from 'react';
 import { aliasOf } from '../../account-aliases.ts';
 import { productLabel } from '../../components/ApprovalCard.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
-import { COPY, type Screen } from '../../copy.ts';
+import { COPY } from '../../copy.ts';
 import { type DeliveryGroup, type DeliveryRow, deliveryGroup, nextTry, stateWords } from '../../events-deliveries.ts';
 import { channelOf } from '../../events-rules.ts';
 import { DeliveryDetail } from './DeliveryDetail.tsx';
@@ -142,17 +142,9 @@ function newestFirst(lists: EventsLists, rows: readonly DeliveryRow[]): Delivery
 }
 
 /** The list of deliveries, or one delivery's page when one is open. */
-export function DeliveriesTab({
-  lists,
-  nav,
-  onScreen,
-}: {
-  lists: EventsLists;
-  nav: EventsNav;
-  onScreen?: ((screen: Screen) => void) | undefined;
-}) {
+export function DeliveriesTab({ lists, nav }: { lists: EventsLists; nav: EventsNav }) {
   const [filter, setFilter] = useState<Filter>('all');
-  if (nav.delivery !== null) return <DeliveryDetail id={nav.delivery} lists={lists} nav={nav} onScreen={onScreen} />;
+  if (nav.delivery !== null) return <DeliveryDetail id={nav.delivery} lists={lists} nav={nav} />;
   const { deliveries } = lists;
   return (
     <section aria-label="Deliveries" className="flex flex-col gap-(--cue-space-4)">
