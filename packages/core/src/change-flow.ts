@@ -472,7 +472,9 @@ async function appliedFromApp<T>(
       );
     }
   } catch (error) {
-    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app', approvedBy: refusedAs });
+    // Nothing here is the app's: an agent, an MCP server, a parent that is not Agent Comms or an origin nothing attests
+    // was refused (the security review of 0.34.0, finding 2). So the line is the CLI's, and it says why.
+    await recordChangeApprovalRefused(core, approvalId, withWhy(error), { surface: 'cli', approvedBy: refusedAs });
     throw error;
   }
   // Only an attested origin reaches here.
@@ -496,6 +498,25 @@ async function appliedFromApp<T>(
     }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * A refusal as its audit line records it: its message, then why in a word — the agent's marker, `MCP_SERVER_PROCESS`,
+ * the origin's reason (`not-agent-comms`, `ORIGIN_UNATTESTED`, `outside-test-profile: data folder`) — so the line tells
+ * one refusal from another as the caller's details do.
+ */
+function withWhy(error: unknown): unknown {
+  if (!(error instanceof CommsError)) return error;
+  const details = error.details ?? {};
+  const why = [
+    details.marker === undefined ? undefined : `marker ${String(details.marker)}`,
+    details.reason,
+    details.outside,
+  ]
+    .filter((part) => part !== undefined)
+    .map(String)
+    .join(': ');
+  return why === '' ? error : new CommsError(error.code, `${error.message} (${why})`);
 }
 
 /** What a command run from the app reaches outside Agent Comms' own folders (`gatedChangeAtTerminal`'s `appReach`). */
