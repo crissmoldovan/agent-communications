@@ -51,6 +51,8 @@ Scripts should read these rather than parse output.
 | [`organise\|organize`](#agent-gmail-organise) | label, archive, star and mark read — every change reversible, and previewable with --dry-run |
 | [`organise-undo\|organize-undo`](#agent-gmail-organise-undo) | put an organising change back, from the `undo` a --json organise returned |
 | [`trash`](#agent-gmail-trash) | move mail to the bin, or take it out again — nothing is ever deleted outright |
+| [`take`](#agent-gmail-take) | take a message before replying to it, so no other session does; hand it back, or mark it done |
+| [`taken`](#agent-gmail-taken) | who has these messages, in closed words; none named: this session’s own takes |
 | [`label`](#agent-gmail-label) | create a label, or find the one already there |
 | [`labels`](#agent-gmail-labels) | the labels in a mailbox |
 | [`sendas`](#agent-gmail-sendas) | the addresses this mailbox can send as |
@@ -656,6 +658,34 @@ agent-gmail trash [options]
 | `--thread <id...>` | every message in these conversations | — |
 | `--undo` | take them out of the bin instead | `false` |
 | `--dry-run` | say what would move and move nothing | `false` |
+
+### `agent-gmail take`
+
+take a message before replying to it, so no other session does; hand it back, or mark it done
+
+```
+agent-gmail take [options] <messageId>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--inbox <alias>` | which mailbox | — |
+| `--hand-back` | hand it back: it is not this session’s | `false` |
+| `--reason <reason>` | why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other | — |
+| `--note <note>` | at most 200 characters for the person, with --hand-back or --done; no session sees it | — |
+| `--done` | mark it done: other sessions stay refused | `false` |
+
+### `agent-gmail taken`
+
+who has these messages, in closed words; none named: this session’s own takes
+
+```
+agent-gmail taken [options] [messageIds...]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--inbox <alias>` | which mailbox | — |
 
 ### `agent-gmail label`
 

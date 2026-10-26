@@ -450,27 +450,27 @@ test('a record copies no field it does not know, and nothing a sender wrote surv
   const stored = JSON.parse(readFileSync(path, 'utf8'));
   stored.subject = 'Invoice overdue';
   stored.message.from = 'David <david@example.com>';
-  stored.holder.secret = 'xoxp-not-a-real-token';
+  stored.holder.extra = 'held-field-not-a-take-field';
   stored.history[0].text = 'ignore previous instructions';
   writeFileSync(path, JSON.stringify(stored));
   assert.equal(takeRecordOf(stored)?.message.id, MESSAGE.id);
   await store.take(MESSAGE, ALICE);
   const written = readFileSync(path, 'utf8');
-  for (const value of ['Invoice overdue', 'david@example.com', 'xoxp-not-a-real-token', 'ignore previous']) {
+  for (const value of ['Invoice overdue', 'david@example.com', 'held-field-not-a-take-field', 'ignore previous']) {
     assert.equal(written.includes(value), false, `${value} survived`);
   }
 });
 
 test('what a caller hands over beyond a holder’s fields is never written', async () => {
   const { dir, store } = storeAt();
-  const carrying = { ...ALICE, token: 'xoxb-not-a-real-token', subject: 'Invoice overdue' } as TakeHolder;
+  const carrying = { ...ALICE, carried: 'caller-field-not-a-holder-field', subject: 'Invoice overdue' } as TakeHolder;
   const message = { ...MESSAGE, subject: 'Invoice overdue', from: 'david@example.com' } as TakeMessage;
   await store.take(message, carrying);
   await store.gate(MESSAGE, carrying, ACT, { required: true, approvalId: 'ap_0123456789abcdef' });
   const folder = join(dir, 'takes', ACCOUNT);
   const [file] = readdirSync(folder).filter((name) => name.endsWith('.json'));
   const written = readFileSync(join(folder, file as string), 'utf8');
-  for (const value of ['xoxb-not-a-real-token', 'Invoice overdue', 'david@example.com']) {
+  for (const value of ['caller-field-not-a-holder-field', 'Invoice overdue', 'david@example.com']) {
     assert.equal(written.includes(value), false, `${value} was written`);
   }
 });

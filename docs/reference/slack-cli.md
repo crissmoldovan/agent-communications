@@ -50,6 +50,8 @@ Scripts should read these rather than parse output.
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
 | [`standing`](#agent-slack-standing) | acknowledgements your agent may send without asking, once you approve them here with a code |
 | [`ack`](#agent-slack-ack) | acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent |
+| [`take`](#agent-slack-take) | take a message before acting on it, so no other session does; hand it back, or mark it done |
+| [`taken`](#agent-slack-taken) | who has these messages, each <channel>/<ts>, in closed words; none: this session’s own |
 | [`edit`](#agent-slack-edit) | change the words of a message this account posted, through the gate |
 | [`delete`](#agent-slack-delete) | delete a message this account posted, through the gate |
 | [`approval`](#agent-slack-approval) | where an approval stands |
@@ -535,6 +537,34 @@ agent-slack ack [options]
 | `--channel <id>` | the conversation the message is in | — |
 | `--ts <ts>` | the message | — |
 | `--content <digest>` | the content, by the digest standing list shows for it | — |
+
+### `agent-slack take`
+
+take a message before acting on it, so no other session does; hand it back, or mark it done
+
+```
+agent-slack take [options] <channel> <ts>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--hand-back` | hand it back: it is not this session’s | `false` |
+| `--reason <reason>` | why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other | — |
+| `--note <note>` | at most 200 characters for the person, with --hand-back or --done; no session sees it | — |
+| `--done` | mark it done: other sessions stay refused | `false` |
+
+### `agent-slack taken`
+
+who has these messages, each <channel>/<ts>, in closed words; none: this session’s own
+
+```
+agent-slack taken [options] [messages...]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
 
 ### `agent-slack edit`
 

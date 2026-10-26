@@ -218,3 +218,24 @@ new release asks of them after an update — they should never be handed several
   they answer.
 - **After an update,** walk through what the new release asks of the person the same way, starting with what changed
   for them. The changelog's **Upgrading** section is the list.
+
+## 13. Take a message before you answer it, and leave one another session has.
+
+- **Several sessions may read one mailbox; one answers each message.** Before you draft a reply or prepare a reply's
+  send, take the message: `gmail_take` with its id (CLI: `agent-gmail take <message> --inbox <mailbox>`). Only mail
+  that arrived can be taken. `gmail_taken` (CLI: `agent-gmail taken`) says who has messages, in closed words — `you`,
+  `another session`, `the person` — and every read says it on each message, as `taken`. Look before you start work on
+  one.
+- **`TAKE_REQUIRED` (exit `10`)** means the mailbox asks a session to take a message before it acts on it, and you have
+  not: nothing was drafted, prepared or sent. Take it if it is yours, then make the same call again.
+- **`TAKEN_ELSEWHERE` (exit `10`)** means another session, or the person, has it: leave it. Never answer it another way
+  — a new message, a forward, another mailbox — and never ask the person to release it for you unless they asked you to
+  handle it. Organising and binning it are refused too.
+- **Not yours? Hand it back:** `step: "hand-back"` with a closed `reason` — `not-mine`, `wrong-account`,
+  `needs-the-person`, `duplicate` or `other` — and, when it helps the person, a `note` of at most 200 characters. The
+  person reads the note; no other session sees it. Never copy what the sender wrote into one. When you have finished
+  with a message, mark it `done`.
+- **A take allows nothing by itself.** Every act still needs the behaviour rules, the send policy and the person's
+  yes. A take lapses an hour after your last act on the message, unless an approval prepared under it still waits.
+  Whether a take is required is the person's setting (`comms_taking`): start a change that lets sessions act without
+  one only when the person asked for it.
