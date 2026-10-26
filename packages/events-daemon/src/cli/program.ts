@@ -21,6 +21,7 @@ import {
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
@@ -771,7 +772,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
 
   const providers = program
     .command('provider')
-    .description('the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key');
+    .description(
+      'the AI providers whose keys Jev and Analyse use — TypeSafe, OpenRouter and Anthropic — and whether each has a key',
+    );
   providers
     .command('list')
     .description('list each AI provider and whether it has a key; never a key')
@@ -786,8 +789,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (provider: string) => {
       ran = true;
       const origin = await personSetupOrigin("set an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       const value = await providerKeyInput(streams, deps.readSecret, origin === PERSON_SETUP_ORIGINS.terminal);
       print(await providerKeySet(provider, { ...controlOptions(program), hidden: value, origin }));
     });
@@ -797,8 +800,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .action(async (provider: string) => {
       ran = true;
       const origin = await personSetupOrigin("remove an AI provider's key");
-      if (provider !== JUDGE_KIND_TYPESAFE && provider !== 'openrouter')
-        throw new CommsError('USAGE', 'the AI provider is typesafe or openrouter');
+      if (!isEventSecretProvider(provider))
+        throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
       print(await providerKeyRemove(provider, { ...controlOptions(program), origin }));
     });
 

@@ -42,6 +42,7 @@ import {
   type MessageShowResultV1,
   type MessagesListResultV1,
 } from '../domain/messages.ts';
+import { type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import {
   isQueueItemId,
   QUEUE_CHANNELS,
@@ -70,7 +71,6 @@ import type {
 } from '../runtime/queue.ts';
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
-import type { EventSecretProvider } from '../store/event-secrets.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -1535,16 +1535,14 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (!Array.isArray(value.providers)) throw new TypeError('a provider list result needs its providers');
       for (const entry of value.providers) {
         assertClosedRecord(entry, ['id', 'name', 'hasKey'], 'a listed provider');
-        if (entry.id !== JUDGE_KIND_TYPESAFE && entry.id !== 'openrouter')
-          throw new TypeError('a listed provider is unknown');
+        if (!isEventSecretProvider(entry.id)) throw new TypeError('a listed provider is unknown');
         assertText(entry.name, 'a listed provider name');
         if (typeof entry.hasKey !== 'boolean') throw new TypeError('a listed provider says whether it has a key');
       }
       return;
     case 'provider-key-set':
     case 'provider-key-remove':
-      if (value.provider !== JUDGE_KIND_TYPESAFE && value.provider !== 'openrouter')
-        throw new TypeError('a provider key result names a known provider');
+      if (!isEventSecretProvider(value.provider)) throw new TypeError('a provider key result names a known provider');
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');

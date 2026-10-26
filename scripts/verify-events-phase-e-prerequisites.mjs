@@ -27,10 +27,13 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.32.0's second security look (2026-10-26) widens one value of a branch 0.32.0 itself added: `judge-setup`'s result
  * `approvedBy`, which was always `desktop-app`, names where the person was — `desktop-app`, `desktop-app (test build)`,
  * `desktop-app (unattested)` or `terminal` — as the CLI established it. No branch an earlier release shipped changed.
+ *
+ * 0.33.0 (design §3.3) is another, also only additive: the AI providers gain `anthropic`, whose key Analyse's model
+ * uses, while `judge-setup` keeps exactly Jev's two providers (`jevProvider`).
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'e027b9c2822201eda15c00c3bd93b433a7a476f1f944522d5b7fbfa4fbf9d6ff',
+    '612a3c987e25a83c29f9d03db2566533b5a904ef31495b84325251105d1e28de',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -60,7 +63,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '73d17360225a91a6279a5284141625c2af7c53e3e575b5d2465e547a03ecdc3f',
+    '0aee14506ae5dbbe6239e227ea65d30e4033ee6ff0c9b8d3183851078678fb33',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

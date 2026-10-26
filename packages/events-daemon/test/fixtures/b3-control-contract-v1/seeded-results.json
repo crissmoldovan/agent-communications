@@ -670,6 +670,11 @@
           "id": "openrouter",
           "name": "OpenRouter",
           "hasKey": true
+        },
+        {
+          "id": "anthropic",
+          "name": "Anthropic",
+          "hasKey": false
         }
       ]
     }

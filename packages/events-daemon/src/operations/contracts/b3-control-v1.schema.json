@@ -943,7 +943,7 @@
               "required": ["kind"],
               "properties": {
                 "kind": { "enum": ["typesafe", "local-endpoint"] },
-                "provider": { "$ref": "#/$defs/aiProvider" },
+                "provider": { "$ref": "#/$defs/jevProvider" },
                 "url": { "type": "string", "minLength": 1, "maxLength": 256 },
                 "model": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$" }
               }
@@ -1251,7 +1251,8 @@
     },
     "queueItemId": { "type": "string", "pattern": "^qi_[0-9A-HJKMNP-TV-Z]{26}$" },
     "laneName": { "type": "string", "pattern": "^[a-z0-9-]{1,40}$" },
-    "aiProvider": { "enum": ["typesafe", "openrouter"] },
+    "aiProvider": { "enum": ["typesafe", "openrouter", "anthropic"] },
+    "jevProvider": { "enum": ["typesafe", "openrouter"] },
     "judgeLimits": {
       "type": "object",
       "additionalProperties": false,
