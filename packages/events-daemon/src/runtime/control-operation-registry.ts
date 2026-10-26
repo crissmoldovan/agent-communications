@@ -122,6 +122,14 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // A rule's activation, approved by the person in the app after its preview (0.33.0 design §3.1): from the app's
   // origins only, for exactly the digest the person saw, as judge setup approves its enablements.
   { capabilityOperation: 'approveRuleFromApp', wireOperation: 'rule-approve', desktopCallable: true, family: 'owner' },
+  // Switching the event service on, approved by the person in the app after its preview (0.34.0 design B4): the
+  // activation `enable-all` prepared, from the app's origins only, for exactly the digest the person saw.
+  {
+    capabilityOperation: 'approveEnableAllFromApp',
+    wireOperation: 'enable-all-approve',
+    desktopCallable: true,
+    family: 'owner',
+  },
   { capabilityOperation: 'providerList', wireOperation: 'provider-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'providerKeySet', wireOperation: 'provider-key-set', desktopCallable: true, family: 'owner' },
   {

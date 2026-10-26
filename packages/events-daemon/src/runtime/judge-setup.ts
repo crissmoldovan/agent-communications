@@ -2,6 +2,7 @@ import { type AuditLog, CommsError, canonicalJson } from '@agentcomms/core';
 import { HumanSecret } from '../domain/human-secret.ts';
 import {
   changeAtTerminal,
+  enableAllApprovalAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
@@ -64,6 +65,19 @@ export interface RuleApprovalResultV1 {
   readonly approved: true;
   /** Where the person was, as the CLI found them: the release app, the test build, or the app unattested. */
   readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
+  readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
+}
+
+/**
+ * What `collection approve` answers (0.34.0 design B4): the event service switched on from the app, who approved it, and
+ * the active rule versions it now collects for — the ones the preview listed — with the activation's completion.
+ */
+export interface EnableAllApprovalResultV1 {
+  readonly approvalId: string;
+  readonly approved: true;
+  /** Where the person was, as the CLI found them: the release app or the test build. */
+  readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
+  readonly ruleVersions: readonly { readonly ruleId: string; readonly ruleVersion: number }[];
   readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
 }
 
@@ -314,6 +328,78 @@ export class JudgeSetupService {
     });
   }
 
+  /**
+   * Switching the event service on, approved by the person in the Agent Comms app after its preview (0.34.0 design
+   * B4): the activation `enable-all` prepared and nothing else — not a rule's, a judge kind's or a budget's — for exactly
+   * the digest the person saw. As `approveRule` does, the owner issues the approval-view challenge and answers it on the
+   * app channel at once; the audit line says where the person was. From the app's origins only: at a terminal the
+   * person types the challenge with `approve`. A speed bump against agents, not a boundary against code running as the
+   * person: the origin is a label a same-user control client declares.
+   */
+  async approveEnableAll(
+    args: Readonly<Record<string, unknown>>,
+    origin: string | undefined,
+  ): Promise<EnableAllApprovalResultV1> {
+    const approvalId = args.approvalId;
+    const digest = args.digest;
+    if (typeof approvalId !== 'string' || !APPROVAL_ID.test(approvalId))
+      throw new CommsError('USAGE', 'that is not an approval id');
+    if (typeof digest !== 'string' || !DIGEST.test(digest))
+      throw new CommsError('USAGE', 'the digest is the 64 hex digits its preview showed');
+    const ids: Record<string, string | string[]> = { approvalId };
+    const approver = personSetupApprover(origin);
+    return this.#audited('enableAllApprove', origin, ids, async () => {
+      if (approver === null || approver === 'terminal')
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          'at your terminal, switch the event service on with approve <approval-id>, which asks for its challenge',
+          { details: { reason: 'AT_TERMINAL' } },
+        );
+      const row = this.#store.database
+        .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
+        .get(approvalId) as { document: string; digest: string; status: string } | undefined;
+      if (row === undefined || row.status !== 'pending')
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'this approval is no longer waiting: it was approved, cancelled or replaced',
+        );
+      if (row.digest !== digest)
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'what switching on covers changed after you saw its preview: review it again',
+        );
+      const document = JSON.parse(row.document) as { kind?: unknown; ruleVersions?: unknown };
+      const ruleVersions =
+        document.kind === 'enable-all' && Array.isArray(document.ruleVersions)
+          ? (document.ruleVersions as { ruleId?: unknown; ruleVersion?: unknown }[]).flatMap((entry) =>
+              typeof entry.ruleId === 'string' && typeof entry.ruleVersion === 'number'
+                ? [{ ruleId: entry.ruleId, ruleVersion: entry.ruleVersion }]
+                : [],
+            )
+          : undefined;
+      if (ruleVersions === undefined)
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          'this approval does not switch the event service on: approve a rule with rule approve, and anything else at your terminal',
+          { details: { reason: 'NOT_ENABLE_ALL' } },
+        );
+      ids.ruleVersions = ruleVersions.map((entry) => `${entry.ruleId}@${entry.ruleVersion}`);
+      const challenge = await this.#activations.issueApprovalViewChallenge(approvalId, this.#now() + 5 * 60_000);
+      if (challenge === null)
+        throw new CommsError('TRANSIENT', 'the approval was being opened elsewhere: try again in a moment');
+      const completion = await withEventWriterLease(this.#quiescer, () =>
+        this.#activations.approve({ approvalId, answer: challenge, via: 'app' }),
+      );
+      return {
+        approvalId,
+        approved: true,
+        approvedBy: approver,
+        ruleVersions,
+        completion: { intentId: completion.intentId, status: completion.status, usedAt: completion.usedAt },
+      };
+    });
+  }
+
   /** Reuses the latest live version when it is the judge wanted; otherwise adds the next version. */
   async #judgeVersion(wanted: Record<string, unknown>): Promise<JudgeSetupResultV1['judge']> {
     const judgeId = wanted.judgeId as string;
@@ -395,9 +481,9 @@ export class JudgeSetupService {
    * attested app, the app unattested (Windows, Linux), or a terminal — never a key.
    */
   async #audited<T>(
-    operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove',
+    operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
     origin: string | undefined,
-    ids: Record<string, string>,
+    ids: Record<string, string | string[]>,
     work: () => Promise<T>,
   ): Promise<T> {
     const approver = personSetupApprover(origin);
@@ -442,12 +528,14 @@ export class JudgeSetupService {
 
 /** The terminal refusal of each person-only change, with the event service's words to type there. */
 function unattestedChange(
-  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove',
-  ids: Readonly<Record<string, string>>,
+  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
+  ids: Readonly<Record<string, string | string[]>>,
 ): CommsError {
   switch (operation) {
     case 'ruleApprove':
       return ruleApprovalAtTerminal(ids.approvalId);
+    case 'enableAllApprove':
+      return enableAllApprovalAtTerminal(ids.approvalId);
     case 'judgeSetup':
       return changeAtTerminal('set up a judge', `judge setup ${ids.kind ?? '<kind>'}, with the same options`);
     case 'providerKeySet':

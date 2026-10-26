@@ -2025,6 +2025,12 @@ async function handleControl(
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
     case OWNER_CONTROL_WIRES.approveRuleFromApp:
       return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
+    // Switching the event service on from the app, after its preview (0.34.0 design B4): the person's, as a rule's is.
+    case OWNER_CONTROL_WIRES.approveEnableAllFromApp:
+      return requireJudgeSetup(judgeSetup).approveEnableAll(
+        personOnly(request.args, 'switching the event service on'),
+        request.origin,
+      );
     case OWNER_CONTROL_WIRES.providerList:
       return requireJudgeSetup(judgeSetup).providerList();
     case OWNER_CONTROL_WIRES.providerKeySet:

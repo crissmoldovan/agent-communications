@@ -67,6 +67,7 @@ import {
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
 import type {
+  EnableAllApprovalResultV1,
   JudgeSetupResultV1,
   ProviderKeyResultV1,
   ProviderListResultV1,
@@ -583,6 +584,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'message-show': MessageShowResultV1;
   readonly 'judge-setup': JudgeSetupResultV1;
   readonly 'rule-approve': RuleApprovalResultV1;
+  readonly 'enable-all-approve': EnableAllApprovalResultV1;
   readonly 'provider-list': ProviderListResultV1;
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
@@ -760,6 +762,11 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
    * enable` prepared, and the digest the preview showed. No challenge is in it: the owner issues and answers its own.
    */
   readonly 'rule-approve': { readonly approvalId: string; readonly digest: string };
+  /**
+   * Switching the event service on, approved by the person in the app after its preview (0.34.0 design B4): the
+   * approval `enable-all` prepared, and the digest the preview showed. No challenge is in it, as for `rule-approve`.
+   */
+  readonly 'enable-all-approve': { readonly approvalId: string; readonly digest: string };
   readonly 'provider-list': Record<string, never>;
   readonly 'provider-key-set': { readonly provider: EventSecretProvider };
   readonly 'provider-key-remove': { readonly provider: EventSecretProvider };
@@ -1431,6 +1438,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'message-show': ['message'],
   'judge-setup': ['kind', 'enabled', 'enabledNow', 'judge', 'budget', 'key', 'destination', 'approvedBy'],
   'rule-approve': ['approvalId', 'ruleId', 'version', 'approved', 'approvedBy', 'completion'],
+  'enable-all-approve': ['approvalId', 'approved', 'approvedBy', 'ruleVersions', 'completion'],
   'provider-list': ['providers'],
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
@@ -1802,6 +1810,26 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       )
         throw new TypeError('a rule approval names the app it came from');
       assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a rule approval's completion");
+      assertText(value.completion.intentId, 'a completed activation');
+      if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
+      assertText(value.completion.usedAt, 'when the approval was used');
+      return;
+    case 'enable-all-approve':
+      assertText(value.approvalId, 'an approved approval id');
+      if (value.approved !== true) throw new TypeError('switching on says it approved');
+      if (
+        typeof value.approvedBy !== 'string' ||
+        value.approvedBy === 'terminal' ||
+        !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
+      )
+        throw new TypeError('switching on names the app it came from');
+      if (!Array.isArray(value.ruleVersions)) throw new TypeError('switching on lists the rule versions it covers');
+      for (const entry of value.ruleVersions) {
+        assertClosedRecord(entry, ['ruleId', 'ruleVersion'], 'a rule version switching on covers');
+        assertText(entry.ruleId, 'a covered rule id');
+        assertPositiveInteger(entry.ruleVersion, 'a covered rule version');
+      }
+      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "switching on's completion");
       assertText(value.completion.intentId, 'a completed activation');
       if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
       assertText(value.completion.usedAt, 'when the approval was used');

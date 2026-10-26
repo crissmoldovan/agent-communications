@@ -70,6 +70,15 @@ Inside the event service's MCP server both refuse, so no agent reads the log thr
 Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
 cannot run, the approval says why and still asks for its challenge.
 
+In the desktop app, **Events → Service → Switch on…** does the first two lines of step 3 for you: it runs `enable-all`, shows you
+the approval's preview — the rules collection starts for — and, when you press Approve, approves exactly that approval
+with `agent-events collection approve <approval-id> --digest <digest>`, the digest its preview showed. That command is
+the app's own: it refuses an agent's shell and the event service's MCP server, and on macOS it first checks that the app
+started it (core's `desktopAppOrigin`), a speed bump against agents, not a boundary against code running as you. On
+Windows and Linux nothing attests the app, so it is refused with `APPROVAL_REQUIRED` (exit 10, reason
+`ORIGIN_UNATTESTED`), naming `approve <approval-id>`, and the app offers Do it in Terminal, where you type the challenge
+as above. **Switch off** is `disable-all`: it takes away, so it applies at once, from anywhere.
+
 An approval that `rule enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
 approve it, nothing is turned on. On its next tick, or when it next starts, the service cancels the activation that
 was waiting for it, and `status` stops counting it as pending. Run `rule enable` again for a new approval. An update
@@ -473,7 +482,8 @@ build counts only for its own marked test profile). Windows and Linux check noth
 through a terminal: a command that is neither at an interactive terminal nor attested as the app's is refused with
 `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
 says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
-`integration set agent-sessions` and `rule approve`. `rule analyse` changes nothing and still runs from the app there.
+`integration set agent-sessions`, `rule approve` and `collection approve`. `rule analyse` changes nothing and still
+runs from the app there.
 The result and the audit line say where you were — `desktop-app`, `desktop-app (test build)` or `terminal` — as the
 CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
 refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`

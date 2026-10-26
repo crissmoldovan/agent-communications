@@ -31,6 +31,7 @@ import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
+  approveEnableAllFromApp,
   approveRuleFromApp,
   disclosureChallenge,
   pendingRuleJudgeTest,
@@ -816,7 +817,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -949,9 +950,36 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
       const origin = await personSetupOrigin('approve a rule', {
         where: 'Events → Rules, Review and approve',
+        action: 'approve',
         unattested: { words: ruleApprovalWords(approvalId) },
       });
       print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+
+  // Switching the event service on, approved in the app after the preview of what `enable-all` prepared (0.34.0 design
+  // B4): the person's own act, as a rule's approval is, from the same origins. At a terminal the person approves with
+  // `approve`, which asks for the challenge; switching off is `disable-all`, which applies at once.
+  const collection = program
+    .command('collection')
+    .description(
+      'the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all',
+    );
+  collection
+    .command('approve <approval-id>')
+    .description(
+      'approve switching the event service on — the approval enable-all prepared — from the Agent Comms app, after its preview, as the person',
+    )
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      // As for a rule: Windows and Linux attest nothing, so there the person is sent to their terminal; the owner
+      // refuses the same origin too.
+      const origin = await personSetupOrigin('switch the event service on', {
+        where: 'Events → Service, Switch on',
+        action: 'approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
+      print(await approveEnableAllFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
     });
 
   // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream

@@ -92,7 +92,9 @@ export function changeAtTerminal(
   );
 }
 
-/** The words `rule approve` sends the person to type: the approval's own `approve <approval-id>`. */
+/**
+ * The words `rule approve` and `collection approve` send the person to type: the approval's own `approve <approval-id>`.
+ */
 export function ruleApprovalWords(approvalId: unknown): string {
   const id = typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>';
   return `approve ${id}, which shows its preview and asks for its challenge`;
@@ -101,6 +103,16 @@ export function ruleApprovalWords(approvalId: unknown): string {
 /** `rule approve`'s refusal of an unattested origin, as the owner gives it. */
 export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
   return changeAtTerminal('approve a rule', ruleApprovalWords(approvalId), {
+    approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
+  });
+}
+
+/**
+ * `collection approve`'s refusal of an unattested origin (0.34.0 design B4), as the CLI and the owner give it: switching
+ * the event service on is approved at the terminal there, with the approval's own `approve <approval-id>`.
+ */
+export function enableAllApprovalAtTerminal(approvalId: unknown): CommsError {
+  return changeAtTerminal('switch the event service on', ruleApprovalWords(approvalId), {
     approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
   });
 }
