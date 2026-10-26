@@ -340,7 +340,8 @@ describe('the rule editor', () => {
     const [update] = service.calls('eventsRuleUpdate') as Extract<Call, { kind: 'eventsRuleUpdate' }>[];
     const agentic = update?.document.agentic as Record<string, unknown>;
     expect(JSON.stringify(agentic.judge)).toBe(JSON.stringify(JUDGE_SHOWS['jev@4']?.document));
-    expect((update?.document.judges as unknown[])[0]).toEqual(JUDGE_SHOWS['jev@4']?.document);
+    const judges = update?.document.judges as unknown[] | undefined;
+    expect(judges?.[0]).toEqual(JUDGE_SHOWS['jev@4']?.document);
   });
 
   it('a judge whose answer is not the live version asked for is not embedded, and the editor says so', async () => {
