@@ -85,6 +85,7 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../operations/signin.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
 import { clientServesInbox, mailboxServedElsewhere } from './install.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
@@ -820,6 +821,32 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  /**
+   * Who has a message (design 2026-10-26-taking-messages §6, T7), in closed words: never another session's folder,
+   * client, key or session id, and never a hand-back's note.
+   */
+  const takenSchema = z
+    .object({
+      state: z.enum(['open', 'offered', 'taken', 'done']),
+      by: z.enum(['you', 'another session', 'the person']).optional(),
+      since: z.string().optional(),
+      leaseUntil: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('your own take: when it lapses with no further act; null while an approval holds it'),
+      offered: z
+        .object({ to: z.enum(['you', 'another session']), until: z.string().nullable() })
+        .optional()
+        .describe('reserved for one session, which must still take it'),
+      handedBack: z
+        .array(z.enum(['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other']))
+        .optional()
+        .describe('why sessions handed it back since it was last taken'),
+    })
+    .nullable()
+    .describe('who has the message: null when nobody has taken, offered or handed it back');
+
   const rowSchema = z.object({
     inbox: z.string(),
     threadId: z.string(),
@@ -833,6 +860,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     attachmentCount: z.number(),
     unread: z.boolean(),
     webLink: z.string(),
+    taken: takenSchema.optional(),
   });
 
   server.registerTool(
@@ -941,6 +969,38 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const thread = await readThread(context, targetInbox(inbox), threadId, { includeQuoted, maxChars });
         return reply({ thread });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): who has these messages, in closed words — this machine's
+   * records alone, one file look each. A look, kept apart from gmail_take so a client that asks before each write does
+   * not ask before it.
+   */
+  server.registerTool(
+    'gmail_taken',
+    {
+      title: 'Who has a message',
+      description:
+        'Who has these messages, before you act on one: `you`, `another session`, `the person`, offered to one session, done, or handed back and why — never which session, folder or client. With no `messages`, the ones this session has taken or been offered in the mailbox. Reads only this machine’s records. A message another session has is not yours to answer: leave it.',
+      inputSchema: z.object({
+        inbox: inboxArgument(Boolean(pinned)),
+        messages: mcpStringArray()
+          .optional()
+          .describe('message ids, at most 50; leave out for this session’s own takes'),
+      }),
+      outputSchema: z.object({
+        inbox: z.string(),
+        messages: z.array(z.object({ id: z.string(), taken: takenSchema })),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ inbox, messages }) => {
+      try {
+        return reply(await takenMessages(context, targetInbox(inbox), messages as string[] | undefined));
       } catch (error) {
         return fail(error);
       }
@@ -2459,6 +2519,52 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       async ({ inbox, ...input }) => {
         try {
           return reply(await trash(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    /*
+     * Taking messages (design 2026-10-26-taking-messages §5): this session takes a message before it acts on it, so no
+     * other session does — and hands it back, saying why, or marks it done. The session is the server's own, worked
+     * out from its process, never an argument. Nothing is said to the sender: mail has no 👀.
+     */
+    server.registerTool(
+      'gmail_take',
+      {
+        title: 'Take a message',
+        description:
+          'Take a message before you reply to it, so no other session does: `step` "take" (the default) takes it, or renews your own take; "hand-back" gives it back when it is not yours, with a `reason` — not-mine, wrong-account, needs-the-person, duplicate or other — and an optional `note` for the person alone; "done" marks it done, and other sessions stay refused. Where the mailbox asks for it, a reply refuses with TAKE_REQUIRED until you take the message; one another session has refuses with TAKEN_ELSEWHERE whatever the setting — leave it. A take lapses an hour after your last act on the message. It reads the message to check it arrived, and sends nothing.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          message: z.string().min(1).describe('the message id, as a search or a read gives it'),
+          step: z.enum(['take', 'hand-back', 'done']).optional().describe('take (the default), hand-back or done'),
+          reason: z
+            .enum(['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other'])
+            .optional()
+            .describe('with hand-back: why, in closed words other sessions see'),
+          note: z
+            .string()
+            .optional()
+            .describe('with hand-back or done: at most 200 characters, for the person alone — no session sees it'),
+        }),
+        outputSchema: z.object({
+          inbox: z.string(),
+          message: z.string(),
+          thread: z.string().nullable(),
+          step: z.enum(['take', 'hand-back', 'done']),
+          state: z.enum(['open', 'offered', 'taken', 'done']),
+          you: z.boolean().describe('true while this session has it'),
+          leaseUntil: z.string().nullable().describe('when your take lapses with no further act'),
+          changed: z.boolean(),
+          taken: takenSchema,
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ inbox, message, step, reason, note }) => {
+        try {
+          return reply(await takeMessage(context, targetInbox(inbox), message, { step, reason, note }));
         } catch (error) {
           return fail(error);
         }

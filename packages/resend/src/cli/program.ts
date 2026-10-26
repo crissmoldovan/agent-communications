@@ -80,6 +80,7 @@ import {
   revokeSendApproval,
   sendStatus,
 } from '../operations/send.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
 import { askFor, readApiKey } from './prompt.ts';
 import {
@@ -94,6 +95,8 @@ import {
   renderRemoved,
   renderSent,
   renderStatus,
+  renderTake,
+  renderTaken,
 } from './render.ts';
 
 /**
@@ -506,6 +509,40 @@ Exit codes: 0 ok · 1 unexpected · 10 a send or a change was refused or needs a
           out: flags.out === undefined ? undefined : String(flags.out),
         });
         writeResult(result, output(), (data) => renderRead(data, options.color), streams);
+      }),
+    );
+
+  // ── taking messages ─────────────────────────────────────────────────────────────────────────────────────────
+
+  accountOption(program.command('take <email>'))
+    .description(
+      'take a received email before replying to it, as this agent session — or hand it back, or mark it done; a person keeps one with core’s takes keep',
+    )
+    .option('--hand-back', 'hand it back: it is open to every session again')
+    .option('--reason <reason>', 'with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other')
+    .option('--done', 'mark it done: other sessions stay refused it')
+    .option('--note <note>', 'with --hand-back or --done: for the person alone, at most 200 characters')
+    .action(
+      act(async (context, _options, email: string, flags: Options) => {
+        if (flags.handBack === true && flags.done === true) {
+          throw new CommsError('USAGE', 'hand it back or mark it done, not both');
+        }
+        const step = flags.handBack === true ? 'hand-back' : flags.done === true ? 'done' : 'take';
+        const result = await takeMessage(context, String(flags.account), email, {
+          step,
+          ...(flags.reason === undefined ? {} : { reason: String(flags.reason) }),
+          ...(flags.note === undefined ? {} : { note: String(flags.note) }),
+        });
+        writeResult(result, output(), renderTake, streams);
+      }),
+    );
+
+  accountOption(program.command('taken [emails...]'))
+    .description('who has these received emails, in closed words; with none, the ones this session has taken')
+    .action(
+      act(async (context, _options, emails: string[], flags: Options) => {
+        const result = await takenMessages(context, String(flags.account), emails.length > 0 ? emails : undefined);
+        writeResult(result, output(), renderTaken, streams);
       }),
     );
 

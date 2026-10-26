@@ -112,6 +112,7 @@ import {
   type StartOptions,
   startSignIn,
 } from '../operations/signin.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askFor } from './prompt.ts';
@@ -1619,6 +1620,75 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
           dryRun: Boolean(options.dryRun),
         });
         writeResult(result, output(), (data) => renderTrash(data, globalOptions.color), streams);
+      }),
+    );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): `take` takes a message for the session this command runs in
+   * — its agent window, worked out from the process, never an argument — hands it back, or marks it done; `taken` says
+   * who has messages. At your own terminal a command is you, who take nothing: core's `takes keep` is yours.
+   */
+  program
+    .command('take <messageId>')
+    .description('take a message before replying to it, so no other session does; hand it back, or mark it done')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .option('--hand-back', 'hand it back: it is not this session’s', false)
+    .option('--reason <reason>', 'why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other')
+    .option('--note <note>', 'at most 200 characters for the person, with --hand-back or --done; no session sees it')
+    .option('--done', 'mark it done: other sessions stay refused', false)
+    .action(
+      act(async (context, _globalOptions, messageId: string, options: Options) => {
+        if (options.handBack === true && options.done === true) {
+          throw new CommsError('USAGE', '--hand-back or --done, not both');
+        }
+        const step = options.handBack === true ? 'hand-back' : options.done === true ? 'done' : 'take';
+        const result = await takeMessage(context, String(options.inbox), messageId, {
+          step,
+          reason: options.reason,
+          note: options.note,
+        });
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            data.step === 'take'
+              ? `${data.changed ? 'Taken' : 'Still yours'}: ${data.message}${data.leaseUntil === null ? '' : `, until ${data.leaseUntil} unless you act on it again`}.`
+              : data.step === 'hand-back'
+                ? `Handed back: ${data.message} is open to every session again.`
+                : `Done: ${data.message}. Other sessions stay refused it.`,
+          streams,
+        );
+      }),
+    );
+
+  program
+    .command('taken [messageIds...]')
+    .description('who has these messages, in closed words; none named: this session’s own takes')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .action(
+      act(async (context, _globalOptions, messageIds: string[], options: Options) => {
+        const asked = messageIds.length === 0 ? undefined : messageIds;
+        const result = await takenMessages(context, String(options.inbox), asked);
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            data.messages.length === 0
+              ? asked === undefined
+                ? 'This session has no message taken or offered here.'
+                : 'Nobody has these messages.'
+              : data.messages
+                  .map(({ id, taken }) => {
+                    if (taken === null) return `${id}  nobody`;
+                    const back = taken.handedBack?.length ? `; handed back: ${taken.handedBack.join(', ')}` : '';
+                    if (taken.state === 'offered')
+                      return `${id}  offered to ${taken.offered?.to ?? 'a session'}${back}`;
+                    if (taken.state === 'open') return `${id}  nobody${back}`;
+                    return `${id}  ${taken.state} by ${taken.by ?? 'a session'}${back}`;
+                  })
+                  .join('\n'),
+          streams,
+        );
       }),
     );
 

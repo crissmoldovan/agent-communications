@@ -50,6 +50,7 @@ import {
 } from './send.ts';
 import type { SessionDeps } from './session.ts';
 import { onlyStaticBlocks } from './static-blocks.ts';
+import { requireSlackTake } from './take-gate.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -584,6 +585,12 @@ async function ackOnce(
   let childId: string | undefined;
   const audited = { standingId: request.standingId, channel, ts };
   try {
+    /*
+     * Taking messages (design 2026-10-26-taking-messages §6): an acknowledgement answers its message, so it needs this
+     * session's take of it when the account asks for one, and is refused on one another session has — before anything
+     * is read or counted. Asked again at the claim.
+     */
+    await requireSlackTake(gate, { channel, ts }, 'slack.ack');
     const { record, inForce, content } = await standingInForce(context, gate, request, digest);
     const act = content.kind;
     const refuse = (reason: StandingRefusal) => standingRefused(reason, askInstead(context));

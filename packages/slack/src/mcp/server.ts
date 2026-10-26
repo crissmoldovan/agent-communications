@@ -79,8 +79,10 @@ import {
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, MAX_WAIT_SECONDS, type StartedSignIn } from '../operations/signin.ts';
 import { prepareStandingAdd } from '../operations/standing.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { standingNarrowedView, standingPreparedView } from '../standing-views.ts';
+import { takenLookupFor } from '../taken-lookup.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -592,6 +594,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               latest: args.latest,
               cursor: args.cursor,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, workspace),
             });
           },
           describeHistory(args.channel),
@@ -631,6 +634,7 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
               limit: args.limit ?? 100,
               cursor: args.cursor,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, workspace),
             });
           },
           describeThread,
@@ -673,7 +677,13 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
           'read',
           async () => {
             const { call, name, teamId } = await session(workspace);
-            return searchMessages(call, name, args.query, { limit, page, ourTeamId: teamId, surface: 'mcp' });
+            return searchMessages(call, name, args.query, {
+              limit,
+              page,
+              ourTeamId: teamId,
+              surface: 'mcp',
+              taken: takenLookupFor(context, workspace),
+            });
           },
           describeSearch,
         );
@@ -1263,6 +1273,81 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
             slackDeps,
           ),
         );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): this session takes a message before it acts on it, hands it
+   * back with a closed reason, or marks it done — and asks who has a message. `agent-slack take` and `taken`, the same
+   * operations. No argument names a session: the server works out which it is (T2). Local: the take reads the message
+   * from Slack to check it is someone else's, and writes only this machine's record.
+   */
+  server.registerTool(
+    'slack_take',
+    {
+      title: 'Take a message, hand it back, or mark it done',
+      description:
+        'Take a message before you act on it — react, reply in its thread, acknowledge it — so no other session acts on it too; hand it back if it is not yours; or mark it done. `step` is `take` (the default; again, it renews your take, which lapses an hour after your last act on the message), `hand-back` with a `reason` (not-mine, wrong-account, needs-the-person, duplicate or other) and an optional `note` for the person, or `done` with an optional `note`. Only a message someone else sent can be taken. TAKEN_ELSEWHERE means another session or the person has it: leave it. Taking changes nothing in Slack and allows nothing by itself: every act still needs the person’s yes. The same as the command line’s `take`.',
+      inputSchema: {
+        ...workspaceArg,
+        channel: z.string().describe('the conversation the message is in: C…, G… or D…'),
+        ts: z.string().describe('the message, by its ts as a read returned it'),
+        step: oneOfWords(['take', 'hand-back', 'done'])
+          .optional()
+          .describe('`take` (the default), `hand-back` or `done`'),
+        reason: oneOfWords(['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other'])
+          .optional()
+          .describe('why it is handed back, for a hand-back: closed words other sessions may see'),
+        note: z
+          .string()
+          .optional()
+          .describe(
+            'at most 200 characters, for the person alone, with a hand-back or a done: other sessions never see it',
+          ),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      try {
+        const name = await resolve(args.workspace);
+        return reply(
+          await takeMessage(
+            context,
+            name,
+            args.channel,
+            args.ts,
+            { step: args.step ?? 'take', reason: args.reason, note: args.note },
+            slackDeps,
+          ),
+        );
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  server.registerTool(
+    'slack_taken',
+    {
+      title: 'Who has these messages',
+      description:
+        'Who has each message, in closed words: `you`, `another session` or `the person`, taken or done, offered, and the reasons it was handed back — never which session. `messages` as `<channel>/<ts>`, at most 50; leave it out for the messages this session holds or is offered in the workspace. Reads only this machine. Ask before you start on a message, so you do not do work another session is doing. The same as the command line’s `taken`.',
+      inputSchema: {
+        ...workspaceArg,
+        messages: z
+          .array(z.string())
+          .max(50)
+          .optional()
+          .describe('the messages, each `<channel>/<ts>` as a read gives them; leave out for this session’s own'),
+      },
+      annotations: readsLocal,
+    },
+    async (args) => {
+      try {
+        return reply(await takenMessages(context, await resolve(args.workspace), args.messages));
       } catch (error) {
         return fail(error);
       }

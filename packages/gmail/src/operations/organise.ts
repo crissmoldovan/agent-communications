@@ -1,6 +1,7 @@
 import { type ActivityItem, approvalOutcome, asLegacy, asV2, CommsError, recipientDomains } from '@agentcomms/core';
 import { recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
+import { refuseGmailHeldElsewhere } from '../takes.ts';
 
 /**
  * Moving mail around: labels, archiving, read state, stars, the bin.
@@ -226,6 +227,8 @@ async function modifyLabels(context: GmailContext, alias: string, options: Modif
   }
   const unique = [...new Set(expanded)];
   await refuseWhileSending(context, resolved.inbox.id, unique);
+  // Housekeeping needs no take, but leaves a message someone else has alone (design 2026-10-26-taking-messages T6).
+  if (!options.dryRun) await refuseGmailHeldElsewhere(context, resolved, unique);
 
   // What each message carries now, so the undo can restore exactly that. One metadata read per message, which is
   // the price of an undo that is actually an undo; a dry run pays it too, so the user can see the reverse before
@@ -329,6 +332,8 @@ async function moveToBin(
     throw new CommsError('USAGE', 'name the messages or threads to move', { hint: 'Pass messageIds or threadIds.' });
   }
   await refuseWhileSending(context, resolved.inbox.id, unique);
+  // Housekeeping needs no take, but leaves a message someone else has alone (design 2026-10-26-taking-messages T6).
+  if (!options.dryRun) await refuseGmailHeldElsewhere(context, resolved, unique);
 
   const action = options.undo ? 'untrash' : 'trash';
   if (options.dryRun) return { inbox: alias, dryRun: true, messages: unique, action };

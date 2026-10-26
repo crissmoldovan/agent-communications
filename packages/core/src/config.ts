@@ -39,6 +39,7 @@ import {
 import { expandHome } from './paths.ts';
 import { namesMigrationEnabled } from './release-gate.ts';
 import { readSearchSettings, searchModelText, storedSearch } from './search/settings.ts';
+import { classifyTakingChange, storedTakingEntries } from './taking.ts';
 
 /**
  * The one config file. Provider-neutral: provider-specific fields (scopes, tiers) are plain strings here and validated
@@ -319,6 +320,16 @@ interface ConfigBody {
    * on, an account added and a model set are loosenings; off, an account removed and no model tightenings.
    */
   search?: unknown;
+  /**
+   * Taking messages, per account (design 2026-10-26-taking-messages §4): `{ accounts: [{ accountId, account, required,
+   * acknowledge, unclaimed }] }`.
+   *
+   * `unknown` here, as `behaviour` is: it is read only through `readTakingSettings`, which reads a value it does not
+   * understand as demanding more — a take required, nothing said to the sender — never as the defaults. Kept through
+   * every write as the schemas keep every key they do not name, and judged by `classifyChange`: a take no longer
+   * required and a 👀 on taking are loosenings; the rest applies at once.
+   */
+  taking?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2183,6 +2194,11 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   const modelBefore = searchModelText(searchBefore.model);
   const modelAfter = searchModelText(searchAfter.model);
   if (modelAfter !== null && modelAfter !== modelBefore) loosen('search.model', modelBefore, modelAfter);
+  // Taking messages (design 2026-10-26-taking-messages §5), judged per account by its id, by the settings in force on
+  // each side: letting a session act without taking a message first, and a 👀 on taking, wait for the person.
+  for (const loosening of classifyTakingChange(before, after)) {
+    loosen(loosening.path, loosening.was, loosening.now, loosening.id);
+  }
   return { loosened: changes.map((change) => change.path), changes };
 }
 
@@ -2279,7 +2295,7 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * the agent label's settings, the behaviour rules, the activity log's, and each mailbox's and account's own settings — including those of
+ * the agent label's settings, the behaviour rules, the activity log's, taking messages', and each mailbox's and account's own settings — including those of
  * one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
@@ -2329,6 +2345,7 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   record('search.enabled', storedSearch(before)?.enabled, storedSearch(after)?.enabled);
   record('search.accounts', storedSearch(before)?.accounts, storedSearch(after)?.accounts);
   record('search.model', storedSearch(before)?.model, storedSearch(after)?.model);
+  record('taking.accounts', storedTakingEntries(before), storedTakingEntries(after));
   return changes;
 }
 

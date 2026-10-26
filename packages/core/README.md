@@ -149,6 +149,53 @@ what each person asked (design 2026-10-26-local-search). Off by default; `search
   Every sender-derived field of a hit comes back in the untrusted-content envelope, and a search writes one activity
   line with its words and a count, and no items.
 
+## Which session answers a message: taking messages
+
+When several agent windows read the same account, one session takes a message before it acts on it, and the others
+leave it. A session takes a message with its channel's take tool — `gmail_take`, `slack_take`, `resend_take` — or the
+channel's `take` command, hands it back when it is not its own (with a closed reason: `not-mine`, `wrong-account`,
+`needs-the-person`, `duplicate` or `other`, and a note for you alone), or marks it done. Which session is taking is
+worked out by the server or the command from the process it runs in — the activity session, and Claude Code's session
+id — never from an argument. A take lapses an hour after the session's last act on the message, or as soon as its agent
+window has ended, unless a send it prepared still waits for your yes.
+
+Each account says whether a session must take a message before it acts on it. Off by default, so nothing changes until
+you turn it on:
+
+```sh
+npx @agentcomms/core taking                                  # every account: required or not, and what a take says
+npx @agentcomms/core taking acme/slack --require on          # a session must take a message first (applies at once)
+npx @agentcomms/core taking acme/slack --require off         # sessions may act without taking (you approve it)
+npx @agentcomms/core taking acme/slack --unclaimed 30        # a message nobody takes in 30 minutes counts as not taken
+```
+
+With it on, an act that answers a message — a reply, a reaction, an acknowledgement — is refused without the take,
+`TAKE_REQUIRED` (exit `10`), before any preview or approval and again just before it is sent. A message another session
+has is refused with `TAKEN_ELSEWHERE` (exit `10`) whether or not a take is required. A new message, a post at the top of
+a channel, and an edit of your own answer nobody's message, and need no take. `--acknowledge eyes` (Slack only, approved
+first) records that a take may say so to the sender with 👀 under a standing approval you made; this release does not
+post that 👀 yet. Over MCP, `comms_taking` is `taking`: with no change it only reports.
+
+Who has each message is yours to see and to change, at your terminal or in the app:
+
+```sh
+npx @agentcomms/core takes list --json                       # every take, offer, hand-back and done, with notes
+npx @agentcomms/core takes release acme/slack C0123/1729936800.000100   # nobody has it now
+npx @agentcomms/core takes give acme/slack C0123/1729936800.000100 --window <id>   # offered to one window for 15 min
+npx @agentcomms/core takes keep acme/slack C0123/1729936800.000100      # you handle it: every session leaves it
+```
+
+The window's id is a Claude Code session id or an activity session key (`activity sessions` lists them). These four
+have no tool, and refuse inside an MCP server's process and in a shell a coding agent marks, with exit `10`: no session
+reads, ends or gives another's take. An agent sees only closed words — `you`, `another session`, `the person` — and the
+reasons a message was handed back, never another session's folder, client or id, and never a note. The records are in
+`<state>/takes/`, one owner-only file per message, holding ids and those words and nothing a sender wrote, each deleted
+thirty days after it last changed.
+
+A take allows nothing by itself: every act still needs the behaviour rules, the send policy and your yes. It keeps two
+sessions from answering the same message. It is a speed bump against agents, not a boundary against code running as
+you: a shell an agent marks nothing in runs these commands as you, and every process here runs as you.
+
 ## What an agent may do, and how it writes
 
 **What an agent may do is enforced.** A behaviour rule lets an agent start only some acts on an account, or in one

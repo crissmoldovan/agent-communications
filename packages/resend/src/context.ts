@@ -13,6 +13,8 @@ import {
   type SendPolicy,
   secretsStoreOf,
   sendPacing,
+  type TakeCaller,
+  takerIdentity,
 } from '@agentcomms/core';
 import { AccountStore, type NamedAccount } from './accounts.ts';
 import type { ResendTransport } from './api/client.ts';
@@ -42,6 +44,11 @@ export interface ResendContextOptions {
   throttle?: ThrottleOptions | undefined;
   /** How a throttled send waits (design 2026-10-08 §R2): core's pacing; a test injects one on the throttle's clock. */
   sendPacing?: (() => SendPacing) | undefined;
+  /**
+   * For a test: who this context's calls are, as a take holds them (design 2026-10-26-taking-messages, T2). Left out,
+   * it is worked out from this process — its activity session and `CLAUDE_CODE_SESSION_ID` — never from an argument.
+   */
+  takeIdentity?: (() => Promise<TakeCaller>) | undefined;
 }
 
 const TEAM_DOMAINS_TTL_MS = 5 * 60 * 1000;
@@ -82,6 +89,7 @@ export class ResendContext {
   /** A fresh pacing for each send: how a throttled one waits before it tries again. */
   readonly sendPacing: () => SendPacing;
   readonly #throttle: Throttle;
+  readonly #takeIdentity: (() => Promise<TakeCaller>) | undefined;
   readonly #teamDomains = new Map<string, { at: number; domains: readonly string[] }>();
 
   constructor(options: ResendContextOptions = {}) {
@@ -102,6 +110,16 @@ export class ResendContext {
     this.#fetch = options.fetch;
     this.#throttle = new Throttle(this.core.paths.stateDir, options.throttle);
     this.sendPacing = options.sendPacing ?? (() => sendPacing());
+    this.#takeIdentity = options.takeIdentity;
+  }
+
+  /**
+   * Who this call is, as a take holds it (T2): an MCP server's agent window, a command's window when it runs in one, or
+   * — `null` — the person at their own terminal, never held to taking.
+   */
+  taker(): Promise<TakeCaller> {
+    if (this.#takeIdentity !== undefined) return this.#takeIdentity();
+    return takerIdentity(this.core, this.surface, this.clientInfo?.(), { env: this.env });
   }
 
   config(): Promise<Config> {

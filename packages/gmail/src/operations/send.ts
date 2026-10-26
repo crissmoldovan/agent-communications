@@ -31,6 +31,7 @@ import {
   sendEpochOf,
   stricterPolicy,
   type TaintAggregate,
+  takeRequiredIn,
   truncateDisplay,
   withApproval,
   withSendingLease,
@@ -63,6 +64,7 @@ import {
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
 import { SENT_FOR_SEARCH } from '../search-capture.ts';
+import { pinGmailTake, requireGmailTake } from '../takes.ts';
 import { VERSION } from '../version.ts';
 import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
@@ -71,6 +73,7 @@ import {
   bindingOf,
   boundDigest,
   checkedAsLine,
+  messageIdOf,
   placeActs,
   type ReplyProof,
   replyProofOf,
@@ -707,6 +710,8 @@ function previewFor(options: {
   security?: string | null | undefined;
   /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
   allowedHere?: string | undefined;
+  /** "Taken by this session at 11:02.": the take this send answers, when this session holds it (design 2026-10-26). */
+  taken?: string | null | undefined;
   /** What it was checked as, when it answers a message here: `Checked as: reply to …` (B4). */
   checkedAs?: string | undefined;
 }): string {
@@ -777,6 +782,7 @@ function previewFor(options: {
   }
   if (options.checkedAs !== undefined) lines.push(options.checkedAs);
   if (options.allowedHere !== undefined) lines.push(options.allowedHere);
+  if (typeof options.taken === 'string') lines.push(options.taken);
   return `${lines.join('\n')}\n${renderMessagePreview(preview)}`;
 }
 
@@ -902,6 +908,30 @@ function replyToOf(proof: ReplyProof | undefined): ActivityReplyTo | undefined {
     : { messageId: proof.messageId, ...(proof.threadId === undefined ? {} : { threadId: proof.threadId }) };
 }
 
+/** The message a proven reply answers, as a take names it: a message this mailbox received, never its own (§6). */
+function answeredBy(proof: ReplyProof | undefined): string | undefined {
+  return proof === undefined || proof.sent ? undefined : proof.messageId;
+}
+
+/**
+ * The message a send answers, asked again at the claim (design 2026-10-26-taking-messages §6): from the proof the
+ * binding already read, or — only where a take could matter, the mailbox requiring one or holding any — the mailbox,
+ * once more. A mailbox where nobody takes anything is asked nothing more than before.
+ */
+async function answeredAtClaim(
+  context: GmailContext,
+  transport: GmailTransport,
+  resolved: ResolvedInbox,
+  config: Config,
+  analysis: DraftAnalysis,
+  known: ReplyProof | undefined,
+): Promise<string | undefined> {
+  if (messageIdOf(analysis.inReplyTo) === undefined) return undefined;
+  if (known !== undefined) return answeredBy(known);
+  const matters = takeRequiredIn(config, resolved.inbox.id) || (await context.core.takes.recordsIn(resolved.inbox.id));
+  return matters ? answeredBy(await replyProofOf(transport, analysis)) : undefined;
+}
+
 /** A send's recipients as its activity line keeps them: To, Cc and Bcc, as addresses. */
 function activityRecipients(expect: Pick<Expectation, 'to' | 'cc' | 'bcc'>): string[] {
   return [...expect.to, ...expect.cc, ...expect.bcc].flatMap((address) => plain(address) ?? []);
@@ -944,6 +974,12 @@ async function prepareOneSend(
   // A mailbox that cannot be asked raises TRANSIENT here, and nothing is prepared.
   const firstProof = await replyProofOf(transport, first.analysis);
   requireMailActs(context, config, resolved, placeActs(first.analysis, firstProof), first.analysis);
+  // Taking messages (design 2026-10-26-taking-messages §6): a reply to a message this mailbox received needs this
+  // session's take where the mailbox asks for one, and is refused while someone else has it — before the draft is
+  // relabelled, and before any approval or preview exists. A follow-up to its own mail answers nobody's.
+  const firstAnswered = answeredBy(firstProof);
+  const firstTake =
+    firstAnswered === undefined ? null : await requireGmailTake(context, resolved, firstAnswered, 'gmail.send.prepare');
   // Who it appears to come from, and a From that says so — rewritten, its header alone, when it does not (G2).
   const fitted = await fitFrom(context, resolved, draftId, first, requested);
   const { analysis, draftMessageId } = fitted.read;
@@ -951,6 +987,13 @@ async function prepareOneSend(
   const proof = analysis.inReplyTo === first.analysis.inReplyTo ? firstProof : await replyProofOf(transport, analysis);
   const acts = placeActs(analysis, proof);
   const allowed = requireMailActs(context, config, resolved, acts, analysis);
+  const answered = answeredBy(proof);
+  const take =
+    answered === firstAnswered
+      ? firstTake
+      : answered === undefined
+        ? null
+        : await requireGmailTake(context, resolved, answered, 'gmail.send.prepare');
 
   const { facts, flags, correspondentHistory } = config.defaults.riskEscalation
     ? await studyRecipients(context, transport, resolved, analysis)
@@ -972,6 +1015,9 @@ async function prepareOneSend(
     riskFlags: flags,
     expect: expectationOf(analysis),
   });
+
+  // The take holds while this approval waits (T3): pinned now it exists. The claim asks the gate again.
+  if (answered !== undefined) await pinGmailTake(context, resolved, answered, 'gmail.send.prepare', record.approvalId);
 
   await context.core.audit.append({
     inboxId: resolved.inbox.id,
@@ -1006,6 +1052,7 @@ async function prepareOneSend(
       security,
       allowedHere: allowedHere(config, resolved, allowed),
       checkedAs: await checkedAsLine(transport, analysis, acts, proof),
+      taken: take?.line,
     }),
     identity: fitted.identity,
     fromRewritten: fitted.rewrittenFrom !== undefined,
@@ -1312,6 +1359,14 @@ async function sendApproved(
     } catch (error) {
       throw withApproval(error, outcome.approval);
     }
+  }
+  // Taking messages (design 2026-10-26-taking-messages §6), asked again before the claim: a take released, handed back
+  // or taken by another session since the prepare refuses the send here, and leaves the approval as it was.
+  try {
+    const answered = await answeredAtClaim(context, transport, resolved, config, before.analysis, binding?.proof);
+    if (answered !== undefined) await requireGmailTake(context, resolved, answered, 'gmail.send.execute');
+  } catch (error) {
+    throw withApproval(error, outcome.approval);
   }
 
   const {

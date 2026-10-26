@@ -447,6 +447,16 @@ on, and only you search it: at your terminal, or in the app.
   refused inside an MCP server's process and from an agent's shell — a speed bump against agents, not a boundary
   against code running as you. Agents keep their own live searches, `gmail_search` and `slack_search`.
 
+### Which session answers a message
+
+From 0.35.0, when several agent windows read the same mailbox or workspace, a session takes a message before it acts
+on it, and the others leave it. Per account, `agentcomms taking <account> --require on` makes the take required: a
+reply, a reaction or an acknowledgement without it is refused, `TAKE_REQUIRED`, and one another session has is refused
+whatever the setting, `TAKEN_ELSEWHERE`. Turning it off again is approved, as every loosening is. A session takes with
+`gmail_take`, `slack_take` or `resend_take`, hands a message back with a closed reason, or marks it done; every read
+says who has each message in closed words, never which session. `agentcomms takes list|release|give|keep` are yours: who
+has each message across every window, and ending, giving or keeping one. [More](packages/core/README.md).
+
 ### Agent sessions, through claude-stream
 
 From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working

@@ -523,6 +523,127 @@
       "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
     },
     {
+      "id": "core.taking",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingReport",
+      "reason": "Taking messages, per account: whether a session must take a message before it acts on it, what a take says to the sender, and when a message nobody took counts. `comms_taking` with no change is this report."
+    },
+    {
+      "id": "core.taking.require",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--require", "on"],
+      "args": {
+        "account": "parity/slack",
+        "required": true
+      },
+      "expect": {
+        "request.required": true,
+        "request.acknowledge": null,
+        "request.afterMinutes": null,
+        "request.notify": null
+      },
+      "reason": "Requiring a take applies at once; letting sessions act without taking a message first is a loosening the person approves (design 2026-10-26-taking-messages §5)."
+    },
+    {
+      "id": "core.taking.acknowledge",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--acknowledge", "nothing"],
+      "args": {
+        "account": "parity/slack",
+        "acknowledge": "nothing"
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": "nothing",
+        "request.afterMinutes": null,
+        "request.notify": null
+      },
+      "reason": "Saying nothing to the sender applies at once; a 👀 on taking is a loosening the person approves, made only under a standing approval they made at their terminal (§7)."
+    },
+    {
+      "id": "core.taking.unclaimed",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--unclaimed", "30"],
+      "args": {
+        "account": "parity/slack",
+        "afterMinutes": 30
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": null,
+        "request.afterMinutes": 30,
+        "request.notify": null
+      },
+      "reason": "When a message nobody took counts as not taken only decides when the person hears of it, so it applies at once either way."
+    },
+    {
+      "id": "core.taking.notify",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--notify", "off"],
+      "args": {
+        "account": "parity/slack",
+        "notify": false
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": null,
+        "request.afterMinutes": null,
+        "request.notify": false
+      },
+      "reason": "Whether the person is reminded of a message nobody took applies at once either way: it waits under Not taken regardless."
+    },
+    {
+      "id": "core.takes.list",
+      "package": "core",
+      "cli": "takes list",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every session's takes, offers, hand-backs and notes — their folders and clients among them — is the person's view, the CLI's and the desktop app's through it, and is refused inside an MCP server's process and in an agent's shell. A tool that answered it would name one project's agent to another's, and hand on notes an agent may have copied a sender's words into; over MCP each channel's `*_taken` answers in closed words only (design 2026-10-26-taking-messages T7, T8, §5)."
+    },
+    {
+      "id": "core.takes.release",
+      "package": "core",
+      "cli": "takes release",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Ending a take is the person's override: no session may end another's (design 2026-10-26-taking-messages §2, §10), and a session's own hand-back is its channel's take tool with `step: \"hand-back\"`. Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
+      "id": "core.takes.give",
+      "package": "core",
+      "cli": "takes give",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Giving a message to a window is the person's: no session may offer a message to another, or to itself past another's take (§2, T4, §10). Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
+      "id": "core.takes.keep",
+      "package": "core",
+      "cli": "takes keep",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Keeping a message is the person saying they will handle it, which refuses every session; a session takes for itself only, with its channel's take tool (T2, §10). Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
       "id": "core.standing.list",
       "package": "core",
       "cli": "standing list",
@@ -1212,6 +1333,66 @@
       "operation": "trash"
     },
     {
+      "id": "gmail.take",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "args": {
+        "step": "take"
+      },
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "This session takes a message before it replies, so no other session does (design 2026-10-26-taking-messages §5). The session is the server's or the command's own, never an argument; at the person's own terminal a command takes nothing."
+    },
+    {
+      "id": "gmail.take.hand-back",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back with a closed reason other sessions see, and a note for the person alone (T8)."
+    },
+    {
+      "id": "gmail.take.done",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "gmail.taken",
+      "package": "gmail",
+      "cli": "taken",
+      "mcp": "gmail_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has these messages, in closed words — never another session's folder, client or key (T7); with none named, this session's own takes."
+    },
+    {
       "id": "gmail.label.create",
       "package": "gmail",
       "cli": "label",
@@ -1549,6 +1730,60 @@
       "args": { "channel": "resend" },
       "expect": { "request.channel": "resend" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"resend\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
+    },
+    {
+      "id": "resend.take",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take"
+      },
+      "reason": "A session takes a received email before it replies to it, so no other session answers it (design 2026-10-26-taking-messages §5): the session is the server's or the command's own, never an argument. `step` tells the take from the hand-back and the done."
+    },
+    {
+      "id": "resend.take.hand-back",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back"
+      },
+      "reason": "Only the holder hands an email back, with a closed reason other sessions see and a note only the person does (T8)."
+    },
+    {
+      "id": "resend.take.done",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done"
+      },
+      "reason": "Only the holder marks an email done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "resend.taken",
+      "package": "resend",
+      "cli": "taken",
+      "mcp": "resend_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each received email, in closed words — `you`, `another session`, `the person` — never who another session is (T7); with none named, this session's own."
     },
     {
       "id": "slack.manifest",
@@ -1977,6 +2212,63 @@
       "mcp": null,
       "status": "exception",
       "reason": "Needs an app configuration token, which must never pass through chat. From chat, slack_manifest returns the manifest to create the app from on api.slack.com (design §4, §6.4)."
+    },
+    {
+      "id": "slack.take",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "Takes a message for the session the server or command runs in — never one an argument names — after reading it from Slack to check it is someone else's (design 2026-10-26-taking-messages T2, T5). `slack_take` with no step is a take."
+    },
+    {
+      "id": "slack.take.hand-back",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back, with a closed reason others may see and a note for the person alone (T8): `take --hand-back` at a terminal, `step: \"hand-back\"` over MCP."
+    },
+    {
+      "id": "slack.take.done",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done, and other sessions stay refused it (T3): `take --done` at a terminal, `step: \"done\"` over MCP."
+    },
+    {
+      "id": "slack.taken",
+      "package": "slack",
+      "cli": "taken",
+      "mcp": "slack_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each message, in closed words — never which session (T7): reads only this machine's records."
     },
     {
       "id": "whatsapp.status",

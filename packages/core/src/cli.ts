@@ -117,6 +117,21 @@ import {
   standingChange,
   standingReport,
 } from './operations/standing.ts';
+import {
+  giveTake,
+  keepTake,
+  listTakes,
+  releaseTake,
+  type TakePersonResult,
+  type TakesListResult,
+} from './operations/takes.ts';
+import {
+  type TakingChangeRequest,
+  type TakingChangeResult,
+  type TakingReport,
+  takingChange,
+  takingReport,
+} from './operations/taking.ts';
 import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
@@ -295,6 +310,22 @@ Usage — run these with this CLI, each as the words after its program:
   behaviour clear <account> [--conversation <id>] [--approval <id>]
                                 take a rule away, so the wider one holds there: approved first when that
                                 allows more
+  taking [<account>]            taking messages, per account: whether a session must take a message
+                                before it acts on it, what a take says to the sender, and when a message
+                                nobody took counts
+  taking <account> --require on|off | --acknowledge eyes|nothing | --unclaimed <minutes> | --notify on|off
+                                [--approval <id>]
+                                one change: --require off and --acknowledge eyes are approved first;
+                                --require on, --acknowledge nothing and the rest apply at once
+  takes list [--since <ISO time|7d|12h>] [--account <name>] [--state open|offered|taken|done]
+                                who has each message: every session's takes, offers, hand-backs and
+                                done, with their folders, clients and notes — for you, never an agent
+  takes release <account> <message>
+                                end whoever has a message, at once: it is open to every session again
+  takes give <account> <message> --window <id>
+                                offer a message to one agent window for 15 minutes; it still takes it
+  takes keep <account> <message>
+                                handle a message yourself: every session is refused it until you release it
   standing list                 the standing approvals — what an agent may send without asking: each one's
                                 contents by digest, places, limits and end, its uses in the last day and
                                 its last acts
@@ -350,20 +381,21 @@ Usage — run these with this CLI, each as the words after its program:
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
 install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
-rule add --as me, label rule remove --as agent, label style labelled, activity record on, a longer activity
-retention, search on, search accounts add and search model set — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
-approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
-the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach
-deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off, a shorter
-activity retention, search off, search accounts remove, search model none and search delete — applies at once and
-asks nobody, and a --dry-run changes nothing. What an agent
-may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
-once when it only narrows.
+rule add --as me, label rule remove --as agent, label style labelled, activity record on, a longer activity retention,
+taking --require off and --acknowledge eyes, search on, search accounts add and search model set — is shown before it
+happens. At a terminal you approve it there; anything else gets the preview and an approval id (exit 10), and runs the
+command again with --approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with
+\`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule
+add --as agent, label rule remove --as me, label style app, activity record off, a shorter activity retention,
+taking --require on, search off, search accounts remove, search model none and search delete — applies at once and
+asks nobody, and a --dry-run changes nothing. What an agent may do is the same: behaviour allow or clear is shown
+first when it lets an agent do more anywhere, and applies at once when it only narrows.
 
-The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, update, mcp install,
-search on, search accounts add and search model set itself: it shows the same preview and, once you press its confirm, runs the same command with --app-approval
-<id>. That counts only on macOS, from the app itself; anywhere else the command says to approve it at your terminal
-instead. It never goes with --approval, and a tightening takes neither: it applies at once.
+The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp
+install, search on, search accounts add and search model set itself: it shows the same preview and, once you press its
+confirm, runs the same command with --app-approval <id>. That counts only on macOS, from the app itself; anywhere else
+the command says to approve it at your terminal instead. It never goes with --approval, and a tightening takes
+neither: it applies at once.
 
 Search on this machine keeps the words of messages agents read, so you can find what each person asked. It is
 yours alone: every search command but status, off, accounts remove, model none and delete is refused inside an MCP
@@ -499,6 +531,12 @@ function parse(argv: string[]) {
       direction: { type: 'string' },
       all: { type: 'boolean', default: false },
       confirm: { type: 'boolean', default: false },
+      // `taking <account>`'s changes and `takes give`'s window; refused elsewhere (`refuseTakingOptionsElsewhere`).
+      require: { type: 'string' },
+      acknowledge: { type: 'string' },
+      unclaimed: { type: 'string' },
+      notify: { type: 'string' },
+      window: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -556,6 +594,8 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return sub === 'record' || sub === 'retention';
     case 'search':
       return sub === 'on' || sub === 'off' || sub === 'accounts' || sub === 'model';
+    case 'taking':
+      return sub !== undefined;
     default:
       return false;
   }
@@ -576,14 +616,15 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, search on|off|accounts|model, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, taking, search on|off|accounts|model, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
 /**
  * Whether a command takes `--app-approval`: a change the desktop app makes as the person's own act, approved there
  * (design 2026-10-26-desktop-0340 §3) — `mcp install` (0.32.0); `label word|name|rule|icon|style`, `behaviour
- * allow|clear` and `update` itself (0.34.0). A report takes none, and `update` refuses it beside any of its other modes.
+ * allow|clear` and `update` itself (0.34.0); `taking <account>` and `search on|accounts add|model set` (0.35.0). A report
+ * takes none, and `update` refuses it beside any of its other modes.
  */
 function takesAppApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
@@ -591,6 +632,7 @@ function takesAppApproval(command: string | undefined, sub: string | undefined):
       return sub === 'install';
     case 'label':
     case 'behaviour':
+    case 'taking':
       return sub !== undefined;
     case 'update':
       return true;
@@ -717,6 +759,33 @@ function refuseActivityOptionsElsewhere(
   );
 }
 
+/** `taking`'s change options, as typed. */
+const TAKING_OPTIONS = ['require', 'acknowledge', 'unclaimed', 'notify'] as const;
+
+/**
+ * Refuses `taking`'s change options on any other command, and `--window` on any but `takes give`, as USAGE, before
+ * anything runs — as `activity`'s are: an option a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseTakingOptionsElsewhere(
+  command: string | undefined,
+  sub: string | undefined,
+  values: Partial<Record<(typeof TAKING_OPTIONS)[number] | 'window', unknown>>,
+  help: Handoff,
+): void {
+  const hint = handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`);
+  if (values.window !== undefined && !(command === 'takes' && sub === 'give')) {
+    throw new CommsError('USAGE', '--window is an option of the takes give command only', { hint });
+  }
+  if (command === 'taking') return;
+  const given = TAKING_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the taking command only`,
+    { hint },
+  );
+}
+
 /**
  * Refuses `search`'s own options on any other command, as USAGE, before anything runs — as `activity`'s are: an option
  * a command does not read is refused rather than quietly doing nothing, and `--confirm` read by nothing would look like
@@ -838,10 +907,11 @@ export async function main(
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
     refuseSearchOptionsElsewhere(command, values, help);
+    refuseTakingOptionsElsewhere(command, sub, values, help);
     if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
       throw new CommsError(
         'USAGE',
-        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update, mcp install, search on, search accounts add and search model set only',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp install, search on, search accounts add and search model set only',
         { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
       );
     }
@@ -1398,6 +1468,92 @@ export async function main(
         );
         writeResult(result, output, renderBehaviourChange);
         return;
+      }
+      case 'taking': {
+        // The account is `sub`; the one change, if any, its option.
+        const [, account, extra] = positionals;
+        if (extra !== undefined) {
+          throw usage(
+            'usage: taking [<account>] [--require on|off | --acknowledge eyes|nothing | --unclaimed <minutes> | --notify on|off]',
+          );
+        }
+        const given = TAKING_OPTIONS.filter((flag) => values[flag] !== undefined);
+        if (given.length === 0) {
+          // Reporting takes no --approval: it would be dropped, and an approval is spent only on its own change.
+          refuseApprovalWithoutTakingChange(values.approval);
+          writeResult(await takingReport(core, account === undefined ? {} : { account }), output, renderTaking);
+          return;
+        }
+        if (account === undefined) throw usage('a change names its account: taking <account> --require on|off');
+        if (given.length > 1) {
+          throw usage(`one change at a time: this asks for --${given.join(' and --')}`);
+        }
+        const [flag] = given as [(typeof TAKING_OPTIONS)[number]];
+        const word = values[flag] as string;
+        const onOff = (name: string): boolean => {
+          if (word !== 'on' && word !== 'off') throw usage(`--${name} is on or off, not "${word.slice(0, 40)}"`);
+          return word === 'on';
+        };
+        let request: TakingChangeRequest;
+        if (flag === 'require') request = { account, required: onOff('require') };
+        else if (flag === 'notify') request = { account, notify: onOff('notify') };
+        else if (flag === 'acknowledge') request = { account, acknowledge: word as 'eyes' | 'nothing' };
+        else {
+          request = {
+            account,
+            afterMinutes: wholeNumber(word, { name: '--unclaimed', min: 5, max: 240 }) as number,
+          };
+        }
+        const result = await gatedChangeAtTerminal(
+          core,
+          takingChange(core, request, appApproval === undefined ? 'cli' : 'app'),
+          { ...approval, rerun: ['taking', account, `--${flag}`, word], appApproval },
+        );
+        writeResult(result, output, renderTakingChange);
+        return;
+      }
+      case 'takes': {
+        // The person's own view and overrides: each refuses inside an MCP server's process and in an agent's shell.
+        const [, , account, message, ...extra] = positionals;
+        const options = { env };
+        if (sub === 'list') {
+          if (account !== undefined) {
+            throw usage('usage: takes list [--since <ISO time|7d|12h>] [--account <name>] [--state <state>]');
+          }
+          writeResult(
+            await listTakes(
+              core,
+              {
+                ...(values.since === undefined ? {} : { since: values.since }),
+                ...(values.account === undefined ? {} : { account: values.account }),
+                ...(values.state === undefined ? {} : { state: values.state }),
+              },
+              options,
+            ),
+            output,
+            (result) => renderTakesList(result, env, platform),
+          );
+          return;
+        }
+        if (sub === 'release' || sub === 'give' || sub === 'keep') {
+          const words = sub === 'give' ? '<account> <message> --window <id>' : '<account> <message>';
+          if (account === undefined || message === undefined || extra.length > 0)
+            throw usage(`usage: takes ${sub} ${words}`);
+          if (values.since !== undefined || values.account !== undefined || values.state !== undefined) {
+            throw usage(`the takes ${sub} command takes no --since, --account or --state`);
+          }
+          const target = { account, message };
+          let result: TakePersonResult;
+          if (sub === 'release') result = await releaseTake(core, target, options);
+          else if (sub === 'keep') result = await keepTake(core, target, options);
+          else {
+            if (values.window === undefined) throw usage(`usage: takes give ${words}`);
+            result = await giveTake(core, { ...target, window: values.window }, options);
+          }
+          writeResult(result, output, renderTakePerson);
+          return;
+        }
+        throw usage('usage: takes list|release|give|keep');
       }
       case 'standing': {
         // Every change here only takes away, so none is gated: each applies at once, and none takes --approval.
@@ -2241,6 +2397,85 @@ function renderBehaviourChange(result: BehaviourChangeResult): string {
   // A note names the rules it replaced, in the file's own words: made safe as the report is.
   const note = result.note === null ? undefined : shownText(result.note, 400);
   return [note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
+}
+
+/** A report of `taking` takes no `--approval`: it would be dropped, never claimed. */
+function refuseApprovalWithoutTakingChange(approvalId: unknown): void {
+  if (approvalId === undefined) return;
+  throw new CommsError('USAGE', 'with no change this only reports, so it takes no --approval', {
+    hint: 'Pass the change the approval was prepared for — --require, --acknowledge, --unclaimed or --notify — with it.',
+  });
+}
+
+function renderTaking(report: TakingReport): string {
+  const lines =
+    report.accounts.length === 0
+      ? ['Nothing that takes messages is connected: Gmail mailboxes and Slack and Resend accounts do.']
+      : report.accounts.map((account) =>
+          [
+            account.account,
+            `  a session must take a message first: ${account.required ? 'yes' : 'no'}`,
+            `  when one does, the sender is told: ${account.acknowledge === 'eyes' ? 'with 👀' : 'nothing'}`,
+            `  a message nobody takes in ${counted(account.unclaimed.afterMinutes, 'minute')}: ${account.unclaimed.notify ? 'remind me' : 'it waits under Not taken'}`,
+          ].join('\n'),
+        );
+  return [...lines, ...report.problems.map((problem) => `note: ${problem}`)].join('\n');
+}
+
+function renderTakingChange(result: TakingChangeResult): string {
+  const said = result.changed ? 'Done.' : 'Already so: nothing was changed.';
+  return [result.note === null ? said : `${said} ${result.note}`, '', renderTaking(result)].join('\n');
+}
+
+/** Who has a take, in the person's words: an agent window by its folder and client, the person, or nobody. */
+function takeHolderText(
+  take: TakesListResult['takes'][number],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string {
+  const holder = take.holder;
+  if (holder === null) return 'nobody';
+  if ('person' in holder) return 'you';
+  const folder =
+    holder.folder === null ? 'an unknown folder' : shortenHome(holder.folder, homeDirectory(env), platform);
+  const client = holder.client === null ? '' : ` · ${shownText(holder.client.name, 40)}`;
+  return `the agent in ${shownText(folder, 200)}${client}`;
+}
+
+function renderTakesList(result: TakesListResult, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (result.takes.length === 0 && result.unreadable.length === 0)
+    return 'No message has been taken, offered or handed back.';
+  const lines = result.takes.map((take) => {
+    const where = `${take.account ?? '(removed)'}  ${take.message.id}`;
+    const state =
+      take.state === 'offered'
+        ? `offered until ${take.offer?.until ?? 'its item is taken'}`
+        : take.state === 'open'
+          ? 'open'
+          : `${take.state} by ${takeHolderText(take, env, platform)} since ${take.takenAt ?? take.updatedAt}`;
+    const back = take.history.filter((line) => line.kind === 'handed-back');
+    const handed =
+      back.length === 0
+        ? ''
+        : `; handed back ${back.length === 1 ? 'once' : `${back.length} times`}: ${[...new Set(back.map((line) => line.reason))].join(', ')}`;
+    return `${where}  ${state}${handed}`;
+  });
+  for (const file of result.unreadable) {
+    lines.push(
+      `${file.account ?? file.accountId}  a record that cannot be read (${file.file}): held until you release it`,
+    );
+  }
+  return lines.join('\n');
+}
+
+function renderTakePerson(result: TakePersonResult): string {
+  const now =
+    result.state === 'open'
+      ? 'it is open to every session'
+      : result.state === 'offered'
+        ? `it is offered to that window until ${result.take?.offer?.until ?? 'it takes it'}; it still takes it itself`
+        : 'you have it: every session is refused it until you release it';
+  return `${result.changed ? 'Done' : 'Already so'}: ${result.account} ${result.message} — ${now}.`;
 }
 
 /** `attach roots add` and the rest, by their words. */

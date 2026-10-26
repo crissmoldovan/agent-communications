@@ -71,6 +71,11 @@ export interface ReplyProof {
   /** Gmail's id of the proven message, and of its thread: what the send's activity line says it answers (0.32.0). */
   readonly messageId: string;
   readonly threadId?: string | undefined;
+  /**
+   * Whether the proven message is one this mailbox sent (its SENT label): a follow-up to its own mail, which answers
+   * nobody else's message, and so needs no take (design 2026-10-26-taking-messages §6).
+   */
+  readonly sent: boolean;
 }
 
 /** A recipient as acts and rules compare it: canonical (lower-cased, its domain in ASCII) and trimmed. */
@@ -139,6 +144,7 @@ export async function replyProofOf(
       from: shownText(shownFrom(header('from')[0]), 120),
       messageId,
       ...(message.threadId ? { threadId: message.threadId } : {}),
+      sent: (message.labelIds ?? []).includes('SENT'),
     };
   }
   return undefined;

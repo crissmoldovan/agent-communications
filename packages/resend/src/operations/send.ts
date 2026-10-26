@@ -66,6 +66,7 @@ import { type PreparedMessage, PreparedStore, SendRecords, type SendSummary } fr
 import type { ResendContext } from '../context.ts';
 import { VERSION } from '../version.ts';
 import { type CurrentOutcome, outcomeOf, outcomeUnavailable } from './last-event.ts';
+import { replyTake } from './take.ts';
 
 /**
  * The send gate: prepare → preview → approval → execute, once.
@@ -438,6 +439,11 @@ function previewOf(options: {
   handoffs: CliHandoffs;
   /** What the behaviour rules allow where this send lands (design 2026-10-19-agent-behaviour-rules, B4). */
   allowedHere: string;
+  /**
+   * For a reply this session has taken the email of (design 2026-10-26-taking-messages §6): "Taken by this session at
+   * 11:02." Display only; nothing binds it.
+   */
+  taken?: string | null | undefined;
   /** A security fix is out (design 2026-10-16, U7): the line the preview opens with, asked once. Display only. */
   security?: string | null | undefined;
 }): string {
@@ -499,7 +505,8 @@ function previewOf(options: {
   // appears to come from, read from the From the approval binds: the terminal's approval says what the prepare said
   // (L3); then what the behaviour rules allow where it lands (B4).
   const security = options.security ? `${options.security}\n` : '';
-  return `${security}${identityLine(identityOfFrom(message.from))}\n${options.allowedHere}\n${renderMessagePreview(preview)}`;
+  const taken = options.taken ? `\n${options.taken}` : '';
+  return `${security}${identityLine(identityOfFrom(message.from))}\n${options.allowedHere}${taken}\n${renderMessagePreview(preview)}`;
 }
 
 /** L3: the first line of a preview — the label recipients will see, or that there is none. */
@@ -625,6 +632,11 @@ async function prepareOneSend(context: ResendContext, name: string, input: Prepa
   // What the behaviour rules allow, at every recipient, before Resend is asked anything or an approval exists (B4).
   const check = behaviourCheckOf(composed.message);
   const allowed = requireAllowed(context, config, named, check);
+  // A reply needs the take of the email it answers (design 2026-10-26-taking-messages §6), asked here too, before any
+  // approval or preview exists and before Resend is asked anything: another session's take refuses it whatever the
+  // setting, and a take required refuses a session that has none.
+  const caller = await context.taker();
+  const taken = await replyTake(context, config, named, composed.message.inReplyTo, 'resend.send.prepare', { caller });
   const domainNote = await checkFromDomain(context, named, composed.message.fromDomain);
   // Who it appears to come from, and the From that says so (R1): settled before the digest, which binds it.
   const { message: outbound, identity } = labelled(config, named.name, named.account.id, composed, requested);
@@ -660,6 +672,13 @@ async function prepareOneSend(context: ResendContext, name: string, input: Prepa
     createdAt: context.now().toISOString(),
   };
   await new PreparedStore(context.core.paths.stateDir).put(prepared);
+  // The take is pinned while this approval waits (T3), so it does not lapse under it. Best-effort: the claim asks again.
+  if (taken?.held === true) {
+    await replyTake(context, config, named, built.message.inReplyTo, 'resend.send.prepare', {
+      caller,
+      approvalId: record.approvalId,
+    }).catch(() => undefined);
+  }
   await context.core.audit.append({
     inboxId: named.account.id,
     alias: name,
@@ -693,6 +712,7 @@ async function prepareOneSend(context: ResendContext, name: string, input: Prepa
       flags: study.flags,
       handoffs: context.handoffs,
       allowedHere: allowedHere(allowed, named),
+      taken: taken?.line ?? null,
       security,
     }),
     policy: livePolicy,
@@ -974,6 +994,10 @@ async function claimAndSend(
   // What the behaviour rules allow now, asked as prepare asked them (B4): a rule tightened since the person's yes stops
   // the send here, before the approval is spent or Resend is asked anything.
   requireAllowed(context, config, named, boundCheckOf(prepared));
+  // And the take of the email a reply answers, asked again of this session (design 2026-10-26-taking-messages §6): a take
+  // released, handed back or taken by another since the prepare stops the send here, the approval unspent.
+  const caller = await context.taker();
+  await replyTake(context, config, named, prepared.message.inReplyTo, 'resend.send.execute', { caller });
   // Everything that can refuse without sending does so before the approval is spent: the key, and a stop Resend asked for.
   const permit = closedPermit();
   const transport = await context.transport(named, permit);
@@ -1070,7 +1094,10 @@ async function claimAndSend(
        * Resend is asked again. Nothing has been sent before any attempt — a retry follows only a refusal that proves it.
        */
       try {
-        requireAllowed(context, await context.config(), named, boundCheckOf(prepared));
+        const now = await context.config();
+        requireAllowed(context, now, named, boundCheckOf(prepared));
+        // The take too, before every attempt: nothing has been sent before any attempt (§6).
+        await replyTake(context, now, named, prepared.message.inReplyTo, 'resend.send.execute', { caller });
       } catch (error) {
         throw await recordNoSend(context, records, bookkeeping, claimToken, claimedApproval, error);
       }
