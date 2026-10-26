@@ -189,3 +189,46 @@ test('0.32 B5: every condition operator reads in words, with its operand untrust
 test('0.32 B5: describeRule and its types are exported from the package', () => {
   assert.equal(events.describeRule, describeRule);
 });
+
+test('0.33 §3.5: a session target reads where its session is, what happens when there is none, and when it is busy', () => {
+  const folder = describeRule(
+    {
+      ...invoices,
+      targets: [
+        {
+          targetId: 'acme',
+          version: 1,
+          kind: 'session',
+          find: { folder: '/example/home/acme' },
+          ifNone: 'start',
+          provider: 'claude',
+          ifBusy: 'queue',
+        },
+      ],
+    },
+    aliases,
+  );
+  assert.match(
+    text(folder),
+    /If it says yes, send it to the session working in \/example\/home\/acme, starting one with Claude Code if there is none, waiting if it is busy\.$/u,
+  );
+  assert.ok(ofKind(folder, 'untrusted').includes('/example/home/acme'), 'a folder is the rule author’s text');
+  const lane = describeRule(
+    {
+      ...invoices,
+      targets: [
+        {
+          targetId: 'david',
+          version: 1,
+          kind: 'session',
+          find: { lane: 'david' },
+          ifNone: 'queue-only',
+          provider: 'codex',
+          ifBusy: 'queue-only',
+        },
+      ],
+    },
+    aliases,
+  );
+  assert.match(text(lane), /send it to the session bound to lane david, or leave it in the Queue if it is busy\.$/u);
+});

@@ -41,6 +41,11 @@ export interface DescribableTarget {
   readonly lane?: { readonly name: string } | undefined;
   readonly url?: unknown;
   readonly subscriberId?: string | undefined;
+  /** An agent-session target's (0.33.0 design §3.5): where its session is found, and what happens when none is, or it is busy. */
+  readonly find?: { readonly folder?: string | undefined; readonly lane?: string | undefined } | undefined;
+  readonly ifNone?: string | undefined;
+  readonly ifBusy?: string | undefined;
+  readonly provider?: string | undefined;
 }
 
 /**
@@ -350,6 +355,36 @@ function webhookHost(target: DescribableTarget): string | undefined {
   return host === undefined || host === '' ? undefined : host;
 }
 
+const SESSION_PROVIDERS: Readonly<Record<string, string>> = { claude: 'Claude Code', codex: 'Codex' };
+
+/** "send it to the session working in ~/work/acme, starting one with Claude Code if there is none, and waiting if it is busy". */
+function session(entry: DescribableTarget): readonly RulePart[] {
+  const where =
+    entry.find?.lane !== undefined
+      ? [plain('send it to the session bound to lane '), value(entry.find.lane)]
+      : entry.find?.folder !== undefined
+        ? [plain('send it to the session working in '), untrusted(entry.find.folder)]
+        : [plain('send it to the session '), value(entry.targetId)];
+  const provider = SESSION_PROVIDERS[entry.provider ?? ''];
+  const none =
+    entry.ifNone === 'start'
+      ? [
+          plain(', starting one'),
+          ...(provider === undefined ? [] : [plain(' with '), value(provider)]),
+          plain(' if there is none'),
+        ]
+      : entry.find?.folder !== undefined
+        ? [plain(', or leave it in the Queue if there is none')]
+        : [];
+  const busy =
+    entry.ifBusy === 'queue'
+      ? [plain(', waiting if it is busy')]
+      : entry.ifBusy === 'queue-only'
+        ? [plain(', or leave it in the Queue if it is busy')]
+        : [];
+  return [...where, ...none, ...busy];
+}
+
 function target(entry: DescribableTarget): readonly RulePart[] {
   switch (entry.kind) {
     case 'dry-run':
@@ -364,6 +399,8 @@ function target(entry: DescribableTarget): readonly RulePart[] {
       return [plain('send it to '), value(webhookHost(entry) ?? entry.targetId)];
     case 'sse':
       return [plain('stream it to '), value(entry.subscriberId ?? entry.targetId)];
+    case 'session':
+      return session(entry);
     default:
       return [plain('deliver it to '), value(entry.targetId)];
   }
