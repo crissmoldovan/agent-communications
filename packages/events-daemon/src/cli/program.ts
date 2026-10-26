@@ -181,6 +181,22 @@ export function renderApprovalViewForTerminal(result: unknown, context: B3Approv
   return escapeForDisplay(renderB3ApprovalPreviewV1(result, context).terminal);
 }
 
+/** Whether a ready view's rule adds a Linear issue: only then does the terminal ask whether a Linear key is kept. */
+function previewHasLinear(result: unknown): boolean {
+  if (typeof result !== 'object' || result === null) return false;
+  const view = result as {
+    readonly kind?: unknown;
+    readonly preview?: { readonly rule?: { readonly targets?: unknown } };
+  };
+  const targets = view.kind === 'READY' ? view.preview?.rule?.targets : undefined;
+  return (
+    Array.isArray(targets) &&
+    targets.some(
+      (target) => typeof target === 'object' && target !== null && (target as { kind?: unknown }).kind === 'linear',
+    )
+  );
+}
+
 /** Whether a ready view's rule sends to a lane: only then does the terminal read which window each lane is bound to. */
 function previewHasLane(result: unknown): boolean {
   if (typeof result !== 'object' || result === null) return false;
@@ -407,7 +423,19 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
             lanes = undefined;
           }
         }
-        streams.stdout.write(`${renderApprovalViewForTerminal(result, { lanes })}\n`);
+        // A Linear target's team and labels are checked against Linear only while a Linear key is kept: say when not.
+        let linearConnected: boolean | undefined;
+        if (previewHasLinear(result)) {
+          try {
+            const listed = (await providerList(controlOptions(program))) as {
+              readonly providers: readonly { readonly id: string; readonly hasKey: boolean }[];
+            };
+            linearConnected = listed.providers.some((entry) => entry.id === 'linear' && entry.hasKey);
+          } catch {
+            linearConnected = undefined;
+          }
+        }
+        streams.stdout.write(`${renderApprovalViewForTerminal(result, { lanes, linearConnected })}\n`);
       }
     });
   const catalogue = program.command('catalogue').description('inspect the local event catalogue');

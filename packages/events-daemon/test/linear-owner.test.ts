@@ -4,7 +4,7 @@ import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.
 import { EventControlClient } from '../src/control/client.ts';
 import { linearIssueId } from '../src/domain/linear-target.ts';
 import { FAKE_LABELS, FAKE_LINEAR_KEY, FAKE_TEAM, FAKE_VIEWER_ID, startFakeLinear } from './support/fake-linear.ts';
-import { cli, readDatabase, SENDER, setUp, withLaneOwner } from './support/lane-harness.ts';
+import { cli, RULE, readDatabase, rule, SENDER, setUp, withLaneOwner } from './support/lane-harness.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
 
 assertLoopbackSeal();
@@ -89,6 +89,53 @@ test('E3: a matching mail becomes one Linear issue, its sender’s words quoted,
         assert.deepEqual(show.delivery.linear, { identifier: 'CUE-1', url: 'https://linear.app/example/issue/CUE-1' });
         assert.deepEqual(show.target, { kind: 'linear', id: 'billing-issues', version: 1 });
         assert.doesNotMatch(`${listed.out}${shown.out}`, /Invoice 42|evil|profiles/u, 'nothing the issue says');
+      },
+      { linearClient: fake.clientOptions() },
+    );
+  } finally {
+    await fake.close();
+  }
+});
+
+test('E3 second look: a rule whose Linear team key or label name is not the one its id names in Linear is refused at activation', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const fake = await startFakeLinear();
+  try {
+    await withLaneOwner(
+      async (harness) => {
+        const mismatched = (version: number, target: Record<string, unknown>) => ({ ...target, version });
+        const enable = async (version: number, target: Record<string, unknown>) => {
+          await harness.control.request('target-add', { document: target });
+          await harness.control.request('rule-create', { document: rule(version, [target]) });
+          return harness.control.request('rule-enable', { ruleId: RULE, version });
+        };
+        // With no Linear key the check is skipped: the rule is prepared, and nothing is asked of Linear.
+        const prepared = (await enable(1, mismatched(1, { ...LINEAR, team: { id: FAKE_TEAM.id, key: 'SECRET' } }))) as {
+          approvalId?: string;
+        };
+        assert.equal(typeof prepared.approvalId, 'string');
+        assert.equal(fake.requests.length, 0, 'nothing was asked of Linear without a key');
+        await new EventControlClient({ stateDir: harness.stateDir, clientName: 'person-setup:desktop-app' }).request(
+          'provider-key-set',
+          { provider: 'linear', hidden: FAKE_LINEAR_KEY },
+        );
+        await assert.rejects(
+          enable(2, mismatched(2, { ...LINEAR, team: { id: FAKE_TEAM.id, key: 'SECRET' } })),
+          (error) => {
+            const details = (error as { details?: { reason?: unknown } }).details;
+            return (
+              details?.reason === 'LINEAR_TEAM_MISMATCH' && /its team id is Linear's team CUE/u.test(String(error))
+            );
+          },
+        );
+        await assert.rejects(
+          enable(3, mismatched(3, { ...LINEAR, labels: [{ id: FAKE_LABELS[0].id, name: 'Urgent' }] })),
+          (error) => (error as { details?: { reason?: unknown } }).details?.reason === 'LINEAR_LABEL_MISMATCH',
+        );
+        // The ids and names Linear gives are what an activation needs.
+        const matching = (await enable(4, mismatched(4, LINEAR))) as { approvalId?: string };
+        assert.equal(typeof matching.approvalId, 'string');
       },
       { linearClient: fake.clientOptions() },
     );

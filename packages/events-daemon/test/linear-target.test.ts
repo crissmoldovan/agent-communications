@@ -206,12 +206,10 @@ test('E3: what a sender wrote reaches Linear as text only — no link, mention, 
   assert.equal(issue.title.includes('\u0007') || issue.title.includes('\u202e'), false);
   assert.ok(issue.title.length <= 255, 'the title fits Linear’s');
 
-  // The person's own words come through as written; the constant the rule maps is theirs too.
+  // The template's own words come through as written; the constant the rule maps is quoted as the rule's, as text.
   assert.match(issue.description, /^Check it against Stripe\.\n\nSubject: /u);
-  assert.match(
-    issue.description,
-    /Kind: invoice\n\n_Added by Agent Comms: rule invoices, version 4; delivery dl\\-1\._$/u,
-  );
+  assert.ok(issue.description.includes(`Kind: \n\n${outsideBlock('kind', 'invoice', 'rule')}`));
+  assert.match(issue.description, /\n\n_Added by Agent Comms: rule invoices, version 4; delivery dl\\-1\._$/u);
   // Every line of the sender's text is inside one quoted, fenced block, whose fence outruns their backticks.
   const block = outsideBlock('subject', hostile);
   assert.ok(issue.description.includes(block));
@@ -244,6 +242,34 @@ test('E3: what a sender wrote reaches Linear as text only — no link, mention, 
   assert.equal(blank.title, 'Agent Comms: rule invoices');
 });
 
+test('E3 second look: a constant the rule maps is quoted as text too — an agent-written rule cannot mention or link through one', () => {
+  const definition = catalogueEntry('gmail.message.received', 1);
+  assert.ok(definition.ok);
+  const mapping = {
+    subject: { $path: '/subject' },
+    note: 'cc https://linear.app/acme/profiles/ceo @ceo, see CUE-12 and [this](https://evil.example)',
+  };
+  const compiled = compileMapping(definition.value, mapping);
+  assert.ok(compiled.ok);
+  const issue = renderLinearIssue({
+    target: canonicalLinearTarget(linear({ title: { text: '{{note}}' }, description: { text: 'Note: {{note}}' } })),
+    ruleId: 'invoices',
+    ruleVersion: 4,
+    deliveryId: 'dl-1',
+    data: { subject: 'x', note: `${mapping.note}\nsecond line` },
+    fields: mappedFields(compiled.value),
+  });
+  // The title is plain text, one line.
+  assert.equal(issue.title, `${mapping.note} second line`);
+  // In the description the constant is a quoted code block, labelled as the rule's, never Markdown.
+  const lines = issue.description.split('\n');
+  assert.ok(lines.includes("> **From the rule's mapping: a fixed value, shown as text** (`note`)"));
+  assert.ok(lines.includes('> ```text'));
+  for (const line of lines.filter((entry) => !entry.startsWith('>')))
+    for (const word of ['profiles', '@ceo', 'CUE-12', 'evil.example', '[this]'])
+      assert.equal(line.includes(word), false, `${word} only inside the quoted code block: ${line}`);
+});
+
 test('E3: every try of one delivery names the same issue: its id is chosen from the delivery’s, as a v4 UUID', () => {
   const id = linearIssueId('dl-1');
   assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u);
@@ -272,8 +298,29 @@ test('E3: the approval preview names the team, the labels, the assignee, and whi
   const line = view.terminal.split('\n').find((entry) => entry.startsWith('Linear issue '));
   assert.equal(
     line,
-    `Linear issue billing-issues@1: adds an issue in team CUE (${TEAM}) through Linear's API (api.linear.app), with your Linear key; label "Billing"; assigned to the Linear key's own user. Its title is filled from sender, subject; its description from subject, kind, each value from the message quoted as written by the sender.`,
+    `Linear issue billing-issues@1: adds an issue in team CUE (${TEAM}) through Linear's API (api.linear.app), with your Linear key; label "Billing"; assigned to the Linear key's own user. Its title is filled from sender, subject; its description from subject, kind, each value quoted as text, never as links or mentions.`,
   );
+  // With no Linear key, activation could not check the team and labels against Linear, and the preview says so.
+  const unchecked = renderB3ApprovalPreviewV1(
+    {
+      kind: 'READY',
+      approvalId: 'ap_00000000000000000000000001',
+      digest: 'a'.repeat(64),
+      preview: document,
+      challenge: {
+        approvalId: 'ap_00000000000000000000000001',
+        digest: 'a'.repeat(64),
+        challenge: 'invoices',
+        expiresAt: 1_000,
+      },
+    },
+    { linearConnected: false },
+  ).terminal.split('\n');
+  assert.equal(
+    unchecked[unchecked.findIndex((entry) => entry.startsWith('Linear issue ')) + 1],
+    'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the rule again.',
+  );
+  assert.equal(view.terminal.includes('Linear is not connected'), false, 'said only when it is not');
   assert.match(view.terminal, /^In plain words .*add an issue to Linear, team CUE\./mu);
   assert.match(
     describeRule(canonicalFullRuleDocument(rule(linear())))

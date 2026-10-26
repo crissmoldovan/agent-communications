@@ -27,9 +27,12 @@ together under one version.
     model-written one comes with the session target. The approval preview names the team, the labels, the assignee
     and which fields fill the title and description. The rule text says it: `linear issue billing-issues, version 1,
     in team CUE, label Billing, assigned to me`.
-  - **What a sender wrote stays text:** in the description each value from the message is a block quote labelled as
-    from outside, inside a code block, where Linear makes no link or mention from a URL, `@name` or issue id; in the
-    title it is flattened to one line.
+  - **A slot's value stays text:** in the description every slot's value — what the sender wrote, or a constant the
+    rule's mapping sets — is a block quote labelled with who wrote it, inside a code block, where Linear makes no link
+    or mention from a URL, `@name` or issue id; in the title it is flattened to one line.
+  - **Checked against Linear:** when you enable the rule with a Linear key kept, each team key must be the team its id
+    names in Linear, and each label name its id's (`LINEAR_TEAM_MISMATCH`, `LINEAR_LABEL_MISMATCH`), so the approval
+    cannot name one team and send to another. With no key the check is skipped, and the approval says so.
   - **Delivery:** one `issueCreate` through the pinned connection to `api.linear.app/graphql`, the one Linear address
     the event service may reach. A rate limit or a 5xx is tried again as a webhook's failure is; Linear refusing it
     fails at once with Linear's code. A retry never adds a second issue: each try looks for the issue by its own id

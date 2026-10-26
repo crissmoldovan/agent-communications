@@ -45,6 +45,7 @@
     "packages/events-daemon/test/laya-judge-creation.test.ts": 1,
     "packages/events-daemon/test/laya-purge-closure.test.ts": 1,
     "packages/events-daemon/test/linear-dispatch.test.ts": 1,
+    "packages/events-daemon/test/linear-integration.test.ts": 1,
     "packages/events-daemon/test/linear-target.test.ts": 1,
     "packages/events-daemon/test/messages-list.test.ts": 1,
     "packages/events-daemon/test/network-documents.test.ts": 1,
@@ -64,6 +65,7 @@
     "packages/events-daemon/test/rule-analyse.test.ts": 1,
     "packages/events-daemon/test/rule-show.test.ts": 2,
     "packages/events-daemon/test/session-owner.test.ts": 1,
+    "packages/events-daemon/test/session-review.test.ts": 1,
     "packages/events-daemon/test/session-target-domain.test.ts": 1,
     "packages/events-daemon/test/sse-persistence-auth.test.ts": 1,
     "packages/events-daemon/test/support/b3-control-v3-vectors.ts": 1,
@@ -5934,6 +5936,126 @@
       }
     },
     {
+      "from": ["packages/events-daemon/test/linear-integration.test.ts:325"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARACTIVATION"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+              "key": "SECRET"
+            },
+            "title": {
+              "text": "{{subject}}"
+            },
+            "description": {
+              "text": ""
+            },
+            "labels": [],
+            "assignee": null
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/linear-integration.test.ts:325"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_LINEARACTIVATION"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "billing-issues",
+            "version": 1,
+            "kind": "linear",
+            "team": {
+              "id": "00000000-0000-4000-8000-000000000000",
+              "key": "CUE"
+            },
+            "title": {
+              "text": "{{subject}}"
+            },
+            "description": {
+              "text": ""
+            },
+            "labels": [],
+            "assignee": null
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
       "from": ["packages/events-daemon/test/linear-target.test.ts:47"],
       "document": {
         "ruleId": "invoices",
@@ -9063,7 +9185,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9142,7 +9264,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9213,7 +9335,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9277,7 +9399,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9356,7 +9478,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9474,7 +9596,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -9542,7 +9664,111 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:35"],
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 2,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_ANALYSEDOMAIN001"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "all": [
+            {
+              "path": "/from/address",
+              "op": "equals",
+              "value": "jane.ceo@acme-private.example",
+              "caseSensitive": false
+            },
+            {
+              "path": "/from/address",
+              "op": "startsWith",
+              "value": "jane.",
+              "caseSensitive": false
+            },
+            {
+              "path": "/subject",
+              "op": "contains",
+              "value": "write to billing@acme-private.example",
+              "caseSensitive": false
+            },
+            {
+              "path": "/subject",
+              "op": "in",
+              "values": ["invoice", "acme-private.example"]
+            },
+            {
+              "path": "/subject",
+              "op": "contains",
+              "value": "invoice v1.2",
+              "caseSensitive": false
+            },
+            {
+              "not": {
+                "path": "/from/address",
+                "op": "domainIs",
+                "value": "sender-chosen-domain.example",
+                "includeSubdomains": false
+              }
+            }
+          ]
+        },
+        "agentic": {
+          "judge": {
+            "judgeId": "jev",
+            "version": 1
+          },
+          "question": "Is this asking me to pay or send something?",
+          "inputs": ["/from/address", "/subject"],
+          "threshold": 0.7,
+          "onUncertain": "no-match",
+          "callsPerRollingHour": 60,
+          "inputTokensPerRolling30Days": 1000000,
+          "concurrency": 1,
+          "maxInputTokens": 2000,
+          "maxOutputTokens": 16
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "log",
+            "version": 1,
+            "kind": "dry-run",
+            "retentionMs": 86400000
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/rule-analyse-domain.test.ts:37"],
       "document": {
         "ruleId": "invoices",
         "version": 2,
@@ -10291,7 +10517,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10357,7 +10583,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10414,7 +10640,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10472,7 +10698,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10529,7 +10755,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10583,7 +10809,7 @@
       }
     },
     {
-      "from": ["packages/events-daemon/test/session-target-domain.test.ts:32"],
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
       "document": {
         "ruleId": "invoices",
         "version": 1,
@@ -10646,6 +10872,62 @@
           "deadLetterMs": 604800000,
           "decisionMetadataMs": 7776000000,
           "queueMs": 604800000
+        }
+      }
+    },
+    {
+      "from": ["packages/events-daemon/test/session-target-domain.test.ts:38"],
+      "document": {
+        "ruleId": "invoices",
+        "version": 1,
+        "source": {
+          "channel": "gmail",
+          "accountIds": ["ibx_SESSIONDOMAIN01"],
+          "options": {
+            "channel": "gmail",
+            "labels": "inbox",
+            "includeSpamTrash": false
+          }
+        },
+        "event": {
+          "type": "gmail.message.received",
+          "version": 1
+        },
+        "condition": {
+          "path": "/subject",
+          "op": "exists"
+        },
+        "mapping": {
+          "from": {
+            "$path": "/from"
+          },
+          "subject": {
+            "$path": "/subject"
+          }
+        },
+        "targets": [
+          {
+            "targetId": "acme",
+            "version": 1,
+            "kind": "session",
+            "find": {
+              "folder": "/example/home/acme"
+            },
+            "ifNone": "start",
+            "provider": "claude"
+          }
+        ],
+        "subscribers": [],
+        "judges": [],
+        "deliveryRateCap": 60,
+        "retention": {
+          "ingestMs": 604800000,
+          "holdMs": 604800000,
+          "deliveryMs": 604800000,
+          "dryrunMs": 86400000,
+          "sseReplayMs": 604800000,
+          "deadLetterMs": 604800000,
+          "decisionMetadataMs": 7776000000
         }
       }
     },
