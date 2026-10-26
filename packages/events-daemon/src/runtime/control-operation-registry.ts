@@ -148,6 +148,9 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
     desktopCallable: true,
     family: 'owner',
   },
+  // One judge version's exact canonical document (0.33.0), for the app's rule editor to embed; content-free, as
+  // `judges list` is, so CLI and MCP alike.
+  { capabilityOperation: 'judgeShow', wireOperation: 'judge-show', desktopCallable: true, family: 'owner' },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

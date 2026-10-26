@@ -162,6 +162,11 @@ const EXPECTED_ANALYSE_ROWS = [
 ] as const;
 
 /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
+/** One judge version's exact canonical document (0.33.0): content-free, as judges list is, so CLI and MCP alike. */
+const EXPECTED_JUDGE_SHOW_ROWS = [
+  ['events-daemon.judge.show', 'judge show', 'events_judge_show', 'both', 'judgeShow'],
+] as const;
+
 const EXPECTED_INTEGRATION_ROWS = [
   ['events-daemon.integration.show', 'integration show', null, 'exception', 'integrationShow'],
 ] as const;
@@ -207,6 +212,7 @@ const expectedRows = [
   ...shapedRows(EXPECTED_ANALYSE_ROWS),
   ...shapedRows(EXPECTED_INTEGRATION_ROWS),
   ...shapedRows(EXPECTED_SESSION_ROWS),
+  ...shapedRows(EXPECTED_JUDGE_SHOW_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
 

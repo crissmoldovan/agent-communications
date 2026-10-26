@@ -72,6 +72,7 @@ import type {
   ProviderListResultV1,
   RuleApprovalResultV1,
 } from '../runtime/judge-setup.ts';
+import type { JudgeShowResultV1 } from '../runtime/judge-show.ts';
 import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
 import type {
   QueueClearResultV1,
@@ -590,6 +591,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'session-queue-list': SessionQueueListResultV1;
   readonly 'session-queue-drop': SessionQueueDropResultV1;
   readonly 'rule-analyse': RuleAnalyseResultV1;
+  readonly 'judge-show': JudgeShowResultV1;
 };
 
 /**
@@ -782,6 +784,8 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
    * Analyse (0.33.0 design §3.3): the person's view of one rule, or a draft of it from the editor, and the provider its
    * model runs on when they pick one. It writes nothing.
    */
+  /** One judge version's exact canonical document (0.33.0), the newest live one unless a version is named. */
+  readonly 'judge-show': { readonly judgeId: string; readonly version?: number | undefined };
   readonly 'rule-analyse': {
     readonly ruleId: string;
     readonly draft?: Readonly<Record<string, JsonValue>> | undefined;
@@ -1435,6 +1439,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'session-queue-list': ['items'],
   'session-queue-drop': ['deliveryId', 'dropped'],
   'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
+  'judge-show': ['judgeId', 'version', 'document', 'digest', 'state'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1813,6 +1818,20 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'rule-analyse':
       assertRuleAnalyseResult(value);
       return;
+    case 'judge-show': {
+      assertText(value.judgeId, 'a shown judge id');
+      assertPositiveInteger(value.version, 'a shown judge version');
+      if (value.state !== 'live' && value.state !== 'revoked') throw new TypeError('a shown judge is live or revoked');
+      if (typeof value.digest !== 'string' || !/^[0-9a-f]{64}$/u.test(value.digest))
+        throw new TypeError("a shown judge's digest is a SHA-256");
+      // The document is exactly a canonical judge document: closed, with no field a key could ride in.
+      const document = canonicalJudge(value.document);
+      if (canonicalJson(document as never) !== canonicalJson(value.document as never))
+        throw new TypeError('a shown judge document is canonical');
+      if (document.judgeId !== value.judgeId || document.version !== value.version)
+        throw new TypeError('a shown judge document is that judge version');
+      return;
+    }
     case 'provider-key-set':
     case 'provider-key-remove':
       if (!isEventSecretProvider(value.provider)) throw new TypeError('a provider key result names a known provider');

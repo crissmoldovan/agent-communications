@@ -498,6 +498,18 @@ manage immutable judges and run fixed synthetic tests
 agent-events judge [options] [command]
 ```
 
+### `agent-events judge show`
+
+show one judge version's exact canonical document, its digest and its state; never a key
+
+```
+agent-events judge show [options] <judge-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` | that version, rather than the newest live one | — |
+
 ### `agent-events judge add`
 
 ```

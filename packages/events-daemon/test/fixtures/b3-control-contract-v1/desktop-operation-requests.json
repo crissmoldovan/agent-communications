@@ -248,5 +248,15 @@
         "digest": "ada6752bbfedde7cdde540ee02823ddc3959eca43c741438c9094e07fc1e07d0"
       }
     }
+  },
+  {
+    "name": "judge-show-request",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev",
+        "version": 1
+      }
+    }
   }
 ]

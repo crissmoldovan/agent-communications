@@ -66,6 +66,7 @@ import {
   judgeKindsList,
   judgeModelStatus,
   judgeSetup,
+  judgeShow,
   judgesList,
   judgeTest,
   removeJudge,
@@ -116,6 +117,7 @@ import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
+import { parseJudgeShowArguments } from '../runtime/judge-show.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
@@ -666,6 +668,17 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     print(await judgesList(controlOptions(program)));
   });
   const judge = program.command('judge').description('manage immutable judges and run fixed synthetic tests');
+  judge
+    .command('show <judge-id>')
+    .description("show one judge version's exact canonical document, its digest and its state; never a key")
+    .option('--version <version>', 'that version, rather than the newest live one')
+    .action(async (judgeId: string, options) => {
+      ran = true;
+      const version = options.version === undefined ? undefined : parseVersion(options.version as string);
+      // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseJudgeShowArguments({ judgeId, ...(version === undefined ? {} : { version }) });
+      print(await judgeShow(judgeId, { ...controlOptions(program), version }));
+    });
   judge.command('add <document>').action(async (document: string) => {
     ran = true;
     const parsed = jsonArgument(document, 'judge document');

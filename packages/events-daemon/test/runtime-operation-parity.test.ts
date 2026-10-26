@@ -73,6 +73,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_subscriber_update',
         'events_subscriber_remove',
         'events_judges_list',
+        'events_judge_show',
         'events_judge_add',
         'events_judge_update',
         'events_judge_remove',
