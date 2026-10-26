@@ -11,6 +11,7 @@ import {
   EVENT_PHRASES,
   hasQueue,
   isFieldText,
+  isRecord,
   pointerTokens,
   REQUIRED_SECTIONS,
   RETENTION_LINES,
@@ -468,7 +469,7 @@ function representationReader(cursor: Cursor, target: Record_, word: 'plain' | '
   };
 }
 
-const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'raw'];
+const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'linear issue', 'raw'];
 
 function thenSection(cursor: Cursor, line: TextLine, state: State): void {
   cursor.take('then');
@@ -567,8 +568,9 @@ function target(line: TextLine): JsonValue {
     noChildren(line, 'a stream');
     return target;
   }
+  if (cursor.take('linear', 'issue')) return linearIssue(cursor, line);
   const word = cursor.peekWord();
-  if (word === 'session' || word === 'linear')
+  if (word === 'session')
     return cursor.fail(
       `a ${word} target is not in this version of the rule text yet; write it as raw followed by its JSON document`,
       at,
@@ -580,6 +582,85 @@ function target(line: TextLine): JsonValue {
     }`,
     at,
   );
+}
+
+/**
+ * A Linear issue target (0.33.0 design §3.4): its line says the team, the labels and who it is assigned to; its
+ * indented lines give the ids Linear knows them by and the title and description. The prototype's short line, with no
+ * id or version (`linear issue in team CUE, …`), parses too, and the event service refuses what it leaves out.
+ */
+function linearIssue(cursor: Cursor, line: TextLine): JsonValue {
+  const short = cursor.isNext('in', 'team');
+  const target: Record_ = short ? { kind: 'linear' } : { ...targetHead(cursor), kind: 'linear' };
+  let labelNames: string[] | undefined;
+  const team = (): Record_ => {
+    if (!isRecord(target.team)) target.team = {};
+    return target.team as Record_;
+  };
+  const inTeam = () => {
+    cursor.expect(['in', 'team'], '"in team <key>"');
+    team().key = cursor.name('the team key');
+  };
+  const labels = (word: 'label' | 'labels') => () => {
+    const at = cursor.mark();
+    if (labelNames !== undefined) cursor.fail('a Linear issue names its labels once', at);
+    cursor.take(word);
+    labelNames = names(cursor, 'a label name');
+  };
+  if (short) inTeam();
+  clauses(cursor, 'a Linear issue', {
+    ...(short ? {} : { in: ['in team <key>', inTeam] as const }),
+    label: ['label <name>', labels('label')],
+    labels: ['labels <name> and <name>', labels('labels')],
+    assigned: [
+      'assigned to me, nobody or user <id>',
+      () => {
+        cursor.expect(['assigned', 'to'], '"assigned to <who>"');
+        if (cursor.take('me')) target.assignee = 'me';
+        else if (cursor.take('nobody')) target.assignee = null;
+        else if (cursor.take('user')) target.assignee = { id: cursor.name('the user id') };
+        else cursor.fail(`expected me, nobody or user <id> after "assigned to"; found ${cursor.describeNext()}`);
+      },
+    ],
+  });
+  let labelIds: { readonly ids: string[]; readonly line: TextLine } | undefined;
+  const ids = (child: TextLine, inner: Cursor) => {
+    if (labelIds !== undefined)
+      inner.fail(`a Linear issue gives its label ids once; they are on line ${labelIds.line.number}`);
+    labelIds = { ids: names(inner, 'a label id'), line: child };
+  };
+  const template = (part: 'title' | 'description') => (inner: Cursor) => {
+    if (inner.isNext('written'))
+      inner.fail(
+        `a model-written ${part} arrives with the session target's context; for now write the ${part} as quoted text with {{field}} slots`,
+      );
+    target[part] = { text: inner.string(`the ${part}`) };
+  };
+  block(line, 'a Linear issue', [
+    [
+      ['team', 'id'],
+      (inner) => {
+        team().id = inner.name('the team id');
+      },
+    ],
+    [['label', 'id'], (inner, child) => ids(child, inner)],
+    [['label', 'ids'], (inner, child) => ids(child, inner)],
+    [['title'], template('title')],
+    [['description'], template('description')],
+  ]);
+  if (labelIds !== undefined) {
+    const given = labelIds as { readonly ids: string[]; readonly line: TextLine };
+    if (labelNames === undefined)
+      fail(given.line, "label ids pair with the label names on the issue's line, which names none");
+    if (given.ids.length !== labelNames.length)
+      fail(given.line, `the issue's line names ${labelNames.length} labels, and this line ${given.ids.length} ids`);
+  }
+  target.labels = (labelNames ?? []).map((name, index) => {
+    const id = labelIds?.ids[index];
+    return id === undefined ? { name } : { id, name };
+  });
+  if (!Object.hasOwn(target, 'assignee')) target.assignee = null;
+  return target;
 }
 
 /** A webhook's indented lines: where it sends, the addresses it may reach, and its signing and ordering. */

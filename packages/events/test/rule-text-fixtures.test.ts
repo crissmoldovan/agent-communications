@@ -93,6 +93,9 @@ const FIXTURES: readonly Fixture[] = [
  * `caseSensitive`, no targets, or a queue rule whose retention has no `queueMs`. A canonical rule never needs one.
  */
 const ESCAPED: Readonly<Record<string, readonly string[]>> = {
+  // The app's 0.32 rule-show fixture carries its judge in the legacy `judges` list, which the event service refuses.
+  'apps/desktop/src/test/fixtures/events-rule-show.v032.json#/invoices/0/document': ['raw /judges ='],
+  'apps/desktop/src/test/fixtures/events-rule-show.v032.json#/invoices/1/document': ['raw /judges ='],
   // `event: { version: 1 }` with no type, and no source: the test adds them per channel.
   'packages/events-daemon/test/activation-documents.test.ts': ['raw /event =', 'raw /source absent'],
   // An empty condition, refused by the consumer contract.
