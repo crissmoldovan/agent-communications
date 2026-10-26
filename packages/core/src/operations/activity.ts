@@ -6,6 +6,8 @@ import {
   type ActivityKind,
   type ActivityLine,
   type ActivityOutcome,
+  type ActivityReplyTo,
+  type ActivitySender,
   type ActivitySession,
   type ActivitySessionSummary,
   type ActivitySurface,
@@ -284,6 +286,223 @@ export async function activityMine(
     lines: shown.lines.filter((line) => line.session.key === identity.key).map((line) => enveloped(line, boundary)),
     more: shown.more,
   };
+}
+
+// ── By item ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The environment variable an MCP server sets in its own process, so every program it starts inherits it: the event
+ * service's (`agent-events mcp`) does. The same marker its queue and dry-run reads refuse on: what is the person's view
+ * is not read from inside a server an agent drives.
+ */
+const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
+
+/** Refuses, as exit 10, when this process is an MCP server's or one it started: the person's view is not read there. */
+function refuseInsideMcpServer(env: NodeJS.ProcessEnv): void {
+  const marker = env[MCP_SERVER_MARKER];
+  if (marker === undefined || marker === '') return;
+  throw new CommsError(
+    'APPROVAL_REQUIRED',
+    "every agent window's activity, item by item, is for a person, at a terminal or in the app — an MCP server's process cannot read it",
+    {
+      hint: 'Over MCP, comms_activity gives the calling window its own activity.',
+      details: { reason: 'MCP_SERVER_PROCESS', marker: MCP_SERVER_MARKER },
+    },
+  );
+}
+
+export interface ActivityItemsRequest {
+  /**
+   * From when: milliseconds since 1970, as the desktop app passes it — or, as `activity show` takes it, an ISO time or
+   * a span back from now (`7d`, `12h`). Every day the retention keeps, when left out.
+   */
+  readonly since?: string | number | undefined;
+  /** Only these items, by the ids this answers with: a Gmail message id, a Slack `<channelId>/<ts>`. */
+  readonly ids?: readonly string[] | undefined;
+}
+
+/** The window a line came from: its key, its folder and the client it said it is. */
+export interface ActivityItemSession {
+  readonly key: string;
+  readonly folder: string | null;
+  readonly client: ClientInfo | null;
+}
+
+/**
+ * One line, as `activity items` lists it under an item it names: which window, what, when and how it ended; the
+ * item's subject and sender as recorded — a sender's words, in the untrusted-content envelope — when the line names
+ * the item itself; and the links (§3.6) where the line has them: the message it answers, the thread it went into —
+ * named as the message it is, `<channelId>/<ts>`, or null for a new message — and the draft it made, prepared or sent.
+ */
+export interface ActivityItemEntry {
+  readonly session: ActivityItemSession;
+  readonly operation: string;
+  readonly at: string;
+  readonly outcome: ActivityOutcome;
+  readonly subject?: string | undefined;
+  readonly from?: ActivitySender | undefined;
+  readonly replyTo?: ActivityReplyTo | undefined;
+  readonly thread?: string | null | undefined;
+  readonly draftId?: string | undefined;
+}
+
+export interface ActivityItemsResult {
+  /** Each item's lines, oldest first, by the item's id; the items in the order they were first named. */
+  readonly items: Record<string, ActivityItemEntry[]>;
+}
+
+/** The most items `--ids` may ask for at once, and how long one id may be. */
+export const MAX_ITEM_IDS = 500;
+const MAX_ITEM_ID_CHARS = 400;
+const ITEM_ID = /^[A-Za-z0-9._:/@+=-]+$/;
+const SLACK_TS = /^\d{1,12}\.\d{1,8}$/;
+const SLACK_CONVERSATION = /^[CDG][A-Z0-9]{1,40}$/;
+const EPOCH_MS = /^\d{1,16}$/;
+/** The latest time a Date can hold, in milliseconds. */
+const LATEST_MS = 8.64e15;
+
+/** `since` as an ISO time: milliseconds since 1970, an ISO time, or a span back from now. Undefined when not given. */
+function itemsSince(value: string | number | undefined, now: Date): string | undefined {
+  if (value === undefined) return undefined;
+  const text = String(value).trim();
+  if (EPOCH_MS.test(text) && Number(text) <= LATEST_MS) return new Date(Number(text)).toISOString();
+  try {
+    return activitySince(text, now);
+  } catch {
+    throw new CommsError(
+      'USAGE',
+      `--since (since, from the app) takes milliseconds since 1970, an ISO time, or a span back from now such as 7d or 12h — not "${text.slice(0, 40)}"`,
+    );
+  }
+}
+
+function itemIdsOf(ids: readonly string[] | undefined): ReadonlySet<string> | undefined {
+  if (ids === undefined) return undefined;
+  if (ids.length > MAX_ITEM_IDS) {
+    throw new CommsError('USAGE', `--ids takes at most ${MAX_ITEM_IDS} ids at once, not ${ids.length}`);
+  }
+  for (const id of ids) {
+    if (typeof id !== 'string' || id.length > MAX_ITEM_ID_CHARS || !ITEM_ID.test(id)) {
+      throw new CommsError('USAGE', `"${String(id).slice(0, 40)}" is not an item's id`, {
+        hint: 'A Gmail message id, a draft id, or a Slack message as <channelId>/<ts>, comma-separated.',
+      });
+    }
+  }
+  return new Set(ids);
+}
+
+/** A Slack line's conversation, by its id: the one the line names, or else the first its messages are in by id. */
+function slackConversationOf(line: ActivityLine): string | undefined {
+  if (line.channelId !== undefined && SLACK_CONVERSATION.test(line.channelId)) return line.channelId;
+  const inOne = (line.items ?? []).find(
+    (item) => SLACK_TS.test(item.id) && item.conversation !== undefined && SLACK_CONVERSATION.test(item.conversation),
+  );
+  return inOne?.conversation;
+}
+
+/**
+ * What a line names, each by the id `activity items` answers with: every item it lists, and every item it links to —
+ * the message it answers (`replyTo`), the draft it made, prepared or sent (`draftId`), and, for Slack, the thread a post
+ * went into. A Slack message is `<channelId>/<ts>`: the conversation it is in by id, else the line's own; one in a room
+ * named only by its name — a search's hits — names no message an event names, and is left out. Anything else — a
+ * Gmail message, a draft, a file — keeps its id as it is. Each id once, with the item the line lists under it, if any.
+ */
+function namedBy(line: ActivityLine): Map<string, ActivityItem | undefined> {
+  const named = new Map<string, ActivityItem | undefined>();
+  const name = (id: string, item?: ActivityItem) => {
+    if (!named.has(id) || (item !== undefined && named.get(id) === undefined)) named.set(id, item);
+  };
+  const slack = line.channel === 'slack';
+  const conversationId = (id: string | undefined) => (id !== undefined && SLACK_CONVERSATION.test(id) ? id : undefined);
+  const lineConversation = slack ? slackConversationOf(line) : undefined;
+  for (const item of line.items ?? []) {
+    if (slack && SLACK_TS.test(item.id)) {
+      const conversation = conversationId(item.conversation) ?? conversationId(line.channelId);
+      if (conversation !== undefined) name(`${conversation}/${item.id}`, item);
+      continue;
+    }
+    name(item.id, item);
+  }
+  if (line.replyTo !== undefined) name(line.replyTo.messageId);
+  if (line.draftId !== undefined) name(line.draftId);
+  if (slack && typeof line.thread === 'string' && lineConversation !== undefined) {
+    name(`${lineConversation}/${line.thread}`);
+  }
+  return named;
+}
+
+/** The words a quick look for `ids` searches a line's text for: an id itself, or a Slack message's ts. */
+function mentionsOf(ids: ReadonlySet<string>): string[] {
+  return [...ids].map((id) => {
+    const slash = id.lastIndexOf('/');
+    return slash === -1 ? id : id.slice(slash + 1);
+  });
+}
+
+/**
+ * Every activity line that names an item, grouped by the item's id (0.32.0 §3.6): which window touched a message,
+ * when and how, and the lines that tie a reply to the message it answers. The person's view — every session, project
+ * and account — so refused inside an MCP server's process (§4), as `activity show` has no tool. What a sender wrote
+ * comes back in the untrusted-content envelope, one boundary per answer, as `activity show` gives it.
+ *
+ * `since` is milliseconds since 1970 (or an ISO time, or a span back from now); `ids`, the items wanted.
+ */
+export async function activityItems(
+  core: Core,
+  request: ActivityItemsRequest = {},
+  options: ActivityReadOptions = {},
+): Promise<ActivityItemsResult> {
+  refuseInsideMcpServer(options.env ?? process.env);
+  const now = (options.now ?? (() => new Date()))();
+  const since = itemsSince(request.since, now);
+  const wanted = itemIdsOf(request.ids);
+  if (wanted !== undefined && wanted.size === 0) return { items: {} };
+  const lines = await core.activity.linesSince({
+    since,
+    ...(wanted === undefined ? {} : { mention: mentionsOf(wanted) }),
+  });
+  const boundary = newBoundary();
+  const wrap = (text: string, field: string) => wrapUntrusted(text, { field }, boundary);
+  const address = (text: string) => (PLAIN_ADDRESS.test(text) ? text : wrap(text, 'from-address'));
+  // A map, and an object made from it at the end: an id is a line's word, and `__proto__` is a word too.
+  const items = new Map<string, ActivityItemEntry[]>();
+  for (const line of lines) {
+    const conversation = line.channel === 'slack' ? slackConversationOf(line) : undefined;
+    const thread =
+      line.thread === undefined
+        ? undefined
+        : line.thread === null
+          ? null
+          : conversation === undefined
+            ? undefined
+            : `${conversation}/${line.thread}`;
+    for (const [id, item] of namedBy(line)) {
+      if (wanted !== undefined && !wanted.has(id)) continue;
+      const from = item?.from;
+      const entry: ActivityItemEntry = {
+        session: { key: line.session.key, folder: line.session.folder, client: line.session.client ?? null },
+        operation: line.operation,
+        at: line.at,
+        outcome: line.outcome,
+        ...(item?.subject === undefined ? {} : { subject: wrap(item.subject, 'subject') }),
+        ...(from === undefined
+          ? {}
+          : {
+              from: {
+                ...(from.name === undefined ? {} : { name: wrap(from.name, 'from-name') }),
+                ...(from.address === undefined ? {} : { address: address(from.address) }),
+              },
+            }),
+        ...(line.replyTo === undefined ? {} : { replyTo: line.replyTo }),
+        ...(thread === undefined ? {} : { thread }),
+        ...(line.draftId === undefined ? {} : { draftId: line.draftId }),
+      };
+      const held = items.get(id);
+      if (held === undefined) items.set(id, [entry]);
+      else held.push(entry);
+    }
+  }
+  return { items: Object.fromEntries(items) };
 }
 
 // ── The settings ───────────────────────────────────────────────────────────────────────────────────────────────

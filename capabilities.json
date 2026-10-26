@@ -42,6 +42,14 @@
       "reason": "Any session's calls, by its key, is the person's view. Over MCP no argument names a session: comms_activity shows the calling session's own, worked out by the server itself, so an agent cannot read another window's subjects and senders by guessing or copying a key (design 2026-10-25-activity S3)."
     },
     {
+      "id": "core.activity.items",
+      "package": "core",
+      "cli": "activity items",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every session's calls that name an item, grouped by the item — which window read a message, replied to it or posted in its thread — is the person's view, the CLI's and the desktop app's through it, and is refused inside an MCP server's process. A tool that answered it would hand one project's mail subjects and senders to another project's agent; over MCP comms_activity answers only for the calling window (design 2026-10-25-activity S3; 2026-10-26-owner-feedback-0320 §3.6, §4)."
+    },
+    {
       "id": "core.activity.mine",
       "package": "core",
       "cli": "activity mine",
@@ -682,6 +690,18 @@
       "args": { "channel": "events" },
       "expect": { "request.channel": "events" },
       "reason": "The service declaration makes `events` a managed server; the core command and tool pass that same declared server id to the shared prune operation."
+    },
+    {
+      "id": "core.mcp.uninstall",
+      "package": "core",
+      "cli": "mcp uninstall",
+      "mcp": "comms_server_uninstall",
+      "status": "both",
+      "operation": "serverUninstallChange",
+      "argv": ["--client", "cursor", "--server", "gmail"],
+      "args": { "channel": "gmail", "client": "cursor" },
+      "expect": { "request.channel": "gmail", "request.client": "cursor" },
+      "reason": "`agentcomms mcp uninstall --client <c> --server <s>` takes one server out of one client's configuration, and comms_server_uninstall with `channel` and `client` is this command: a tightening, applied at once with no approval (design 2026-10-26-owner-feedback-0320 §3.3, §4). Prune is not this — it removes runtimes, and no registration."
     },
 
     {

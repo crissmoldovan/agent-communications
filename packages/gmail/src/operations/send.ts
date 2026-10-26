@@ -1,5 +1,6 @@
 import {
   type ActDecision,
+  type ActivityReplyTo,
   type ApprovalObject,
   type ApprovalRecord,
   approveAndWaitSentence,
@@ -70,6 +71,7 @@ import {
   boundDigest,
   checkedAsLine,
   placeActs,
+  type ReplyProof,
   replyProofOf,
   requireMailActs,
   stillBound,
@@ -870,19 +872,33 @@ export async function prepareSend(
     as?: string | undefined;
   } = {},
 ): Promise<SendPreparation> {
-  // Recorded in the activity log as an approval asked for: its id, the draft and its subject, and the recipients.
-  return recorded(
+  /*
+   * Recorded in the activity log as an approval asked for: its id, the draft and its subject, and the recipients — and,
+   * when the draft answers a message this mailbox holds, that message and its thread (0.32.0 §3.6), as the proof the
+   * prepare already made found it: no further call to Gmail.
+   */
+  const made = await recorded(
     context,
     'gmail.send.prepare',
     'approval',
     alias,
     () => prepareOneSend(context, alias, draftId, options),
-    (prepared) => ({
+    ({ prepared, replyTo }) => ({
       approvalId: prepared.approvalId,
       items: [itemOf(prepared.draftId, prepared.expect.subject)],
       recipients: activityRecipients(prepared.expect),
+      draftId: prepared.draftId,
+      ...(replyTo === undefined ? {} : { replyTo }),
     }),
   );
+  return made.prepared;
+}
+
+/** The message a proof found, as an activity line names what a send answers. */
+function replyToOf(proof: ReplyProof | undefined): ActivityReplyTo | undefined {
+  return proof === undefined
+    ? undefined
+    : { messageId: proof.messageId, ...(proof.threadId === undefined ? {} : { threadId: proof.threadId }) };
 }
 
 /** A send's recipients as its activity line keeps them: To, Cc and Bcc, as addresses. */
@@ -895,7 +911,7 @@ async function prepareOneSend(
   alias: string,
   draftId: string,
   options: { as?: string | undefined },
-): Promise<SendPreparation> {
+): Promise<{ prepared: SendPreparation; replyTo: ActivityReplyTo | undefined }> {
   const requested = oneOf(options.as, IDENTITIES, IDENTITY_WORDS);
   // First: the configuration this send's epoch is read from is version 3, and an earlier release's records are retired.
   const { legacyDrain } = await ensureSendEpochConfig(context.core, { now: context.now });
@@ -974,7 +990,7 @@ async function prepareOneSend(
     act: 'send',
     approvalId: record.approvalId,
   });
-  return {
+  const prepared: SendPreparation = {
     approvalId: record.approvalId,
     inbox: alias,
     draftId,
@@ -1013,6 +1029,7 @@ async function prepareOneSend(
     approval: await context.core.approvals.approvalOf(record),
     ...(legacyDrain === undefined ? {} : { legacyDrain }),
   };
+  return { prepared, replyTo: replyToOf(proof) };
 }
 
 /**
@@ -1201,7 +1218,8 @@ export async function executeSend(
   /*
    * Recorded in the activity log around the send, never inside it: the line is written once the send below has ended,
    * whichever way — the message Gmail filed (or the draft, when it named none), its subject, the recipients and the
-   * approval. A line that cannot be written changes nothing here: the audit log is the send's record.
+   * approval, and the draft it sent and the thread Gmail filed it in (0.32.0 §3.6), so a reply's send is tied to its
+   * reply draft. A line that cannot be written changes nothing here: the audit log is the send's record.
    */
   return recorded(
     context,
@@ -1213,6 +1231,8 @@ export async function executeSend(
       approvalId: sent.approvalId,
       items: [itemOf(sent.sentMessageId ?? sent.draftId, sent.subject)],
       recipients: activityRecipients(sent),
+      draftId: sent.draftId,
+      ...(sent.threadId === undefined ? {} : { threadId: sent.threadId }),
     }),
   );
 }

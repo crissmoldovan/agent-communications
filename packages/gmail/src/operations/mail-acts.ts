@@ -68,6 +68,9 @@ export interface ReplyProof {
   readonly participants: ReadonlySet<string>;
   /** Its From, as a preview shows it: a sender's words, so decoded, neutralised and flattened to one line. */
   readonly from: string;
+  /** Gmail's id of the proven message, and of its thread: what the send's activity line says it answers (0.32.0). */
+  readonly messageId: string;
+  readonly threadId?: string | undefined;
 }
 
 /** A recipient as acts and rules compare it: canonical (lower-cased, its domain in ASCII) and trimmed. */
@@ -131,7 +134,12 @@ export async function replyProofOf(
       for (const value of header(name))
         for (const { address } of parseAddressList(value)) participants.add(placeOf(address));
     }
-    return { participants, from: shownText(shownFrom(header('from')[0]), 120) };
+    return {
+      participants,
+      from: shownText(shownFrom(header('from')[0]), 120),
+      messageId,
+      ...(message.threadId ? { threadId: message.threadId } : {}),
+    };
   }
   return undefined;
 }

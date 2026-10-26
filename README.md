@@ -400,6 +400,9 @@ WhatsApp is recorded only as counts.
 
 - `agentcomms activity sessions` lists the agent windows, newest first, by project folder and client;
   `agentcomms activity show <session>` lists what one did. The desktop app's Activity screen shows the same.
+- `agentcomms activity items --json` lists the same calls grouped by the message they name — a Gmail message id, a
+  Slack `<channelId>/<ts>` — with the links that tie a reply to what it answers (from 0.32.0). It is your view, and
+  refused inside an MCP server's process.
 - An agent sees only its own window, through `comms_activity` (or `agentcomms activity mine`): never another
   project's mail.
 - `agentcomms activity record off` stops recording at once, and `agentcomms activity retention <days>` shortens how
