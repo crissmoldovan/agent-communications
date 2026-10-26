@@ -418,6 +418,11 @@ network traffic Laya has — and checks every file against the release's lock an
 runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
 files of every entry it replaced.
 
+**A judge's exact document.** `agent-events judge show <judge-id> [--version <n>] --json` (and `events_judge_show` over
+MCP) gives one judge version's canonical document, as a rule embeds it, with its digest and whether it is `live` or
+`revoked`: the newest live version unless you name one. It is configuration only — kind, provider, model, endpoint,
+prompt template and protocol. A hosted judge's key is kept apart from its document, so it never appears here.
+
 **Every judge kind is off until you turn it on: in the desktop app, or at your terminal.** Installing, updating, a rule
 or a budget never turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of
 that kind. Removing a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later

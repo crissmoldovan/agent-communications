@@ -238,5 +238,15 @@
   {
     "name": "session-queue-drop-request",
     "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } }
+  },
+  {
+    "name": "judge-show-request",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev",
+        "version": 1
+      }
+    }
   }
 ]

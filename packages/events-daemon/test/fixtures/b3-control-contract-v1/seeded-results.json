@@ -1005,5 +1005,30 @@
     "name": "session-queue-drop-result",
     "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } },
     "result": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e", "dropped": true }
+  },
+  {
+    "name": "judge-show-result",
+    "request": {
+      "operation": "judge-show",
+      "args": {
+        "judgeId": "jev"
+      }
+    },
+    "result": {
+      "judgeId": "jev",
+      "version": 1,
+      "document": {
+        "judgeId": "jev",
+        "version": 1,
+        "kind": "typesafe",
+        "provider": "openrouter",
+        "model": "typesafe/jev-1.14",
+        "endpoint": "https://openrouter.ai/api/v1/systemone",
+        "promptTemplate": "typesafe-jev-noul-v1",
+        "protocol": "noul"
+      },
+      "digest": "016f6fab0c5468f0de527e6d12c912e4b5cc236948a80cd899747da40d020d3e",
+      "state": "live"
+    }
   }
 ]

@@ -33,6 +33,9 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   // `rule analyse` (0.33.0): reads a decision's judge metadata — its number and sending domain — through the same
   // centrally leased cipher, and writes nothing.
   'packages/events-daemon/src/runtime/rule-analyse.ts',
+  // The agent-session target (0.33.0): its dispatcher opens a session delivery's record and seals the queue item a match
+  // becomes, through the same centrally leased cipher.
+  'packages/events-daemon/src/runtime/session-dispatcher.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',

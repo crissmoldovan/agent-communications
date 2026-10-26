@@ -2906,6 +2906,17 @@
       "reason": "A match waiting for a busy agent session is passed on when the session's run ends; dropping one is the person's, in the app or at their terminal, as clearing the queue is: an agent must not be able to make what is waiting for a session disappear. A bound window sees its own lane's waiting matches with events_session_queue_list (0.33.0 design §3.5)."
     },
     {
+      "id": "events-daemon.judge.show",
+      "package": "events-daemon",
+      "cli": "judge show",
+      "mcp": "events_judge_show",
+      "status": "both",
+      "operation": "judgeShow",
+      "argv": ["parity"],
+      "args": { "judgeId": "parity" },
+      "expect": { "judgeId": "parity" }
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

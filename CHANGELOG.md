@@ -45,6 +45,10 @@ together under one version.
   `events_session_queue_list`. `integration show|set agent-sessions` says where the relay is — yours to set, from the
   app or your terminal. The rule text prints and parses the `session` block. One automatic migration, 32, admits the
   session kind and adds the content-free busy queue.
+- **A judge's exact document** (`@agentcomms/events-daemon`): `agent-events judge show <judgeId> [--version <n>] --json`
+  and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
+  prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any
+  judge in a rule, not only one another rule already carries. A judge's key is never part of its document.
 
 ## 0.32.0
 
