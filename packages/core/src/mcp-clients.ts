@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 // A relative import, never the package's own name: core importing `@agentcomms/core` only resolved through
 // Node's self-reference to the *built* package, so running core from source loaded its own stale dist.
-import { homeDirectory, withoutPathOptions } from './paths.ts';
+import { homeDirectory, homeForDiscovery, withoutPathOptions } from './paths.ts';
 import { parseToml, TomlError } from './toml.ts';
 
 /**
@@ -74,7 +74,7 @@ export function knownClientConfigs(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
 ): ClientConfigFile[] {
-  const home = homeDirectory(env);
+  const home = homeForDiscovery(homeDirectory(env), "the apps' MCP configs", env);
   const claudeDir = env.CLAUDE_CONFIG_DIR ? resolve(env.CLAUDE_CONFIG_DIR) : home;
   const codexDir = env.CODEX_HOME ? resolve(env.CODEX_HOME) : join(home, '.codex');
   const files: ClientConfigFile[] = [

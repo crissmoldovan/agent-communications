@@ -6,7 +6,7 @@ import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { type LockOptions, withFileLock } from './lock.ts';
 import { namesResolvedNode } from './node-program.ts';
-import { homeDirectory } from './paths.ts';
+import { homeDirectory, homeForDiscovery } from './paths.ts';
 
 const RECEIPT_VERSION = 1 as const;
 const RECEIPT_FILE = 'managed-shims.json';
@@ -83,7 +83,7 @@ export function managedShimDirectory(context: ManagedShimContext): string {
   if (!managedShimsSupported(context)) {
     throw new CommsError('CONFIG', managedShimUnsupportedNotice(context));
   }
-  return join(homeDirectory(context.env), '.local', 'bin');
+  return join(homeForDiscovery(homeDirectory(context.env), 'the managed command shims', context.env), '.local', 'bin');
 }
 
 /** Managed CLI shims are POSIX-only until Windows has an argument-forwarding form that does not re-parse input. */

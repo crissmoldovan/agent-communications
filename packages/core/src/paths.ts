@@ -1,5 +1,5 @@
 import { homedir, userInfo } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, resolve, sep } from 'node:path';
 
 export const APP_DIR_NAME = 'agent-communications';
 
@@ -128,8 +128,20 @@ export function resolvePathIdentity(options: PathEnvironment = {}): ResolvedPath
     // `resolve` makes a relative pin absolute and removes redundant trailing separators while preserving a root.
     pathOverrides[key] = resolve(value);
   }
+  const paths = { ...derived, ...pathOverrides };
+  // Under test, Agent Comms' own configuration and state are never taken from the account's real home: a test pins
+  // them, or gives a temporary home (`homeForDiscovery`); nor its secrets and data when nothing is pinned at all. The
+  // downloads folder is only a default for saving, and is not checked here.
+  const root = resolve(home);
+  const configPinned = explicitConfigDir || pathOverrides.configDir !== undefined;
+  for (const key of ['configDir', 'stateDir', 'secretsDir', 'dataDir'] as const) {
+    if (configPinned && (key === 'secretsDir' || key === 'dataDir')) continue;
+    const dir = paths[key];
+    if (dir === derived[key] && (dir === root || dir.startsWith(`${root}${sep}`)))
+      homeForDiscovery(home, "Agent Comms' own folders", env);
+  }
   return {
-    paths: { ...derived, ...pathOverrides },
+    paths,
     pathOverrides: Object.freeze(pathOverrides),
   };
 }
@@ -167,6 +179,41 @@ export function accountHome(): string {
     // An account with no entry in the database.
   }
   return homedir();
+}
+
+/**
+ * The variable the test preload sets (`test/helpers/loopback-seal-preload.mjs`): while it is `1`, no user state is
+ * looked for under the account's real home. The second look at 0.33.0 found a test that started the event service
+ * without a temporary home and read the person's claude-stream relay token into memory.
+ */
+export const NO_REAL_HOME_VARIABLE: string = 'AGENTCOMMS_TEST_NO_REAL_HOME';
+
+/** Where each refused attempt is counted, so the preload fails a test process that caught the error and went on. */
+const REAL_HOME_ATTEMPTS = Symbol.for('agentcomms.test.real-home-attempts.v1');
+
+/**
+ * `home`, about to have user state looked for under it: the claude-stream relay's token, the apps' MCP configs, a
+ * client's command, the update job's launch agent, the managed command shims. Outside tests it is `home`, unchanged.
+ * Under test (`AGENTCOMMS_TEST_NO_REAL_HOME=1`, in this process's environment or the one given) the account's own home
+ * — its entry in the password database, which no variable moves, so a test's temporary `HOME` is never mistaken for
+ * it — is refused loudly, and counted: a test that forgot its temporary home fails rather than reading or writing the
+ * person's files. Only the path is compared; nothing under it is read.
+ */
+export function homeForDiscovery(home: string, what: string, env: NodeJS.ProcessEnv = process.env): string {
+  if (process.env[NO_REAL_HOME_VARIABLE] !== '1' && env[NO_REAL_HOME_VARIABLE] !== '1') return home;
+  let real = '';
+  try {
+    real = userInfo().homedir;
+  } catch {
+    // An account with no entry in the database: there is no real home to tell apart.
+  }
+  if (real === '' || resolve(home) !== resolve(real)) return home;
+  const store = globalThis as unknown as Record<symbol, string[] | undefined>;
+  store[REAL_HOME_ATTEMPTS] ??= [];
+  store[REAL_HOME_ATTEMPTS].push(what);
+  throw new Error(
+    `under test, ${what} would have been looked for in the account's real home folder: give the test a temporary home`,
+  );
 }
 
 /**

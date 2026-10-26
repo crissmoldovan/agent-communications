@@ -7,6 +7,7 @@ import {
   CommsError,
   type ConfigStore,
   homeDirectory,
+  homeForDiscovery,
   isCommsError,
   openCore,
   resolvePaths,
@@ -1226,7 +1227,8 @@ async function startOwnerWithLock(
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
   const agentSessions = new AgentSessionService({
     store: database,
-    homeDirectory: options.agentSessions?.homeDirectory ?? homeDirectory(),
+    // Under test the account's real home is refused (`homeForDiscovery`): a test gives the owner a temporary one.
+    homeDirectory: options.agentSessions?.homeDirectory ?? homeForDiscovery(homeDirectory(), 'the claude-stream relay'),
     // Agent Comms' own folders: no session works in them, and no file part is read from them (review of 0.33.0, 4).
     deniedFolders: [
       ...new Set([

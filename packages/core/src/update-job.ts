@@ -8,7 +8,7 @@ import { replaceFileInPlace, writeFileAtomic } from './fs.ts';
 import { launcherPaths } from './launcher.ts';
 import { withFileLock } from './lock.ts';
 import { nodeProgram } from './node-program.ts';
-import { homeDirectory } from './paths.ts';
+import { homeDirectory, homeForDiscovery } from './paths.ts';
 import { absoluteSearchPath, childEnvironment, windowsSystemProgram } from './system-programs.ts';
 
 /**
@@ -147,7 +147,7 @@ export function updateJobContext(
   }
   return {
     platform,
-    home: homeDirectory(env),
+    home: homeForDiscovery(homeDirectory(env), "the background update job's launch agent", env),
     stateDir,
     launcher: options.launcher ?? coreLauncherPath(dataDir),
     node,

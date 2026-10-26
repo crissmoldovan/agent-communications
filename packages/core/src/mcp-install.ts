@@ -31,7 +31,7 @@ import {
   type UnreadableConfig,
 } from './mcp-clients.ts';
 import { nodeProgram } from './node-program.ts';
-import { homeDirectory, shortenHome, withoutPathOptions } from './paths.ts';
+import { homeDirectory, homeForDiscovery, shortenHome, withoutPathOptions } from './paths.ts';
 import { absoluteSearchPath, childEnvironment } from './system-programs.ts';
 import { compareVersions } from './versions.ts';
 
@@ -229,7 +229,7 @@ export async function whichExecutable(name: string, env: NodeJS.ProcessEnv): Pro
  */
 export function clientCliDirectories(env: NodeJS.ProcessEnv): string[] {
   if (process.platform === 'win32') return [];
-  const home = env.HOME;
+  const home = env.HOME ? homeForDiscovery(env.HOME, "a client's command in ~/.local/bin", env) : env.HOME;
   const system =
     env.AGENT_COMMS_CLIENT_CLI_DIRS !== undefined
       ? env.AGENT_COMMS_CLIENT_CLI_DIRS.split(delimiter)
