@@ -172,6 +172,10 @@ function noSuchWatch(): never {
   });
 }
 
+function waitCancelled(): CommsError {
+  return new CommsError('TRANSIENT', 'the wait was cancelled: its caller has gone');
+}
+
 function stopped(): CommsError {
   return new CommsError('NOT_FOUND', 'the local event service stopped, so this wait ended', {
     hint: 'Call events_wait again once the event service is running.',
@@ -487,7 +491,12 @@ export class LaneService {
   }
 
   /** `events_wait`: until the lane's next item or `seconds` (1–50), whichever is first (§3.6). */
-  async wait(laneValue: unknown, seconds: unknown, caller: LaneWindowIdentity): Promise<LaneWaitResultV1> {
+  async wait(
+    laneValue: unknown,
+    seconds: unknown,
+    caller: LaneWindowIdentity,
+    signal?: AbortSignal,
+  ): Promise<LaneWaitResultV1> {
     const lane = requireLaneName(laneValue);
     if (!Number.isSafeInteger(seconds) || (seconds as number) < 1 || (seconds as number) > LANE_WAIT_MAX_SECONDS)
       usage(`seconds is a whole number from 1 to ${LANE_WAIT_MAX_SECONDS}`);
@@ -498,6 +507,8 @@ export class LaneService {
     };
     const first = bound();
     if (first === undefined) return notBoundHere(lane);
+    // A caller that has gone takes no item: an aborted wait ends before it looks, and as soon as it is aborted.
+    if (signal?.aborted) throw waitCancelled();
     const woke = this.#wake(first);
     if (woke !== null) return { pointer: woke };
     if (this.#stopped) throw stopped();
@@ -508,6 +519,7 @@ export class LaneService {
         settled = true;
         clearTimeout(deadline);
         clearInterval(recheck);
+        signal?.removeEventListener('abort', onAbort);
         this.#waiters.delete(waiter);
         outcome();
       };
@@ -529,8 +541,10 @@ export class LaneService {
         },
         stop: (error) => finish(() => reject(error)),
       };
+      const onAbort = () => finish(() => reject(waitCancelled()));
       const deadline = setTimeout(() => finish(() => resolve({ waiting: true })), (seconds as number) * 1_000);
       const recheck = setInterval(() => waiter.check(), this.#recheckMs);
+      signal?.addEventListener('abort', onAbort, { once: true });
       this.#waiters.add(waiter);
     });
   }

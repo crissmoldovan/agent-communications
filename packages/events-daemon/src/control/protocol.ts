@@ -55,6 +55,8 @@ export interface ControlRequest {
 /** Server-only request context: the origin is copied from the authenticated hello, never decoded from request args. */
 export interface AuthenticatedControlRequest extends ControlRequest {
   readonly origin: string;
+  /** Aborts when the request's connection closes: its caller has gone, so a long operation may stop. */
+  readonly signal?: AbortSignal | undefined;
 }
 
 /** The future B3 request subset is typed at the authenticated protocol boundary without a public CLI or MCP registration. */

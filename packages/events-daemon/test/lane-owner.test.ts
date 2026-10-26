@@ -443,10 +443,34 @@ test('LANE-E: a bound window is woken by a new item with a pointer and no sender
     assert.ok(beats.length >= 1, 'progress while it waited');
     assert.deepEqual(structured(await tool(david, 'events_wait', { lane: 'david', seconds: 1 })), { waiting: true });
 
+    // A wait the client cancels stops its heartbeat and ends its wait in the owner, so it takes no item with it.
+    const cancelledId = david.nextId();
+    const cancelled = tool(david, 'events_wait', { lane: 'david', seconds: 30 }, { progressToken: 'wait-cancel' });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const beatsFor = () =>
+      david.notifications.filter(
+        (message) =>
+          message.method === 'notifications/progress' &&
+          (message.params as { progressToken?: unknown }).progressToken === 'wait-cancel',
+      ).length;
+    assert.ok(beatsFor() >= 1, 'it was beating while it waited');
+    await david.notify('notifications/cancelled', { requestId: cancelledId, reason: 'the person moved on' });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const atCancel = beatsFor();
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    assert.equal(beatsFor(), atCancel, 'no heartbeat after the cancel');
+    void cancelled;
+    await deliver(harness, 'David once more: after the cancelled wait');
+    assert.match(
+      resultText(await tool(david, 'events_watch', { lane: 'david' })),
+      /^1 new item in lane david /u,
+      'the cancelled wait ended in the owner and took nothing: the next watch wakes on the new item',
+    );
+
     const everything = [...david.wire, ...other.wire]
       .filter((line) => !line.includes('"events_lane_item"') && !line.includes('untrusted-content'))
       .join('\n');
-    for (const content of [SENDER, SENDER_NAME, 'David contract', 'second question', 'snippet of'])
+    for (const content of [SENDER, SENDER_NAME, 'David contract', 'second question', 'snippet of', 'once more'])
       assert.ok(!everything.includes(content), `no wake, pointer, list or refusal carries ${content}`);
     assert.ok(!other.wire.join('\n').includes('David contract'), 'the unbound window never saw the content');
   });

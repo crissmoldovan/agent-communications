@@ -78,9 +78,12 @@ export async function laneTaskCancel(
 export async function laneWait(
   lane: string,
   seconds: number,
-  options: Options & { readonly caller: LaneWindowIdentity },
+  options: Options & { readonly caller: LaneWindowIdentity; readonly signal?: AbortSignal | undefined },
 ): Promise<LaneWaitResultV1> {
-  return (await client(options).request('lane-wait', withCaller({ lane, seconds }, options))) as LaneWaitResultV1;
+  // The MCP request's signal: a client that cancels ends the wait in the owner too, which then takes no item.
+  return (await client(options).request('lane-wait', withCaller({ lane, seconds }, options), {
+    signal: options.signal,
+  })) as LaneWaitResultV1;
 }
 
 /** One item of this window's lane, enveloped as `queue show` gives it. */

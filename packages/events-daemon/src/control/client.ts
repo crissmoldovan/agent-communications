@@ -28,7 +28,12 @@ export class EventControlClient {
     this.#clientName = options.clientName ?? 'events-cli';
   }
 
-  async request(operation: string, args: Record<string, unknown> = {}): Promise<unknown> {
+  /** `signal` ends the request at once and closes its connection, so the owner stops working on it too. */
+  async request(
+    operation: string,
+    args: Record<string, unknown> = {},
+    options: { readonly signal?: AbortSignal | undefined } = {},
+  ): Promise<unknown> {
     // No token leaves this process for an endpoint another user could have created (B1-G).
     assertControlSupported();
     const record = await readInstance(this.#paths);
@@ -36,7 +41,7 @@ export class EventControlClient {
     await verifyOwnEndpoint(this.#paths, record);
     const token = await readToken(this.#paths, record);
     try {
-      return await requestControl(record, token, this.#clientName, operation, args);
+      return await requestControl(record, token, this.#clientName, operation, args, options.signal);
     } catch (error) {
       if (isMissingOwner(error)) throw notRunning();
       throw error;
@@ -67,8 +72,12 @@ export async function requestControl(
   clientName: string,
   operation: string,
   args: Record<string, unknown>,
+  signal?: AbortSignal,
 ): Promise<unknown> {
   const socket = await connect(record.endpoint);
+  const abort = () => socket.destroy(cancelled());
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
   try {
     const hello = (await exchange(socket, {
       hello: { supportedVersions: CONTROL_PROTOCOL_VERSIONS, token, client: { name: clientName } },
@@ -85,8 +94,21 @@ export async function requestControl(
     if (!reply.ok) throw controlError(reply);
     return reply.data;
   } finally {
+    signal?.removeEventListener('abort', abort);
     socket.end();
   }
+}
+
+/** The caller gave up on its request: its connection is closed, and the owner's work on it ends with it. */
+function cancelled(): CommsError {
+  return new CommsError('TRANSIENT', 'the local event request was cancelled');
+}
+
+/** An owner that ends or closes its connection before it answers has gone: the caller is told, never left waiting. */
+function closedBeforeAnswer(): Error {
+  return Object.assign(new Error('the local event service closed the connection before it answered'), {
+    code: 'ECONNRESET',
+  });
 }
 
 async function readToken(paths: EventPaths, record: EventInstanceRecord): Promise<string> {
@@ -132,12 +154,21 @@ function exchange(socket: Socket, value: unknown): Promise<unknown> {
       cleanup();
       reject(error);
     };
+    // Review of 0.31.0: an owner that died mid-request ends or closes the socket with no frame and no error.
+    const onGone = () => {
+      cleanup();
+      reject(closedBeforeAnswer());
+    };
     const cleanup = () => {
       socket.off('data', onData);
       socket.off('error', onError);
+      socket.off('end', onGone);
+      socket.off('close', onGone);
     };
     socket.on('data', onData);
     socket.once('error', onError);
+    socket.once('end', onGone);
+    socket.once('close', onGone);
     socket.write(encodeControlFrame(value));
   });
 }

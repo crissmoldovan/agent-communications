@@ -640,3 +640,26 @@ test('LANE-B: with more than 500 open items a window still wakes on each next on
     assert.equal(lanes.watch('david', DAVID).status, 'working');
   });
 });
+
+// Review of 0.31.0, finding 4: a long-poll whose caller has gone must end, and must not take an item with it.
+test('LANE-B: a long-poll ends at once when its signal aborts, and the next item still wakes the window', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLanes(async ({ store, lanes, clock }) => {
+    lanes.seen(DAVID);
+    lanes.bind('david', DAVID.sessionId as string);
+    const abort = new AbortController();
+    const started = Date.now();
+    const waiting = lanes.wait('david', 30, DAVID, abort.signal);
+    setTimeout(() => abort.abort(), 50);
+    await assert.rejects(waiting, refused('TRANSIENT', /cancelled/u));
+    assert.ok(Date.now() - started < 5_000, 'it ended at once, not at its 30 seconds');
+    const gone = new AbortController();
+    gone.abort();
+    await assert.rejects(lanes.wait('david', 30, DAVID, gone.signal), refused('TRANSIENT', /cancelled/u));
+    clock.value = NOW + 5_000;
+    const item = seed(store, { ruleId: 'david-on-slack', targetId: 'lane-david', arrivedAt: NOW + 4_000 });
+    lanes.notifyAppended();
+    assert.equal(lanes.watch('david', DAVID).pointer?.item, item, 'the cancelled wait took nothing');
+  });
+});

@@ -1775,7 +1775,7 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.laneTaskCancel:
       return lanes.taskCancel(request.args.taskId, requiredCaller(request.args));
     case OWNER_CONTROL_WIRES.laneWait:
-      return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args));
+      return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args), request.signal);
     case OWNER_CONTROL_WIRES.laneItem:
       return lanes.item(request.args.itemId, requiredCaller(request.args));
     case OWNER_CONTROL_WIRES.catalogueList:

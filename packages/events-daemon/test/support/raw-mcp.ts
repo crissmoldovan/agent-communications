@@ -23,6 +23,10 @@ export interface RawClient {
     params?: Record<string, unknown>,
     options?: { readonly tasks?: boolean },
   ): Promise<RawMessage>;
+  /** The request id the next `request` will use: what a `notifications/cancelled` names. */
+  readonly nextId: () => number;
+  /** Sends a notification, with the 2026-07-28 envelope. */
+  notify(method: string, params?: Record<string, unknown>): Promise<void>;
   /** Every notification the server sent, in order. */
   readonly notifications: readonly RawMessage[];
   /** Every message either way, for a scan of what the window was told. */
@@ -55,6 +59,12 @@ export async function rawClient(transport: Transport): Promise<RawClient> {
   return {
     notifications,
     wire,
+    nextId: () => next + 1,
+    async notify(method, params = {}) {
+      const message = { jsonrpc: '2.0' as const, method, params: { ...params, _meta: envelope(true) } };
+      wire.push(JSON.stringify(message));
+      await transport.send(message as never);
+    },
     request(method, params = {}, options = {}) {
       next += 1;
       const id = next;
