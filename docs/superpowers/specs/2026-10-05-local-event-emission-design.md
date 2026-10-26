@@ -1908,6 +1908,19 @@ everything else is capped at the content's `stagedAt` plus the applicable ingest
 | Decision metadata | outcome, judge value and reason code; no sender content | decision | + decision-metadata retention | decision metadata, separate | cleared; uniqueness tombstone kept |
 | Installation-reset delivery | reset metadata only; no content | creation | + 24 hours, fixed (D7) | fixed by this design | `dead-lettered` or `retention-expired`; barrier degraded |
 
+**Note, 2026-10-26 (0.33.0; security review of 0.33.0, finding 9).** The table gains one record, a judged decision's
+sending domain, which Analyse counts (0.33.0 design §3.3). It is sender-chosen, so it ends with the content it came
+from, not with the decision's content-free metadata:
+
+| Record | Holds | Clock starts | Ends at | Approved retention | At the end |
+|---|---|---|---|---|---|
+| Sending domain (`decision_sender_domains`) | the domain of a judged message's From address, never the address | the decision | the projection's `decisionDeadline` = `stagedAt` + ingest retention | ingest | deleted; at once with the decision's metadata or the decision |
+
+- **An encrypted table:** its `encryptedDomain` binds the AAD of its single primary-key component, `decision_id`.
+- **Purges:** a trigger deletes the row whenever its decision's record is cleared — expiry, account removal, a
+  replacement — and the row goes with its decision.
+- **Tightening:** an ingest tightening shortens, and never lengthens, every kept domain of the rule from its staged time.
+
 **Note, 2026-10-25 (0.30.0; action queue design Q2 and §4.3).** The table gains one record, the queue item:
 
 | Record | Holds | Clock starts | Ends at | Approved retention | At the end |

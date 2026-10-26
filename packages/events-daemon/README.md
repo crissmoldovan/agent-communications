@@ -279,8 +279,11 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   - the queue items you marked done or dismissed, against the judge's number for each.
 
   It reads no subject, body, snippet or address. A domain is counted only when a judged decision kept it: from 0.33.0
-  a judged decision keeps its sender's domain (never the address) in its encrypted judge metadata, when the rule tests
-  or keeps `from.address` and the domain is a plain ASCII hostname. Decisions made before 0.33.0 have none.
+  a judged decision keeps its sender's domain (never the address), when the rule tests or keeps `from.address` and the
+  domain is a plain ASCII hostname. It is kept apart from the decision's metadata, encrypted, and only as long as the
+  rule keeps the message's content — its projection's deadline, the ingest retention (7 days by default) — not the 90
+  days of the decision's content-free metadata; it goes sooner with that metadata, and a tightening shortens it. So
+  Analyse's per-domain counts cover the last week or so, the rest of its counts the last 30 days.
 - **What it suggests from the counts alone:**
   - a sending domain the judge said no to three times or more, and never yes: the condition, with that domain left out
     before the judge is asked;

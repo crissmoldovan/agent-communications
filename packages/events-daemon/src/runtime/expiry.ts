@@ -261,6 +261,8 @@ export class EventExpiry {
           )
           .run(now, now).changes,
       );
+      // Analyse's sending domains end with the projection's deadline (security review of 0.33.0, finding 9).
+      database.prepare('DELETE FROM decision_sender_domains WHERE expires_at <= ?').run(now);
       const sourceStages = this.#expireSourceStages(database, now);
       return {
         deliveries,

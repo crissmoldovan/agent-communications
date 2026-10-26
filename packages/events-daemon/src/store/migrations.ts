@@ -1257,6 +1257,32 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '32' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // Analyse's sending domains (security review of 0.33.0, finding 9): a judged decision's sender domain is kept on
+    // its own, encrypted, until its projection's deadline — the rule's content (ingest) retention — not for the 90 days
+    // of the decision's metadata. It goes sooner with that metadata: the trigger runs whenever a decision's record is
+    // cleared (expiry, account removal, a replacement), and the row goes with its decision.
+    version: 33,
+    name: 'decision-sender-domains-v1',
+    statements: [
+      `CREATE TABLE decision_sender_domains (
+        decision_id TEXT PRIMARY KEY REFERENCES decisions(id) ON DELETE CASCADE,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        expires_at INTEGER NOT NULL,
+        encrypted_domain BLOB NOT NULL
+      ) STRICT`,
+      'CREATE INDEX decision_sender_domains_expiry ON decision_sender_domains(expires_at)',
+      'CREATE INDEX decision_sender_domains_rule ON decision_sender_domains(rule_id, rule_version)',
+      `CREATE TRIGGER decision_sender_domains_go_with_metadata
+        AFTER UPDATE OF encrypted_record ON decisions
+        WHEN NEW.encrypted_record IS NULL
+        BEGIN
+          DELETE FROM decision_sender_domains WHERE decision_id = NEW.id;
+        END`,
+      "UPDATE meta SET value = '33' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

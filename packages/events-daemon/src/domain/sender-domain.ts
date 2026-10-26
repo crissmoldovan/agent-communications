@@ -2,8 +2,8 @@ import { catalogueEntry, getPointer, type JsonValue, toAsciiDomain } from '@agen
 
 /**
  * The domain of a message's sender address, for Analyse's per-domain counts (0.33.0 design §3.3): what a judge said of
- * each sending domain, never of a person. Only the domain is kept, and only inside the decision's encrypted judge
- * metadata, which goes when the rule's decision metadata does.
+ * each sending domain, never of a person. Only the domain is kept, encrypted and on its own, and only until the
+ * decision's projection's deadline: the rule's content retention (`runtime/sender-domains.ts`).
  *
  * A domain is taken only when it is already a plain ASCII hostname — lowercase letters, digits, hyphens and dots, as
  * the `domainIs` condition compares it — so what is kept can carry no markup, no space and no other text. Anything else
@@ -47,14 +47,4 @@ export function senderDomainOf(
   if (at < 1) return null;
   const domain = found.value.slice(at + 1);
   return isKeptSenderDomain(domain) ? domain : null;
-}
-
-/** A judged decision's metadata with its sender's domain beside the judge's answer, when there is one to keep. */
-export function withSenderDomain(
-  metadata: Readonly<Record<string, unknown>>,
-  rule: { readonly event: { readonly type: string; readonly version: number } },
-  event: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-  const senderDomain = senderDomainOf(rule.event.type, rule.event.version, event);
-  return senderDomain === null ? metadata : { ...metadata, senderDomain };
 }

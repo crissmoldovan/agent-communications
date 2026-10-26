@@ -153,7 +153,6 @@ function seedDecision(
           threshold: 0.7,
           value: input.value,
           valueLabel: 'probability',
-          ...(input.senderDomain === undefined ? {} : { senderDomain: input.senderDomain }),
         };
   database
     .prepare(
@@ -170,6 +169,14 @@ function seedDecision(
       NOW + 90 * DAY,
       metadata === null ? null : Buffer.from(JSON.stringify(metadata)),
     );
+  // The decision's sending domain, kept apart until its projection's deadline (security review of 0.33.0, 9).
+  if (input.senderDomain !== undefined)
+    database
+      .prepare(
+        `INSERT INTO decision_sender_domains (decision_id, rule_id, rule_version, expires_at, encrypted_domain)
+         VALUES (?, ?, 1, ?, ?)`,
+      )
+      .run(decisionId, RULE, observedAt + 7 * DAY, Buffer.from(input.senderDomain));
   if (input.item === undefined) return;
   const deliveryId = `delivery-analyse-${sequence}`;
   database
