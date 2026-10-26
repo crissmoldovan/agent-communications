@@ -58,3 +58,16 @@ test('a link that is not an id is dropped, never kept as text', () => {
   );
   assert.deepEqual(half.replyTo, { messageId: 'm1' });
 });
+
+test('a Slack line keeps its conversation id and its thread — null said as null — and drops either when not an id', () => {
+  const slack = { channel: 'slack', operation: 'slack.post.send' };
+  const threaded = activityLineOf(line({ ...slack, channelId: 'C1', thread: '1700000005.000100' }));
+  assert.equal(threaded.channelId, 'C1');
+  assert.equal(threaded.thread, '1700000005.000100');
+  const fresh = activityLineOf(line({ ...slack, channelId: 'C1', thread: null }));
+  assert.equal(fresh.thread, null);
+  assert.ok('thread' in fresh);
+  const neither = activityLineOf(line({ ...slack, channelId: '#eng room', thread: 'not a ts' }));
+  assert.equal(neither.channelId, undefined);
+  assert.equal('thread' in neither, false);
+});
