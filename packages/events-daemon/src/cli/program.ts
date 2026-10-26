@@ -11,6 +11,7 @@ import {
   resolvePaths,
 } from '@agentcomms/core';
 import { Command, CommanderError } from 'commander';
+import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
   isSetupJudgeKind,
   localSetupEndpoint,
@@ -23,6 +24,7 @@ import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
+import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
@@ -114,6 +116,7 @@ import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-ju
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
+import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -476,6 +479,29 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           ruleTestRetained(eventId, ruleId, ruleVersion, controlOptions(program)),
         ),
       );
+    });
+
+  rule
+    .command('analyse <rule-id>')
+    .description(
+      "suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
+    )
+    .option('--draft <source>', 'analyse a draft rule document instead of the stored version: - reads it from stdin')
+    .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
+    .action(async (ruleId: string, options: Record<string, unknown>) => {
+      ran = true;
+      assertNotMcpServer(env, 'analyse');
+      const provider = options.provider as string | undefined;
+      if (provider !== undefined && !isAnalyseProvider(provider))
+        throw new CommsError('USAGE', `Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
+      let draft: Readonly<Record<string, unknown>> | undefined;
+      if (options.draft !== undefined) {
+        if (options.draft !== '-') throw new CommsError('USAGE', '--draft reads the draft from stdin: give it -');
+        draft = await draftInput(streams);
+      }
+      // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
+      parseRuleAnalyseArguments({ ruleId, ...(draft === undefined ? {} : { draft }), provider });
+      print(await ruleAnalyse(ruleId, { ...controlOptions(program), draft, provider }));
     });
 
   const targets = program.command('targets').description('inspect immutable local event target versions');
@@ -1200,6 +1226,28 @@ function isTerminalSecretReveal(
   value: unknown,
 ): value is { readonly receipt: Record<string, unknown>; readonly terminalReveal: string } {
   return isRecord(value) && isRecord(value.receipt) && typeof value.terminalReveal === 'string';
+}
+
+/** Analyse's draft (0.33.0 §3.3): one JSON rule document on stdin, as the app's editor sends it. */
+async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<string, unknown>>> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > ANALYSE_DRAFT_MAX_BYTES)
+      throw new CommsError('USAGE', `a draft is at most ${ANALYSE_DRAFT_MAX_BYTES} bytes of JSON`);
+    chunks.push(bytes);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
+  } catch {
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+  return parsed as Readonly<Record<string, unknown>>;
 }
 
 /** The most a provider key read from the app's stdin may be. */

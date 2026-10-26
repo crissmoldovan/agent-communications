@@ -2828,6 +2828,17 @@
       "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
     },
     {
+      "id": "events-daemon.rule.analyse",
+      "package": "events-daemon",
+      "cli": "rule analyse",
+      "mcp": null,
+      "status": "exception",
+      "operation": "ruleAnalyse",
+      "argv": ["parity"],
+      "expect": { "ruleId": "parity" },
+      "reason": "Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, at a terminal or in the app, on the model provider they picked with their own key. No tool runs it: an agent never reads those counts and never spends the person's key, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",
