@@ -548,7 +548,29 @@ export async function takerIdentity(
         })
       : await options.identity();
   if (surface === 'cli' && !session.grouped && sessionId === null) return null;
-  return holderOfSession(session, sessionId);
+  const caller = holderOfSession(session, sessionId);
+  // A command that joined no window names the process above it — the shell it ran in, which ends as soon as it has —
+  // not the window's: it holds no parent, and its take lapses by its lease alone.
+  return surface === 'cli' && !session.grouped ? { ...caller, parent: null } : caller;
+}
+
+/**
+ * The holder after the same session acts again (T2): what this caller says of itself, and — where it says less, as a
+ * command in the window's shell does — what was known of the session before: an agent window's grouped key, its
+ * parent, its folder and its client. So a renewal from a shell never loses the window a take would end with.
+ */
+export function refreshedHolder(held: TakeHolder | TakePerson | null, caller: TakeHolder): TakeHolder {
+  if (held === null || isPerson(held)) return caller;
+  const keepKey = held.grouped && !caller.grouped;
+  return {
+    key: keepKey ? held.key : caller.key,
+    grouped: keepKey ? held.grouped : caller.grouped,
+    process: keepKey ? held.process : caller.process,
+    sessionId: caller.sessionId ?? held.sessionId,
+    parent: caller.parent ?? held.parent,
+    folder: caller.folder ?? held.folder,
+    client: caller.client ?? held.client,
+  };
 }
 
 /** The terminal a person's act comes from, for its line: its folder and the processes above it (§10). Never throws. */
@@ -1028,7 +1050,7 @@ export class TakeStore {
       if (refusal !== null) throw refusal;
       const renewing = record.state === 'taken' && holdsIt(record, caller);
       const next: TakeRecord = renewing
-        ? { ...record, holder: caller, lastActAt: at, updatedAt: at }
+        ? { ...record, holder: refreshedHolder(record.holder, caller), lastActAt: at, updatedAt: at }
         : {
             ...record,
             message: {
@@ -1154,7 +1176,13 @@ export class TakeStore {
       const line = `Taken by this session at ${clockTime(current.takenAt ?? at)}.`;
       if (current.state === 'done') return { next: current, result: { held: true, line } };
       const pins = pin === undefined || current.pins.includes(pin) ? [...current.pins] : [...current.pins, pin];
-      const next: TakeRecord = { ...current, holder: caller, lastActAt: at, pins, updatedAt: at };
+      const next: TakeRecord = {
+        ...current,
+        holder: refreshedHolder(current.holder, caller),
+        lastActAt: at,
+        pins,
+        updatedAt: at,
+      };
       return { next, result: { held: true, line } };
     });
   }

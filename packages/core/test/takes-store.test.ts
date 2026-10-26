@@ -534,6 +534,32 @@ test('takerIdentity: the person at a terminal is nobody; a window, or a Claude C
   assert.equal(claudeCodeSessionId({ CLAUDE_CODE_SESSION_ID: 'not-a-uuid' }), null);
 });
 
+test('a command that joined no window holds no parent — its shell ends at once — and a renewal keeps what was known', async () => {
+  const sid = '11111111-2222-4333-8444-555555555555';
+  const shell = { pid: 999, startedAt: 'Mon Oct 26 10:30:00 2026', name: 'zsh' };
+  const cli = await takerIdentity({ activity: undefined }, 'cli', undefined, {
+    env: { CLAUDE_CODE_SESSION_ID: sid },
+    identity: async () => ({
+      key: 'cccccccccccccccc',
+      process: 'c3c3c3c3c3c3',
+      pid: 7,
+      folder: '/example/home/work',
+      parent: shell,
+      grouped: false,
+      surface: 'cli',
+    }),
+  });
+  assert.equal(cli?.parent, null, 'the shell a command ran in is not the window');
+  // The window's server took it; the same session renews it from its shell: the window's parent is kept.
+  const { store } = storeAt('2026-10-26T10:00:00.000Z', { running: (pid) => pid !== shell.pid });
+  const server = holder({ sessionId: sid });
+  await store.take(MESSAGE, server);
+  const renewed = await store.take(MESSAGE, cli as TakeHolder);
+  assert.equal(renewed.changed, false);
+  assert.deepEqual((renewed.record.holder as TakeHolder).parent, server.parent);
+  assert.equal((await refusal(store.take(MESSAGE, BOB))).code, 'TAKEN_ELSEWHERE', 'its window is still running');
+});
+
 test('a state folder is made only by the first record', () => {
   const dir = tempDir('comms-takes-empty-');
   mkdirSync(join(dir, 'other'));
