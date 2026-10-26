@@ -150,6 +150,8 @@ ask <judge id>, version <n>[, via <provider>]
 The judge's document is embedded in the rule, so every field of it is written. Each line is optional and sets only its
 own fields: the prototype's short `ask` parses, and the event service refuses what it leaves out.
 
+The app fills a short `ask`'s judge document and limits from the judge's stored version, by its id; the parser does not.
+
 ### `then` — `targets`
 
 ```
@@ -227,7 +229,8 @@ keep for
 
 Only what differs from the defaults is written, and the parser fills the rest: 7 days each, except dry runs (1 day)
 and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a rule with a
-queue target, queue items 7 days (action queue design, Q2). With no `keep for`, the rule has the defaults.
+queue target, queue items 7 days (action queue design, Q2). With no `keep for`, the rule has the defaults. They are
+`RULE_RETENTION_DEFAULTS`, exported by this package, the one copy the event service uses too.
 
 ## What the parser fills
 
