@@ -526,7 +526,11 @@ test('mine never returns another session’s line, whatever filters it is given'
     { kind: 'read' },
     { since: '2000-01-01T00:00:00.000Z' },
   ]) {
-    const shown = await activityMine(m.core, { surface: 'mcp', ...filters }, { identity: async () => mine, now: LINE_DAY });
+    const shown = await activityMine(
+      m.core,
+      { surface: 'mcp', ...filters },
+      { identity: async () => mine, now: LINE_DAY },
+    );
     assert.ok(
       shown.lines.every((each) => each.session.key === mine.key),
       JSON.stringify(filters),
