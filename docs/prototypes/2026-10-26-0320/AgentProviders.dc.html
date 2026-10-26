@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agents, Providers</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:980px}
+.app button,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:860px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;align-self:flex-start}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+.h2{margin:0;font-size:15px;font-weight:600}
+.opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:12px}
+.opt{display:flex;flex-direction:column;gap:6px;padding:12px 14px;border-radius:12px;background:var(--s2);border:2px solid transparent;cursor:pointer;text-align:left}
+.opt.sel{border-color:var(--accent);background:var(--accentSoft)}
+.found{display:flex;align-items:center;gap:6px;font-size:12px}
+.y{color:var(--ok);font-weight:600}
+.n{color:var(--text3)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s1);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.f{height:30px;border:0;border-radius:8px;background:var(--s2);padding:0 8px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.dim{opacity:.55}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div><h1 class="h1">Agents</h1><p class="muted" style="margin: 0">Which agents Agent Comms finds and starts sessions with, and how.</p></div>
+  <nav aria-label="Agents" class="tabs">
+    <a class="tab" href="AgentSessions.dc.html">Sessions</a>
+    <a class="tab on" href="AgentProviders.dc.html" aria-current="page">Providers</a>
+    <a class="tab" href="#">Label</a>
+    <a class="tab" href="#">Behaviour rules</a>
+    <a class="tab" href="#">Standing approvals</a>
+  </nav>
+
+  <section class="card" aria-labelledby="claude">
+    <h2 id="claude" class="h2">Claude</h2>
+    <div class="opts" role="radiogroup" aria-labelledby="claude">
+      <button type="button" role="radio" aria-checked="{{cLocal}}" class="opt {{cLocalCls}}" onClick="{{pickCLocal}}">
+        <span style="font-weight: 600">What's installed on this Mac</span>
+        <span class="found"><span class="y">✓</span>Claude Code CLI 2.1.310</span>
+        <span class="found"><span class="y">✓</span>Claude desktop app</span>
+        <span class="found"><span class="y">✓</span>Claude Code in VS Code</span>
+        <span class="faint">Sessions run as you, with your subscription. Agent Comms finds them and can start new ones.</span>
+      </button>
+      <button type="button" role="radio" aria-checked="{{cCustom}}" class="opt {{cCustomCls}}" onClick="{{pickCCustom}}">
+        <span style="font-weight: 600">Custom: Agent Comms runs them</span>
+        <span class="faint">Connect an Anthropic API key, or sign in with a Claude subscription. Agent Comms starts and manages each session itself, and shows it here.</span>
+        <span style="display: flex; gap: 6px; flex-wrap: wrap"><span class="btn">Add an API key…</span><span class="btn">Sign in…</span></span>
+      </button>
+    </div>
+    <div class="row"><span class="faint">Open sessions in</span><select class="f" aria-label="Open Claude sessions in"><option>Terminal</option><option>VS Code</option><option>the Claude app</option></select><span class="faint">New sessions</span><select class="f" aria-label="Permissions for new sessions"><option>ask before acting</option><option>may edit files</option></select></div>
+  </section>
+
+  <section class="card" aria-labelledby="codex">
+    <h2 id="codex" class="h2">Codex</h2>
+    <div class="opts" role="radiogroup" aria-labelledby="codex">
+      <button type="button" role="radio" aria-checked="{{xLocal}}" class="opt {{xLocalCls}}" onClick="{{pickXLocal}}">
+        <span style="font-weight: 600">What's installed on this Mac</span>
+        <span class="found"><span class="y">✓</span>Codex CLI 0.48</span>
+        <span class="found"><span class="n">–</span>Codex app: not found</span>
+        <span class="found"><span class="y">✓</span>Codex in VS Code</span>
+        <span class="faint">Sessions run as you, with your ChatGPT plan.</span>
+      </button>
+      <button type="button" role="radio" aria-checked="{{xCustom}}" class="opt {{xCustomCls}}" onClick="{{pickXCustom}}">
+        <span style="font-weight: 600">Custom: Agent Comms runs them</span>
+        <span class="faint">Connect an OpenAI API key, or sign in with ChatGPT.</span>
+        <span style="display: flex; gap: 6px; flex-wrap: wrap"><span class="btn">Add an API key…</span><span class="btn">Sign in…</span></span>
+      </button>
+    </div>
+    <div class="row"><span class="faint">Open sessions in</span><select class="f" aria-label="Open Codex sessions in"><option>Terminal</option><option>VS Code</option></select></div>
+  </section>
+
+  <section class="card dim" aria-labelledby="cursor">
+    <h2 id="cursor" class="h2">Cursor</h2>
+    <p class="faint" style="margin: 6px 0 0">Not installed on this Mac.</p>
+  </section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { claude: 'local', codex: 'local' }; }
+renderVals() {
+const c = this.state.claude, x = this.state.codex;
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+cLocal: c === 'local', cCustom: c === 'custom', cLocalCls: c === 'local' ? 'sel' : '', cCustomCls: c === 'custom' ? 'sel' : '',
+xLocal: x === 'local', xCustom: x === 'custom', xLocalCls: x === 'local' ? 'sel' : '', xCustomCls: x === 'custom' ? 'sel' : '',
+pickCLocal: () => this.setState({ claude: 'local' }), pickCCustom: () => this.setState({ claude: 'custom' }),
+pickXLocal: () => this.setState({ codex: 'local' }), pickXCustom: () => this.setState({ codex: 'custom' })
+};
+}
+}
+</script>
+</body>
+</html>

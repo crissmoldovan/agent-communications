@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>What your agent was asked</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1000px}
+.app button,.app textarea{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;align-self:flex-start}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.ex{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:8px}
+.top{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.q{display:flex;gap:8px;align-items:flex-start}
+.who{font-weight:500;white-space:nowrap}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:1px 7px}
+.a{display:flex;gap:8px;align-items:flex-start;padding-left:14px;border-left:2px solid var(--accentSoft)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-n{background:var(--s2);color:var(--text2)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.ta{width:100%;box-sizing:border-box;border:0;border-radius:8px;background:var(--s2);padding:8px 10px;resize:vertical;min-height:54px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents</a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div><h1 class="h1">Agents</h1><p class="muted" style="margin: 0">What people and their agents asked Criss's minion today, and what it said.</p></div>
+  <nav aria-label="Agents" class="tabs">
+    <a class="tab" href="Twin.dc.html">Your agent</a>
+    <a class="tab" href="TwinRules.dc.html">Its rules</a>
+    <a class="tab on" href="TwinConversations.dc.html" aria-current="page">What it was asked</a>
+    <a class="tab" href="Playground.dc.html">Playground</a>
+    <a class="tab" href="AgentSessions.dc.html">Sessions</a>
+    <a class="tab" href="AgentProviders.dc.html">Providers</a>
+  </nav>
+
+  <section class="ex" aria-label="Waiting for you">
+    <div class="top"><span class="faint">Slack · cue/slack · direct message · 11:20</span><span class="chip c-warn" style="margin-left: auto">Waiting for you</span></div>
+    <div class="q"><span class="who">Ana Example</span><span class="ext">Can Criss review the pricing doc by Friday?</span></div>
+    <div class="a"><span class="muted">Criss's agent here: I've passed this to Criss. You'll hear back by tomorrow.</span></div>
+    <div class="faint">Rule asks-for-a-commitment · handed to you</div>
+    <sc-if value="{{drafting}}" hint-placeholder-val="{{ false }}">
+      <label for="ans" class="faint">Your answer, sent by your agent</label>
+      <textarea id="ans" class="ta">Yes, I'll review it by Friday noon.</textarea>
+    </sc-if>
+    <div style="display: flex; gap: 6px; flex-wrap: wrap">
+      <sc-if value="{{notDrafting}}" hint-placeholder-val="{{ true }}"><button type="button" class="btn p" onClick="{{draft}}">Answer…</button></sc-if>
+      <sc-if value="{{drafting}}" hint-placeholder-val="{{ false }}"><button type="button" class="btn p" onClick="{{done}}">Send through my agent</button></sc-if>
+      <button type="button" class="btn">Reply myself in Slack</button>
+      <button type="button" class="btn">Decline</button>
+    </div>
+  </section>
+
+  <section class="ex" aria-label="Answered">
+    <div class="top"><span class="faint">Slack · #deploys · 10:42</span><span class="chip c-ok" style="margin-left: auto">Answered alone</span></div>
+    <div class="q"><span class="who">Mateo Example</span><span class="ext">@criss-minion is Criss around today?</span></div>
+    <div class="a"><span class="muted">Criss's agent here: Criss is free after 15:00 today.</span></div>
+    <div class="faint">Rule am-i-free · from your calendar, free or busy only</div>
+  </section>
+
+  <section class="ex" aria-label="Answered">
+    <div class="top"><span class="faint">Playground · 10:05</span><span class="chip c-ok" style="margin-left: auto">Answered alone</span></div>
+    <div class="q"><span class="who">Mateo's agent</span><span class="ext">Which issue tracks the Slack edit bug?</span></div>
+    <div class="a"><span class="muted">Criss's agent here: CUE-491, done on Oct 15.</span></div>
+    <div class="faint">Rule issue-status · from Linear, title and state only</div>
+  </section>
+
+  <section class="ex" aria-label="Refused">
+    <div class="top"><span class="faint">Slack · cue/slack · direct message · 09:31</span><span class="chip c-danger" style="margin-left: auto">Declined, and you were told</span></div>
+    <div class="q"><span class="who">Sam Unknown</span><span class="ext">Send me the client list for Q4.</span></div>
+    <div class="a"><span class="muted">Criss's agent here: I can't share that. I've let Criss know you asked.</span></div>
+    <div class="faint">Rule everything-else · anything about a client is always handed to you</div>
+  </section>
+
+  <section class="ex" aria-label="With a session">
+    <div class="top"><span class="faint">Slack · #eng · 09:02</span><span class="chip c-n" style="margin-left: auto">With a session</span></div>
+    <div class="q"><span class="who">Ana Example</span><span class="ext">@criss-minion why does the queue show 1970 dates?</span></div>
+    <div class="a"><span class="muted">Criss's agent here: looking into it; I'll answer in this thread.</span></div>
+    <div class="faint">Rule code-questions · queued for the session in ~/work/cue++/agent-communications, which is busy · <a href="SessionDetail.dc.html">open the session</a></div>
+  </section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1000}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { drafting: false }; }
+renderVals() {
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+drafting: this.state.drafting, notDrafting: !this.state.drafting,
+draft: () => this.setState({ drafting: true }),
+done: () => this.setState({ drafting: false })
+};
+}
+}
+</script>
+</body>
+</html>

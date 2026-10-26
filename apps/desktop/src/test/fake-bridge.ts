@@ -400,6 +400,9 @@ export function createFakeBridge(
     },
     async openFullDiskAccess() {},
     async answerQuit() {},
+    async providerKeySet(provider) {
+      return ok({ provider, hasKey: true, judges: 0 });
+    },
   };
 
   const bridge = { calls } as FakeBridge;

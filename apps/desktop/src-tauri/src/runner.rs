@@ -14,7 +14,7 @@ use crate::paths::{resolve_folders, FolderOverrides, Folders, PathEnv, Platform}
 use regex::Regex;
 use serde_json::Value;
 use std::ffi::OsString;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::sync::LazyLock;
@@ -191,8 +191,20 @@ pub fn run_words(words: &Words, ctx: &RunContext) -> CliResult {
     run_with(words, ctx, STDOUT_CAP)
 }
 
+/// Runs `words` with `input` on its stdin, then a newline, then stdin closed (0.32.0): the one way a secret — an AI
+/// provider's key, from Settings → AI providers — reaches a launcher. It is never a word of the command line or of its
+/// environment, and nothing here logs or keeps it.
+pub fn run_with_input(words: &Words, ctx: &RunContext, input: &[u8]) -> CliResult {
+    run_inner(words, ctx, STDOUT_CAP, Some(input))
+}
+
 /// `run_words`, with the stdout cap named.
 pub(crate) fn run_with(words: &Words, ctx: &RunContext, cap: usize) -> CliResult {
+    run_inner(words, ctx, cap, None)
+}
+
+/// Runs `words`, with `input` written to stdin when there is any, and stdin closed otherwise.
+fn run_inner(words: &Words, ctx: &RunContext, cap: usize, input: Option<&[u8]>) -> CliResult {
     // Windows starts every launcher with Node: without one, nothing is looked for or started.
     if ctx.platform == Platform::Windows && ctx.node.is_none() {
         return AppError::no_node().into();
@@ -210,13 +222,32 @@ pub(crate) fn run_with(words: &Words, ctx: &RunContext, cap: usize) -> CliResult
         Err(error) => return error.into(),
     };
     let json = words.shape != Shape::VersionLine;
-    let mut child = match command_for(words, &program, &ctx.folders, json).spawn() {
+    let mut command = command_for(words, &program, &ctx.folders, json);
+    if input.is_some() {
+        command.stdin(Stdio::piped());
+    }
+    let mut child = match command.spawn() {
         Ok(child) => child,
         Err(error) => {
             return AppError::io(format!("the {name} launcher could not be started: {error}"))
                 .into()
         }
     };
+    if let Some(input) = input {
+        // At most a few KiB, into an empty pipe: the write never waits on the child. Dropping the handle closes stdin,
+        // so the CLI reads to its end.
+        let handed = child.stdin.take().is_some_and(|mut stdin| {
+            stdin.write_all(input).is_ok()
+                && stdin.write_all(b"\n").is_ok()
+                && stdin.flush().is_ok()
+        });
+        if !handed {
+            let _ = child.kill();
+            let _ = child.wait();
+            return AppError::io(format!("the {name} launcher could not be given its input"))
+                .into();
+        }
+    }
     let (Some(stdout), Some(stderr)) = (child.stdout.take(), child.stderr.take()) else {
         let _ = child.kill();
         let _ = child.wait();

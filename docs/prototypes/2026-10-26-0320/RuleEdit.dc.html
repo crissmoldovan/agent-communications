@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Edit a rule</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45);--scrim:rgba(24,24,27,.32)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55);--scrim:rgba(0,0,0,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1900px;position:relative}
+.app button,.app select,.app input,.app textarea{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.wide{max-width:1040px;margin:0 auto}
+.cols{display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start}
+.form{flex:999 1 520px;min-width:0;display:flex;flex-direction:column;gap:12px}
+.aside{flex:1 1 260px;display:flex;flex-direction:column;gap:12px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sec{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.sh{margin:0 0 10px;font-size:14px;font-weight:600;display:flex;align-items:center;gap:8px}
+.sh .n{width:20px;height:20px;border-radius:6px;background:var(--accentSoft);color:var(--accent);font-size:11px;display:flex;align-items:center;justify-content:center}
+.line{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:8px}
+.f{height:30px;border:0;border-radius:8px;background:var(--s2);padding:0 8px}
+.f.grow{flex:1;min-width:140px}
+.ta{width:100%;box-sizing:border-box;border:0;border-radius:8px;background:var(--s2);padding:8px 10px;resize:vertical;min-height:54px}
+.x{width:28px;height:28px;border:0;border-radius:7px;background:transparent;color:var(--text3);cursor:pointer}
+.x:hover{background:var(--s2)}
+.add{border:0;background:transparent;color:var(--accent);font-weight:500;cursor:pointer;padding:4px 0}
+.act{background:var(--s2);border-radius:12px;padding:12px 14px;margin-bottom:10px}
+.ah{display:flex;align-items:center;gap:8px;margin-bottom:10px;font-weight:600}
+.ah .ic{width:26px;height:26px;border-radius:8px;background:var(--s1);display:flex;align-items:center;justify-content:center;color:var(--text2)}
+.sub{display:grid;grid-template-columns:130px minmax(0,1fr);gap:8px 10px;align-items:center}
+.sub .k{color:var(--text3);font-size:12px}
+.ctx{display:flex;flex-direction:column;gap:6px}
+.cx{display:flex;align-items:flex-start;gap:8px;background:var(--s1);border-radius:9px;padding:8px 10px}
+.cx .t{font-size:11px;font-weight:600;color:var(--text3);text-transform:none;min-width:118px;padding-top:2px}
+.tag{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:7px;background:var(--s1);font-size:12px;font-weight:500}
+.tag.on{background:var(--accentSoft);color:var(--accent)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-n{background:var(--s2);color:var(--text2)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.q{background:transparent}
+.seg{display:inline-flex;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.sg{height:28px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.say b{font-weight:600}
+.switch{width:34px;height:20px;border-radius:10px;background:var(--accent);position:relative;flex:none}
+.switch::after{content:"";position:absolute;top:2px;left:16px;width:16px;height:16px;border-radius:50%;background:#fff}
+.foot{position:sticky;bottom:0;background:var(--bg);padding:12px 0 0;display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.scrim{position:absolute;inset:0;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;padding:120px 16px;box-sizing:border-box}
+.dialog{width:100%;max-width:560px;background:var(--s1);border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:22px 24px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.chg{display:flex;gap:8px;align-items:flex-start}
+.chg .pl{color:var(--ok);font-weight:600;width:14px;flex:none}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="wide">
+  <a href="RuleDetail.dc.html" class="faint" style="text-decoration: none">‹ Events · Rules · invoices</a>
+  <div style="display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 8px 0 16px">
+    <h1 class="h1">Edit invoices</h1><span class="chip c-n">Version 3, not saved</span>
+    <span style="margin-left: auto; display: flex; gap: 8px; align-items: center">
+      <nav class="seg" aria-label="Edit as"><a class="sg on" href="RuleEdit.dc.html" aria-current="page">Visual</a><a class="sg" href="RuleEditText.dc.html">Text</a></nav>
+      <a class="btn" href="RuleAnalyse.dc.html"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l1.8 4.6L18.5 9l-4.7 1.6L12 15l-1.8-4.4L5.5 9l4.7-1.4z"></path><path d="M19 15l.8 2 2 .8-2 .8-.8 2-.8-2-2-.8 2-.8z"></path></svg>Analyse</a>
+    </span>
+  </div>
+
+  <div class="cols">
+  <div class="form">
+
+    <section class="sec" aria-labelledby="s1">
+      <h2 id="s1" class="sh"><span class="n">1</span>When</h2>
+      <div class="line">
+        <span>When</span>
+        <label for="ev" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Event</label>
+        <select id="ev" class="f"><option>a new message arrives</option><option>a message I sent</option></select>
+        <span>in</span>
+        <label for="acc" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Account</label>
+        <select id="acc" class="f"><option>cue/gmail</option><option>personal/gmail</option><option>cue/slack</option></select>
+        <span>in</span>
+        <label for="lbl" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Folder</label>
+        <select id="lbl" class="f"><option>the inbox</option><option>any folder</option><option>a label…</option></select>
+      </div>
+    </section>
+
+    <section class="sec" aria-labelledby="s2">
+      <h2 id="s2" class="sh"><span class="n">2</span>Which messages</h2>
+      <div class="line"><span>Pass on messages that match</span><select class="f" aria-label="Match"><option>any</option><option>all</option></select><span>of these:</span></div>
+      <div class="line"><select class="f" aria-label="Field"><option>Subject</option></select><select class="f" aria-label="Test"><option>mentions</option></select><input class="f grow" value="invoice" aria-label="Value"><button type="button" class="x" aria-label="Remove">×</button></div>
+      <div class="line"><select class="f" aria-label="Field"><option>Subject</option></select><select class="f" aria-label="Test"><option>mentions</option></select><input class="f grow" value="payment" aria-label="Value"><button type="button" class="x" aria-label="Remove">×</button></div>
+      <button type="button" class="add">+ Add a condition</button>
+    </section>
+
+    <section class="sec" aria-labelledby="s3">
+      <h2 id="s3" class="sh"><span class="n">3</span>Ask a judge<span class="switch" role="img" aria-label="On" style="margin-left: auto"></span></h2>
+      <div class="sub">
+        <span class="k">Judge</span><select class="f" aria-label="Judge"><option>Jev, through OpenRouter</option><option>A local model server</option></select>
+        <span class="k">Question</span><textarea class="ta" aria-label="Question">Is this asking me to pay or send something?</textarea>
+        <span class="k">It looks at</span><span style="display: flex; gap: 6px; flex-wrap: wrap"><span class="tag on">Sender</span><span class="tag on">Subject</span><span class="tag on">First 300 characters</span><span class="tag">Sender's address</span></span>
+        <span class="k">Yes when at least</span><span style="display: flex; align-items: center; gap: 10px"><input type="range" min="50" max="95" value="70" aria-label="Threshold" style="flex: 1; accent-color: var(--accent)"><span style="font-weight: 500">0.70</span></span>
+        <span class="k">If it's unsure</span><select class="f" aria-label="If unsure"><option>Don't pass it on</option><option>Hold it for me</option></select>
+      </div>
+    </section>
+
+    <section class="sec" aria-labelledby="s4">
+      <h2 id="s4" class="sh"><span class="n">4</span>Then do</h2>
+
+      <div class="act">
+        <div class="ah"><span class="ic" aria-hidden="true">▤</span>Put it in the Queue<button type="button" class="x" aria-label="Remove" style="margin-left: auto">×</button></div>
+        <div class="sub"><span class="k">Lane</span><input class="f" value="billing" aria-label="Lane"><span class="k">Keep it for</span><select class="f" aria-label="Keep for"><option>7 days</option><option>30 days</option></select></div>
+      </div>
+
+      <div class="act">
+        <div class="ah"><span class="ic" aria-hidden="true">◎</span>Send it to an agent session<span class="chip c-acc">New</span><button type="button" class="x" aria-label="Remove" style="margin-left: auto">×</button></div>
+        <div class="sub">
+          <span class="k">Find</span><span style="display: flex; gap: 6px; flex-wrap: wrap"><select class="f" aria-label="Find by"><option>the session working in</option><option>the session bound to lane</option></select><input class="f grow" value="~/work/cue++/acme" aria-label="Folder"></span>
+          <span class="k">If there's none</span><span style="display: flex; gap: 6px; flex-wrap: wrap"><select class="f" aria-label="If none"><option>start a new one</option><option>leave it in the Queue</option></select><select class="f" aria-label="With"><option>with Claude Code</option><option>with Codex</option></select></span>
+          <span class="k">If it's busy</span><select class="f" aria-label="If busy"><option>queue it until the session is free</option><option>leave it in the Queue</option><option>tell it now anyway</option></select>
+          <span class="k">Give it</span>
+          <div class="ctx">
+            <div class="cx"><span class="t">FROM THE MESSAGE</span><span style="display: flex; gap: 6px; flex-wrap: wrap"><span class="tag on">Sender</span><span class="tag on">Subject</span><span class="tag on">First 300 characters</span><span class="tag">Link to the message</span></span></div>
+            <div class="cx"><span class="t">FIXED TEXT</span><textarea class="ta" aria-label="Fixed text">Check the invoice against Stripe before replying. Never pay anything.</textarea></div>
+            <div class="cx"><span class="t">WRITTEN BY A MODEL</span><span style="flex: 1; display: flex; flex-direction: column; gap: 6px"><select class="f" aria-label="Model"><option>Claude, through your Anthropic key</option><option>Jev</option></select><input class="f" value="Say in one line what the sender wants, and by when." aria-label="Instruction"></span></div>
+            <div class="cx"><span class="t">FROM ELSEWHERE</span><span style="flex: 1; display: flex; gap: 6px; flex-wrap: wrap"><select class="f" aria-label="Kind"><option>a file</option><option>a web address</option><option>a command's output</option></select><input class="f grow" value="~/work/cue++/acme/billing/HOW-WE-INVOICE.md" aria-label="Path"></span></div>
+            <button type="button" class="add" style="align-self: flex-start">+ Add context</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="act">
+        <div class="ah"><span class="ic" aria-hidden="true">◇</span>Add an issue in Linear<span class="chip c-acc">New</span><span class="chip c-warn">Linear isn't connected</span><button type="button" class="x" aria-label="Remove" style="margin-left: auto">×</button></div>
+        <div class="sub">
+          <span class="k">Team</span><select class="f" aria-label="Team"><option>CUE</option></select>
+          <span class="k">Title</span><select class="f" aria-label="Title"><option>Written by a model: “Invoice request from …”</option><option>The subject</option></select>
+          <span class="k">Description</span><select class="f" aria-label="Description"><option>The same context the session gets</option><option>Sender and subject only</option></select>
+          <span class="k">Label, assignee</span><span style="display: flex; gap: 6px"><input class="f" value="Billing" aria-label="Label"><select class="f" aria-label="Assignee"><option>Me</option></select></span>
+        </div>
+        <p class="faint" style="margin: 8px 0 0">Connect Linear in <a href="Integrations.dc.html">Settings → Integrations</a> first.</p>
+      </div>
+
+      <div style="display: flex; gap: 6px; flex-wrap: wrap; align-items: center">
+        <span class="faint">Add:</span>
+        <button type="button" class="btn q">Queue</button><button type="button" class="btn q">Agent session</button><button type="button" class="btn q">Linear issue</button><button type="button" class="btn q">Webhook</button><button type="button" class="btn q">Dry-run log</button>
+      </div>
+    </section>
+
+    <section class="sec" aria-labelledby="s5">
+      <h2 id="s5" class="sh"><span class="n">5</span>What's kept, and the limit</h2>
+      <div class="sub">
+        <span class="k">Keep</span><span style="display: flex; gap: 6px; flex-wrap: wrap"><span class="tag on">Sender</span><span class="tag on">Subject</span><span class="tag on">First 300 characters</span><span class="tag">Attachments' names</span></span>
+        <span class="k">At most</span><span style="display: flex; gap: 8px; align-items: center"><input class="f" value="60" aria-label="Per hour" style="width: 60px"><span>an hour</span></span>
+      </div>
+    </section>
+
+    <div class="foot">
+      <span class="faint" style="flex: 1; min-width: 240px">Saving makes version 3. Version 2 keeps running until you approve version 3.</span>
+      <a class="btn" href="RuleDetail.dc.html">Cancel</a>
+      <button type="button" class="btn p" onClick="{{review}}">Review and approve…</button>
+    </div>
+  </div>
+
+  <aside class="aside" aria-label="Summary">
+    <section class="sec">
+      <h2 class="sh" style="font-size: 13px">In plain words</h2>
+      <p class="say" style="margin: 0; line-height: 1.6">When <b>a new message</b> arrives in <b>cue/gmail</b> with “invoice” or “payment” in the subject, ask <b>Jev</b> “Is this asking me to pay or send something?”. If it says yes:</p>
+      <ol class="say" style="margin: 6px 0 0; padding-left: 18px; line-height: 1.6"><li>put it in the <b>Queue</b>, lane <b>billing</b>;</li><li>send it to the <b>session in ~/work/cue++/acme</b>, starting one if there's none and waiting if it's busy;</li><li>add an <b>issue in Linear</b>, team CUE.</li></ol>
+    </section>
+    <section class="sec">
+      <h2 class="sh" style="font-size: 13px">Analyse</h2>
+      <p class="muted" style="margin: 0 0 10px">Looks for gaps, and sharpens the judge's question and what each session is told. You see every change before it's made.</p>
+      <a class="btn" href="RuleAnalyse.dc.html">Analyse this rule</a>
+    </section>
+  </aside>
+  </div>
+</div>
+</main>
+
+<sc-if value="{{reviewing}}" hint-placeholder-val="{{ false }}">
+<div class="scrim">
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="rv">
+    <div><h2 id="rv" style="margin: 0 0 4px; font-size: 17px; font-weight: 600">Approve version 3 of invoices</h2><p class="muted" style="margin: 0">Version 2 keeps running until you approve.</p></div>
+    <div style="display: flex; flex-direction: column; gap: 8px">
+      <div class="chg"><span class="pl">+</span><span>The subject may also mention “payment”.</span></div>
+      <div class="chg"><span class="pl">+</span><span>Matches go to the agent session in ~/work/cue++/acme too. One is started with Claude Code if there's none, and they wait if it's busy.</span></div>
+      <div class="chg"><span class="pl">+</span><span>The session is told the sender, subject and first 300 characters, a fixed note, a model's one-line summary, and one file.</span></div>
+      <div class="chg"><span class="pl">+</span><span>An issue is added in Linear, team CUE.</span></div>
+    </div>
+    <div style="background: var(--warnSoft); border-radius: 10px; padding: 10px 12px"><strong style="font-weight: 600">What leaves this Mac:</strong> the sender, subject and first 300 characters of matching mail go to Claude (the session and the summary) and to Linear.</div>
+    <div><label for="confirm" style="font-weight: 500; display: block; margin-bottom: 6px">Type <strong>invoices</strong> to approve</label><input id="confirm" class="f" style="width: 100%; box-sizing: border-box"></div>
+    <div style="display: flex; justify-content: flex-end; gap: 8px"><button type="button" class="btn" onClick="{{back}}">Back</button><a class="btn p" href="RuleDetail.dc.html">Approve and switch on</a></div>
+  </section>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1900}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { reviewing: false }; }
+renderVals() {
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+reviewing: this.state.reviewing,
+review: () => this.setState({ reviewing: true }),
+back: () => this.setState({ reviewing: false })
+};
+}
+}
+</script>
+</body>
+</html>

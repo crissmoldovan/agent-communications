@@ -36,13 +36,12 @@ test('0.32 B3: an event source is read back from its dedupe key, per channel, an
     chatId: '447700900001@s.whatsapp.net',
     messageId: '3EB0FAKE01',
   });
-  assert.deepEqual(parseEventSource('resend.email.received', 'fake-email-0001'), {
-    channel: 'resend',
-    emailId: 'fake-email-0001',
-  });
+  // A Resend email id is a UUID; the shared parser (Task C's) reads no other shape.
+  const email = '00000000-0000-4000-8000-000000000001';
+  assert.deepEqual(parseEventSource('resend.email.received', email), { channel: 'resend', emailId: email });
   assert.deepEqual(
-    parseEventSource('resend.email.status_changed', '["fake-email-0002","sent","delivered","2026-10-26T08:00:00Z"]'),
-    { channel: 'resend', emailId: 'fake-email-0002' },
+    parseEventSource('resend.email.status_changed', `["${email}","sent","delivered","2026-10-26T08:00:00Z"]`),
+    { channel: 'resend', emailId: email },
   );
   for (const [type, key] of [
     ['gmail.message.received', 'g-0001'],
@@ -54,6 +53,7 @@ test('0.32 B3: an event source is read back from its dedupe key, per channel, an
     ['whatsapp.message.received', 'no-slash'],
     ['whatsapp.message.received', 'chat/'],
     ['resend.email.received', ''],
+    ['resend.email.received', 'fake-email-0001'],
     ['agentcomms.delivery.told', 'anything'],
     ['unknown', 'anything'],
   ] as const)

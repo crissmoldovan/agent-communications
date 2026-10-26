@@ -791,6 +791,17 @@
     }
   },
   {
+    "name": "messages-list-result",
+    "request": {
+      "operation": "messages-list",
+      "args": {}
+    },
+    "result": {
+      "messages": [],
+      "next": null
+    }
+  },
+  {
     "name": "stop-result",
     "request": {
       "operation": "stop",

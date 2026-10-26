@@ -45,6 +45,9 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'held',
     'queue',
     'lane',
+    'messages',
+    'message',
+    'provider',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -114,9 +117,19 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_watch',
         'events_wait',
         'events_lane_item',
+        'events_provider_list',
       ].sort(),
     );
+    for (const personal of ['events_judge_setup', 'events_provider_key_set', 'events_provider_key_remove'])
+      assert.ok(
+        !names.includes(personal),
+        `${personal}: judge setup and AI provider keys are the person's, in the app or at a terminal (2026-10-26)`,
+      );
     assert.ok(!names.includes('events_lane_bind'), 'binding a lane is the person’s act at a terminal (routing B1)');
+    assert.ok(
+      !names.some((name) => /message/u.test(name)),
+      'what happened to each message is the person’s view: no MCP tool reads it (0.32.0 §3.6, §4)',
+    );
     for (const contentRead of ['events_queue_list', 'events_queue_show', 'events_queue_clear'])
       assert.ok(
         !names.includes(contentRead),

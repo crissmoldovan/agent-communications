@@ -17,12 +17,13 @@ export function markMcpServerProcess(env: NodeJS.ProcessEnv, name: string): void
 
 /**
  * The person-only gate: the queue's content reads (Q1), and `queue clear`, which an agent must not be able to use to
- * make the person's queue disappear; binding a lane; and since 0.32.0 `delivery show` and the dry-run log's `list` and
- * `show` (owner feedback §3.5). It refuses inside an MCP server's process; a shell an agent runs is the person's own.
+ * make the person's queue disappear; binding a lane; and since 0.32.0 `delivery show`, the dry-run log's `list` and
+ * `show`, `messages list` and `message show`, and judge setup and provider keys. It refuses inside an MCP server's
+ * process; a shell an agent runs is the person's own.
  */
 export function assertNotMcpServer(
   env: NodeJS.ProcessEnv,
-  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' = 'read',
+  action: 'read' | 'clear' | 'bind' | 'delivery' | 'dryrun' | 'messages' | 'setup' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -54,6 +55,18 @@ export function assertNotMcpServer(
       message:
         "the dry-run log is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
       hint: 'events_deliveries_list says which deliveries went to a dry-run target, without what they held.',
+    },
+    // 0.32.0 §3.6: what happened to each message — where it went, who read it — is the person's own view.
+    messages: {
+      message:
+        "what happened to each message is for a person, at a terminal or in the app — the event service's MCP server cannot read it",
+      hint: 'queue items gives an agent what is waiting, without what it says.',
+    },
+    // Judge setup and AI provider keys (owner decision 2026-10-26): the person's, from the app or their terminal.
+    setup: {
+      message:
+        "setting up a judge or an AI provider's key is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to set it up in the app: Events → Judges, and Settings → AI providers.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

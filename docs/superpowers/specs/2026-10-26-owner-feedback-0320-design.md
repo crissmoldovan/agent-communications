@@ -3,7 +3,8 @@
 Status: draft, 2026-10-26. Written under the owner's `/goal` of 2026-10-26 ("create a very thorough spec and plan for
 implementing all of these ones by analysing each of them one by one … then completely implement everything"), and their
 later word: "prototype the UI via Canvas so I can see exactly how this would look, so I can feed back before we build
-it". The prototype is https://claude.ai/artifact/3dRSZuWTRDfw9JjGmurYNM (12 screens). Facts below were read from
+it". The prototype is https://claude.ai/artifact/3dRSZuWTRDfw9JjGmurYNM, kept in this repository at
+`docs/prototypes/2026-10-26-0320/` (open it with its README). The owner approved it on 2026-10-26 ("perfect"). Facts below were read from
 feat/0.31 at 1c279b4d on 2026-10-26; the fact sheet with every file and line is `docs/superpowers/plans/2026-10-26-0320-facts.md`.
 
 Each item has the same parts: what the owner said, what is there today, what changes, the decisions (**O** = the

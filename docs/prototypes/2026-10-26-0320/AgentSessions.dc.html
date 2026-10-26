@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Agents, Sessions</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#C2700C;--warnInk:#9A5806;--warnSoft:rgba(161,92,7,.10);--gone:#A1A1AA;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnInk:#F5B454;--warnSoft:rgba(245,180,84,.12);--gone:#52525B;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:980px}
+.app button,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--warnSoft);color:var(--warnInk);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:860px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;margin:12px 0 16px}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.pill{height:28px;padding:0 10px;border-radius:14px;border:0;background:transparent;color:var(--text2);font-weight:500;cursor:pointer}
+.pill.on{background:var(--s3);color:var(--text)}
+.sel{height:28px;border:0;border-radius:8px;background:var(--s2);padding:0 8px;margin-left:auto}
+.list{background:var(--s1);border-radius:14px;padding:6px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.ss{display:flex;align-items:center;gap:12px;padding:12px;border-radius:10px;position:relative}
+.ss:hover{background:var(--s2)}
+.st{width:18px;height:18px;flex:none;display:flex;align-items:center;justify-content:center}
+.dot{width:9px;height:9px;border-radius:50%}
+.spin{width:14px;height:14px;border-radius:50%;border:2px solid var(--accentSoft);border-top-color:var(--accent);animation:spin 900ms linear infinite;box-sizing:border-box}
+@keyframes spin{to{transform:rotate(360deg)}}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-n{background:var(--s2);color:var(--text2)}
+.c-warn{background:var(--warnSoft);color:var(--warnInk)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.btn{height:30px;padding:0 10px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap}
+.btn:hover{background:var(--s3)}
+.menu{position:absolute;right:12px;top:48px;z-index:5;background:var(--s1);border-radius:12px;box-shadow:0 10px 30px rgba(0,0,0,.16);padding:6px;display:flex;flex-direction:column;min-width:200px}
+.mi{height:32px;display:flex;align-items:center;gap:8px;padding:0 10px;border-radius:8px;text-decoration:none}
+.mi:hover{background:var(--s2)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.legend{display:flex;gap:16px;flex-wrap:wrap;margin-top:14px;color:var(--text3);font-size:12px;align-items:center}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.spin{animation:none}}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni on" href="AgentSessions.dc.html" aria-current="page">Agents<span class="cnt">1</span></a><a class="ni" href="#">Updates</a><a class="ni" href="Main.dc.html">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Agents</h1>
+  <p class="muted" style="margin: 0">The agent sessions on this Mac: what each is doing now, and what it has done.</p>
+  <nav aria-label="Agents" class="tabs">
+    <a class="tab on" href="AgentSessions.dc.html" aria-current="page">Sessions</a>
+    <a class="tab" href="AgentProviders.dc.html">Providers</a>
+    <a class="tab" href="#">Label</a>
+    <a class="tab" href="#">Behaviour rules</a>
+    <a class="tab" href="#">Standing approvals</a>
+  </nav>
+
+  <div class="bar">
+    <div role="group" aria-label="Show" style="display: flex; gap: 6px; flex-wrap: wrap">
+      <button type="button" class="pill on" aria-pressed="true">All 6</button>
+      <button type="button" class="pill" aria-pressed="false">Working 2</button>
+      <button type="button" class="pill" aria-pressed="false">Needs you 1</button>
+      <button type="button" class="pill" aria-pressed="false">Ready 2</button>
+      <button type="button" class="pill" aria-pressed="false">Ended 1</button>
+    </div>
+    <label for="prov" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Provider</label>
+    <select id="prov" class="sel"><option>Claude and Codex</option><option>Claude</option><option>Codex</option></select>
+  </div>
+
+  <div class="list">
+    <sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+      <div class="ss">
+        <span class="st" role="img" aria-label="{{r.stateWord}}">
+          <sc-if value="{{r.spinning}}" hint-placeholder-val="{{ false }}"><span class="spin"></span></sc-if>
+          <sc-if value="{{r.still}}" hint-placeholder-val="{{ true }}"><span class="dot" style="background: {{r.dot}}"></span></sc-if>
+        </span>
+        <a href="SessionDetail.dc.html" style="flex: 1; min-width: 0; text-decoration: none">
+          <span style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap"><span style="font-weight: 500">{{r.folder}}</span><span class="faint">{{r.client}}</span></span>
+          <span style="display: block; color: {{r.ink}}">{{r.doing}}</span>
+        </a>
+        <sc-if value="{{r.hasLane}}" hint-placeholder-val="{{ false }}"><span class="chip c-acc">lane {{r.lane}}</span></sc-if>
+        <sc-if value="{{r.hasQueued}}" hint-placeholder-val="{{ false }}"><span class="chip c-n">{{r.queued}} waiting</span></sc-if>
+        <button type="button" class="btn" aria-expanded="{{r.open}}" onClick="{{r.toggle}}">Open in ▾</button>
+        <sc-if value="{{r.open}}" hint-placeholder-val="{{ false }}">
+          <div class="menu" role="menu">
+            <a class="mi" role="menuitem" href="#">VS Code</a>
+            <a class="mi" role="menuitem" href="#">Terminal (the CLI)</a>
+            <a class="mi" role="menuitem" href="#">{{r.app}}</a>
+            <a class="mi" role="menuitem" href="SessionDetail.dc.html">Here, in Agent Comms</a>
+          </div>
+        </sc-if>
+      </div>
+    </sc-for>
+  </div>
+
+  <div class="legend" aria-label="What the marks mean">
+    <span style="display: flex; gap: 6px; align-items: center"><span class="spin" aria-hidden="true"></span>Working</span>
+    <span style="display: flex; gap: 6px; align-items: center"><span class="dot" aria-hidden="true" style="background: var(--warn)"></span>Needs you</span>
+    <span style="display: flex; gap: 6px; align-items: center"><span class="dot" aria-hidden="true" style="background: var(--ok)"></span>Ready</span>
+    <span style="display: flex; gap: 6px; align-items: center"><span class="dot" aria-hidden="true" style="background: var(--gone)"></span>Ended</span>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { open: 0 }; }
+renderVals() {
+const base = [
+{ state: 'work', folder: '~/work/cue++/acme', client: 'Claude Code 2.1.310 · in Terminal', doing: 'Drafting a reply to an invoice request', lane: 'billing', queued: 2, app: 'Claude desktop app' },
+{ state: 'need', folder: '~/work/ops', client: 'Codex 0.48 · in VS Code', doing: 'Needs you: approve a post in #deploys', lane: '', queued: 0, app: 'Codex app' },
+{ state: 'work', folder: '~/work/cue++/agent-communications', client: 'Claude Code 2.1.310 · in the Claude app', doing: 'Running the tests', lane: '', queued: 0, app: 'Claude desktop app' },
+{ state: 'ready', folder: '~/work/personal', client: 'Claude Code 2.1.310 · in Terminal', doing: 'Ready since 10:55 · read 3 messages today', lane: '', queued: 0, app: 'Claude desktop app' },
+{ state: 'ready', folder: '~/work/rgc/bts', client: 'Codex 0.48 · in Terminal', doing: 'Ready since 09:12', lane: 'david', queued: 0, app: 'Codex app' },
+{ state: 'gone', folder: '~/work/cue++/ui', client: 'Claude Code 2.1.309', doing: 'Ended 2 hours ago · sent 1 Slack message', lane: '', queued: 0, app: 'Claude desktop app' }
+];
+const dots = { need: 'var(--warn)', ready: 'var(--ok)', gone: 'var(--gone)', work: 'var(--accent)' };
+const words = { need: 'Needs you', ready: 'Ready', gone: 'Ended', work: 'Working' };
+const rows = base.map((b, i) => ({ ...b,
+spinning: b.state === 'work', still: b.state !== 'work', dot: dots[b.state], stateWord: words[b.state],
+ink: b.state === 'need' ? 'var(--warnInk)' : (b.state === 'gone' ? 'var(--text3)' : 'var(--text2)'),
+hasLane: !!b.lane, hasQueued: b.queued > 0,
+open: this.state.open === i,
+toggle: () => this.setState({ open: this.state.open === i ? -1 : i }) }));
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light', rows: rows };
+}
+}
+</script>
+</body>
+</html>

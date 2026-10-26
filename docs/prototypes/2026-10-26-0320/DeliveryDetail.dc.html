@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A delivery</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:1180px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h3{margin:0 0 8px;font-size:12px;font-weight:500;color:var(--text3)}
+.card{background:var(--s1);border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-out{background:var(--warnSoft);color:var(--warn)}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:1px 7px}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s2)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.kv{display:grid;grid-template-columns:90px minmax(0,1fr);gap:8px 12px;align-items:baseline}
+.code{background:var(--s2);border-radius:10px;padding:12px 14px;margin:0;white-space:pre-wrap;overflow-x:auto;line-height:1.6}
+.try{display:grid;grid-template-columns:80px minmax(0,1fr) auto;gap:12px;padding:8px 0;align-items:baseline}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <a href="Deliveries.dc.html" class="faint" style="text-decoration: none">‹ Events · Deliveries</a>
+
+  <sc-if value="{{isDry}}" hint-placeholder-val="{{ true }}">
+    <div class="row" style="flex-wrap: wrap; gap: 10px"><h1 class="h1">mail-subject → Dry-run log</h1><span class="chip c-acc">Recorded · nothing sent</span></div>
+  </sc-if>
+  <sc-if value="{{isHook}}" hint-placeholder-val="{{ false }}">
+    <div class="row" style="flex-wrap: wrap; gap: 10px"><h1 class="h1">build-alerts → Webhook</h1><span class="chip c-warn">Will try again at 12:10</span>
+      <span style="margin-left: auto; display: flex; gap: 6px"><button type="button" class="btn">Try now</button><button type="button" class="btn q">Stop trying</button></span>
+    </div>
+  </sc-if>
+
+  <section class="card" aria-labelledby="msg">
+    <div class="row" style="margin-bottom: 8px"><h2 id="msg" class="h3" style="margin: 0">The message</h2><a class="btn q" href="#" style="margin-left: auto">Open in Gmail</a></div>
+    <div class="kv">
+      <span class="faint">Where</span><span>Gmail · {{account}} · {{when}}</span>
+      <span class="faint">From</span><span><span class="ext">{{from}}</span> <span class="chip c-out">From outside</span></span>
+      <span class="faint">Subject</span><span><span class="ext">{{subject}}</span></span>
+    </div>
+    <p class="faint" style="margin: 10px 0 0"><a href="MessageTimeline.dc.html">See everything that happened to this message ›</a></p>
+  </section>
+
+  <section class="card" aria-labelledby="why">
+    <h2 id="why" class="h3">Why it was passed on</h2>
+    <div>Rule <a href="RuleDetail.dc.html" style="font-weight: 500">{{rule}}</a>, version 1: {{matched}}</div>
+    <div class="faint" style="margin-top: 4px">No judge on this rule.</div>
+  </section>
+
+  <sc-if value="{{isDry}}" hint-placeholder-val="{{ true }}">
+    <section class="card" aria-labelledby="would">
+      <h2 id="would" class="h3">What it would have delivered</h2>
+      <pre class="code mono">{{payload}}</pre>
+      <p class="faint" style="margin: 8px 0 0">Only the parts the rule keeps. Text the sender wrote is shown as plain text, never as links or formatting.</p>
+    </section>
+  </sc-if>
+  <sc-if value="{{isHook}}" hint-placeholder-val="{{ false }}">
+    <section class="card" aria-labelledby="sends">
+      <h2 id="sends" class="h3">What it sends</h2>
+      <div>To <span class="mono">https://hooks.ci.example/agentcomms</span>, signed with the target's key</div>
+      <div class="faint" style="margin-top: 4px">The sender and the subject, as the rule keeps them</div>
+    </section>
+  </sc-if>
+
+  <section class="card" aria-labelledby="tries">
+    <h2 id="tries" class="h3">Tries</h2>
+    <sc-for list="{{tries}}" as="t" hint-placeholder-count="1">
+      <div class="try"><span class="faint">{{t.at}}</span><span>{{t.what}}</span><span class="chip {{t.cls}}">{{t.tag}}</span></div>
+    </sc-for>
+    <p class="faint" style="margin: 6px 0 0">{{triesNote}}</p>
+  </section>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"kind":{"editor":"enum","options":["dry run","webhook, will try again"],"default":"dry run"},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+renderVals() {
+const dry = (this.props.kind ?? 'dry run') === 'dry run';
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+isDry: dry, isHook: !dry,
+account: dry ? 'personal/gmail' : 'cue/gmail',
+when: dry ? 'Oct 26, 10:02' : 'Oct 26, 11:52',
+from: dry ? 'Jo Example <jo@example.com>' : 'CI <builds@ci.example>',
+subject: dry ? 'test: does the rule fire?' : 'Build 1842 failed on main',
+rule: dry ? 'mail-subject' : 'build-alerts',
+matched: dry ? 'the subject contains “test”.' : 'mail from builds@ci.example.',
+payload: '{\n  "rule": "mail-subject",\n  "channel": "gmail",\n  "account": "personal/gmail",\n  "from": "Jo Example <jo@example.com>",\n  "subject": "test: does the rule fire?",\n  "arrived": "2026-10-26T10:02:01Z"\n}',
+tries: dry
+? [{ at: '10:02:03', what: 'Written to the dry-run log on this Mac', tag: 'Recorded', cls: 'c-acc' }]
+: [
+{ at: '11:58:15', what: 'Try 3 of 5: the webhook answered 503, it is unavailable', tag: 'Failed', cls: 'c-danger' }
+],
+triesNote: dry ? 'The dry-run log keeps this entry for 24 hours, until tomorrow at 10:02, then deletes it.' : 'Earlier tries are counted, not kept one by one. Next try at 12:10; after 2 more failed tries it stops, and the delivery shows as failed.'
+};
+}
+}
+</script>
+</body>
+</html>

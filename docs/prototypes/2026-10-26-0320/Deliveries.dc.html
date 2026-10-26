@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Events, Deliveries</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--danger:#B93E0B;--dangerSoft:rgba(194,65,12,.09);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:980px}
+.app button{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2)}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.new{margin-left:auto;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:1px 6px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.sub{margin:0 0 18px;color:var(--text2)}
+.tabs{display:inline-flex;flex-wrap:wrap;background:var(--s2);border-radius:10px;padding:3px;gap:2px;margin-bottom:16px}
+.tab{height:30px;padding:0 12px;border-radius:8px;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.pills{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.pill{height:28px;padding:0 10px;border-radius:14px;border:0;background:transparent;color:var(--text2);font-weight:500;cursor:pointer}
+.pill.on{background:var(--s3);color:var(--text)}
+.list{background:var(--s1);border-radius:14px;padding:6px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.dl{display:flex;align-items:center;gap:14px;padding:12px;border-radius:10px;text-decoration:none;transition:background-color 160ms ease}
+.dl:hover{background:var(--s2)}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.ext{display:inline-block;background:var(--s2);border-radius:6px;padding:0 6px;font-size:12px}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.icon{width:30px;height:30px;border-radius:9px;display:flex;align-items:center;justify-content:center;flex:none;background:var(--s2);color:var(--text2)}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="#">Overview</a><a class="ni" href="#">Queue</a><a class="ni" href="Messages.dc.html">Messages<span class="new">New</span></a><a class="ni" href="#">Accounts</a><a class="ni" href="Connections.dc.html">Connections<span class="new">New</span></a><a class="ni" href="#">Approvals</a><a class="ni" href="#">Activity</a><a class="ni" href="AgentSessions.dc.html">Agents</a><a class="ni" href="#">Updates</a><a class="ni on" href="Main.dc.html" aria-current="page">Events</a><a class="ni" href="#">Doctor</a>
+  </div>
+  <div style="margin-top: auto"><a class="ni" href="Providers.dc.html">Settings</a></div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <h1 class="h1">Events</h1>
+  <p class="sub">Rules watch your accounts and pass on what matters.</p>
+  <nav aria-label="Event service" class="tabs">
+    <a class="tab" href="#">Service <span aria-hidden="true" style="width: 7px; height: 7px; border-radius: 50%; background: var(--ok)"></span></a>
+    <a class="tab" href="Main.dc.html">Judges</a>
+    <a class="tab" href="Rules.dc.html">Rules <span class="n">5</span></a>
+    <a class="tab on" href="Deliveries.dc.html" aria-current="page">Deliveries <span class="n">5</span></a>
+  </nav>
+  <p class="muted" style="margin: 0 0 6px">A delivery is one message a rule passed on: to the Queue, to a webhook, or to the dry-run log. Open one to see the message, why it was passed on, and each try.</p>
+  <p class="faint" style="margin: 0 0 14px">The dry-run log is a private record on this Mac of what a rule would have delivered, for trying a rule out. Nothing in it is sent anywhere, and each entry is deleted after 24 hours.</p>
+
+  <div class="pills" role="group" aria-label="Show">
+    <button type="button" class="pill on" aria-pressed="true">All 5</button>
+    <button type="button" class="pill" aria-pressed="false">Will try again 1</button>
+    <button type="button" class="pill" aria-pressed="false">Failed 1</button>
+    <button type="button" class="pill" aria-pressed="false">Done 3</button>
+  </div>
+
+  <div class="list">
+    <a class="dl" href="DeliveryDetail.dc.html">
+      <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-weight: 500">invoices → Queue, lane billing</span><span class="faint">Gmail · cue/gmail · from <span class="ext">David Example</span></span></span>
+      <span class="chip c-ok">Delivered</span><span class="faint" style="width: 64px; text-align: right">11:40</span>
+    </a>
+    <a class="dl" href="DeliveryDetail.dc.html">
+      <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-weight: 500">david-on-slack → Queue, lane david</span><span class="faint">Slack · cue/slack · from <span class="ext">David Example</span></span></span>
+      <span class="chip c-ok">Delivered</span><span class="faint" style="width: 64px; text-align: right">11:31</span>
+    </a>
+    <a class="dl" href="DeliveryDetail.dc.html">
+      <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h9l4 4v14H6z"></path><path d="M9 11h7M9 15h5"></path></svg></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-weight: 500">mail-subject → Dry-run log</span><span class="faint">Gmail · personal/gmail · from <span class="ext">Jo Example</span> · nothing was sent</span></span>
+      <span class="chip c-acc">Recorded</span><span class="faint" style="width: 64px; text-align: right">10:02</span>
+    </a>
+    <a class="dl" href="DeliveryDetail.dc.html">
+      <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"></path></svg></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-weight: 500">build-alerts → Webhook, hooks.ci.example</span><span class="faint">Gmail · cue/gmail · tried 3 times · next try at 12:10</span></span>
+      <span class="chip c-warn">Will try again</span><span class="faint" style="width: 64px; text-align: right">11:52</span>
+    </a>
+    <a class="dl" href="DeliveryDetail.dc.html">
+      <span class="icon" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1"></path><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1"></path></svg></span>
+      <span style="flex: 1; min-width: 0"><span style="display: block; font-weight: 500">build-alerts → Webhook, hooks.ci.example</span><span class="faint">Gmail · cue/gmail · gave up after 5 tries</span></span>
+      <span class="chip c-danger">Failed</span><span class="faint" style="width: 64px; text-align: right">08:15</span>
+    </a>
+  </div>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":980}}'>
+class Component extends DCLogic {
+renderVals() {
+return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };
+}
+}
+</script>
+</body>
+</html>

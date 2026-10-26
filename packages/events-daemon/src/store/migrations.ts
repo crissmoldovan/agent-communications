@@ -902,15 +902,91 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
     ],
   },
   {
+    // AI provider keys (owner decision 2026-10-26): one key slot for each provider the person has an account with —
+    // TypeSafe and OpenRouter — beside the hosted judge's own. The slot's owner is the provider; its material stays in
+    // the selected backend and its opaque reference is sealed like every other generation's.
+    version: 26,
+    name: 'event-secret-provider-slot-v1',
+    statements: [
+      'DROP INDEX event_secret_generations_current',
+      `CREATE TABLE event_secret_generations_v26 (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose = 'sse-bearer')
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN ('typesafe', 'openrouter'))
+        )
+      ) STRICT`,
+      `INSERT INTO event_secret_generations_v26
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+      'DROP TABLE event_secret_generations',
+      'ALTER TABLE event_secret_generations_v26 RENAME TO event_secret_generations',
+      `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+      "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // A queue item's history (0.32.0 spec §3.6): a window woken for it, a window reading it, and Done, Dismiss and
+    // Reopen, each with who did it — an agent window by its activity session key, or the person (no key). Ids and times
+    // only. It goes with its item: the trigger runs on every delete of an item row, whichever path purges it (expiry,
+    // revocation, account removal, queue clear). Never read over MCP, and never written to core's activity log. Two
+    // indexes serve `messages list`, which joins observed events to their queue items.
+    version: 27,
+    name: 'event-queue-item-history-v1',
+    statements: [
+      `CREATE TABLE queue_item_history (
+        item_id TEXT NOT NULL CHECK (
+          length(item_id) = 29 AND substr(item_id, 1, 3) = 'qi_' AND substr(item_id, 4) NOT GLOB '*[^0-9A-HJKMNP-TV-Z]*'
+        ),
+        at INTEGER NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('woken', 'read', 'done', 'dismissed', 'reopened')),
+        actor TEXT NOT NULL CHECK (actor IN ('person', 'window')),
+        window_key TEXT CHECK (
+          window_key IS NULL OR (length(window_key) = 16 AND window_key NOT GLOB '*[^0-9a-f]*')
+        ),
+        CHECK ((actor = 'window') = (window_key IS NOT NULL)),
+        CHECK (actor = 'window' OR kind NOT IN ('woken', 'read'))
+      ) STRICT`,
+      'CREATE INDEX queue_item_history_item ON queue_item_history(item_id, at)',
+      `CREATE TRIGGER queue_item_history_goes_with_its_item
+        AFTER DELETE ON queue_items
+        BEGIN
+          DELETE FROM queue_item_history WHERE item_id = OLD.id;
+        END`,
+      // `messages list` reads observed events newest first, and joins each to its queue item by event id.
+      'CREATE INDEX ingest_observed ON ingest(observed_at, event_id)',
+      'CREATE INDEX queue_items_event ON queue_items(event_id)',
+      "UPDATE meta SET value = '27' WHERE key = 'schema_version'",
+    ],
+  },
+  {
     // 0.32.0 (owner feedback §3.5): a delivery starts with next_at = 0, "due now", and the dry-run, queue and SSE
     // dispatchers used to leave it there when they delivered, which the app showed as a next try in 1970. They clear
     // it now; this clears it on the rows they left. Only a row that may still be tried keeps a time (the scheduler
     // reads NULL as due, so a disclosing row recovered to a try loses nothing).
-    version: 26,
+    version: 28,
     name: 'event-delivery-next-at-terminal-v1',
     statements: [
       "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
-      "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
+      "UPDATE meta SET value = '28' WHERE key = 'schema_version'",
     ],
   },
 ];

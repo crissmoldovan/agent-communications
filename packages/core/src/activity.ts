@@ -136,6 +136,15 @@ export interface ActivityTold {
 }
 
 /**
+ * The message a draft or a send answers (design 2026-10-26-owner-feedback-0320 §3.6): the provider's id of it, and of
+ * its thread when known. Ids only — what links a reply to the message it answers, never anything either one says.
+ */
+export interface ActivityReplyTo {
+  readonly messageId: string;
+  readonly threadId?: string | undefined;
+}
+
+/**
  * One call, as the log keeps it (§4.2, S1, S2, S4). Content never: what was touched, by id, subject and sender, and
  * how it ended.
  *
@@ -145,6 +154,10 @@ export interface ActivityTold {
  * - `query` is a search's words — an agent wrote them, not a sender.
  * - `recipients` and `approvalId` are a write's, as the audit records them.
  * - `told` is a delivery's (S1).
+ * - `replyTo`, `draftId` and `threadId` link a reply to what it answers (0.32.0 §3.6): the message a reply draft or a
+ *   send prepared as a reply answers, the draft a line made, prepared or sent, and the thread a send went into.
+ * - `channelId` and `thread` are Slack's (0.32.0 §3.6): the conversation a post went to or a history read read, by its
+ *   id — the name a read keeps is not what an event names — and the parent ts a post went into, null for a new message.
  */
 export interface ActivityLine {
   readonly at: string;
@@ -163,6 +176,11 @@ export interface ActivityLine {
   readonly recipients?: readonly string[] | undefined;
   readonly approvalId?: string | undefined;
   readonly told?: ActivityTold | undefined;
+  readonly replyTo?: ActivityReplyTo | undefined;
+  readonly draftId?: string | undefined;
+  readonly threadId?: string | undefined;
+  readonly channelId?: string | undefined;
+  readonly thread?: string | null | undefined;
   /**
    * The line was cut to `MAX_ACTIVITY_LINE_BYTES`: items, then recipients, dropped from the end, and long words
    * shortened. `count` still says how many items there were.
@@ -349,6 +367,25 @@ function fitted(line: ActivityLine): ActivityLine {
   return { ...rest, truncated: true };
 }
 
+/**
+ * A provider's id as a link field keeps one: a string of id characters, at most `BOUNDS.id` long — never a word with
+ * spaces or markup in it, so a link can never carry what a sender wrote. Undefined for anything else.
+ */
+function providerId(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length <= BOUNDS.id && /^[A-Za-z0-9._:/@+=-]+$/.test(value)
+    ? value
+    : undefined;
+}
+
+/** `replyTo` as a line keeps it: a message id, and its thread's when there is one; undefined without a message id. */
+function replyToOf(raw: unknown): ActivityReplyTo | undefined {
+  const link = own<Record<string, unknown>>(raw);
+  const messageId = providerId(link?.messageId);
+  if (messageId === undefined) return undefined;
+  const threadId = providerId(link?.threadId);
+  return { messageId, ...(threadId === undefined ? {} : { threadId }) };
+}
+
 /** The line every field of it bounded, before the line as a whole is (`fitted`). */
 function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
   const raw = input as unknown as Record<string, unknown>;
@@ -378,6 +415,12 @@ function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
   const query = cut(raw.query, BOUNDS.query);
   const approvalId =
     typeof raw.approvalId === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(raw.approvalId) ? raw.approvalId : undefined;
+  const replyTo = replyToOf(raw.replyTo);
+  const draftId = providerId(raw.draftId);
+  const threadId = providerId(raw.threadId);
+  const channelId = providerId(raw.channelId);
+  // Null is a statement — a new message, in no thread — and kept as one; anything else that is not an id goes.
+  const thread = raw.thread === null ? null : providerId(raw.thread);
   return {
     at,
     channel: cut(raw.channel, BOUNDS.word) ?? '',
@@ -397,6 +440,11 @@ function boundedLine(input: ActivityLineInput, now: Date): ActivityLine {
     ...(told === undefined
       ? {}
       : { told: { rule: cut(told.rule, BOUNDS.name) ?? '', target: cut(told.target, BOUNDS.name) ?? '' } }),
+    ...(replyTo === undefined ? {} : { replyTo }),
+    ...(draftId === undefined ? {} : { draftId }),
+    ...(threadId === undefined ? {} : { threadId }),
+    ...(channelId === undefined ? {} : { channelId }),
+    ...(thread === undefined ? {} : { thread }),
     ...(raw.truncated === true ? { truncated: true as const } : {}),
   };
 }
@@ -975,6 +1023,35 @@ export class ActivityLog {
     lines.sort(newestFirst);
     if (lines.length > limit) lines.length = limit;
     return { lines, more: matched > limit, summary: summary === null ? null : summaryOf(summary) };
+  }
+
+  /**
+   * Every session's lines at or after `since` (every day the retention keeps, when left out), oldest first: the
+   * person's view, which `activity items` groups by what each line names (0.32.0 §3.6). None of a day past the
+   * retention is ever read. `mention` is a quick look before a line is read whole: only lines whose text holds one of
+   * those words are read — the caller still decides what each line names.
+   */
+  async linesSince(
+    options: { since?: string | undefined; mention?: readonly string[] | undefined } = {},
+  ): Promise<ActivityLine[]> {
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
+    const { since, mention } = options;
+    const found: ActivityLine[] = [];
+    for (const day of await this.days()) {
+      if (day < cutoff) continue;
+      if (since !== undefined && `${day}T23:59:59.999Z` < since) continue;
+      const text = await this.#text(day);
+      if (text === null) continue;
+      for (const raw of text.split('\n')) {
+        if (!raw) continue;
+        if (mention !== undefined && !mention.some((word) => raw.includes(word))) continue;
+        const line = readLine(raw);
+        if (line === null || (since !== undefined && line.at < since)) continue;
+        found.push(line);
+      }
+    }
+    // Two processes append to one file out of order: by time, and lines of one time in the order they were met.
+    return found.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1));
   }
 
   /**
@@ -1595,6 +1672,11 @@ export interface ActivityDetail {
   readonly recipients?: readonly string[] | undefined;
   readonly approvalId?: string | undefined;
   readonly told?: ActivityTold | undefined;
+  readonly replyTo?: ActivityReplyTo | undefined;
+  readonly draftId?: string | undefined;
+  readonly threadId?: string | undefined;
+  readonly channelId?: string | undefined;
+  readonly thread?: string | null | undefined;
 }
 
 /** The refusals a call can end in — a policy, an approval, a rule, a cap or a usage mistake — rather than a failure. */
@@ -1651,6 +1733,11 @@ async function recordCall(
       ...(detail.recipients === undefined ? {} : { recipients: detail.recipients }),
       ...(detail.approvalId === undefined ? {} : { approvalId: detail.approvalId }),
       ...(detail.told === undefined ? {} : { told: detail.told }),
+      ...(detail.replyTo === undefined ? {} : { replyTo: detail.replyTo }),
+      ...(detail.draftId === undefined ? {} : { draftId: detail.draftId }),
+      ...(detail.threadId === undefined ? {} : { threadId: detail.threadId }),
+      ...(detail.channelId === undefined ? {} : { channelId: detail.channelId }),
+      ...(detail.thread === undefined ? {} : { thread: detail.thread }),
     });
   } catch {
     // Recording never fails the call.

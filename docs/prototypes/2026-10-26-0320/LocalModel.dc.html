@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Set up a local model server</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#9A5806;--warnSoft:rgba(161,92,7,.10);--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45);--scrim:rgba(24,24,27,.32)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8B8B94;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55);--scrim:rgba(0,0,0,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap;min-height:820px;position:relative}
+.app button,.app select,.app input{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;color:var(--text2)}
+.ni.on{background:var(--s3);color:var(--text)}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 48px}
+.col{max-width:760px;margin:0 auto}
+.h1{margin:0 0 4px;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow)}
+.btn{height:32px;padding:0 14px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;transition:background-color 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.row{display:flex;align-items:center;gap:12px}
+.scrim{position:absolute;inset:0;background:var(--scrim);display:flex;align-items:flex-start;justify-content:center;padding:64px 16px;box-sizing:border-box}
+.dialog{width:100%;max-width:520px;background:var(--s1);border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:22px 24px;box-sizing:border-box;display:flex;flex-direction:column;gap:16px}
+.seg{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.sg{height:30px;border:0;border-radius:8px;background:transparent;cursor:pointer;font-weight:500;color:var(--text2)}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.lbl{font-weight:500;margin:0 0 6px;display:block}
+.field{height:34px;width:100%;box-sizing:border-box;border-radius:8px;border:0;background:var(--s2);padding:0 10px}
+.result{background:var(--okSoft);border-radius:10px;padding:10px 12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+</style>
+</helmet>
+<div class="app {{themeClass}}">
+
+<nav aria-label="Sections" class="nav">
+  <div style="display: flex; align-items: center; gap: 10px; padding: 6px 8px 0">
+    <span aria-hidden="true" style="width: 24px; height: 24px; border-radius: 7px; background: var(--accent); color: var(--accentText); display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 12px">A</span>
+    <span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span>
+  </div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <span class="ni">Overview</span><span class="ni">Queue</span><span class="ni">Messages</span><span class="ni">Accounts</span><span class="ni">Connections</span><span class="ni">Approvals</span><span class="ni">Activity</span><span class="ni">Agents</span><span class="ni">Updates</span><span class="ni on">Events</span><span class="ni">Doctor</span>
+  </div>
+</nav>
+
+<main class="main" aria-hidden="true">
+<div class="col">
+  <h1 class="h1">Events</h1>
+  <p class="muted" style="margin: 0 0 18px">Rules watch your accounts and pass on what matters.</p>
+  <div class="card" style="height: 110px; margin-bottom: 12px"></div>
+  <div class="card" style="height: 90px; margin-bottom: 12px"></div>
+  <div class="card" style="height: 90px"></div>
+</div>
+</main>
+
+<div class="scrim">
+  <section class="dialog" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+    <div>
+      <h2 id="dlg-title" style="margin: 0 0 4px; font-size: 17px; font-weight: 600">Set up a local model server</h2>
+      <p class="muted" style="margin: 0">Use a model running on this Mac as a judge. Nothing leaves the Mac.</p>
+    </div>
+
+    <div>
+      <span class="lbl" id="kind-l">What you run</span>
+      <div class="seg" role="radiogroup" aria-labelledby="kind-l">
+        <button type="button" role="radio" aria-checked="{{k0}}" class="sg {{c0}}" onClick="{{pick0}}">Ollama</button>
+        <button type="button" role="radio" aria-checked="{{k1}}" class="sg {{c1}}" onClick="{{pick1}}">LM Studio</button>
+        <button type="button" role="radio" aria-checked="{{k2}}" class="sg {{c2}}" onClick="{{pick2}}">Something else</button>
+      </div>
+    </div>
+
+    <div>
+      <label class="lbl" for="addr">Address</label>
+      <input id="addr" class="field" value="{{addr}}">
+      <p class="faint" style="margin: 6px 0 0">Only an address on this Mac, such as 127.0.0.1 or localhost. The server must answer in the OpenAI chat format, as Ollama and LM Studio do.</p>
+    </div>
+
+    <div class="row" style="flex-wrap: wrap">
+      <button type="button" class="btn" onClick="{{find}}">Check and find models</button>
+      <span class="faint">Asks the server which models it has.</span>
+    </div>
+
+    <sc-if value="{{found}}" hint-placeholder-val="{{ false }}">
+      <div class="result" role="status">Connected. 3 models found.</div>
+      <div>
+        <label class="lbl" for="model">Model</label>
+        <select id="model" class="field">
+          <option>llama3.1:8b</option>
+          <option>qwen2.5:7b-instruct</option>
+          <option>mistral:7b</option>
+        </select>
+        <p class="faint" style="margin: 6px 0 0">Answers from a local model aren't calibrated, so the Queue marks them “uncalibrated”.</p>
+      </div>
+    </sc-if>
+
+    <div class="row" style="justify-content: flex-end; gap: 8px; margin-top: 4px">
+      <a class="btn" href="Main.dc.html">Cancel</a>
+      <a class="btn p" href="Main.dc.html" aria-disabled="{{notFound}}" style="opacity: {{turnOnOpacity}}">Turn on</a>
+    </div>
+  </section>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":820}}'>
+class Component extends DCLogic {
+constructor(props) { super(props); this.state = { kind: 0, found: false }; }
+renderVals() {
+const k = this.state.kind;
+const addrs = ['http://127.0.0.1:11434', 'http://127.0.0.1:1234', 'http://127.0.0.1:8080'];
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+k0: k === 0, k1: k === 1, k2: k === 2,
+c0: k === 0 ? 'on' : '', c1: k === 1 ? 'on' : '', c2: k === 2 ? 'on' : '',
+pick0: () => this.setState({ kind: 0, found: false }),
+pick1: () => this.setState({ kind: 1, found: false }),
+pick2: () => this.setState({ kind: 2, found: false }),
+addr: addrs[k],
+found: this.state.found, notFound: !this.state.found,
+turnOnOpacity: this.state.found ? 1 : 0.5,
+find: () => this.setState({ found: true })
+};
+}
+}
+</script>
+</body>
+</html>

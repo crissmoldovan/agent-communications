@@ -85,7 +85,7 @@ test('the local event service README states its boundaries for the person using 
   assert.match(prose, /hidden chat never reaches a target/i);
   assert.match(prose, /never sends mail or messages through them/i);
   assert.match(prose, /An agent can never/i);
-  assert.match(prose, /Every judge kind is off until you enable it, at your terminal/i);
+  assert.match(prose, /Every judge kind is off until you turn it on: in the desktop app, or at your terminal/i);
   assert.match(
     prose,
     /will run the Laya model on this machine, in an isolated worker\. This release does not offer it yet/i,

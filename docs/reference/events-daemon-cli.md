@@ -55,12 +55,15 @@ Scripts should read these rather than parse output.
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
+| [`provider`](#agent-events-provider) | the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most |
 | [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
 | [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
+| [`messages`](#agent-events-messages) | what happened to each message the event service observed: matched, judged, delivered, queued, read |
+| [`message`](#agent-events-message) | one message the event service observed, by its event id |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
 | [`mcp`](#agent-events-mcp) | serve the MCP interface over standard input and output |
 | [`secrets`](#agent-events-secrets) | migrate the daemon-owned secret backend at a human terminal |
@@ -578,6 +581,20 @@ agent-events judge key rotate [options] <judge-id>
 |---|---|---|
 | `--version <version>` |  | — |
 
+### `agent-events judge setup`
+
+set up and turn on Jev (typesafe) or a model server on this machine (local-endpoint) in one step, as the person
+
+```
+agent-events judge setup [options] <kind>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--provider <provider>` | Jev's provider: typesafe (the default) or openrouter | — |
+| `--url <url>` | the local model server's URL: http://127.0.0.1:<port> or http://[::1]:<port> | — |
+| `--model <name>` | the local model server's model (default nimble) | — |
+
 ### `agent-events budget`
 
 inspect or prepare the immutable global judge budget
@@ -596,6 +613,46 @@ agent-events budget show [options]
 
 ```
 agent-events budget update [options] <document>
+```
+
+### `agent-events provider`
+
+the AI providers whose keys Jev uses — TypeSafe and OpenRouter — and whether each has a key
+
+```
+agent-events provider [options] [command]
+```
+
+### `agent-events provider list`
+
+list each AI provider and whether it has a key; never a key
+
+```
+agent-events provider list [options]
+```
+
+### `agent-events provider key`
+
+set or remove an AI provider's key, as the person
+
+```
+agent-events provider key [options] [command]
+```
+
+### `agent-events provider key set`
+
+store a provider key, read from your hidden input or the app’s stdin, never from argv
+
+```
+agent-events provider key set [options] <provider>
+```
+
+### `agent-events provider key remove`
+
+remove a provider key, and the copy its Jev judges hold
+
+```
+agent-events provider key remove [options] <provider>
 ```
 
 ### `agent-events deliveries`
@@ -805,6 +862,44 @@ unbind a lane from its window at once; its watches end
 
 ```
 agent-events lane unbind [options] <lane>
+```
+
+### `agent-events messages`
+
+what happened to each message the event service observed: matched, judged, delivered, queued, read
+
+```
+agent-events messages [options] [command]
+```
+
+### `agent-events messages list`
+
+list observed messages newest first, each with its decisions, deliveries and queue item (a person)
+
+```
+agent-events messages list [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--since <ms>` | the oldest observation time, in milliseconds since 1970 | `30 days back` |
+| `--before <ms\|next>` | only messages observed before this time, or the next an earlier page gave | — |
+| `--limit <n>` | at most this many messages (1 to 500, default 100) | — |
+
+### `agent-events message`
+
+one message the event service observed, by its event id
+
+```
+agent-events message [options] [command]
+```
+
+### `agent-events message show`
+
+show one message, with every line of its queue item’s history (a person)
+
+```
+agent-events message show [options] <event-id>
 ```
 
 ### `agent-events approve`

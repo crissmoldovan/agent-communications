@@ -180,6 +180,41 @@ agent-events lane unbind david       # at once; the window's watches end
 - **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
   2025-era client connects as before.
 
+## What happened to a message
+
+From 0.32.0 the event service tells you what became of each message it observed: whether each rule matched it and what
+its judge answered, where each delivery went, the queue item it became, and what happened to that item since — which
+agent window was woken for it and read it, and who marked it done, dismissed it or reopened it. The desktop app reads
+it for its Messages screen; at a terminal:
+
+```bash
+agent-events messages list --json                    # the last 30 days, newest first, 100 at a time
+agent-events messages list --before <next> --json    # the page after: pass back the next the last page gave
+agent-events message show <event-id> --json          # one message, with every line of its queue item's history
+```
+
+- **What each message holds:**
+  - its event id, type, channel, account, and when it happened and was observed;
+  - its source's own ids: a Gmail message id, a Slack channel and ts, a WhatsApp chat and message id, a Resend email
+    id. These are the ids its link and agent-communications' activity log use;
+  - each rule's decision, with the judge's answer while the decision's record is kept;
+  - each delivery's target and state;
+  - its queue item, with that item's history. `agent-events messages list` gives the newest line of each kind;
+    `agent-events message show` gives every line.
+- **Ids and times only, but for what a queue kept.** When the message's queue target keeps a summary
+  (`show: summary`), `kept` gives its sender and subject as `agent-events queue show` does: inside the
+  untrusted-content envelope, data and never instructions.
+- **Who did what.** An item's history lines are `woken`, `read`, `done`, `dismissed` and `reopened`. Each says
+  `window`, with the agent window's activity session key, for a call through the event service's MCP server, or
+  `person`, for the CLI and the app. An item keeps its newest 500 lines, and its history goes when the item goes.
+- **Who can read it: you.** `agent-events messages list` and `agent-events message show` refuse inside the event
+  service's MCP server (`agent-events mcp`) and every program it starts. No MCP tool returns a message's story or an
+  item's history. The history is never written to agent-communications' activity log, so no agent's own activity
+  view names an item in a lane bound to another window.
+- **What it can't see.** Only what the event service saw: a reply an agent sent is in the activity log, and what you
+  did in Gmail or Slack yourself is in neither. `--since` and `--before` take milliseconds since 1970, and `--limit`
+  is 1 to 500.
+
 ## What you can do with it
 
 - **Sources:**
@@ -240,6 +275,7 @@ channel servers applies, and the result tells you to restart the client. The
   - read what the dry-run log kept, one delivery's details, or what a queue item says outside its own lane;
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
+  - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
   - resume a target;
   - decide a held event.
 
@@ -250,9 +286,10 @@ channel servers applies, and the result tells you to restart the client. The
 
 A rule can ask a model one yes/no question about an event, after the rule's own conditions on its fields have matched.
 Two kinds of judge are available:
-- **`typesafe`:** TypeSafe's hosted **Jev** (`jev-1.13.0`), through its System One API at
-  `https://api.typesafe.ai/v1/systemone`. The fields the rule names leave this machine for TypeSafe, sent with your
-  TypeSafe API key.
+- **`typesafe`:** TypeSafe's hosted **Jev**, from one of two providers. From TypeSafe itself (`jev-1.13.0`), through
+  its System One API at `https://api.typesafe.ai/v1/systemone`; or through OpenRouter (`typesafe/jev-1.14`), at
+  `https://openrouter.ai/api/v1/systemone`, which passes the request on to TypeSafe's Jev. The fields the rule names
+  leave this machine for that provider, sent with your key for it.
 - **`local-endpoint`:** a model server you run on this machine, at a plain-HTTP URL whose host is the literal
   `127.0.0.1` or `::1`; hostnames, HTTPS and any other address are refused. It is sent the same System One request
   as Jev. A server that answers in its own JSON says where its number is, with `"protocol": "json-score"` and a
@@ -283,10 +320,40 @@ network traffic Laya has — and checks every file against the release's lock an
 runtime and model, only while Laya is disabled; and once a newly approved entry's model is ready, the daemon deletes the
 files of every entry it replaced.
 
-**Every judge kind is off until you enable it, at your terminal.** Installing, updating, a rule or a budget never
-turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of that kind. Removing
-a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later become active. To
-ask Jev about received mail:
+**Every judge kind is off until you turn it on: in the desktop app, or at your terminal.** Installing, updating, a rule
+or a budget never turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of
+that kind. Removing a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later
+become active.
+
+**Setting up Jev, or a model server on this machine, in one step.** In the desktop app, Settings → AI providers keeps
+your TypeSafe and OpenRouter keys, and Events → Judges → Set up Jev picks the provider and turns Jev on. The app runs
+these commands, which you can run yourself:
+
+```bash
+# 1. your provider's key: typed at this terminal, hidden, or piped in on stdin — never an argument
+agent-events provider key set openrouter      # or typesafe
+agent-events provider list                    # whether each provider has a key; never the key
+
+# 2. Jev from that provider, set up and turned on
+agent-events judge setup typesafe --provider openrouter
+
+# or a model server on this machine (an Ollama System One server here)
+agent-events judge setup local-endpoint --url http://127.0.0.1:11434 --model nimble
+```
+
+`judge setup` adds the judge (`jev`, or `local-model`), gives Jev its provider's stored key, approves the daemon-wide
+budget when there is none for the judge's provider — 60 calls per rolling hour, 1,000,000 input tokens per rolling 30
+days and two calls at a time, overall and for that provider — and turns the kind on. Running the command is your
+approval of those enablements: each is recorded as approved through the app (`approvedVia: app` on its approval, and
+`approvedBy: desktop-app` in the audit log). Running it again changes nothing, or makes the next judge version when the
+provider, the URL or the model changed; a rule keeps using the judge version it names until you update it. A local
+model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `provider key set` again replaces a key,
+and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
+refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands refuses an
+agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list` says only
+whether each provider has a key.
+
+Or step by step, at your terminal, to ask Jev about received mail:
 
 ```bash
 # 1. turn the kind on: you approve its exact enablement at this terminal
@@ -324,6 +391,11 @@ agent-events judge test jev --version 1
   "protocol": "noul"
 }
 ```
+
+Through OpenRouter, the same judge names `"provider": "openrouter"`, `"model": "typesafe/jev-1.14"` and
+`"endpoint": "https://openrouter.ai/api/v1/systemone"`; the provider fixes both, and the budget needs an `openrouter`
+provider entry. A rule's approval says where its judge sends the fields: to TypeSafe, or to OpenRouter, which passes
+them to TypeSafe's Jev.
 
 `budget.json`, the ceilings for every judge call, overall and per provider:
 
