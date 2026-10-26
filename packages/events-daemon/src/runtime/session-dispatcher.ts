@@ -5,8 +5,8 @@ import { buildSessionPrompt, type JsonValue, type ResolvedContextPart } from '@a
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { newQueueItemId, parseQueueItemContent } from '../domain/queue-target.ts';
 import type { SessionTargetDocument } from '../domain/session-target.ts';
-import type { EventDatabase } from '../store/database.ts';
 import { PackedRecordError } from '../store/crypto.ts';
+import type { EventDatabase } from '../store/database.ts';
 import { type EventRecordCipher, RecordStorageError } from '../store/records.ts';
 import { queueDeadlines } from '../store/retention.ts';
 import { assertLiveEventAccount, isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.ts';
