@@ -42,6 +42,7 @@ import {
 import type { ResolvedPaths } from '../paths.ts';
 import { type KeyringModule, keychainNamespace, loadKeyringModule, probeKeychain } from '../secrets.ts';
 import { endStanding } from '../standing-flow.ts';
+import { readTakingSettings } from '../taking.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import { inspectUpdateJob, type UpdateJobDeps, updateJobContext, updateJobHealth } from '../update-job.ts';
 import {
@@ -221,6 +222,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
 
   if (readable) checks.push(...organisationChecks(config, handoffs));
   if (readable) checks.push(...behaviourChecks(config, handoffs));
+  if (readable) checks.push(...takingChecks(config, handoffs));
 
   /*
    * Approval records that cannot be used (design 2026-10-05 §D2): a file that cannot be read, or a record whose binding
@@ -409,6 +411,26 @@ async function standingLedgerChecks(core: Core, config: Config | null, handoffs:
  * Nothing at all on a machine with no rule, so every other doctor reads as it always did. The third row, servers that
  * enforce no rule, is read with the registrations (`registrationChecks`).
  */
+/**
+ * Taking messages (design 2026-10-26-taking-messages §4): a value in `taking` this release cannot read counts as the
+ * stricter one — a take required — and is said here, so the person knows why a session is refused.
+ */
+function takingChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
+  const { problems } = readTakingSettings(config);
+  if (problems.length === 0) return [];
+  const listing = handoffSentence(handoffs.core(['taking']), (command) => ` ${command} shows what applies.`);
+  return [
+    {
+      name: 'taking messages',
+      ok: false,
+      detail: `${problems.map((problem) => shownText(problem, 240)).join('; ')} — until it is corrected`,
+      fix: remedy(
+        `Correct taking.accounts in config.json — or, if a later release wrote it, update agent-communications.${listing}`,
+      ),
+    },
+  ];
+}
+
 function behaviourChecks(config: Config, handoffs: CliHandoffs): DoctorCheck[] {
   const checks: DoctorCheck[] = [];
   const listing = handoffSentence(handoffs.core(['behaviour']), (command) => ` ${command} lists every rule.`);

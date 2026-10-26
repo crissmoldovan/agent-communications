@@ -55,6 +55,7 @@ import {
   standingChange,
   standingReport,
 } from '../operations/standing.ts';
+import { TAKING_CHANGE_KINDS, type TakingChangeRequest, takingChange, takingReport } from '../operations/taking.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
 import { updateJobChange } from '../operations/update-job.ts';
 import { updateRollbackChange } from '../operations/update-rollback.ts';
@@ -146,12 +147,14 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
-    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check` or `status`.',
+    'comms_label, comms_behaviour, comms_taking and comms_standing with no change, and comms_update with `check` or',
+    '`status`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
     '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label), letting an agent',
-    'do more (comms_behaviour) — is shown to the person before it happens. The first call',
+    'do more (comms_behaviour), letting sessions act without taking a message first (comms_taking) — is shown to the',
+    'person before it happens. The first call',
     'returns `approvalRequired` with a `preview` and an `approvalId`: show the preview in full and ask. Then call the',
     'same tool again, with the same arguments and the `approvalId`. Under the `chat` change policy the person’s yes in',
     'this conversation is the approval; under `confirm` they first run the approve command the result gives, in their',
@@ -726,6 +729,70 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       }
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
       return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── Taking messages ──────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Whether a session must take a message before it acts on it, per account (design 2026-10-26-taking-messages §5):
+   * `agentcomms taking` and this, one operation. Requiring a take and saying nothing apply at once; letting sessions act
+   * without taking first, and a 👀 on taking, are loosenings, shown first and approved. Who has a message is each
+   * channel's `*_taken`; the person's list and overrides are the CLI's alone.
+   */
+  server.registerTool(
+    'comms_taking',
+    {
+      title: 'Taking messages',
+      description:
+        'Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`\'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true` and `acknowledge: "nothing"` apply at once, and so do `afterMinutes` and `notify`. `required: false` and `acknowledge: "eyes"` (Slack only) are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.',
+      inputSchema: {
+        account: z
+          .string()
+          .optional()
+          .describe('the mailbox or account, by its name: `organisation/platform`; for a change, required'),
+        required: z
+          .boolean()
+          .optional()
+          .describe('true: a session must take a message first — at once; false: approved first'),
+        acknowledge: z
+          .enum(['eyes', 'nothing'])
+          .optional()
+          .describe('what a take says to the sender: `nothing` at once; `eyes` (Slack) approved first'),
+        afterMinutes: z
+          .number()
+          .int()
+          .min(5)
+          .max(240)
+          .optional()
+          .describe('a message nobody takes within this many minutes, 5 to 240, counts as not taken'),
+        notify: z
+          .boolean()
+          .optional()
+          .describe('remind the person of a message nobody took, or let it wait under Not taken'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = TAKING_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `required`, `acknowledge`, `afterMinutes` or `notify` — with it.',
+          });
+          return takingReport(core, args.account === undefined ? {} : { account: args.account });
+        });
+      }
+      if (args.account === undefined) {
+        return fail(new CommsError('USAGE', 'a change names its account: `account`, by its name'));
+      }
+      const request = {
+        account: args.account,
+        ...Object.fromEntries(asked.map((kind) => [kind, args[kind]])),
+      } as TakingChangeRequest;
+      return change(() => takingChange(core, request, 'mcp'), args.approvalId);
     },
   );
 

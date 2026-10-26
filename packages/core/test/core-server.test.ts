@@ -253,6 +253,7 @@ const CHANGING = [
   'comms_activity_settings',
   'comms_label',
   'comms_behaviour',
+  'comms_taking',
   'comms_org_add',
   'comms_org_update',
   'comms_org_remove',
@@ -321,7 +322,7 @@ test('the greeting says how a change is approved, names the policy in force, and
       assert.match(greeting, /restarted/, 'the last line survives too');
       assert.match(greeting, /comms_update with `check`/, 'an agent learns it can see what is behind');
       // Standing approvals: reading and ending them is here; creating one only ever prepares, for a person's terminal.
-      assert.match(greeting, /comms_label, comms_behaviour and comms_standing with no change/);
+      assert.match(greeting, /comms_label, comms_behaviour, comms_taking and comms_standing with no change/);
       assert.match(greeting, /comms_standing narrows or ends standing approvals at once/);
       assert.match(greeting, /slack_standing_add\nonly prepares one the person asked for/);
       assert.match(greeting, /at their own terminal with its code, never in chat/);
