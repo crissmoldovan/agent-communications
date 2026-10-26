@@ -174,6 +174,41 @@ agent-events lane unbind david       # at once; the window's watches end
 - **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
   2025-era client connects as before.
 
+## What happened to a message
+
+From 0.32.0 the event service tells you what became of each message it observed: whether each rule matched it and what
+its judge answered, where each delivery went, the queue item it became, and what happened to that item since — which
+agent window was woken for it and read it, and who marked it done, dismissed it or reopened it. The desktop app reads
+it for its Messages screen; at a terminal:
+
+```bash
+agent-events messages list --json                    # the last 30 days, newest first, 100 at a time
+agent-events messages list --before <next> --json    # the page after: pass back the next the last page gave
+agent-events message show <event-id> --json          # one message, with every line of its queue item's history
+```
+
+- **What each message holds:**
+  - its event id, type, channel, account, and when it happened and was observed;
+  - its source's own ids: a Gmail message id, a Slack channel and ts, a WhatsApp chat and message id, a Resend email
+    id. These are the ids its link and agent-communications' activity log use;
+  - each rule's decision, with the judge's answer while the decision's record is kept;
+  - each delivery's target and state;
+  - its queue item, with that item's history. `agent-events messages list` gives the newest line of each kind;
+    `agent-events message show` gives every line.
+- **Ids and times only, but for what a queue kept.** When the message's queue target keeps a summary
+  (`show: summary`), `kept` gives its sender and subject as `agent-events queue show` does: inside the
+  untrusted-content envelope, data and never instructions.
+- **Who did what.** An item's history lines are `woken`, `read`, `done`, `dismissed` and `reopened`. Each says
+  `window`, with the agent window's activity session key, for a call through the event service's MCP server, or
+  `person`, for the CLI and the app. An item keeps its newest 500 lines, and its history goes when the item goes.
+- **Who can read it: you.** `agent-events messages list` and `agent-events message show` refuse inside the event
+  service's MCP server (`agent-events mcp`) and every program it starts. No MCP tool returns a message's story or an
+  item's history. The history is never written to agent-communications' activity log, so no agent's own activity
+  view names an item in a lane bound to another window.
+- **What it can't see.** Only what the event service saw: a reply an agent sent is in the activity log, and what you
+  did in Gmail or Slack yourself is in neither. `--since` and `--before` take milliseconds since 1970, and `--limit`
+  is 1 to 500.
+
 ## What you can do with it
 
 - **Sources:**
