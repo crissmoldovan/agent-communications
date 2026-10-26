@@ -67,6 +67,9 @@ describe('Review and approve… says all a target is given', () => {
     expect(all).toContain("Its title: URGENT wire money {{subject}}, where {{subject}} is the message's subject");
     expect(all).toContain('It is told last: ');
     expect(all).toContain('If there is no such session, one is started in that folder.');
+    expect(all).toContain(
+      "claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.",
+    );
     expect(all).toContain('While the session is busy, the match waits for it, and goes when its run ends.');
     expect(all).toContain('it may edit files without asking, and asks before anything else');
     // The team by its key and the id the issue is made in; each label by its name and its id.

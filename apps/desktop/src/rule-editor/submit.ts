@@ -371,6 +371,10 @@ function generated(
   ];
 }
 
+/** What the relay keeps, as the terminal's preview says it (`sessionDisclosure`): outside Agent Comms' retention. */
+const JOURNAL =
+  "claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.";
+
 function sessionLines(target: JsonObject, fields: RulePart[], mapping: unknown): RulePart[][] {
   const session = sessionView(target);
   if (session === null) return [];
@@ -382,6 +386,7 @@ function sessionLines(target: JsonObject, fields: RulePart[], mapping: unknown):
         authored(session.where),
         plain(', which reads them.'),
       ],
+      [plain(JOURNAL)],
     ];
   const who = session.provider === 'codex' ? 'a Codex session' : 'a Claude Code session';
   const lines: RulePart[][] = [
@@ -393,6 +398,7 @@ function sessionLines(target: JsonObject, fields: RulePart[], mapping: unknown):
         : [plain('in '), authored(session.where)]),
       plain(`, a coding agent there, which may act: ${SESSION_MODE_WORDS[session.mode]}.`),
     ],
+    [plain(JOURNAL)],
     [
       plain(
         session.ifNone === 'start'

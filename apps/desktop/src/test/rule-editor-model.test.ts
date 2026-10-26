@@ -192,6 +192,7 @@ describe('the rule editor model', () => {
     ]);
     expect(lines.slice(5)).toEqual([
       'the sender, the subject, the first 300 characters and a link to the message and the context below go to a Claude Code session in /example/home/work/acme, a coding agent there, which may act: it asks before it acts.',
+      "claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.",
       'If there is no such session, one is started in that folder.',
       'While the session is busy, the match waits for it, and goes when its run ends.',
       'Context part 1: the file /example/home/work/acme/HOW.md, read when the match is passed on (at most 64 KB).',
