@@ -454,6 +454,9 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
   one the relay only watches, or one fenced or moved, is not waited on: another is found or started.
 - **A window you opened yourself** is not one the relay can prompt: a session found by a lane whose window claude-stream
   does not run becomes a lane item, as in 0.31.0, and wakes that window.
+- **A match starts at most one session.** If the session it started is fenced or moved to another executor, watched or
+  gone by the time it is prompted, the match fails, saying which (`SESSION_FENCED`, `SESSION_MOVED`, `SESSION_WATCHED`,
+  `SESSION_GONE`), rather than start another.
 
 ### Upgrading
 

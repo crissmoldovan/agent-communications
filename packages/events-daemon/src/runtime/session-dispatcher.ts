@@ -237,7 +237,11 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       if (lane !== undefined && error instanceof RelayError) return this.#leaveInQueue(delivery, lane);
       throw error;
     }
-    let snapshot = await this.#chosen(delivery, ready);
+    const chosen = await this.#chosen(delivery, ready);
+    // A delivery starts at most one session. The one it started takes no prompt now — fenced, moved, watched or gone —
+    // so it fails, saying why, rather than starting another (security review of 0.33.0, second look, 1).
+    if (chosen.kind === 'lost') return this.#deadLetter(delivery, chosen.code);
+    let snapshot = chosen.kind === 'usable' ? chosen.snapshot : null;
     let started = false;
     if (snapshot === null) {
       const found = await this.#find(delivery, ready, binding?.session_id ?? null);
@@ -315,22 +319,31 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     return { state: delivered ? 'delivered' : 'terminal', deliveryId: delivery.claim.id };
   }
 
-  /** The session an earlier try of this delivery chose, when the relay still has it. */
-  async #chosen(delivery: Delivery, ready: ReadyRelay): Promise<RelaySnapshotV1 | null> {
+  /**
+   * The session an earlier try of this delivery chose: `usable` when the relay still runs it; `none` when there is none
+   * to use, so another is found; `lost` when it is one this delivery started, which is never replaced by another.
+   */
+  async #chosen(
+    delivery: Delivery,
+    ready: ReadyRelay,
+  ): Promise<
+    | { readonly kind: 'usable'; readonly snapshot: RelaySnapshotV1 }
+    | { readonly kind: 'none' }
+    | { readonly kind: 'lost'; readonly code: string }
+  > {
     const row = this.#store.database
-      .prepare('SELECT relay_session_id FROM session_deliveries WHERE delivery_id = ?')
-      .get(delivery.claim.id) as { relay_session_id: string } | undefined;
-    if (row === undefined) return null;
+      .prepare('SELECT relay_session_id, started FROM session_deliveries WHERE delivery_id = ?')
+      .get(delivery.claim.id) as { relay_session_id: string; started: number } | undefined;
+    if (row === undefined) return { kind: 'none' };
     const snapshot = await ready.client.snapshot(row.relay_session_id);
+    if (snapshot !== null && isPromptableSession(snapshot.session)) return { kind: 'usable', snapshot };
+    if (row.started === 1) return { kind: 'lost', code: lostSessionCode(snapshot) };
     // Gone, or since become one the relay only watches, or fenced or moved away: it takes no prompt, so another is
     // found — never waited on (security review of 0.33.0, finding 3).
-    if (snapshot === null || !isPromptableSession(snapshot.session)) {
-      this.#store.immediate(() =>
-        this.#store.database.prepare('DELETE FROM session_deliveries WHERE delivery_id = ?').run(delivery.claim.id),
-      );
-      return null;
-    }
-    return snapshot;
+    this.#store.immediate(() =>
+      this.#store.database.prepare('DELETE FROM session_deliveries WHERE delivery_id = ?').run(delivery.claim.id),
+    );
+    return { kind: 'none' };
   }
 
   /**
@@ -685,6 +698,13 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
   #purgeAccount(source: CanonicalFullRuleDocument['source']['channel'], accountId: string): void {
     this.#store.immediate(() => purgeRemovedAccountWork(this.#store.database, { source, accountId }, this.#now()));
   }
+}
+
+/** Why the session a delivery started takes no prompt, as the code its dead letter carries. */
+function lostSessionCode(snapshot: RelaySnapshotV1 | null): string {
+  if (snapshot === null) return 'SESSION_GONE';
+  if (snapshot.session.attached === 'observer') return 'SESSION_WATCHED';
+  return snapshot.session.executor?.state === 'moved' ? 'SESSION_MOVED' : 'SESSION_FENCED';
 }
 
 function lastActive(snapshot: RelaySnapshotV1): number {

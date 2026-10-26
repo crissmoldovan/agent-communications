@@ -28,7 +28,8 @@ import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 /**
  * The 0.33.0 security review's findings on the agent-session target, kept as regressions: a lane session target's
  * counts stay out of an unbound window (5); a 409 that is not "busy" never loops the busy queue, and a match's model
- * part runs once (3); a FIFO named by a file part never stalls the event service (4).
+ * part runs once (3); a FIFO named by a file part never stalls the event service (4). The second look's, as REVIEW2-n: a
+ * delivery starts at most one session (1).
  */
 
 const PERSON = 'person-setup:terminal';
@@ -399,4 +400,33 @@ test('REVIEW-3: a session never free fails its delivery after SESSION_RETRY_LIMI
     },
     { reconcileMs: 100 },
   );
+});
+
+const sessionPosts = (relay: FakeRelay): number =>
+  relay.requests.filter((request) => request.method === 'POST' && request.path === '/v1/sessions').length;
+
+test('REVIEW2-1: a delivery starts at most one session; when the relay fences or moves it, the delivery fails saying so', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  for (const [state, code] of [
+    ['fenced', 'SESSION_FENCED'],
+    ['moved', 'SESSION_MOVED'],
+  ] as const)
+    await withReview(
+      async ({ harness, relay, folder }) => {
+        // No session works in the folder, and the relay fences (or moves) every session it starts.
+        relay.fenceNewSessions = state;
+        await approveRule(harness, [{ ...queued(folder, false), ifBusy: 'queue' }]);
+        harness.mailbox.send(`every new session ${state}`);
+        await until(
+          harness,
+          () => sessionDeliveries(harness)[0]?.state === 'dead-lettered',
+          `the ${state} dead letter`,
+        );
+        assert.equal(sessionDeliveries(harness)[0]?.last_error_code, code);
+        assert.equal(sessionPosts(relay), 1, 'one session started, never a second');
+        assert.equal(relay.runs.length, 0);
+      },
+      { reconcileMs: 100 },
+    );
 });
