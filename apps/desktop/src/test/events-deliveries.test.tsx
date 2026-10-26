@@ -417,6 +417,16 @@ describe('Events → Deliveries', () => {
     await waitFor(() => expect(rowIds(view)).toHaveLength(6));
   });
 
+  it("a rule the app cannot name is shown as text on a delivery's page, never as a link to open", async () => {
+    const odd = [{ ...deliveries[1], deliveryId: 'dlv-odd', ruleId: 'rule with spaces' }];
+    renderApp(deliveriesBridge({ eventsDeliveries: odd }), { screen: 'events' });
+    await openTab('Deliveries');
+    const page = await openDelivery('dlv-odd');
+    const why = within(page).getByRole('region', { name: 'Why it was passed on' });
+    expect(why.textContent).toContain('Rule rule with spaces');
+    expect(within(why).queryByRole('button')).toBeNull();
+  });
+
   it('an empty list says so, and a list in a shape the app does not know says it could not be read', async () => {
     const first = renderApp(deliveriesBridge({ eventsDeliveries: [] }), { screen: 'events' });
     let view = await openTab('Deliveries');

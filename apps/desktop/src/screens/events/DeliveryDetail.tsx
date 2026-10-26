@@ -31,6 +31,7 @@ import {
 } from '../../events-deliveries.ts';
 import { channelOf, describeCondition, judgeName, type TargetView } from '../../events-rules.ts';
 import { atLeast } from '../../gates.ts';
+import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
 import { type EventsLists, type EventsNav, UNREADABLE_LIST } from './lists.ts';
@@ -314,9 +315,13 @@ function Why({
     <Part title={DELIVERY_COPY.why}>
       <p className="text-fg">
         {'Rule '}
-        <Link variant="underline" render={<button type="button" />} onClick={() => nav.openRule(row.ruleId)}>
+        {isRuleId(row.ruleId) ? (
+          <Link variant="underline" render={<button type="button" />} onClick={() => nav.openRule(row.ruleId)}>
+            <UntrustedText text={row.ruleId} />
+          </Link>
+        ) : (
           <UntrustedText text={row.ruleId} />
-        </Link>
+        )}
         {row.ruleVersion === null ? null : `, version ${row.ruleVersion}`}
         {document === null ? null : (
           <>
