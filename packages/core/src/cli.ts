@@ -34,12 +34,14 @@ import { installExitStatus, type Launcher, type SupportedClient } from './mcp-in
 import type { NamesMigrationRow, NotApplicableRename } from './names.ts';
 import { wholeNumber } from './numbers.ts';
 import {
+  type ActivityItemsResult,
   type ActivityMineResult,
   type ActivitySessionsResult,
   type ActivitySettingsReport,
   type ActivitySettingsRequest,
   type ActivitySettingsResult,
   type ActivityShowResult,
+  activityItems,
   activityMine,
   activitySessions,
   activitySettingsChange,
@@ -118,7 +120,7 @@ import {
 } from './operations/update-settings.ts';
 import { updateStatus } from './operations/update-status.ts';
 import { profileSourcePath, shownPath, shownText } from './organisations.ts';
-import { resolvePaths } from './paths.ts';
+import { homeDirectory, resolvePaths, shortenHome } from './paths.ts';
 import {
   escapeForDisplay,
   renderDoctor,
@@ -176,6 +178,9 @@ Usage — run these with this CLI, each as the words after its program:
                                 [--since <ISO time|7d|12h>] [--limit <n>]
                                 the calls of the session this command runs in, its agent window's or
                                 its own: the latest 50 of the last 24 hours, --limit 200 at most
+  activity items [--since <ms|ISO time|7d|12h>] [--ids <id,…>]
+                                every call that names an item, grouped by the item: a Gmail message
+                                id, a Slack <channelId>/<ts>; which window, when, and the reply links
   activity settings             whether activity is recorded, how many days are kept, and what is held
   activity record on|off [--approval <id>]
                                 off stops recording at once; on records again, and is approved first
@@ -416,6 +421,8 @@ function parse(argv: string[]) {
       kind: { type: 'string' },
       channel: { type: 'string' },
       outcome: { type: 'string' },
+      // `activity items`; refused on every other command (`refuseActivityOptionsElsewhere`).
+      ids: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -589,10 +596,15 @@ const ACTIVITY_OPTIONS = ['kind', 'channel', 'outcome'] as const;
  */
 function refuseActivityOptionsElsewhere(
   command: string | undefined,
-  values: Partial<Record<(typeof ACTIVITY_OPTIONS)[number], unknown>>,
+  values: Partial<Record<(typeof ACTIVITY_OPTIONS)[number] | 'ids', unknown>>,
   help: Handoff,
 ): void {
   if (command === 'activity') return;
+  if (values.ids !== undefined) {
+    throw new CommsError('USAGE', '--ids is an option of the activity items command only', {
+      hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`),
+    });
+  }
   const given = ACTIVITY_OPTIONS.filter((flag) => values[flag] !== undefined);
   if (given.length === 0) return;
   throw new CommsError(
@@ -780,7 +792,7 @@ export async function main(
         const [, , target, ...extra] = positionals;
         // The filters this subcommand reads; any other given is refused, as every command refuses one it does not read.
         const taking = (taken: readonly string[]) => {
-          const given = (['kind', 'channel', 'account', 'outcome', 'since', 'limit'] as const).filter(
+          const given = (['kind', 'channel', 'account', 'outcome', 'since', 'limit', 'ids'] as const).filter(
             (flag) => values[flag] !== undefined && !taken.includes(flag),
           );
           if (given.length > 0) throw usage(`the activity ${sub} command takes no --${given.join(', --')}`);
@@ -825,6 +837,29 @@ export async function main(
           );
           return;
         }
+        if (sub === 'items') {
+          if (target !== undefined) {
+            throw usage('usage: activity items [--since <ms|ISO time|7d|12h>] [--ids <id,…>]');
+          }
+          taking(['since', 'ids']);
+          const ids =
+            values.ids === undefined
+              ? undefined
+              : values.ids
+                  .split(',')
+                  .map((id) => id.trim())
+                  .filter((id) => id !== '');
+          writeResult(
+            await activityItems(
+              core,
+              { ...(values.since === undefined ? {} : { since: values.since }), ...(ids === undefined ? {} : { ids }) },
+              shown,
+            ),
+            output,
+            (result) => renderActivityItems(result, env, platform),
+          );
+          return;
+        }
         if (sub === 'settings') {
           if (target !== undefined) throw usage('usage: activity settings');
           taking([]);
@@ -851,7 +886,7 @@ export async function main(
           writeResult(result, output, renderActivitySettingsChange);
           return;
         }
-        throw usage('usage: activity sessions|show|mine|settings|record|retention');
+        throw usage('usage: activity sessions|show|mine|items|settings|record|retention');
       }
       case 'approvals': {
         if (sub === 'list') {
@@ -1799,6 +1834,43 @@ function renderActivityMine(result: ActivityMineResult): string {
     '',
     activityLinesText(result.lines, result.more),
   ].join('\n');
+}
+
+/**
+ * `activity items`, at a terminal: each item by its id, then each line that names it — when, what, how it ended, and
+ * which window — with what a sender wrote of it inside one envelope for that line.
+ */
+function renderActivityItems(result: ActivityItemsResult, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  const ids = Object.keys(result.items);
+  if (ids.length === 0) return 'no call names an item';
+  const home = homeDirectory(env);
+  const entryText = (entry: ActivityItemsResult['items'][string][number]): string => {
+    const where =
+      entry.session.folder === null
+        ? '(folder unknown)'
+        : truncateDisplay(shortenHome(entry.session.folder, home, platform), 120);
+    const client = entry.session.client === null ? 'no client named' : truncateDisplay(entry.session.client.name, 40);
+    const head = [
+      `  ${entry.at}`,
+      entry.operation,
+      entry.outcome,
+      entry.session.key,
+      where,
+      client,
+      ...(entry.replyTo === undefined ? [] : [`answers ${entry.replyTo.messageId}`]),
+      ...(entry.thread === undefined ? [] : [entry.thread === null ? 'new message' : `in thread ${entry.thread}`]),
+      ...(entry.draftId === undefined ? [] : [`draft ${entry.draftId}`]),
+    ].join('  ');
+    const name = entry.from?.name === undefined ? undefined : envelopeText(entry.from.name);
+    const address = entry.from?.address === undefined ? undefined : `<${envelopeText(entry.from.address)}>`;
+    const from = [name, address].filter((part): part is string => part !== undefined).join(' ');
+    const said = [
+      ...(entry.subject === undefined ? [] : [`"${envelopeText(entry.subject)}"`]),
+      ...(from ? [`from ${from}`] : []),
+    ].join('  ');
+    return said === '' ? head : `${head}\n${wrapUntrusted(said, { field: 'activity' })}`;
+  };
+  return ids.map((id) => [id, ...(result.items[id] ?? []).map(entryText)].join('\n')).join('\n\n');
 }
 
 function renderActivitySettings(report: ActivitySettingsReport): string {

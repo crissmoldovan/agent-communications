@@ -1026,6 +1026,35 @@ export class ActivityLog {
   }
 
   /**
+   * Every session's lines at or after `since` (every day the retention keeps, when left out), oldest first: the
+   * person's view, which `activity items` groups by what each line names (0.32.0 §3.6). None of a day past the
+   * retention is ever read. `mention` is a quick look before a line is read whole: only lines whose text holds one of
+   * those words are read — the caller still decides what each line names.
+   */
+  async linesSince(
+    options: { since?: string | undefined; mention?: readonly string[] | undefined } = {},
+  ): Promise<ActivityLine[]> {
+    const cutoff = this.#cutoff((await this.#maintained()).retentionDays);
+    const { since, mention } = options;
+    const found: ActivityLine[] = [];
+    for (const day of await this.days()) {
+      if (day < cutoff) continue;
+      if (since !== undefined && `${day}T23:59:59.999Z` < since) continue;
+      const text = await this.#text(day);
+      if (text === null) continue;
+      for (const raw of text.split('\n')) {
+        if (!raw) continue;
+        if (mention !== undefined && !mention.some((word) => raw.includes(word))) continue;
+        const line = readLine(raw);
+        if (line === null || (since !== undefined && line.at < since)) continue;
+        found.push(line);
+      }
+    }
+    // Two processes append to one file out of order: by time, and lines of one time in the order they were met.
+    return found.sort((a, b) => (a.at === b.at ? 0 : a.at < b.at ? -1 : 1));
+  }
+
+  /**
    * The window a CLI call belongs to (S2): the session of a server process, today or yesterday, whose parent is one of
    * `ancestors` — the nearest first. Null when none is. Read from each day's parents file; a day with none — written
    * by an earlier build — is read whole, as before.
