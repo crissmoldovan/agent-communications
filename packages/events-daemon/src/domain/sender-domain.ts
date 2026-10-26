@@ -13,6 +13,16 @@ import { catalogueEntry, getPointer, type JsonValue, toAsciiDomain } from '@agen
 const LABEL = '[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?';
 const HOSTNAME = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`, 'u');
 const SENDER_ADDRESS = '/from/address';
+const SENDER_PATTERN = SENDER_ADDRESS.slice(1);
+
+/**
+ * Whether the event type has a From address a condition can test by its domain. (The pattern is compared joined: the
+ * built bundle's import scan reads a quoted `from` next to another quote as an import.)
+ */
+export function hasSenderAddress(eventType: string, eventVersion: number): boolean {
+  const definition = catalogueEntry(eventType, eventVersion);
+  return definition.ok && definition.value.addresses.some((pattern) => pattern.join('/') === SENDER_PATTERN);
+}
 
 /** Whether `value` is a domain as Analyse keeps one: a plain lowercase ASCII hostname of two labels or more. */
 export function isKeptSenderDomain(value: unknown): value is string {
@@ -30,12 +40,7 @@ export function senderDomainOf(
   eventVersion: number,
   event: Readonly<Record<string, unknown>>,
 ): string | null {
-  const definition = catalogueEntry(eventType, eventVersion);
-  if (!definition.ok) return null;
-  const hasSender = definition.value.addresses.some(
-    (pattern) => pattern.length === 2 && pattern[0] === 'from' && pattern[1] === 'address',
-  );
-  if (!hasSender) return null;
+  if (!hasSenderAddress(eventType, eventVersion)) return null;
   const found = getPointer(event as JsonValue, SENDER_ADDRESS);
   if (!found.found || typeof found.value !== 'string') return null;
   const at = found.value.lastIndexOf('@');

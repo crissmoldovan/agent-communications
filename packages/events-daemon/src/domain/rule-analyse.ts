@@ -1,7 +1,7 @@
 import { isDangerous } from '@agentcomms/core';
-import { catalogueEntry, type JsonValue, printRuleText } from '@agentcomms/events';
+import { type JsonValue, printRuleText } from '@agentcomms/events';
 import { MESSAGE_DECISION_OUTCOMES, type MessageDecisionOutcome } from './messages.ts';
-import { isKeptSenderDomain } from './sender-domain.ts';
+import { hasSenderAddress, isKeptSenderDomain } from './sender-domain.ts';
 
 /**
  * Analyse (0.33.0 design §3.3): suggestions for one rule, or a draft of it, each with what the part says now, what it
@@ -235,15 +235,13 @@ function yesLine(text: string): string | null {
 }
 
 /** Whether the rule's event has a From address a condition can test by its domain. */
-function hasSenderAddress(doc: Doc): boolean {
+function ruleHasSenderAddress(doc: Doc): boolean {
   const event = record(doc.event);
-  if (event === null || typeof event.type !== 'string' || typeof event.version !== 'number') return false;
-  const definition = catalogueEntry(event.type, event.version);
   return (
-    definition.ok &&
-    definition.value.addresses.some(
-      (pattern) => pattern.length === 2 && pattern[0] === 'from' && pattern[1] === 'address',
-    )
+    event !== null &&
+    typeof event.type === 'string' &&
+    typeof event.version === 'number' &&
+    hasSenderAddress(event.type, event.version)
   );
 }
 
@@ -267,7 +265,7 @@ function exclusionSuggestion(
   facts: RuleAnalyseFacts,
   wrapDomain: (domain: string) => string,
 ): RuleSuggestionV1 | null {
-  if (doc.condition === undefined || record(doc.agentic) === null || !hasSenderAddress(doc)) return null;
+  if (doc.condition === undefined || record(doc.agentic) === null || !ruleHasSenderAddress(doc)) return null;
   const refused = domainCounts(facts.judged)
     .filter((entry) => entry.yes === 0 && entry.no >= ANALYSE_EXCLUSION_MINIMUM)
     .sort((left, right) => right.no - left.no || (left.domain < right.domain ? -1 : 1))
