@@ -141,7 +141,7 @@ export function RuleEditor({
   lists: EventsLists;
   /** Back to the rule's page, or to the list for a new rule. */
   onClose: () => void;
-  /** The new version is on. */
+  /** The review is over — approved in the app, or left for the terminal — so the rule's page reads it again. */
   onApproved: (ruleId: string, version: number) => void;
 }) {
   const bridge = useBridge();
@@ -435,6 +435,7 @@ export function RuleEditor({
           review={review}
           names={lists.names}
           onApproved={() => onApproved(review.ruleId, review.version)}
+          onDone={() => onApproved(review.ruleId, review.version)}
           onClosed={(revokeProblem) => {
             setReview(null);
             setProblem(revokeProblem);

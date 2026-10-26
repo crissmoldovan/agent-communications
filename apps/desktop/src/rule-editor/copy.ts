@@ -154,6 +154,12 @@ export const REVIEW_COPY = {
   approved: (id: string, version: number) => `${id} version ${version} is on.`,
   notApproved: 'It was not switched on',
   revoked: 'Not approved: the new version was not switched on.',
+  approveInTerminal: 'Approve in Terminal',
+  atTerminal:
+    'On this computer the app cannot be sure it is you who presses Approve, so you approve it in a terminal: it shows this preview again and asks you to type its challenge.',
+  inTerminal: (version: number) =>
+    `Finish in the terminal: type the challenge it shows. Version ${version} switches on once you approve there.`,
+  done: 'Done',
 } as const;
 
 /** Analyse's words (the prototype's RuleAnalyse). */

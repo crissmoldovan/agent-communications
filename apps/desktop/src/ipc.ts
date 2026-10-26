@@ -293,7 +293,13 @@ export type TerminalCommand =
    * Binding a lane to an agent window, which only the person does, at a terminal (0.31.0, B1): `lane bind <lane>
    * --window <id>`, the window an activity key or a Claude Code session id. The app never runs it.
    */
-  | { kind: 'laneBind'; lane: string; window: string };
+  | { kind: 'laneBind'; lane: string; window: string }
+  /**
+   * Approving a rule's activation the editor prepared, at a terminal (0.33.0), where the app cannot attest the person in
+   * the app (Windows and Linux): the events service's `approve <approval-id>`, which shows its preview and asks for its
+   * challenge there. Rust opens only an approval it recorded for `eventsRuleEnable`; the app never answers it.
+   */
+  | { kind: 'ruleApprove'; approvalId: string };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 

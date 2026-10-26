@@ -6,10 +6,18 @@
  * activation's from what a real owner printed.
  */
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Call } from '../ipc.ts';
 import { renderApp } from './render.tsx';
 import { APPROVAL, DIGEST, editorBridge, JUDGE_SHOWS } from './rule-editor-bridge.ts';
+
+// The app attests the person in the app only on macOS; elsewhere the review offers Approve in Terminal. These tests run
+// as macOS unless one says otherwise.
+const platform = vi.hoisted(() => ({ mac: true }));
+vi.mock('../platform.ts', () => ({ isMac: () => platform.mac }));
+afterEach(() => {
+  platform.mac = true;
+});
 
 async function openRulesTab(): Promise<void> {
   const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
@@ -265,6 +273,69 @@ describe('the rule editor', () => {
     expect(await screen.findByRole('region', { name: 'Rule invoices' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Edit invoices' })).toBeNull();
     expect(service.bridge.calls.filter((each) => each.command === 'revokePreview')).toHaveLength(1);
+  });
+
+  it('on Windows and Linux the review offers Approve in Terminal: the terminal takes the challenge, the app none', async () => {
+    platform.mac = false;
+    const service = editorBridge();
+    renderApp(service.bridge, { screen: 'events' });
+    const editor = await editInvoices();
+    fireEvent.change(within(editor).getByRole('textbox', { name: 'Value 2' }), { target: { value: 'receipt' } });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Review and approve…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Approve version 3 of invoices' });
+    // The same preview; no name to type and no in-app press.
+    expect(within(dialog).getByRole('region', { name: 'What changes' })).toBeTruthy();
+    expect(within(dialog).queryByRole('textbox', { name: 'Type invoices to approve' })).toBeNull();
+    expect(within(dialog).queryByRole('button', { name: 'Approve and switch on' })).toBeNull();
+    expect(dialog.textContent).toContain('you approve it in a terminal: it shows this preview again');
+    const terminal = () => service.bridge.calls.filter((each) => each.command === 'openInTerminal');
+    expect(terminal()).toEqual([]);
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve in Terminal' }));
+    await waitFor(() =>
+      expect(terminal().map((each) => each.args)).toEqual([{ kind: 'ruleApprove', approvalId: APPROVAL }]),
+    );
+    expect(await within(dialog).findByText(/^Finish in the terminal: type the challenge it shows\./u)).toBeTruthy();
+    expect(service.calls('eventsRuleApprove')).toEqual([]);
+    // Done leaves it to the terminal: nothing is revoked, and the rule's page reads it again.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
+    expect(await screen.findByRole('region', { name: 'Rule invoices' })).toBeTruthy();
+    expect(service.bridge.calls.filter((each) => each.command === 'revokePreview')).toEqual([]);
+    expect(service.calls('eventsRuleApprove')).toEqual([]);
+  });
+
+  it('on macOS, an approval the event service refuses as unattested is offered at the terminal instead', async () => {
+    const service = editorBridge();
+    // The event service's refusal of an approval from a process it cannot attest as the person's app.
+    const cli = service.bridge.cli.bind(service.bridge);
+    service.bridge.cli = async (call) =>
+      call.kind === 'eventsRuleApprove'
+        ? {
+            status: 'failed',
+            exit: 77,
+            code: 'APPROVAL_REQUIRED',
+            message: 'the app could not be attested as yours on this computer',
+            hint: null,
+          }
+        : cli(call);
+    renderApp(service.bridge, { screen: 'events' });
+    const editor = await editInvoices();
+    fireEvent.change(within(editor).getByRole('textbox', { name: 'Value 2' }), { target: { value: 'receipt' } });
+    fireEvent.click(within(editor).getByRole('button', { name: 'Review and approve…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Approve version 3 of invoices' });
+    fireEvent.change(within(dialog).getByRole('textbox', { name: 'Type invoices to approve' }), {
+      target: { value: 'invoices' },
+    });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Approve and switch on' }));
+    expect(await within(dialog).findByRole('button', { name: 'Approve in Terminal' })).toBeTruthy();
+    expect(dialog.textContent).toContain('It was not switched on: the app could not be attested as yours');
+    expect(within(dialog).queryByRole('button', { name: 'Approve and switch on' })).toBeNull();
+    // Back still revokes it.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Back' }));
+    await waitFor(() =>
+      expect(service.bridge.calls.filter((each) => each.command === 'revokePreview').map((each) => each.args)).toEqual([
+        APPROVAL,
+      ]),
+    );
   });
 
   it('a changed target becomes its next version, and the rule carries the copy the event service stored', async () => {
