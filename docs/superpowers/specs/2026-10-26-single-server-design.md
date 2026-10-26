@@ -371,7 +371,7 @@ does not protect.
   "name": "Claude Code · cue++",           // shown in previews and Activity: 1–64 printable characters, no quotes,
                                            // newlines or bidi controls (the preview rule of mcp-install.ts:1115-1124)
   "app": "claude-code",                    // claude-code | claude-desktop | codex | cursor | gemini | vscode | manual
-  "where": { "scope": "local", "folder": "/Users/…/cue++", "configDir": null },   // D18
+  "where": { "scope": "local", "folder": "/example/home/work/cue++", "configDir": null },   // D18
   "entry": { "name": "agentcomms", "path": "~/.claude.json" },  // what core wrote; null for manual
   "launcher": "managed",                   // managed | npx | local
   "parts": [

@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { ACTIVITY_KINDS, ACTIVITY_OUTCOMES, warmSessionIdentity } from '../activity.ts';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
@@ -12,6 +12,7 @@ import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
+import { requestClient, stdinClosed } from '../mcp-request.ts';
 import {
   activityMine,
   activitySettingsChange,
@@ -114,6 +115,12 @@ export interface CoreMcpOptions {
 export interface CoreMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one (a discarded `server/discover` probe, then
+   * the real opening). For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 /*
@@ -369,7 +376,8 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
     async (args, ctx) =>
       read(() => {
-        const client = server.server.getClientVersion();
+        // The client this request names in its envelope (2026-07-28), or the one it named on connecting (2025).
+        const client = requestClient(ctx, () => server.server.getClientVersion());
         return activityMine(core, {
           surface: 'mcp',
           ...args,
@@ -1357,21 +1365,33 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    return serveStdio(
+      async () => {
+        const next = unserved ?? (await createCoreMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+  };
   return {
     server,
-    /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((resolve) => {
-        transport.onclose = () => resolve();
-        // A client that dies without closing the transport simply closes our stdin.
-        process.stdin.once('end', resolve);
-        process.stdin.once('close', resolve);
-      });
-      await server.connect(transport);
+      // A client that dies without closing the transport simply closes our stdin.
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
   };
 }
 

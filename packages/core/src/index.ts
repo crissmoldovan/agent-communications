@@ -124,6 +124,11 @@ export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
 /* The mark an MCP server sets in its own process, so a person's reads refuse inside it and everything it starts. */
 export * from './mcp-marker.ts';
+/*
+ * Who an MCP request says it comes from, in both protocol eras: its 2026-07-28 envelope first, then what the client
+ * said on connecting (single-server design D7). Every server reads its client this way.
+ */
+export * from './mcp-request.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
 // The notification on the person's screen for each standing act (design 2026-10-19-standing-approvals, S10).

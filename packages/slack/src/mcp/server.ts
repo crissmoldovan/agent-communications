@@ -1,6 +1,8 @@
 import {
   type ApprovalKind,
+  activityClient,
   approvalNotFound,
+  type ClientInfo,
   CommsError,
   type CoreHandOff,
   changeToolResult,
@@ -10,6 +12,7 @@ import {
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
   refuseUnclaimedApproval,
   retiredOutHint,
+  stdinClosed,
   strictToolArguments,
   toCommsError,
   updateToolNotice,
@@ -147,6 +150,11 @@ export interface SlackMcpOptions extends SlackContextOptions {
 export interface SlackMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` with `serveStdio`, in whichever protocol era the client opens with: this server for the first
+   * connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 const MAX_LISTED = 8;
@@ -223,7 +231,7 @@ function listOf(names: readonly string[]): string {
 
 export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promise<SlackMcpServer> {
   // What the client said it is, once one has connected: the activity log's session names it (design 2026-10-25-activity).
-  const client: { info?: () => { name: string; version?: string } | undefined } = {};
+  const client: { info?: () => ClientInfo | undefined } = {};
   const context = new SlackContext({ ...options, surface: 'mcp', clientInfo: () => client.info?.() });
   const pinned = options.workspace;
   /*
@@ -238,7 +246,8 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
-  client.info = () => server.server.getClientVersion();
+  // The client each call came from: its 2026-07-28 envelope's, or the one it named on connecting (single-server D7).
+  client.info = activityClient(() => server.server.getClientVersion());
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text
@@ -1857,23 +1866,35 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const fresh = async (): Promise<McpServer> => {
+    const next = unserved ?? (await createSlackMcpServer(options)).server;
+    unserved = undefined;
+    return next;
+  };
   return {
     server,
-    /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
       const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
       // A client that dies without closing the transport simply closes our stdin.
-      const stdinClosed = new Promise<void>((resolve) => {
-        process.stdin.once('end', resolve);
-        process.stdin.once('close', resolve);
-      });
+      const closed = stdinClosed();
       /*
        * Installed for the life of the process, not of the connection. The case it exists for is a client that closes
        * stdin and then, when the server has not left, sends SIGTERM — by which time the connection is already over.
        * Signal listeners do not keep the event loop alive, so a server with nothing in flight still exits as before.
        */
       exitAfterRefreshes();
-      await serveUntilClosed(server, new StdioServerTransport(), { closed: stdinClosed });
+      await serveUntilClosed(fresh, new StdioServerTransport(), { closed });
+    },
+    serve: async (transport) => {
+      const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+      return serveStdio(fresh, { transport, onerror: () => undefined });
     },
   };
 }
@@ -1887,19 +1908,47 @@ export async function createSlackMcpServer(options: SlackMcpOptions = {}): Promi
  * cannot, stderr — the log the client keeps — says which workspace will need signing in again.
  */
 export async function serveUntilClosed(
-  server: McpServer,
+  server: McpServer | (() => Promise<McpServer>),
   transport: Transport,
   options: { closed?: Promise<void>; stderr?: WarningSink } = {},
 ): Promise<void> {
+  let ended: () => void = () => undefined;
   const closed = new Promise<void>((resolve) => {
+    ended = resolve;
+    void options.closed?.then(resolve);
+  });
+  if (typeof server === 'function') {
+    // Served with `serveStdio`, in whichever era the client opens with, through a transport that says when it closes.
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    serveStdio(server, { transport: closing(transport, () => ended()), onerror: () => undefined });
+  } else {
     const previous = transport.onclose;
     transport.onclose = () => {
       previous?.();
-      resolve();
+      ended();
     };
-    void options.closed?.then(resolve);
-  });
-  await server.connect(transport);
+    await server.connect(transport);
+  }
   await closed;
   await settleBeforeExit(options.stderr ?? process.stderr);
+}
+
+/** `transport`, telling `onClosed` when it closes, beside whatever `serveStdio` sets its `onclose` to. */
+function closing(transport: Transport, onClosed: () => void): Transport {
+  const wire: Transport = {
+    start: () => transport.start(),
+    send: (message, options) => transport.send(message, options),
+    close: () => transport.close(),
+    setProtocolVersion: (version) => transport.setProtocolVersion?.(version),
+    get sessionId() {
+      return transport.sessionId;
+    },
+  };
+  transport.onmessage = (message, extra) => wire.onmessage?.(message, extra);
+  transport.onerror = (error) => wire.onerror?.(error);
+  transport.onclose = () => {
+    wire.onclose?.();
+    onClosed();
+  };
+  return wire;
 }
