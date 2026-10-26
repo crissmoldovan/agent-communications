@@ -901,6 +901,18 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '25' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // 0.32.0 (owner feedback §3.5): a delivery starts with next_at = 0, "due now", and the dry-run, queue and SSE
+    // dispatchers used to leave it there when they delivered, which the app showed as a next try in 1970. They clear
+    // it now; this clears it on the rows they left. Only a row that may still be tried keeps a time (the scheduler
+    // reads NULL as due, so a disclosing row recovered to a try loses nothing).
+    version: 26,
+    name: 'event-delivery-next-at-terminal-v1',
+    statements: [
+      "UPDATE deliveries SET next_at = NULL WHERE next_at IS NOT NULL AND state NOT IN ('queued', 'retryable')",
+      "UPDATE meta SET value = '26' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

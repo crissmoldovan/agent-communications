@@ -664,3 +664,27 @@ test('B2-T8: account removal purges its retained stream bytes in the same cleanu
     await rm(setup.stateDir, { recursive: true, force: true });
   }
 });
+
+// 0.32.0 (owner feedback §3.5): a delivered row has no next try, so the app has no 1970 date to show for it.
+test('0.32 B1: a delivered SSE row clears next_at, so it has no next try to show', { skip: WINDOWS_SKIP }, async () => {
+  const setup = await fixture();
+  try {
+    setup.store.database.exec("UPDATE deliveries SET next_at = 0 WHERE id = 'delivery-sse'");
+    const dispatcher = new SseDispatcher({
+      store: setup.store,
+      cipher: sseCipher(),
+      approvals: { get: async () => null },
+      config: { load: async () => ({ inboxes: { inbox: { id: ACCOUNT, provider: 'gmail' } } }) } as never,
+      fence: async () => undefined,
+      now: () => 100,
+    });
+    assert.deepEqual(await dispatcher.dispatch('delivery-sse'), { state: 'delivered', deliveryId: 'delivery-sse' });
+    const row = setup.store.database
+      .prepare("SELECT state, next_at FROM deliveries WHERE id = 'delivery-sse'")
+      .get() as { state: string; next_at: number | null };
+    assert.deepEqual({ ...row }, { state: 'delivered', next_at: null });
+  } finally {
+    setup.store.close();
+    await rm(setup.stateDir, { recursive: true, force: true });
+  }
+});

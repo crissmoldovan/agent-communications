@@ -361,7 +361,7 @@ test('E2: v17/v18 upgrades every B1, B2, and D fixture through B3 once without c
       applyMigrations(database);
       assert.equal(
         (database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string }).value,
-        '25',
+        String(EVENT_MIGRATIONS.at(-1)?.version),
         fixture.name,
       );
       assert.deepEqual(
@@ -656,7 +656,7 @@ test('E2: a fresh daemon database keeps secure-delete enabled across a reopen', 
       assert.equal(
         (first.database.prepare("SELECT value FROM meta WHERE key = 'schema_version'").get() as { value: string })
           .value,
-        '25',
+        String(EVENT_MIGRATIONS.at(-1)?.version),
       );
     } finally {
       first.close();
