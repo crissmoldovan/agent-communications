@@ -54,7 +54,7 @@ export function Agent() {
 
   return (
     <ScreenFrame title="Agent">
-      <Tabs.Root value={view} onValueChange={(value) => setView(value as View)}>
+      <Tabs.Root swipe value={view} onValueChange={(value) => setView(value as View)}>
         {/* A space before each count, which the flex row does not draw, keeps the tab's name two words apart. */}
         <Tabs.List aria-label="Agent" className="self-start">
           <Tabs.Tab value="label">

@@ -1441,7 +1441,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
     </Tabs.Tab>
   );
   return (
-    <Tabs.Root value={selected} onValueChange={(value) => setSelected(value as EventsTab)}>
+    <Tabs.Root swipe value={selected} onValueChange={(value) => setSelected(value as EventsTab)}>
       <Tabs.List aria-label="Events" className="self-start">
         {tab(
           'service',

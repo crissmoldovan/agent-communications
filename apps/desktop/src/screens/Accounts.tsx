@@ -173,7 +173,7 @@ function ChannelTabs({
   const [chosen, setChosen] = useState<Channel | null>(null);
   const current = chosen !== null && channels.includes(chosen) ? chosen : (channels[0] as Channel);
   return (
-    <Tabs.Root value={current} onValueChange={(value) => setChosen(value as Channel)}>
+    <Tabs.Root swipe value={current} onValueChange={(value) => setChosen(value as Channel)}>
       <div className="flex flex-wrap items-center justify-between gap-(--cue-space-3)">
         <Tabs.List aria-label="Channels">
           {channels.map((channel) => {

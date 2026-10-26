@@ -41,7 +41,7 @@ export function Approvals() {
 
   return (
     <ScreenFrame title="Approvals">
-      <Tabs.Root value={view} onValueChange={(value) => setView(value as View)}>
+      <Tabs.Root swipe value={view} onValueChange={(value) => setView(value as View)}>
         <Tabs.List aria-label="Approvals" className="self-start">
           {/* A space before the count, which the flex row does not draw, keeps the tab's name two words apart. */}
           <Tabs.Tab value="waiting">

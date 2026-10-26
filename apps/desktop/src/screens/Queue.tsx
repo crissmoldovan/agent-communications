@@ -301,6 +301,7 @@ function QueueViews() {
         <Problem message={queueCounts.message} />
       ) : null}
       <Tabs.Root
+        swipe
         value={view}
         onValueChange={(value) => {
           const next = value as QueueView;
