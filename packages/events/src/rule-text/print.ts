@@ -64,6 +64,11 @@ function writeDocument(doc: Doc, readable: boolean): string {
       said.add('condition');
     }
     if (head.length > 0) blocks.push(head);
+    const ask = Object.hasOwn(doc, 'agentic') ? askLines(doc.agentic as JsonValue) : undefined;
+    if (ask !== undefined) {
+      blocks.push(ask);
+      said.add('agentic');
+    }
     if (Array.isArray(doc.targets) && doc.targets.length > 0) {
       blocks.push(thenLines(doc.targets));
       said.add('targets');
@@ -338,4 +343,106 @@ function subscriberLines(subscribers: readonly JsonValue[]): string[] | undefine
     if (origins !== undefined) lines.push(`  ${origins.length === 1 ? 'origin' : 'origins'} ${formatNames(origins)}`);
   }
   return lines;
+}
+
+const AGENTIC_FIELDS = [
+  'judge',
+  'question',
+  'inputs',
+  'threshold',
+  'onUncertain',
+  'callsPerRollingHour',
+  'inputTokensPerRolling30Days',
+  'concurrency',
+  'maxInputTokens',
+  'maxOutputTokens',
+];
+const JUDGE_TEXT = ['kind', 'provider', 'model', 'endpoint', 'promptTemplate', 'protocol'];
+const UNSURE: Readonly<Record<string, string>> = { 'no-match': 'drop', hold: 'hold' };
+
+const counted = (count: number, singular: string, plural: string) => `${count} ${count === 1 ? singular : plural}`;
+
+/** The judge's document under `judge`, or undefined when it has a field or a value the readable form cannot say. */
+function judgeLines(judge: Doc): string[] | undefined {
+  if (!hasKeys(judge, ['judgeId', 'version'], [...JUDGE_TEXT, 'approvedAddressSet', 'scorePointer'])) return undefined;
+  if (typeof judge.judgeId !== 'string' || !isCount(judge.version)) return undefined;
+  if (JUDGE_TEXT.some((field) => judge[field] !== undefined && typeof judge[field] !== 'string')) return undefined;
+  const { kind, model, endpoint, approvedAddressSet, promptTemplate, protocol, scorePointer } = judge;
+  if (approvedAddressSet !== undefined && !isStringArray(approvedAddressSet)) return undefined;
+  if (scorePointer !== undefined && !isFieldText(scorePointer)) return undefined;
+  const block = [
+    ...(endpoint === undefined ? [] : [`    endpoint ${formatName(endpoint as string)}`]),
+    ...(approvedAddressSet === undefined
+      ? []
+      : [
+          `    approved ${approvedAddressSet.length === 1 ? 'address' : 'addresses'} ${formatNames(approvedAddressSet)}`,
+        ]),
+    ...(promptTemplate === undefined ? [] : [`    prompt template ${formatName(promptTemplate as string)}`]),
+    ...(protocol === undefined ? [] : [`    protocol ${formatName(protocol as string)}`]),
+    ...(scorePointer === undefined ? [] : [`    score at ${formatField(scorePointer)}`]),
+  ];
+  if (kind === undefined && model === undefined && block.length === 0) return [];
+  return [
+    `  judge${kind === undefined ? '' : ` ${formatName(kind as string)}`}${model === undefined ? '' : `, model ${formatName(model as string)}`}`,
+    ...block,
+  ];
+}
+
+/** The `ask` section, or undefined when the agentic part has a shape the readable form cannot say. */
+function askLines(agentic: JsonValue): string[] | undefined {
+  if (!isRecord(agentic) || !hasKeys(agentic, ['judge'], AGENTIC_FIELDS)) return undefined;
+  const { judge, question, inputs, threshold, onUncertain } = agentic;
+  if (!isRecord(judge)) return undefined;
+  const judged = judgeLines(judge);
+  if (judged === undefined) return undefined;
+  if (question !== undefined && typeof question !== 'string') return undefined;
+  if (inputs !== undefined && !(Array.isArray(inputs) && inputs.every(isFieldText))) return undefined;
+  if (threshold !== undefined && !(typeof threshold === 'number' && Number.isFinite(threshold))) return undefined;
+  if (onUncertain !== undefined && (typeof onUncertain !== 'string' || !Object.hasOwn(UNSURE, onUncertain)))
+    return undefined;
+  const limits = [
+    'callsPerRollingHour',
+    'inputTokensPerRolling30Days',
+    'concurrency',
+    'maxInputTokens',
+    'maxOutputTokens',
+  ];
+  if (limits.some((field) => agentic[field] !== undefined && !isCount(agentic[field]))) return undefined;
+  const count = (field: string) => agentic[field] as number | undefined;
+  const calls = count('callsPerRollingHour');
+  const tokens = count('inputTokensPerRolling30Days');
+  const concurrency = count('concurrency');
+  const most = [
+    ...(calls === undefined ? [] : [`${counted(calls, 'call', 'calls')} an hour`]),
+    ...(tokens === undefined ? [] : [`${counted(tokens, 'input token', 'input tokens')} in 30 days`]),
+    ...(concurrency === undefined ? [] : [`${concurrency} at a time`]),
+  ];
+  const tokensIn = count('maxInputTokens');
+  const tokensOut = count('maxOutputTokens');
+  const each = [
+    ...(tokensIn === undefined ? [] : [`${counted(tokensIn, 'token', 'tokens')} in`]),
+    ...(tokensOut === undefined ? [] : [`${counted(tokensOut, 'token', 'tokens')} out`]),
+  ];
+  const unsure = onUncertain === undefined ? undefined : `if unsure ${UNSURE[onUncertain as string]}`;
+  const bar =
+    threshold === undefined
+      ? unsure === undefined
+        ? []
+        : [`  ${unsure}`]
+      : [`  yes at ${canonicalJson(threshold)}${unsure === undefined ? '' : `, ${unsure}`}`];
+  return [
+    `ask ${formatName(judge.judgeId as string)}, version ${judge.version}${
+      judge.provider === undefined ? '' : `, via ${formatName(judge.provider as string)}`
+    }`,
+    ...(question === undefined ? [] : [`  question ${JSON.stringify(question)}`]),
+    ...(inputs === undefined
+      ? []
+      : [
+          `  looking at ${inputs.length === 0 ? 'nothing' : inputs.map((input) => formatField(input as string)).join(', ')}`,
+        ]),
+    ...bar,
+    ...(most.length === 0 ? [] : [`  at most ${most.join(', ')}`]),
+    ...(each.length === 0 ? [] : [`  each call up to ${each.join(' and ')}`]),
+    ...judged,
+  ];
 }

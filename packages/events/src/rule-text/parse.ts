@@ -20,10 +20,11 @@ const STATEMENTS: ReadonlyMap<string, readonly string[]> = new Map([
   ['rule', ['ruleId', 'version']],
   ['when', ['source', 'event']],
   ['match', ['condition']],
+  ['ask', ['agentic']],
   ['then', ['targets']],
 ]);
-const TOP_LEVEL = ['rule', 'when', 'match', 'then', 'subscriber', 'raw'];
-const TOP_LEVEL_WORDS = 'rule, when, match, then, subscriber or raw';
+const TOP_LEVEL = ['rule', 'when', 'match', 'ask', 'then', 'subscriber', 'raw'];
+const TOP_LEVEL_WORDS = 'rule, when, match, ask, then, subscriber or raw';
 
 interface State {
   /** Fields a section set, with the line that set them. */
@@ -112,6 +113,10 @@ function statement(line: TextLine, state: State): void {
       once(state, 'match', line, cursor);
       cursor.take('match');
       setNatural(state, 'match', line, 'condition', condition(cursor, line));
+      break;
+    case 'ask':
+      once(state, 'ask', line, cursor);
+      setNatural(state, 'ask', line, 'agentic', ask(cursor, line));
       break;
     case 'then':
       once(state, 'then', line, cursor);
@@ -624,4 +629,208 @@ function assemble(state: State, errors: RuleTextError[], end: number): JsonObjec
   if (!has('judges')) doc.judges = [];
   if (!has('subscribers')) doc.subscribers = [];
   return doc;
+}
+
+/** The lines indented under a section, each read once by the reader its first words choose. */
+function block(
+  line: TextLine,
+  what: string,
+  readers: readonly (readonly [
+    words: readonly string[],
+    read: (cursor: Cursor, child: TextLine) => void,
+    takesLines?: 'takes lines',
+  ])[],
+): void {
+  const said = new Map<string, number>();
+  for (const child of line.children) {
+    const cursor = new Cursor(child);
+    const at = cursor.mark();
+    const found = readers.find(([words]) => cursor.isNext(...words));
+    if (found === undefined) {
+      const choices = readers.map(([words]) => words.join(' '));
+      const word = cursor.peekWord();
+      const close =
+        word === undefined
+          ? undefined
+          : suggestion(
+              word,
+              choices.map((choice) => choice.split(' ')[0] as string),
+            );
+      cursor.fail(
+        `${what}'s lines are ${choices.join(', ')}; found ${cursor.describeNext()}${
+          close === undefined
+            ? ''
+            : `. Did you mean ${JSON.stringify(choices.find((choice) => choice.startsWith(close)))}?`
+        }`,
+        at,
+      );
+    }
+    const [words, read, takesLines] = found as (typeof readers)[number];
+    const key = words.join(' ');
+    const first = said.get(key);
+    if (first !== undefined) cursor.fail(`${what} says ${key} once; it is already on line ${first}`, at);
+    said.set(key, child.number);
+    cursor.take(...words);
+    if (takesLines === undefined) noChildren(child, key);
+    read(cursor, child);
+    cursor.expectEnd(key);
+  }
+}
+
+const UNSURE: Readonly<Record<string, string>> = { drop: 'no-match', hold: 'hold' };
+
+function unsure(cursor: Cursor): string {
+  const at = cursor.mark();
+  const word = cursor.word();
+  if (word === undefined || !Object.hasOwn(UNSURE, word))
+    return cursor.fail(
+      `when the judge is unsure, the rule can drop the message or hold it; found ${word === undefined ? cursor.describeNext() : JSON.stringify(word)}`,
+      at,
+    );
+  return UNSURE[word] as string;
+}
+
+/** The `ask` section: the judge on its first line, the rest on the lines indented under it. */
+function ask(cursor: Cursor, line: TextLine): JsonValue {
+  cursor.take('ask');
+  const judge: Record_ = { judgeId: cursor.name('the judge id') };
+  cursor.expect([',', 'version'], '", version <n>" after the judge id');
+  judge.version = cursor.integer('the judge version');
+  if (cursor.comma()) {
+    cursor.expect(['via'], '", via <provider>"');
+    judge.provider = cursor.name('the provider');
+  }
+  cursor.expectEnd('the judge');
+  const agentic: Record_ = { judge };
+  block(line, 'an ask', [
+    [
+      ['question'],
+      (inner) => {
+        agentic.question = inner.string('the question');
+      },
+    ],
+    [
+      ['looking', 'at'],
+      (inner) => {
+        if (inner.take('nothing')) agentic.inputs = [];
+        else {
+          const inputs = [field(inner, 'a field the judge looks at')];
+          while (inner.comma()) inputs.push(field(inner, 'a field the judge looks at'));
+          agentic.inputs = inputs;
+        }
+      },
+    ],
+    [
+      ['yes', 'at'],
+      (inner) => {
+        const at = inner.mark();
+        const threshold = inner.value('the bar');
+        if (typeof threshold !== 'number') inner.fail('the bar is a number from 0 to 1, such as 0.7', at);
+        agentic.threshold = threshold;
+        if (inner.comma()) {
+          inner.expect(['if', 'unsure'], '", if unsure drop" or ", if unsure hold"');
+          if (Object.hasOwn(agentic, 'onUncertain'))
+            inner.fail('the ask says what happens when the judge is unsure once', inner.mark());
+          agentic.onUncertain = unsure(inner);
+        }
+      },
+    ],
+    [
+      ['if', 'unsure'],
+      (inner) => {
+        if (Object.hasOwn(agentic, 'onUncertain'))
+          inner.fail('the ask says what happens when the judge is unsure once', inner.mark());
+        agentic.onUncertain = unsure(inner);
+      },
+    ],
+    [
+      ['at', 'most'],
+      (inner) => {
+        const said = new Set<string>();
+        do {
+          const at = inner.mark();
+          const count = inner.integer('the limit');
+          let field: string;
+          if (inner.take('call', 'an', 'hour') || inner.take('calls', 'an', 'hour')) field = 'callsPerRollingHour';
+          else if (
+            inner.take('input', 'token', 'in', '30', 'days') ||
+            inner.take('input', 'tokens', 'in', '30', 'days')
+          )
+            field = 'inputTokensPerRolling30Days';
+          else if (inner.take('at', 'a', 'time')) field = 'concurrency';
+          else
+            return inner.fail(
+              `a judge's limits are <n> calls an hour, <n> input tokens in 30 days and <n> at a time; found ${inner.describeNext()}`,
+              inner.mark(),
+            );
+          if (said.has(field)) inner.fail('each limit is given once', at);
+          said.add(field);
+          agentic[field] = count;
+        } while (inner.comma());
+      },
+    ],
+    [
+      ['each', 'call', 'up', 'to'],
+      (inner) => {
+        const said = new Set<string>();
+        do {
+          const at = inner.mark();
+          const count = inner.integer('the token cap');
+          if (!(inner.take('token') || inner.take('tokens')))
+            inner.fail('expected "tokens in" or "tokens out"', inner.mark());
+          const field = inner.take('in') ? 'maxInputTokens' : inner.take('out') ? 'maxOutputTokens' : undefined;
+          if (field === undefined) return inner.fail('expected "in" or "out" after tokens', inner.mark());
+          if (said.has(field)) inner.fail('each call gives its tokens in and out once each', at);
+          said.add(field);
+          agentic[field] = count;
+        } while (inner.take('and'));
+      },
+    ],
+    [
+      ['judge'],
+      (inner, child) => {
+        if (!inner.atEnd() && !inner.nextIs(',')) judge.kind = inner.name('the judge kind');
+        if (inner.comma()) {
+          inner.expect(['model'], '", model <name>"');
+          judge.model = inner.name('the model');
+        }
+        block(child, 'a judge', [
+          [
+            ['endpoint'],
+            (deeper) => {
+              judge.endpoint = deeper.name('the endpoint');
+            },
+          ],
+          [
+            ['approved'],
+            (deeper) => {
+              if (!(deeper.take('address') || deeper.take('addresses')))
+                deeper.fail('expected "approved addresses <address> and <address>"', deeper.mark());
+              judge.approvedAddressSet = names(deeper, 'an address');
+            },
+          ],
+          [
+            ['prompt', 'template'],
+            (deeper) => {
+              judge.promptTemplate = deeper.name('the prompt template');
+            },
+          ],
+          [
+            ['protocol'],
+            (deeper) => {
+              judge.protocol = deeper.name('the protocol');
+            },
+          ],
+          [
+            ['score', 'at'],
+            (deeper) => {
+              judge.scorePointer = field(deeper, 'the score');
+            },
+          ],
+        ]);
+      },
+      'takes lines',
+    ],
+  ]);
+  return agentic;
 }

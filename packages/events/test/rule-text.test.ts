@@ -349,3 +349,143 @@ test('printing refuses what is not a JSON object', () => {
   for (const value of [[], null, 'rule', { when: undefined, bad: Number.NaN }])
     assert.throws(() => printRuleText(value as JsonObject), /JSON object|non-finite/);
 });
+
+const JEV = {
+  judgeId: 'jev',
+  version: 2,
+  kind: 'typesafe',
+  provider: 'typesafe',
+  model: 'jev-1.13.0',
+  endpoint: 'https://api.typesafe.ai/v1/systemone',
+  promptTemplate: 'typesafe-jev-noul-v1',
+  protocol: 'noul',
+};
+
+const LIMITS = {
+  callsPerRollingHour: 60,
+  inputTokensPerRolling30Days: 1_000_000,
+  concurrency: 1,
+  maxInputTokens: 2000,
+  maxOutputTokens: 16,
+};
+
+test('ask: the judge, its question, what it looks at, its bar, its limits and the judge document it embeds', () => {
+  const agentic = {
+    judge: JEV,
+    question: 'Is this asking me to pay or send something?',
+    inputs: ['/from/address', '/subject', '/snippet'],
+    threshold: 0.7,
+    onUncertain: 'no-match',
+    ...LIMITS,
+  };
+  assert.deepEqual(section(roundTrip(rule({ agentic })), 'ask'), [
+    'ask jev, version 2, via typesafe',
+    '  question "Is this asking me to pay or send something?"',
+    '  looking at from.address, subject, snippet',
+    '  yes at 0.7, if unsure drop',
+    '  at most 60 calls an hour, 1000000 input tokens in 30 days, 1 at a time',
+    '  each call up to 2000 tokens in and 16 tokens out',
+    '  judge typesafe, model jev-1.13.0',
+    '    endpoint https://api.typesafe.ai/v1/systemone',
+    '    prompt template typesafe-jev-noul-v1',
+    '    protocol noul',
+  ]);
+});
+
+test('ask: a local judge with its address and score pointer, a Laya judge, holding when unsure, looking at nothing', () => {
+  const local = {
+    judge: {
+      judgeId: 'local',
+      version: 1,
+      kind: 'local-endpoint',
+      provider: 'ollama',
+      model: 'llama3.2:3b',
+      endpoint: 'http://127.0.0.1:11434/api/generate',
+      approvedAddressSet: ['127.0.0.1'],
+      promptTemplate: 'ollama-json-score-v1',
+      protocol: 'json-score',
+      scorePointer: '/score',
+    },
+    question: 'Does the sender want a reply?',
+    inputs: ['/subject'],
+    threshold: 0.5,
+    onUncertain: 'hold',
+    ...LIMITS,
+    concurrency: 3,
+  };
+  assert.deepEqual(section(roundTrip(rule({ agentic: local })), 'ask'), [
+    'ask local, version 1, via ollama',
+    '  question "Does the sender want a reply?"',
+    '  looking at subject',
+    '  yes at 0.5, if unsure hold',
+    '  at most 60 calls an hour, 1000000 input tokens in 30 days, 3 at a time',
+    '  each call up to 2000 tokens in and 16 tokens out',
+    '  judge local-endpoint, model llama3.2:3b',
+    '    endpoint http://127.0.0.1:11434/api/generate',
+    '    approved address 127.0.0.1',
+    '    prompt template ollama-json-score-v1',
+    '    protocol json-score',
+    '    score at score',
+  ]);
+  const laya = {
+    judge: {
+      judgeId: 'laya-1',
+      version: 1,
+      kind: 'laya',
+      provider: 'laya',
+      model: 'laya-en-onnx-68f27dfe',
+      promptTemplate: 'laya-yes-no-v1',
+    },
+    question: 'Reply needed?',
+    inputs: [],
+    threshold: 1,
+    onUncertain: 'no-match',
+    callsPerRollingHour: 1,
+    inputTokensPerRolling30Days: 1,
+    concurrency: 1,
+    maxInputTokens: 1,
+    maxOutputTokens: 1,
+  };
+  assert.deepEqual(section(roundTrip(rule({ agentic: laya })), 'ask'), [
+    'ask laya-1, version 1, via laya',
+    '  question "Reply needed?"',
+    '  looking at nothing',
+    '  yes at 1, if unsure drop',
+    '  at most 1 call an hour, 1 input token in 30 days, 1 at a time',
+    '  each call up to 1 token in and 1 token out',
+    '  judge laya, model laya-en-onnx-68f27dfe',
+    '    prompt template laya-yes-no-v1',
+  ]);
+});
+
+test("ask: the prototype's short ask parses, and leaves out what it does not say for the event service to refuse", () => {
+  const text = [
+    'rule invoices, version 1',
+    'when a new message arrives in cue/gmail, in the inbox',
+    'match subject mentions "invoice"',
+    'ask jev, version 1, via typesafe',
+    '  question "Is this asking me to pay or send something?"',
+    '  looking at from.address, subject',
+    '  yes at 0.70, if unsure drop',
+    'then',
+    '  queue billing, version 1, in lane billing, keep 7 days',
+  ].join('\n');
+  const parsed = parseRuleText(text);
+  assert.ok(parsed.ok, JSON.stringify(parsed));
+  assert.deepEqual(parsed.doc.agentic, {
+    judge: { judgeId: 'jev', version: 1, provider: 'typesafe' },
+    question: 'Is this asking me to pay or send something?',
+    inputs: ['/from/address', '/subject'],
+    threshold: 0.7,
+    onUncertain: 'no-match',
+  });
+  assert.deepEqual(parsed.doc.condition, { path: '/subject', op: 'contains', value: 'invoice', caseSensitive: false });
+});
+
+test('ask: an agentic part the readable form cannot say is raw, whole', () => {
+  const text = roundTrip(rule({ agentic: { judge: JEV, question: 'q', inputs: ['/subject'], threshold: 'high' } }));
+  assert.match(text, /^raw \/agentic = \{.*"threshold":"high".*\}$/m);
+  assert.doesNotMatch(text, /^ask /m);
+  roundTrip(rule({ agentic: { judge: { ...JEV, extra: true }, question: 'q' } }));
+  roundTrip(rule({ agentic: { question: 'no judge' } }));
+});
