@@ -31,7 +31,7 @@ export const SECTIONS: readonly { screen: Exclude<Screen, 'settings'>; label: st
   { screen: 'connections', label: 'Connections', isNew: true },
   { screen: 'approvals', label: 'Approvals' },
   { screen: 'activity', label: 'Activity' },
-  { screen: 'agent', label: 'Agent' },
+  { screen: 'agent', label: 'Your agents' },
   { screen: 'updates', label: 'Updates' },
   { screen: 'events', label: 'Events' },
   { screen: 'doctor', label: 'Doctor' },

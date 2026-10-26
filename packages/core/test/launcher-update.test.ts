@@ -6,10 +6,11 @@ import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
-import { asV2 } from '../src/approval-stored.ts';
+import { asV2, stateOf } from '../src/approval-stored.ts';
 import { gatedChange } from '../src/change-flow.ts';
 import type { InboxConfig } from '../src/config.ts';
 import { type Core, openCore } from '../src/core.ts';
+import { DESKTOP_RELEASE_IDENTIFIER } from '../src/desktop-origin.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherPaths, readPointer, switchPointer, writeLauncher } from '../src/launcher.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
@@ -25,6 +26,7 @@ import {
 } from '../src/operations/update.ts';
 import { runBackgroundUpdate } from '../src/update-background.ts';
 import { readUpdateCheck } from '../src/update-state.ts';
+import { type MainDeps, runMain } from './helpers/main-in-process.ts';
 import {
   attestationsEndpoint,
   fixtureTarballs,
@@ -695,4 +697,63 @@ test('while a person’s update is applying, a background run finds the machine 
   }
   assert.equal((await person).status, 'applied');
   assert.equal((await readPointer(m.dataDir, 'gmail'))?.current, managedRuntimeDir(m.dataDir, GMAIL, LATEST));
+});
+
+/*
+ * 0.34.0 (design 2026-10-26-desktop-0340 §3, B3): Bring everything up to date is approved in the desktop app. `update
+ * --app-approval <id>` approves the update the app prepared — on macOS only when the app itself started the command —
+ * and applies it; it is refused with --approval beside it, to an agent's shell, inside an MCP server's process, and
+ * where nothing attests the app, which is sent to the terminal with the command to run there. Run in this process as
+ * the app runs it, with the stand-in registry and installers and the origin check handed in: no real codesign.
+ */
+test('`update --app-approval` applies the update the app prepared when the app started it, and is refused anywhere else', async () => {
+  const m = machine();
+  makeRuntime(m, OLD);
+  await registerOnLauncher(m, OLD);
+  const deps = fakes(m, LATEST);
+  const attested = async () => ({
+    ok: true as const,
+    build: 'release' as const,
+    identifier: DESKTOP_RELEASE_IDENTIFIER,
+  });
+  const run = (words: string[], extra: Record<string, string> = {}, origin?: MainDeps['appOrigin']) =>
+    runMain([...words, '--json'], { ...m.env, ...extra }, process.platform, {
+      update: deps,
+      ...(origin === undefined ? {} : { appOrigin: origin }),
+    });
+  const asked = await run(['update', '--no-verify']);
+  assert.equal(asked.code, 10, asked.stdout + asked.stderr);
+  const approvalId = String((asked.json().error as { details: { approvalId: string } }).details.approvalId);
+  const app = ['update', '--no-verify', '--app-approval', approvalId];
+
+  const both = await run([...app, '--approval', approvalId], {}, attested);
+  assert.equal(both.code, 64, both.stdout);
+  for (const mode of [['--check'], ['--status'], ['--rollback']]) {
+    const misuse = await run(['update', ...mode, '--app-approval', approvalId], {}, attested);
+    assert.equal(misuse.code, 64, `${mode}: ${misuse.stdout}`);
+  }
+  for (const extra of [{ CLAUDECODE: '1' }, { AGENTCOMMS_MCP_SERVER: 'gmail' }]) {
+    const refused = await run(app, extra, attested);
+    assert.equal(refused.code, 10, refused.stdout);
+    assert.equal((refused.json().error as { code: string }).code, 'APPROVAL_REQUIRED');
+  }
+  const elsewhere = await run(app, {}, async () => ({ ok: false, reason: 'unattested-platform' }));
+  assert.equal(elsewhere.code, 10, elsewhere.stdout);
+  const error = elsewhere.json().error as { code: string; hint: string; details: { reason: string } };
+  assert.equal(error.details.reason, 'ORIGIN_UNATTESTED');
+  assert.match(error.hint, /or run `.*update --no-verify`( \(PowerShell\))? at your own terminal\./u);
+  assert.deepEqual(deps.runtimes, [], 'nothing was installed by any refusal');
+  assert.equal((await readPointer(m.dataDir, 'gmail'))?.current, managedRuntimeDir(m.dataDir, GMAIL, OLD));
+
+  const done = await run(app, {}, attested);
+  assert.equal(done.code, 0, done.stdout + done.stderr);
+  assert.equal((done.json().data as unknown as UpdateResult).status, 'updated');
+  assert.equal((await readPointer(m.dataDir, 'gmail'))?.current, managedRuntimeDir(m.dataDir, GMAIL, LATEST));
+  const [record] = await m.core.approvals.list();
+  assert.equal(record ? stateOf(record) : undefined, 'used');
+  assert.equal(record ? asV2(record)?.approvedVia : undefined, 'app');
+  const approved = (await m.core.audit.tail({ limit: 500 })).find(
+    (line) => line.operation === 'change.approve' && line.outcome === 'ok',
+  );
+  assert.equal(approved?.approvedBy, 'desktop-app');
 });

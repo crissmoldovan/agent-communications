@@ -6,11 +6,16 @@
 //! rule's activation, whose `eventsRuleApprove` (`rule approve`) answers only the one the rule editor prepared with
 //! `eventsRuleEnable`, for its digest (`rule_editor`); and since 0.34.0 switching the event service on, whose
 //! `eventsCollectionApprove` (`collection approve`) answers only the one Events → Service prepared with
-//! `eventsEnableAll`, for its digest.
+//! `eventsEnableAll`, for its digest. Since 0.34.0 the label's changes are too (`label`): a `labelWord`, `labelName`,
+//! `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app prepared for the same call
+//! without it.
 
 use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
 use crate::grammar;
 use crate::ipc::AppError;
+use crate::label::{
+    self, LabelIdentity, LabelKinds, LabelName, LabelWord, LABEL_APP_APPROVAL_VERSION,
+};
 use crate::launchers::Product;
 use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
 use regex::Regex;
@@ -1089,6 +1094,49 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ids: Option<ItemIds>,
     },
+    /// Core `label word <word> [--app-approval <id>]` (0.34.0's Your agents, `label`): the word after the person's
+    /// name. Without `appApproval` it prepares a change — a new word loosens, and core answers with its preview; with
+    /// it, the person approved in the app the change the app prepared (`connections::run_app_approval`), once.
+    LabelWord {
+        word: LabelWord,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label name <name> [--app-approval <id>]` (0.34.0): the person's name, for where a channel has none of its
+    /// own. Prepared and approved as `labelWord` is.
+    LabelName {
+        name: LabelName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label rule add <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--app-approval <id>]`
+    /// (0.34.0): an exception to the tag. `--as me` loosens and is prepared, then approved in the app; `--as agent`
+    /// applies at once, and is never given the app's approval.
+    LabelRuleAdd {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kinds: Option<LabelKinds>,
+        #[serde(rename = "as")]
+        identity: LabelIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label rule remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--app-approval <id>]`
+    /// (0.34.0): an exception taken away, as it is listed. Taking away a `me` rule applies at once; an `agent` rule is
+    /// prepared, then approved in the app.
+    LabelRuleRemove {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kinds: Option<LabelKinds>,
+        #[serde(rename = "as")]
+        identity: LabelIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -1613,6 +1661,44 @@ impl Call {
             Call::SessionQueueDrop { delivery_id } => {
                 events(&["session-queue", "drop", delivery_id.as_str()])
             }
+            Call::LabelWord { word, app_approval } => with(
+                core(&["label", "word", word.word()]),
+                label::app_approval_words(app_approval),
+            ),
+            Call::LabelName { name, app_approval } => with(
+                core(&["label", "name", name.as_str()]),
+                label::app_approval_words(app_approval),
+            ),
+            Call::LabelRuleAdd {
+                account,
+                conversation,
+                kinds,
+                identity,
+                app_approval,
+            } => with(
+                core(&["label", "rule", "add", account.as_str()]),
+                label::rule_words(
+                    conversation.as_ref().map(ConversationId::as_str),
+                    kinds,
+                    *identity,
+                    app_approval,
+                ),
+            ),
+            Call::LabelRuleRemove {
+                account,
+                conversation,
+                kinds,
+                identity,
+                app_approval,
+            } => with(
+                core(&["label", "rule", "remove", account.as_str()]),
+                label::rule_words(
+                    conversation.as_ref().map(ConversationId::as_str),
+                    kinds,
+                    *identity,
+                    app_approval,
+                ),
+            ),
         })
     }
 
@@ -1634,7 +1720,7 @@ impl Call {
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the six change shapes, and only those.
+    /// (DA10): the six change shapes, and the label's four changes without the app's approval (0.34.0), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1644,6 +1730,22 @@ impl Call {
                 | Call::McpInstall { .. }
                 | Call::BehaviourAllow { .. }
                 | Call::BehaviourClear { .. }
+                | Call::LabelWord {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelName {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelRuleAdd {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelRuleRemove {
+                    app_approval: None,
+                    ..
+                }
         )
     }
 
@@ -1705,6 +1807,10 @@ impl Call {
             Call::EventsCollectionApprove { .. } | Call::EventsDisableAll {} => {
                 Some(COLLECTION_SWITCH_VERSION)
             }
+            Call::LabelWord { .. }
+            | Call::LabelName { .. }
+            | Call::LabelRuleAdd { .. }
+            | Call::LabelRuleRemove { .. } => Some(LABEL_APP_APPROVAL_VERSION),
             _ => None,
         }
     }
@@ -1873,6 +1979,14 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
         json!({ "kind": "judgeShow", "judgeId": "jev" }),
         json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 }),
+        json!({ "kind": "labelWord", "word": "assistant" }),
+        json!({ "kind": "labelWord", "word": "AI", "appApproval": ID }),
+        json!({ "kind": "labelName", "name": "Jo Example" }),
+        json!({ "kind": "labelName", "name": "Jo Example", "appApproval": ID }),
+        json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
+        json!({ "kind": "labelRuleAdd", "account": "example/gmail", "conversation": "@example.com", "as": "me", "appApproval": ID }),
+        json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
+        json!({ "kind": "labelRuleRemove", "account": "example/slack", "conversation": "C0123ABCD", "kinds": "reply,reaction", "as": "agent", "appApproval": ID }),
         json!({ "kind": "eventsEnableAll" }),
         json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
         json!({ "kind": "eventsDisableAll" }),
@@ -2682,6 +2796,10 @@ mod tests {
                 json!({ "kind": "behaviourClear", "account": "example/slack" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
                 json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+                json!({ "kind": "labelWord", "word": "assistant" }),
+                json!({ "kind": "labelName", "name": "Jo Example" }),
+                json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
+                json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
             ]
         );
     }

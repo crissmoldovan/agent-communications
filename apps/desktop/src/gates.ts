@@ -11,8 +11,10 @@
  * lanes (`LANES_VERSION`), and `judgeSetup`, the first with judge setup and AI provider keys (`JUDGE_SETUP_VERSION`). The
  * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
  * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`. `ruleEditor` is the events
- * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations; and
- * `collectionSwitch` too (`COLLECTION_SWITCH_VERSION`, 0.34.0): Switch on… approved in the app, and Switch off. An events
+ * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations.
+ * `labelChanges` is core's (`LABEL_APP_APPROVAL_VERSION`, 0.34.0): Your agents changes the label's word, name and
+ * exceptions, each loosening approved in the app; an older core shows the label read-only. `collectionSwitch` is the
+ * events service's (`COLLECTION_SWITCH_VERSION`, 0.34.0): Switch on… approved in the app, and Switch off. An events
  * service with the rule editor but older than that still prepares Switch on…, which is then approved in Terminal.
  */
 export const GATES = {
@@ -28,6 +30,7 @@ export const GATES = {
   judgeSetup: '0.32.0',
   messages: '0.32.0',
   ruleEditor: '0.33.0',
+  labelChanges: '0.34.0',
   collectionSwitch: '0.34.0',
 } as const;
 

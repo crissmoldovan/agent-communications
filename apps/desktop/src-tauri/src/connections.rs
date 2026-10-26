@@ -21,7 +21,8 @@ impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
     /// `mcpInstall` of the same app and server, `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
     /// with, for the same digest (0.33.0), and `eventsCollectionApprove` the switching on `eventsEnableAll` came back
-    /// with (0.34.0). None for every other call.
+    /// with (0.34.0); and a label change with `appApproval` the same change without it (0.34.0, `label`). None for every
+    /// other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -41,7 +42,8 @@ impl Call {
             // Switching the event service on that Events → Service prepared with `eventsEnableAll`, for this very digest
             // (0.34.0): kept the same way.
             Call::EventsCollectionApprove { approval_id, .. } => Some((approval_id, self.clone())),
-            _ => None,
+            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
+            _ => self.answers_label_approval(),
         }
     }
 }

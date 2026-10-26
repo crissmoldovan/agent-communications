@@ -56,6 +56,7 @@ Scripts should read these rather than parse output.
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
+| [`collection`](#agent-events-collection) | the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all |
 | [`integration`](#agent-events-integration) | the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
 | [`session-queue`](#agent-events-session-queue) | the matches waiting for a busy agent session, each passed on when the session’s run ends |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
@@ -693,6 +694,26 @@ remove a provider key, and the copy its Jev judges hold; a Linear target then ad
 ```
 agent-events provider key remove [options] <provider>
 ```
+
+### `agent-events collection`
+
+the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all
+
+```
+agent-events collection [options] [command]
+```
+
+### `agent-events collection approve`
+
+approve switching the event service on — the approval enable-all prepared — from the Agent Comms app, after its preview, as the person
+
+```
+agent-events collection approve [options] <approval-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--digest <digest>` | the fingerprint of the activation the preview showed | — |
 
 ### `agent-events integration`
 

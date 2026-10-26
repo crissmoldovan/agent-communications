@@ -8,6 +8,7 @@ pub mod deeplink;
 pub mod event_service;
 pub mod grammar;
 pub mod ipc;
+pub mod label;
 pub mod launchers;
 pub mod links;
 pub mod login_item;

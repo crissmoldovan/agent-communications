@@ -233,7 +233,7 @@ describe('the shell', () => {
       'Connections',
       'Approvals',
       'Activity',
-      'Agent',
+      'Your agents',
       'Updates',
       'Events',
       'Doctor',

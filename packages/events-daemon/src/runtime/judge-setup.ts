@@ -2,15 +2,18 @@ import { type AuditLog, CommsError, canonicalJson } from '@agentcomms/core';
 import { HumanSecret } from '../domain/human-secret.ts';
 import {
   changeAtTerminal,
+  enableAllApprovalAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
   type PersonSetupApprover,
   personSetupApprover,
+  personSetupSurface,
   ruleApprovalAtTerminal,
   type SetupJudgeKind,
   setupBudgetDocument,
   setupJudgeDocument,
+  testBuildElsewhere,
 } from '../domain/judge-setup.ts';
 import {
   type CanonicalJudgeBudgetDocument,
@@ -64,6 +67,19 @@ export interface RuleApprovalResultV1 {
   readonly approved: true;
   /** Where the person was, as the CLI found them: the release app, the test build, or the app unattested. */
   readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
+  readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
+}
+
+/**
+ * What `collection approve` answers (0.34.0 design B4): the event service switched on from the app, who approved it, and
+ * the active rule versions it now collects for — the ones the preview listed — with the activation's completion.
+ */
+export interface EnableAllApprovalResultV1 {
+  readonly approvalId: string;
+  readonly approved: true;
+  /** Where the person was, as the CLI found them: the release app or the test build. */
+  readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
+  readonly ruleVersions: readonly { readonly ruleId: string; readonly ruleVersion: number }[];
   readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
 }
 
@@ -130,6 +146,7 @@ export class JudgeSetupService {
   readonly #quiescer: WriterQuiescer;
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
   readonly #now: () => number;
+  readonly #testProfile: () => boolean;
 
   constructor(input: {
     readonly store: EventDatabase;
@@ -142,6 +159,11 @@ export class JudgeSetupService {
     readonly quiescer: WriterQuiescer;
     readonly audit?: Pick<AuditLog, 'append'> | undefined;
     readonly now?: (() => number) | undefined;
+    /**
+     * Whether this event service's own state folder is a test profile's (`isTestProfileState`): the only one the local
+     * test build may change. None is, unless the owner says so.
+     */
+    readonly testProfile?: (() => boolean) | undefined;
   }) {
     this.#store = input.store;
     this.#b3 = input.b3;
@@ -150,6 +172,7 @@ export class JudgeSetupService {
     this.#quiescer = input.quiescer;
     this.#audit = input.audit;
     this.#now = input.now ?? Date.now;
+    this.#testProfile = input.testProfile ?? (() => false);
   }
 
   providerList(): ProviderListResultV1 {
@@ -284,9 +307,12 @@ export class JudgeSetupService {
         throw new CommsError(
           'APPROVAL_VOID',
           'this approval is no longer waiting: it was approved, cancelled or replaced',
+          { details: { reason: 'APPROVAL_NOT_WAITING' } },
         );
       if (row.digest !== digest)
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after you saw its preview: review it again');
+        throw new CommsError('APPROVAL_VOID', 'the rule changed after you saw its preview: review it again', {
+          details: { reason: 'DIGEST_MISMATCH' },
+        });
       const document = JSON.parse(row.document) as { kind?: unknown; rule?: { ruleId?: unknown; version?: unknown } };
       const ruleId = document.kind === 'rule' ? document.rule?.ruleId : undefined;
       const version = document.kind === 'rule' ? document.rule?.version : undefined;
@@ -309,6 +335,80 @@ export class JudgeSetupService {
         version,
         approved: true,
         approvedBy: approver,
+        completion: { intentId: completion.intentId, status: completion.status, usedAt: completion.usedAt },
+      };
+    });
+  }
+
+  /**
+   * Switching the event service on, approved by the person in the Agent Comms app after its preview (0.34.0 design
+   * B4): the activation `enable-all` prepared and nothing else — not a rule's, a judge kind's or a budget's — for exactly
+   * the digest the person saw. As `approveRule` does, the owner issues the approval-view challenge and answers it on the
+   * app channel at once; the audit line says where the person was. From the app's origins only: at a terminal the
+   * person types the challenge with `approve`. A speed bump against agents, not a boundary against code running as the
+   * person: the origin is a label a same-user control client declares.
+   */
+  async approveEnableAll(
+    args: Readonly<Record<string, unknown>>,
+    origin: string | undefined,
+  ): Promise<EnableAllApprovalResultV1> {
+    const approvalId = args.approvalId;
+    const digest = args.digest;
+    if (typeof approvalId !== 'string' || !APPROVAL_ID.test(approvalId))
+      throw new CommsError('USAGE', 'that is not an approval id');
+    if (typeof digest !== 'string' || !DIGEST.test(digest))
+      throw new CommsError('USAGE', 'the digest is the 64 hex digits its preview showed');
+    const ids: Record<string, string | string[]> = { approvalId };
+    const approver = personSetupApprover(origin);
+    return this.#audited('enableAllApprove', origin, ids, async () => {
+      if (approver === null || approver === 'terminal')
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          'at your terminal, switch the event service on with approve <approval-id>, which asks for its challenge',
+          { details: { reason: 'AT_TERMINAL' } },
+        );
+      const row = this.#store.database
+        .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
+        .get(approvalId) as { document: string; digest: string; status: string } | undefined;
+      if (row === undefined || row.status !== 'pending')
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'this approval is no longer waiting: it was approved, cancelled or replaced',
+          { details: { reason: 'APPROVAL_NOT_WAITING' } },
+        );
+      if (row.digest !== digest)
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'what switching on covers changed after you saw its preview: review it again',
+          { details: { reason: 'DIGEST_MISMATCH' } },
+        );
+      const document = JSON.parse(row.document) as { kind?: unknown; ruleVersions?: unknown };
+      const ruleVersions =
+        document.kind === 'enable-all' && Array.isArray(document.ruleVersions)
+          ? (document.ruleVersions as { ruleId?: unknown; ruleVersion?: unknown }[]).flatMap((entry) =>
+              typeof entry.ruleId === 'string' && typeof entry.ruleVersion === 'number'
+                ? [{ ruleId: entry.ruleId, ruleVersion: entry.ruleVersion }]
+                : [],
+            )
+          : undefined;
+      if (ruleVersions === undefined)
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          'this approval does not switch the event service on: approve a rule with rule approve, and anything else at your terminal',
+          { details: { reason: 'NOT_ENABLE_ALL' } },
+        );
+      ids.ruleVersions = ruleVersions.map((entry) => `${entry.ruleId}@${entry.ruleVersion}`);
+      const challenge = await this.#activations.issueApprovalViewChallenge(approvalId, this.#now() + 5 * 60_000);
+      if (challenge === null)
+        throw new CommsError('TRANSIENT', 'the approval was being opened elsewhere: try again in a moment');
+      const completion = await withEventWriterLease(this.#quiescer, () =>
+        this.#activations.approve({ approvalId, answer: challenge, via: 'app' }),
+      );
+      return {
+        approvalId,
+        approved: true,
+        approvedBy: approver,
+        ruleVersions,
         completion: { intentId: completion.intentId, status: completion.status, usedAt: completion.usedAt },
       };
     });
@@ -392,23 +492,23 @@ export class JudgeSetupService {
 
   /**
    * The person's origins only, and an audit line of its outcome: ids, the outcome, and where the person was — the
-   * attested app, the app unattested (Windows, Linux), or a terminal — never a key.
+   * attested app, the app unattested (Windows, Linux), or a terminal — never a key. Its surface is `app` only for an
+   * attested app and `cli` for a terminal; any other caller's line names none (`personSetupSurface`).
    */
   async #audited<T>(
-    operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove',
+    operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
     origin: string | undefined,
-    ids: Record<string, string>,
+    ids: Record<string, string | string[]>,
     work: () => Promise<T>,
   ): Promise<T> {
     const approver = personSetupApprover(origin);
-    const surface = approver === 'terminal' ? ('cli' as const) : ('app' as const);
+    const surface = personSetupSurface(approver, this.#testProfile);
     const record = async (outcome: 'ok' | 'refused' | 'failed', reason?: string) =>
       this.#audit?.append({
         inboxId: '',
         operation: `events.${operation}`,
         outcome,
-        surface,
-        origin: surface,
+        ...(surface === undefined ? {} : { surface, origin: surface }),
         ids: { ...ids, ...(approver === null ? {} : { approvedBy: approver }) },
         ...(reason === undefined ? {} : { reason }),
       });
@@ -423,15 +523,27 @@ export class JudgeSetupService {
       await record('refused', 'ORIGIN_UNATTESTED');
       throw unattestedChange(operation, ids);
     }
+    // The local test build changes only its own test profile, whatever folders the CLI was given (security review of
+    // 0.34.0, finding 1): this event service's own state folder must be one.
+    if (approver === 'desktop-app (test build)' && !this.#testProfile()) {
+      await record('refused', 'NOT_A_TEST_PROFILE');
+      throw testBuildElsewhere();
+    }
     try {
       const result = await work();
       await record('ok');
       return result;
     } catch (error) {
-      // A refusal with its own reason is audited as one, with that reason; anything else as a failure.
+      // A refusal with its own reason is audited as one, with that reason — an approval this person-only path refuses
+      // because it is not waiting or was not the one the person saw included (0.34.0 review, finding 4); anything else
+      // as a failure.
+      const given =
+        error instanceof CommsError ? (error.details as { reason?: unknown } | undefined)?.reason : undefined;
       const reason =
-        error instanceof CommsError && error.code === 'APPROVAL_REQUIRED'
-          ? (error.details as { reason?: unknown } | undefined)?.reason
+        error instanceof CommsError &&
+        (error.code === 'APPROVAL_REQUIRED' ||
+          (error.code === 'APPROVAL_VOID' && (given === 'DIGEST_MISMATCH' || given === 'APPROVAL_NOT_WAITING')))
+          ? given
           : undefined;
       if (typeof reason === 'string') await record('refused', reason);
       else await record('failed');
@@ -442,12 +554,14 @@ export class JudgeSetupService {
 
 /** The terminal refusal of each person-only change, with the event service's words to type there. */
 function unattestedChange(
-  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove',
-  ids: Readonly<Record<string, string>>,
+  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
+  ids: Readonly<Record<string, string | string[]>>,
 ): CommsError {
   switch (operation) {
     case 'ruleApprove':
       return ruleApprovalAtTerminal(ids.approvalId);
+    case 'enableAllApprove':
+      return enableAllApprovalAtTerminal(ids.approvalId);
     case 'judgeSetup':
       return changeAtTerminal('set up a judge', `judge setup ${ids.kind ?? '<kind>'}, with the same options`);
     case 'providerKeySet':

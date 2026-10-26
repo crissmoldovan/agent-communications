@@ -24,9 +24,10 @@ import {
 } from './cli-runtime.ts';
 import { type Config, classifyChange, type LooseningConsent } from './config.ts';
 import type { Core } from './core.ts';
-import { type DesktopOrigin, desktopAppOrigin } from './desktop-origin.ts';
+import { type DesktopOrigin, desktopAppOrigin, type TouchedFolder } from './desktop-origin.ts';
 import { CommsError } from './errors.ts';
-import { type CliHandoffs, type Handoff, isCommand, requireHandoffs } from './handoffs.ts';
+import { type CliHandoffs, type Handoff, handoffSentence, isCommand, requireHandoffs } from './handoffs.ts';
+import { homeDirectory } from './paths.ts';
 
 /**
  * One changing operation, run the same way from the CLI and from MCP.
@@ -216,13 +217,19 @@ export async function gatedChangeAtTerminal<T>(
      */
     answered?: boolean | undefined;
     /**
-     * The approval the desktop app prepared for this change and the person approved there (0.32.0, `mcp install
-     * --app-approval <id>`): approved through the app channel and claimed by this change, as judge setup's are. Refused
-     * to an agent's shell and inside an MCP server's process; never with `approvalId`.
+     * The approval the desktop app prepared for this change and the person approved there (`--app-approval <id>`:
+     * `mcp install` from 0.32.0; `label`, `behaviour allow|clear` and `update` from 0.34.0): approved through the app
+     * channel and claimed by this change, as judge setup's are. Refused to an agent's shell and inside an MCP server's
+     * process; never with `approvalId`.
      */
     appApproval?: string | undefined;
-    /** Where an app approval came from (`desktopAppOrigin`); injected by tests only. */
-    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+    /**
+     * What the command reaches outside Agent Comms' own folders, for the test build's origin check: the apps' MCP configs
+     * (`mcp install`, `update`) and npm's global packages (`update`).
+     */
+    appReach?: AppReach | undefined;
+    /** Where an app approval came from (`desktopAppOrigin`, handed the folders it is for); injected by tests only. */
+    appOrigin?: AppOriginCheck | undefined;
     streams?: Streams | undefined;
   },
 ): Promise<T> {
@@ -397,7 +404,10 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * 0.33.0; the app offers Approve in Terminal), and the refusal is audited as `desktop-app (unattested)`, so
  * `approvedVia: 'app'` means the attested app. Always refused to an agent's shell (its marker) and inside an MCP
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
- * prepared for, and only on a command that passes this option (`mcp install`); no MCP tool does.
+ * prepared for, and only on a command that passes this option — `mcp install` (0.32.0), and the person-only changes
+ * the app makes from 0.34.0: `label word|name|rule add|rule remove|icon|style`, `behaviour allow|clear` and `update`
+ * (design 2026-10-26-desktop-0340 §3, B1–B3). No MCP tool does. Where nothing attests the app, the refusal names the
+ * command itself, without the option, to run at the person's terminal.
  */
 async function appliedFromApp<T>(
   core: Core,
@@ -407,7 +417,10 @@ async function appliedFromApp<T>(
     approvalId?: string | undefined;
     env: NodeJS.ProcessEnv;
     output: { platform?: NodeJS.Platform | undefined };
-    appOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+    rerun: readonly string[];
+    rerunOn?: 'own' | 'core' | undefined;
+    appReach?: AppReach | undefined;
+    appOrigin?: AppOriginCheck | undefined;
   },
   approvalId: string,
 ): Promise<T> {
@@ -437,16 +450,15 @@ async function appliedFromApp<T>(
     }
     // On macOS the process that started this one must be Agent Comms itself, its running code verified by its pid;
     // Windows and Linux attest nothing, so there the change is approved at the person's terminal instead.
-    origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
+    // Every folder the command will touch goes with it: the test build speaks only when its profile holds them all.
+    const check = { configDir: core.paths.configDir, folders: touchedFolders(core, options.env, options.appReach) };
+    origin = await (options.appOrigin ?? desktopAppOrigin)(check);
     if (!origin.ok && origin.reason === 'unattested-platform') {
       refusedAs = 'desktop-app (unattested)';
       throw new CommsError(
         'APPROVAL_REQUIRED',
         'nothing on this platform attests that the Agent Comms app started this, so approve the change at your terminal',
-        {
-          hint: 'In the app, press Approve in Terminal; or run the same mcp install at your own terminal, without --app-approval.',
-          details: { reason: 'ORIGIN_UNATTESTED' },
-        },
+        { hint: atYourTerminal(core, options), details: { reason: 'ORIGIN_UNATTESTED' } },
       );
     }
     if (!origin.ok) {
@@ -455,12 +467,14 @@ async function appliedFromApp<T>(
         'only the Agent Comms app can approve a change in the app, and this was not started by it',
         {
           hint: 'Approve it in the Agent Comms app, or at your own terminal.',
-          details: { reason: origin.reason },
+          details: { reason: origin.reason, ...(origin.outside === undefined ? {} : { outside: origin.outside }) },
         },
       );
     }
   } catch (error) {
-    await recordChangeApprovalRefused(core, approvalId, error, { surface: 'app', approvedBy: refusedAs });
+    // Nothing here is the app's: an agent, an MCP server, a parent that is not Agent Comms or an origin nothing attests
+    // was refused (the security review of 0.34.0, finding 2). So the line is the CLI's, and it says why.
+    await recordChangeApprovalRefused(core, approvalId, withWhy(error), { surface: 'cli', approvedBy: refusedAs });
     throw error;
   }
   // Only an attested origin reaches here.
@@ -483,6 +497,90 @@ async function appliedFromApp<T>(
       disposition: 'person',
     }).catch(() => undefined);
     throw error;
+  }
+}
+
+/**
+ * A refusal as its audit line records it: its message, then why in a word — the agent's marker, `MCP_SERVER_PROCESS`,
+ * the origin's reason (`not-agent-comms`, `ORIGIN_UNATTESTED`, `outside-test-profile: data folder`) — so the line tells
+ * one refusal from another as the caller's details do.
+ */
+function withWhy(error: unknown): unknown {
+  if (!(error instanceof CommsError)) return error;
+  const details = error.details ?? {};
+  const why = [
+    details.marker === undefined ? undefined : `marker ${String(details.marker)}`,
+    details.reason,
+    details.outside,
+  ]
+    .filter((part) => part !== undefined)
+    .map(String)
+    .join(': ');
+  return why === '' ? error : new CommsError(error.code, `${error.message} (${why})`);
+}
+
+/** What a command run from the app reaches outside Agent Comms' own folders (`gatedChangeAtTerminal`'s `appReach`). */
+export interface AppReach {
+  /** The apps' MCP configs, which are under the home folder (and `CLAUDE_CONFIG_DIR`, `CODEX_HOME` when set). */
+  readonly clients?: boolean | undefined;
+  /** npm's global packages, in its global folder (`npm_config_prefix`). */
+  readonly npmGlobal?: boolean | undefined;
+}
+
+/** The app-origin check, handed the config folder and every other folder the command touches (`desktopAppOrigin`). */
+export type AppOriginCheck = (check: {
+  configDir: string;
+  folders: readonly TouchedFolder[];
+}) => Promise<DesktopOrigin>;
+
+/**
+ * Every folder a change made from the app touches besides its config folder (the security review of 0.34.0, finding
+ * 1): its state, data and secrets folders, and what `reach` adds — the home folder and the apps' own config folders for
+ * a command that registers servers, and npm's global folder, which only `npm_config_prefix` names here, for one that
+ * updates global packages.
+ */
+function touchedFolders(core: Core, env: NodeJS.ProcessEnv, reach: AppReach | undefined): TouchedFolder[] {
+  const { stateDir, dataDir, secretsDir } = core.paths;
+  const folders: TouchedFolder[] = [
+    { what: 'state folder', path: stateDir },
+    { what: 'data folder', path: dataDir },
+    { what: 'secrets folder', path: secretsDir },
+  ];
+  if (reach?.clients === true) {
+    folders.push({ what: 'home folder, where the apps keep their MCP configs', path: homeDirectory(env) });
+    if (env.CLAUDE_CONFIG_DIR) folders.push({ what: "Claude Code's config folder", path: env.CLAUDE_CONFIG_DIR });
+    if (env.CODEX_HOME) folders.push({ what: "Codex's config folder", path: env.CODEX_HOME });
+  }
+  if (reach?.npmGlobal === true) {
+    folders.push({ what: "npm's global folder", path: env.npm_config_prefix || env.NPM_CONFIG_PREFIX || undefined });
+  }
+  return folders;
+}
+
+/**
+ * What a person does where nothing attests the app: press Approve in Terminal, or run the command the app ran — its own
+ * words, located, without `--app-approval` — at their own terminal, where they approve it there and then.
+ */
+function atYourTerminal(
+  core: Core,
+  options: {
+    rerun: readonly string[];
+    rerunOn?: 'own' | 'core' | undefined;
+    output: { platform?: NodeJS.Platform | undefined };
+  },
+): string {
+  const instead =
+    'In the app, press Approve in Terminal; or run the same command at your own terminal, without --app-approval.';
+  try {
+    const handoffs = requireHandoffs(core, options.output.platform);
+    return handoffSentence(
+      handoffs[options.rerunOn ?? 'own'](options.rerun),
+      (command) => `In the app, press Approve in Terminal; or run ${command} at your own terminal.`,
+      { instead },
+    );
+  } catch {
+    // A core opened with no caller names no command: the words alone, never a guess at one.
+    return instead;
   }
 }
 

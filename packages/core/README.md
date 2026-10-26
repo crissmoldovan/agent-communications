@@ -61,19 +61,37 @@ Every channel CLI, and the declared events service through core, registers and p
 `comms_server_install` or `comms_server_prune` prepared is claimed by their `mcp install` or `mcp prune` for the same
 request, and the other way round.
 
-`mcp install` is also approved in the desktop app, as Connections adds a server to an app (0.32.0): the app shows
-core's preview, and once the person presses its confirm it runs the same command with `--app-approval <id>`. That plans
-the install first, checks the approval is a waiting one for exactly that install, and only then approves it through
-the app channel (`approvedVia: app`) and applies it; an approval for anything else, or a plan that refuses, approves
-nothing. On macOS core checks that the app started this process: a speed bump against agents, not a boundary against code running as you. `desktopAppOrigin` has codesign verify the
-running parent, by its pid: the release, signed by the owner's team, audited `approvedBy: desktop-app`; or the local
-test build, ad-hoc signed, only for a test profile — a config folder holding `.agentcomms-test-profile`, which
-`scripts/local-test-release.sh` writes, and not your real, default one — audited `desktop-app (test build)`. Windows
-and Linux check nothing, so there the install is approved at your terminal: `--app-approval` from an origin nothing
-attests is refused with `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), the refusal is audited as
-`desktop-app (unattested)`, the approval still waits, and Connections offers Approve in Terminal instead.
-`approvedVia: app` therefore means the attested app. `--app-approval` is always refused to an agent's shell and
-inside an MCP server's process, takes no `--approval`, and no MCP tool has it.
+`mcp install --server <a,b,…>` adds several servers to one client as one change (0.34.0): one preview naming every
+server and what each reaches, one approval, then each registered in the order given. The first that fails stops the
+rest; the error says which were registered and which were not, and the approval, spent on that attempt, is not used
+again. `--name` and the pins (`--account`, `--inbox`, `--workspace`, `--read-only`) are for one server on its own.
+`comms_server_install` takes the same list as `servers`, in place of `channel`.
+
+Some of these changes are also approved in the desktop app, as the person's own act: `mcp install` (0.32.0, when the
+app adds servers to an app), and from 0.34.0 `label word`, `label name`, `label rule add|remove`, `label icon`,
+`label style`, `behaviour allow|clear` and `update`. The app shows core's preview, and once the person presses its
+confirm it runs the same command with `--app-approval <id>`. That plans the change first, checks the approval is a
+waiting one for exactly that change, and only then approves it through the app channel (`approvedVia: app`) and
+applies it; an approval for anything else, or a plan that refuses, approves nothing. A tightening — `label rule add
+--as agent`, `label style … app`, a `behaviour allow` that only narrows — applies at once and takes no approval of
+either kind. Given `--app-approval` it is refused and nothing is applied: from the attested app on macOS with `USAGE`
+(exit 64), since the change needs none; from anywhere else — an agent, an MCP server's process, a parent that is not
+the app, Windows or Linux — the origin is checked first, so it is refused as any other app approval there is, with
+`APPROVAL_REQUIRED` (exit 10). On macOS core checks that the app started this
+process: a speed bump against agents, not a boundary against code running as you, which can approve in-process anyway.
+`desktopAppOrigin` has codesign verify the running parent, by its pid: the release, signed by the owner's team,
+audited `approvedBy: desktop-app`; or the local test build, ad-hoc signed, only for a test profile — a config folder
+holding `.agentcomms-test-profile`, which `scripts/local-test-release.sh` writes, and not your real, default one, found
+from your account's own home whatever `HOME` or `XDG_CONFIG_HOME` say — and only when every other folder the command
+touches is inside that profile: its state, data and secrets folders, and for `mcp install` and `update` the home folder
+the apps' configs are in (and for `update`, npm's global folder). Its approvals are audited `desktop-app (test build)`.
+Windows and Linux check nothing, so there the change is approved at your terminal:
+`--app-approval` from an origin nothing attests is refused with `APPROVAL_REQUIRED` (exit 10, reason
+`ORIGIN_UNATTESTED`) and a hint naming the command to run there, the refusal is audited as `desktop-app
+(unattested)`, the approval still waits, and the app offers Approve in Terminal instead. `approvedVia: app` therefore
+means the attested app. `--app-approval` is always refused to an agent's shell and inside an MCP server's process,
+takes no `--approval`, and no MCP tool has it. Standing approvals are never approved in the app: they are approved at
+a terminal, with their code.
 
 `label style <workspace> app|labelled` chooses how an agent's messages look in one Slack workspace. `app`, the default,
 posts as the app with Slack's APP tag where it can, and as you, labelled, elsewhere. `labelled` posts every one as you,

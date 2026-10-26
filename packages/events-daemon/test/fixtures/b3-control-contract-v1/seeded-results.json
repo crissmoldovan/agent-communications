@@ -1052,5 +1052,31 @@
       "digest": "016f6fab0c5468f0de527e6d12c912e4b5cc236948a80cd899747da40d020d3e",
       "state": "live"
     }
+  },
+  {
+    "name": "enable-all-approve-result",
+    "request": {
+      "operation": "enable-all-approve",
+      "args": {
+        "approvalId": "ap_VJPKF7Z3VVEVZ1GKGCWP3PZB40",
+        "digest": "75518500da9318b19a1148deebe93db44b3f6351f6488d79acf0ada8a2b7552c"
+      }
+    },
+    "result": {
+      "approvalId": "ap_VJPKF7Z3VVEVZ1GKGCWP3PZB40",
+      "approved": true,
+      "approvedBy": "desktop-app",
+      "ruleVersions": [
+        {
+          "ruleId": "david-by-mail",
+          "ruleVersion": 1
+        }
+      ],
+      "completion": {
+        "intentId": "act_ae00411267ba5e2e3a37b6354e5c581c",
+        "status": "completed",
+        "usedAt": "2026-10-26T19:04:11.479Z"
+      }
+    }
   }
 ]

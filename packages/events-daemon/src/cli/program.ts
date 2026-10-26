@@ -20,17 +20,20 @@ import {
   PERSON_SETUP_ORIGINS,
   type PersonSetupOrigin,
   ruleApprovalWords,
+  testBuildOutsideProfile,
 } from '../domain/judge-setup.ts';
 import { isJevProvider } from '../domain/judges.ts';
 import type { LaneListResultV1 } from '../domain/lanes.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import { EVENT_SECRET_PROVIDER_WORDS, isEventSecretProvider } from '../domain/providers.ts';
+import { approvalViewForAgent } from '../mcp/agent-approval-view.ts';
 import { createEventsMcpServer } from '../mcp/server.ts';
 import { integrationSet, sessionQueueDrop, sessionQueueList } from '../operations/agent-sessions.ts';
 import { ruleAnalyse } from '../operations/analyse.ts';
 import { approvalView } from '../operations/approval-view.ts';
 import {
   approve,
+  approveEnableAllFromApp,
   approveRuleFromApp,
   disclosureChallenge,
   pendingRuleJudgeTest,
@@ -124,6 +127,7 @@ import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
+import { withinTestProfile } from '../runtime/test-profile.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -412,6 +416,17 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .requiredOption('--digest <digest>')
     .action(async (approvalId: string, options) => {
       ran = true;
+      // An agent's shell, or a program inside the event service's MCP server, gets the agent view: the preview alone,
+      // with no challenge issued or shown, as events_approval_view gives it (security review of 0.34.0, finding 3). A
+      // marker is a speed bump: a shell without one runs as the person.
+      if (agentMarker(env) !== null || (env[MCP_SERVER_MARKER] ?? '') !== '') {
+        print(
+          approvalViewForAgent(
+            await approvalView(approvalId, options.digest as string, { ...controlOptions(program), agentView: true }),
+          ),
+        );
+        return;
+      }
       const result = await approvalView(approvalId, options.digest as string, controlOptions(program));
       if (program.opts<EventsCliOptions>().json) print(result);
       else {
@@ -816,7 +831,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -846,12 +861,29 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         : readsOutput(env, streams)
     )
       return PERSON_SETUP_ORIGINS.terminal;
-    // The config folder this run is for, found only when the app's origin is checked: a test build speaks only for a
-    // marked test profile's.
+    // The folders this run is for, found only when the app's origin is checked: a test build speaks only for a marked
+    // test profile's config folder, and only when every other folder the act touches is in that profile too — here
+    // the state folder, whose event service the act goes to (security review of 0.34.0, finding 1). Core's
+    // `desktopAppOrigin` takes them as `folders` (core 0.34.0); the same check runs here as well, so a core without it,
+    // and a test's injected origin, are held to it too. The event service checks its own state folder as well.
     const configDir = () => program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir: configDir() })))();
+    const stateDir = () => program.opts<EventsCliOptions>().stateDir ?? resolvePaths({ env }).stateDir;
+    const attest = () => {
+      // A variable, not a literal: a core from before `folders` takes the config folder alone.
+      const check = { configDir: configDir(), folders: [{ what: 'state folder', path: stateDir() }] };
+      return desktopAppOrigin(check);
+    };
+    const found = await (deps.desktopOrigin ?? attest)();
+    const origin =
+      found.ok && found.build === 'test' && !withinTestProfile(configDir(), stateDir())
+        ? ({ ok: false, reason: 'outside-test-profile', outside: 'state folder' } as const)
+        : found;
     if (origin.ok)
       return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
+    if (origin.reason === 'outside-test-profile') {
+      const outside = (origin as { readonly outside?: unknown }).outside;
+      throw testBuildOutsideProfile(typeof outside === 'string' ? outside : 'a folder it touches');
+    }
     if (origin.reason === 'unattested-platform') {
       if (options.unattested === 'accept') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
       throw changeAtTerminal(what, options.unattested?.words ?? 'command, with the same words');
@@ -949,9 +981,36 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
       const origin = await personSetupOrigin('approve a rule', {
         where: 'Events → Rules, Review and approve',
+        action: 'approve',
         unattested: { words: ruleApprovalWords(approvalId) },
       });
       print(await approveRuleFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+
+  // Switching the event service on, approved in the app after the preview of what `enable-all` prepared (0.34.0 design
+  // B4): the person's own act, as a rule's approval is, from the same origins. At a terminal the person approves with
+  // `approve`, which asks for the challenge; switching off is `disable-all`, which applies at once.
+  const collection = program
+    .command('collection')
+    .description(
+      'the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all',
+    );
+  collection
+    .command('approve <approval-id>')
+    .description(
+      'approve switching the event service on — the approval enable-all prepared — from the Agent Comms app, after its preview, as the person',
+    )
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      // As for a rule: Windows and Linux attest nothing, so there the person is sent to their terminal; the owner
+      // refuses the same origin too.
+      const origin = await personSetupOrigin('switch the event service on', {
+        where: 'Events → Service, Switch on',
+        action: 'approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
+      print(await approveEnableAllFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
     });
 
   // Settings → Integrations: what the person's Linear key can see (0.33.0 design §3.4), and where their claude-stream
