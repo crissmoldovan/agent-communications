@@ -317,6 +317,11 @@ test('on Windows and Linux, where nothing attests the app, an approval in the ap
       assert.equal((error.details as { reason?: string }).reason, 'ORIGIN_UNATTESTED');
       assert.match(error.message, /nothing on this platform attests that the Agent Comms app started this/u);
       assert.match(error.message, /at your terminal/u);
+      // The words to type there are the command that was run — its own, located — never another command's (0.34.0).
+      assert.match(
+        String(error.hint),
+        /^In the app, press Approve in Terminal; or run `.+ policy chat`( \(PowerShell\))? at your own terminal\.$/u,
+      );
       return true;
     },
   );

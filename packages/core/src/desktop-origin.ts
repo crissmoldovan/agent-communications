@@ -1,8 +1,9 @@
 /**
  * Where the desktop app's own approvals come from (0.32.0, after the release's security reviews of 2026-10-26).
  *
- * The app answers two kinds of approval as the person's act — adding a server to an app (core's `mcp install
- * --app-approval`) and judge setup and AI provider keys (the event service) — by running a CLI with no terminal. On
+ * The app answers two kinds of approval as the person's act — core's changes (`--app-approval`: adding servers to an
+ * app with `mcp install`, and from 0.34.0 the agent label, what agents may do, and `update`) and judge setup and AI
+ * provider keys (the event service) — by running a CLI with no terminal. On
  * macOS the CLI checks that the app started this process: codesign verifies the running parent, by its pid, against
  * Agent Comms' requirement. That is a speed bump against agents, not a boundary against code running as you: code
  * running as the person can approve in-process anyway.
