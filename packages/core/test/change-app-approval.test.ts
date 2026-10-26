@@ -172,15 +172,21 @@ async function standing(core: Core): Promise<{ state: string; via: string | unde
   return { state: stateOf(record), via: record.form === 'v2' ? record.record.approvedVia : undefined };
 }
 
-test('an app approval is checked against this exact change before it is answered: another change leaves it untouched', async () => {
+test('an app approval is checked against this exact change before it is answered: another change voids it', async () => {
   const { core } = coreWith('never');
   const approvalId = await prepared(core, setSendPolicy(core, 'chat'));
   await assert.rejects(
     gatedChangeAtTerminal(core, setSendPolicy(core, 'confirm'), { ...APP, appApproval: approvalId }),
-    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_REQUIRED',
+    (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_VOID',
   );
   assert.equal(await policyNow(core), 'never');
-  assert.deepEqual(await standing(core), { state: 'pending', via: undefined }, 'never answered');
+  // Never answered, and void (the security review of 0.34.0, finding 4): as a claim for another change voids it.
+  assert.deepEqual(await standing(core), { state: 'revoked', via: undefined });
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'chat'), { ...APP, appApproval: approvalId }),
+    CommsError,
+  );
+  assert.equal(await policyNow(core), 'never', 'nor used for the change it was prepared for');
 });
 
 /*
@@ -317,6 +323,11 @@ test('on Windows and Linux, where nothing attests the app, an approval in the ap
       assert.equal((error.details as { reason?: string }).reason, 'ORIGIN_UNATTESTED');
       assert.match(error.message, /nothing on this platform attests that the Agent Comms app started this/u);
       assert.match(error.message, /at your terminal/u);
+      // The words to type there are the command that was run — its own, located — never another command's (0.34.0).
+      assert.match(
+        String(error.hint),
+        /^In the app, press Approve in Terminal; or run `.+ policy chat`( \(PowerShell\))? at your own terminal\.$/u,
+      );
       return true;
     },
   );
@@ -343,6 +354,67 @@ test('on Windows and Linux, where nothing attests the app, an approval in the ap
       appApproval: again,
     }),
     (error: unknown) => error instanceof CommsError && error.code === 'APPROVAL_REQUIRED',
+  );
+});
+
+/*
+ * The security review of 0.34.0 (finding 2, low): a refusal on the app path was audited with surface `app` even when the
+ * caller had just been shown not to be the app — an agent's shell, an MCP server's process, a parent that is not Agent
+ * Comms, an origin nothing attests. `app` is now recorded only for an attested origin; every other refusal is the CLI's,
+ * and its line says why.
+ */
+test("the audit says `app` only for an attested origin: every other refusal is the CLI's, with why it was refused", async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const cases = [
+    { why: 'an agent', options: { env: { CLAUDECODE: '1' } }, reason: /not an agent \(marker CLAUDECODE\)/u },
+    {
+      why: 'an MCP server',
+      options: { env: { AGENTCOMMS_MCP_SERVER: 'gmail' } },
+      reason: /an MCP server's process is not the app \(marker AGENTCOMMS_MCP_SERVER: MCP_SERVER_PROCESS\)/u,
+    },
+    {
+      why: 'not the app',
+      options: { appOrigin: async (): Promise<DesktopOrigin> => ({ ok: false, reason: 'not-agent-comms' }) },
+      reason: /was not started by it \(not-agent-comms\)/u,
+    },
+    {
+      why: 'nothing attests',
+      options: { appOrigin: async (): Promise<DesktopOrigin> => ({ ok: false, reason: 'unattested-platform' }) },
+      reason: /nothing on this platform attests .* \(ORIGIN_UNATTESTED\)/u,
+    },
+  ];
+  for (const one of cases) {
+    await assert.rejects(gatedChangeAtTerminal(core, change, { ...APP, ...one.options, appApproval: approvalId }));
+  }
+  const refused = (await auditLines(core)).filter((line) => line.operation === 'change.approve');
+  assert.deepEqual(
+    refused.map((line) => [line.outcome, line.surface]),
+    cases.map(() => ['refused', 'cli']),
+    'none of them was the app',
+  );
+  for (const [index, one] of cases.entries()) assert.match(String(refused[index]?.reason), one.reason, one.why);
+  assert.equal(refused.at(-1)?.approvedBy, 'desktop-app (unattested)', 'the origin it refused, named as unattested');
+
+  // The attested app: its refusal, for another change, and its approval are the app's.
+  await assert.rejects(
+    gatedChangeAtTerminal(core, setSendPolicy(core, 'confirm'), { ...APP, appApproval: approvalId }),
+    CommsError,
+  );
+  const { core: other } = coreWith('never');
+  const again = await prepared(other, setSendPolicy(other, 'chat'));
+  await gatedChangeAtTerminal(other, setSendPolicy(other, 'chat'), { ...APP, appApproval: again });
+  const attested = [
+    ...(await auditLines(core)).filter((line) => line.operation === 'change.approve').slice(cases.length),
+    ...(await auditLines(other)).filter((line) => line.operation === 'change.approve'),
+  ];
+  assert.deepEqual(
+    attested.map((line) => [line.outcome, line.surface]),
+    [
+      ['refused', 'app'],
+      ['ok', 'app'],
+    ],
   );
 });
 

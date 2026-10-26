@@ -646,6 +646,18 @@
       "reason": "`agentcomms mcp install` registers the core server; comms_server_install registers any channel's, and with `channel: \"core\"` is this command."
     },
     {
+      "id": "core.mcp.install.several",
+      "package": "core",
+      "cli": "mcp install",
+      "mcp": "comms_server_install",
+      "status": "both",
+      "operation": "serverInstallsChange",
+      "argv": ["--client", "claude-code", "--server", "gmail,slack"],
+      "args": { "servers": ["gmail", "slack"], "client": "claude-code" },
+      "expect": { "request.servers": ["gmail", "slack"], "request.client": "claude-code" },
+      "reason": "Several servers for one client as one change (design 2026-10-26-desktop-0340, B3): `agentcomms mcp install --server <a,b,…>` and comms_server_install with `servers` run the same operation — one plan, one preview naming every server, one approval, each registered in order, the first failure stopping the rest. One server stays the single-install row's operation."
+    },
+    {
       "id": "core.mcp.prune",
       "package": "core",
       "cli": "mcp prune",
@@ -2841,6 +2853,21 @@
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
       "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+    },
+    {
+      "id": "events-daemon.collection.approve",
+      "package": "events-daemon",
+      "cli": "collection approve",
+      "mcp": null,
+      "status": "exception",
+      "operation": "approveEnableAllFromApp",
+      "argv": [
+        "ap_00000000000000000000000000",
+        "--digest",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expect": { "approvalId": "ap_00000000000000000000000000" },
+      "reason": "Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a rule's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.rule.analyse",

@@ -34,7 +34,8 @@ export function assertNotMcpServer(
     | 'analyse'
     | 'integration'
     | 'relay'
-    | 'sessions' = 'read',
+    | 'sessions'
+    | 'approve' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -97,6 +98,11 @@ export function assertNotMcpServer(
       message:
         "where Agent Comms finds your claude-stream relay is for a person, at a terminal or in the app — the event service's MCP server cannot read or change it",
       hint: 'An agent can ask the person to set it in the app: Settings → Integrations → Agent sessions.',
+    },
+    // A rule's activation, or switching the event service on, approved in the app (0.33.0 §3.1, 0.34.0 B4): the person's.
+    approve: {
+      message: "approving is for a person, in the app or at a terminal — the event service's MCP server cannot do it",
+      hint: 'An agent gives the person the approval id and its preview; they approve it in the Agent Comms app, or with approve <approval-id> at their terminal.',
     },
     // The busy queue (0.33.0 §3.5): the person's to read and drop from; a bound window sees its own lane's over MCP.
     sessions: {

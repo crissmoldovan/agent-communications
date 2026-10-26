@@ -11,7 +11,8 @@ import { Avatar, Breadcrumb, Chip, Panel, SegmentedControl } from '@cueplusplus/
 import { type ReactNode, useState } from 'react';
 import type { BehaviourReport, LabelReport } from '../../cli-types.ts';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
-import { AgentsHere, type Read } from './AgentsHere.tsx';
+import type { Read } from '../Agent.tsx';
+import { AgentsHere } from './AgentsHere.tsx';
 import { isActing } from './acts.ts';
 
 export const ACCOUNT_PAGE_COPY = {

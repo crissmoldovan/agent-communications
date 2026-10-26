@@ -4,7 +4,7 @@ import { paint } from './cli-runtime.ts';
 import { type CliHandoffs, handoffSentence } from './handoffs.ts';
 import type { InstallResult, PruneResult } from './mcp-install.ts';
 import type { DoctorReport } from './operations/maintenance.ts';
-import type { PruneAllResult } from './operations/servers.ts';
+import type { PruneAllResult, ServerInstallsResult } from './operations/servers.ts';
 import type { UpdateItem, UpdateReport, UpdateResult } from './operations/update.ts';
 import type { UpdateStatus } from './operations/update-status.ts';
 
@@ -447,6 +447,13 @@ export function renderInstall(result: InstallResult, color: boolean): string {
   } else lines.push(paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`));
   for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
   return lines.join('\n');
+}
+
+/** What `mcp install --server a,b,c` prints: each server's own lines, under its name, in the order they went in. */
+export function renderInstalls(result: ServerInstallsResult, color: boolean): string {
+  return result.results
+    .map((one) => `${paint(color, 'bold', `${serverLabel(one.server)}:`)}\n${renderInstall(one, color)}`)
+    .join('\n\n');
 }
 
 /**

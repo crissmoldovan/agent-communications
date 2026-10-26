@@ -36,7 +36,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Connections New',
     'Approvals',
     'Activity',
-    'Agent',
+    'Your agents',
     'Updates',
     'Events',
     'Doctor',

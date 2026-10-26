@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -25,6 +25,8 @@ import { tempDir } from './helpers/temp.ts';
 const RELEASE_APP = '/Applications/Agent Comms.app/Contents/MacOS/agentcomms-desktop';
 /** The real default config folder, as core resolves it with no pin, and a test profile's, marked as the script marks it. */
 const REAL_CONFIG = '/example/home/.config/agent-communications';
+/** The account's own home, as `os.userInfo()` would name it, and its config folder: never the real ones in a test. */
+const REAL = { realHome: '/example/home', defaultConfigDir: REAL_CONFIG };
 function testProfile(marked = true): string {
   const dir = tempDir('origin-profile-');
   if (marked) writeFileSync(join(dir, TEST_PROFILE_MARKER), '');
@@ -103,30 +105,25 @@ test('the test app is accepted only for a marked test profile, never the real on
     satisfies: ['test'],
   });
   const profile = testProfile();
-  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, configDir: profile, defaultConfigDir: REAL_CONFIG }), {
+  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, configDir: profile, ...REAL }), {
     ok: true,
     build: 'test',
     identifier: DESKTOP_TEST_IDENTIFIER,
   });
   // A folder the script did not mark: any home-made ad-hoc app with the test identifier, beside any install of the CLI.
-  const unmarked = await desktopAppOrigin({
-    ...DARWIN,
-    exec,
-    configDir: testProfile(false),
-    defaultConfigDir: REAL_CONFIG,
-  });
+  const unmarked = await desktopAppOrigin({ ...DARWIN, exec, configDir: testProfile(false), ...REAL });
   assert.equal(unmarked.ok ? '' : unmarked.reason, 'not-a-test-profile');
   // The real, default folder, even marked.
   const real = testProfile();
-  const atReal = await desktopAppOrigin({ ...DARWIN, exec, configDir: real, defaultConfigDir: real });
+  const atReal = await desktopAppOrigin({ ...DARWIN, exec, configDir: real, ...REAL, defaultConfigDir: real });
   assert.equal(atReal.ok ? '' : atReal.reason, 'test-app-with-real-profile');
   // No folder named: nothing to check, so nothing accepted.
-  const unknown = await desktopAppOrigin({ ...DARWIN, exec, defaultConfigDir: REAL_CONFIG });
+  const unknown = await desktopAppOrigin({ ...DARWIN, exec, ...REAL });
   assert.equal(unknown.ok ? '' : unknown.reason, 'test-profile-unknown');
   // A marker that is a link, not the file the script writes, does not count.
   const linked = testProfile(false);
   symlinkSync(join(profile, TEST_PROFILE_MARKER), join(linked, TEST_PROFILE_MARKER));
-  const viaLink = await desktopAppOrigin({ ...DARWIN, exec, configDir: linked, defaultConfigDir: REAL_CONFIG });
+  const viaLink = await desktopAppOrigin({ ...DARWIN, exec, configDir: linked, ...REAL });
   assert.equal(viaLink.ok ? '' : viaLink.reason, 'not-a-test-profile');
   // The release needs no marker: it speaks for any folder, the real one included.
   const release = machine({ parent: RELEASE_APP, satisfies: ['release'] });
@@ -135,6 +132,112 @@ test('the test app is accepted only for a marked test profile, never the real on
       .ok,
     true,
   );
+});
+
+/** A test profile as `local-test-release.sh` lays it out: `<root>/config` (marked), `state`, `data`, `config/secrets`. */
+function scriptProfile(): { root: string; configDir: string; stateDir: string; dataDir: string; secretsDir: string } {
+  const root = tempDir('origin-agentcomms-test-');
+  const configDir = join(root, 'config');
+  const stateDir = join(root, 'state');
+  const dataDir = join(root, 'data');
+  mkdirSync(configDir);
+  mkdirSync(stateDir);
+  mkdirSync(join(dataDir, 'launch'), { recursive: true });
+  writeFileSync(join(configDir, TEST_PROFILE_MARKER), '');
+  return { root, configDir, stateDir, dataDir, secretsDir: join(configDir, 'secrets') };
+}
+
+/** A home of its own standing in for the person's account (`os.userInfo().homedir`), with their real folders in it. */
+function account(): { home: string; config: string; state: string; data: string } {
+  const home = tempDir('origin-account-');
+  const config = join(home, '.config', 'agent-communications');
+  const data = join(home, '.local', 'share', 'agent-communications');
+  mkdirSync(join(config, 'state'), { recursive: true });
+  mkdirSync(data, { recursive: true });
+  return { home, config, state: join(config, 'state'), data };
+}
+
+const TEST_APP = '/example/home/Applications/Agent Comms Test.app/Contents/MacOS/x';
+const refusedFor = (origin: Awaited<ReturnType<typeof desktopAppOrigin>>) =>
+  origin.ok ? 'accepted' : `${origin.reason}${origin.outside === undefined ? '' : `: ${origin.outside}`}`;
+
+/*
+ * The security review of 0.34.0 (finding 1, low): the test build was held only to its config folder, and the person's
+ * real one was worked out from `HOME` and `XDG_CONFIG_HOME`, which whoever starts the command sets. `update` and `mcp
+ * install` change the data folder's launchers and runtimes and the apps' configs whatever the config folder is. Now
+ * every folder the command touches must be inside the marked test profile, and the person's real folders are found from
+ * the account itself.
+ */
+test('the test app speaks for a command only when every folder it touches is inside the marked test profile', async () => {
+  const { exec } = machine({ parent: TEST_APP, satisfies: ['test'] });
+  const person = account();
+  const profile = scriptProfile();
+  const folders = (over: Partial<Record<'state' | 'data' | 'secrets', string>> = {}) => [
+    { what: 'state folder', path: over.state ?? profile.stateDir },
+    { what: 'data folder', path: over.data ?? profile.dataDir },
+    { what: 'secrets folder', path: over.secrets ?? profile.secretsDir },
+  ];
+  const check = (extra: { what: string; path: string | undefined }[]) =>
+    desktopAppOrigin({ ...DARWIN, exec, realHome: person.home, configDir: profile.configDir, folders: extra });
+
+  // The genuine test profile, as the script writes it: accepted, as the test build.
+  assert.deepEqual(await check(folders()), { ok: true, build: 'test', identifier: DESKTOP_TEST_IDENTIFIER });
+  // A marked test config beside the person's real state or data: refused, naming the folder.
+  assert.equal(refusedFor(await check(folders({ state: person.state }))), 'outside-test-profile: state folder');
+  assert.equal(refusedFor(await check(folders({ data: person.data }))), 'outside-test-profile: data folder');
+  // Inside the profile by its path, and the real data folder by a link: refused by where it really is.
+  symlinkSync(person.data, join(profile.root, 'linked-data'));
+  assert.equal(
+    refusedFor(await check(folders({ data: join(profile.root, 'linked-data') }))),
+    'outside-test-profile: data folder',
+  );
+  // A folder the command touches that has no name here is not inside anything.
+  assert.equal(
+    refusedFor(await check([...folders(), { what: "npm's global folder", path: undefined }])),
+    "outside-test-profile: npm's global folder",
+  );
+  // A command that writes the apps' configs reaches the home folder too: the person's own is refused, the profile's not.
+  assert.equal(
+    refusedFor(await check([...folders(), { what: 'home folder', path: person.home }])),
+    'outside-test-profile: home folder',
+  );
+  assert.equal(
+    refusedFor(await check([...folders(), { what: 'home folder', path: join(profile.root, 'home') }])),
+    'accepted',
+  );
+});
+
+test("the person's real folders are found from the account itself, whatever the environment the command was given says", async () => {
+  const { exec } = machine({ parent: TEST_APP, satisfies: ['test'] });
+  const person = account();
+  const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, HOME: process.env.HOME };
+  // Whoever starts the command sets these: an elsewhere for the "real" folder, so the real one looks like a test's.
+  process.env.XDG_CONFIG_HOME = tempDir('origin-elsewhere-');
+  process.env.HOME = tempDir('origin-elsewhere-home-');
+  try {
+    // The person's real config folder, marked: still theirs.
+    writeFileSync(join(person.config, TEST_PROFILE_MARKER), '');
+    const atReal = await desktopAppOrigin({ ...DARWIN, exec, realHome: person.home, configDir: person.config });
+    assert.equal(refusedFor(atReal), 'test-app-with-real-profile');
+    // A marked config whose profile is the account's home, or holds its real folders: refused.
+    for (const configDir of [join(person.home, 'config'), join(person.home, '.local', 'config')]) {
+      mkdirSync(configDir, { recursive: true });
+      writeFileSync(join(configDir, TEST_PROFILE_MARKER), '');
+      const origin = await desktopAppOrigin({ ...DARWIN, exec, realHome: person.home, configDir, folders: [] });
+      assert.equal(refusedFor(origin), 'test-profile-holds-real-folders', configDir);
+    }
+    // And a profile inside one of the real folders.
+    const nested = join(person.data, 'profile', 'config');
+    mkdirSync(nested, { recursive: true });
+    writeFileSync(join(nested, TEST_PROFILE_MARKER), '');
+    const inside = await desktopAppOrigin({ ...DARWIN, exec, realHome: person.home, configDir: nested, folders: [] });
+    assert.equal(refusedFor(inside), 'test-profile-holds-real-folders');
+  } finally {
+    for (const [name, value] of Object.entries(saved)) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
+  }
 });
 
 test("the local test release marks its test profile's config folder with this marker, and nothing else", () => {

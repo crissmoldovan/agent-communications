@@ -20,7 +20,8 @@ pub const MCP_APP_APPROVAL_VERSION: &str = "0.32.0";
 impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
     /// `mcpInstall` of the same app and server, and `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
-    /// with, for the same digest (0.33.0). None for every other call.
+    /// with, for the same digest (0.33.0); and a label change with `appApproval` the same change without it (0.34.0,
+    /// `label`). None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -73,7 +74,8 @@ impl Call {
                     style: *style,
                 },
             )),
-            _ => None,
+            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
+            _ => self.answers_label_approval(),
         }
     }
 }

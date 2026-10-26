@@ -1,8 +1,9 @@
 /**
  * Where the desktop app's own approvals come from (0.32.0, after the release's security reviews of 2026-10-26).
  *
- * The app answers two kinds of approval as the person's act — adding a server to an app (core's `mcp install
- * --app-approval`) and judge setup and AI provider keys (the event service) — by running a CLI with no terminal. On
+ * The app answers two kinds of approval as the person's act — core's changes (`--app-approval`: adding servers to an
+ * app with `mcp install`, and from 0.34.0 the agent label, what agents may do, and `update`) and judge setup and AI
+ * provider keys (the event service) — by running a CLI with no terminal. On
  * macOS the CLI checks that the app started this process: codesign verifies the running parent, by its pid, against
  * Agent Comms' requirement. That is a speed bump against agents, not a boundary against code running as you: code
  * running as the person can approve in-process anyway.
@@ -12,7 +13,10 @@
  * - **The local test build** (`scripts/local-test-release.sh`) is ad-hoc signed, with no team: its running code must say
  *   `com.cueplusplus.agentcomms.test`, and since any home-made ad-hoc app can say that, it speaks only for a test
  *   profile — a config folder that holds the script's marker, `.agentcomms-test-profile`, and is not the person's real,
- *   default one. Its approvals are audited as the test build's, never as the release's.
+ *   default one — and only when every other folder the command touches is inside that profile too: its state, data and
+ *   secrets folders, and the home folder the apps' configs are in for one that registers servers (the security review of
+ *   0.34.0, finding 1). The person's real folders are found from the account's own home, which no variable moves. Its
+ *   approvals are audited as the test build's, never as the release's.
  *
  * The parent's path (`ps -o comm=`) is argv[0], which a process sets itself (`exec -a`): it is read only for the
  * refusal's message, and never decides anything. The launchers `exec` Node, so the app is this process's parent.
@@ -22,12 +26,27 @@
  */
 import { execFile } from 'node:child_process';
 import { lstatSync, realpathSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { resolvePaths } from './paths.ts';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { APP_DIR_NAME, accountHome } from './paths.ts';
 
 export type DesktopOrigin =
   | { ok: true; build: 'release' | 'test'; identifier: string }
-  | { ok: false; reason: string; parent?: string };
+  | {
+      ok: false;
+      reason: string;
+      parent?: string;
+      /** For `outside-test-profile`: which folder the command touches that the test profile does not hold. */
+      outside?: string;
+    };
+
+/**
+ * A folder a command touches, besides its config folder, by what it is to a person — `data folder`, `home folder` —
+ * and where it is; a path left undefined is one the command reaches and nothing here names, such as npm's own default.
+ */
+export interface TouchedFolder {
+  readonly what: string;
+  readonly path: string | undefined;
+}
 
 /** Runs a program, by its full path and never through a shell, and gives back what it printed; rejects on failure. */
 export type ExecFn = (file: string, args: readonly string[]) => Promise<string>;
@@ -71,8 +90,16 @@ export async function desktopAppOrigin(
     exec?: ExecFn | undefined;
     /** The config folder the approval is for: a test build speaks only for a marked test profile's. */
     configDir?: string | undefined;
-    /** The person's real config folder, as core resolves it with no folder named; worked out when left out. */
+    /**
+     * Every other folder the command will touch — its state, data and secrets folders, and for a command that writes
+     * the apps' configs or npm's global packages, those too. A test build speaks only when each is inside the marked
+     * test profile (the security review of 0.34.0, finding 1). Left out, only the config folder is checked.
+     */
+    folders?: readonly TouchedFolder[] | undefined;
+    /** The person's real config folder; worked out from the account's own home when left out. */
     defaultConfigDir?: string | undefined;
+    /** The account's own home (`os.userInfo().homedir`), which no variable moves; a test names one of its own. */
+    realHome?: string | undefined;
   } = {},
 ): Promise<DesktopOrigin> {
   const platform = deps.platform ?? process.platform;
@@ -100,15 +127,78 @@ export async function desktopAppOrigin(
   }
   if (await satisfies(DESKTOP_TEST_REQUIREMENT)) {
     // Any home-made ad-hoc app can say the test identifier: it speaks only for a test profile the script marked, and
-    // never for the person's real, default folder.
+    // never for the person's real, default folders, nor for anything the command touches outside the profile.
     if (deps.configDir === undefined) return { ok: false, reason: 'test-profile-unknown' };
-    const real =
-      deps.defaultConfigDir ?? resolvePaths({ env: { ...process.env, AGENT_COMMS_CONFIG_DIR: '' } }).configDir;
-    if (sameFolder(deps.configDir, real)) return { ok: false, reason: 'test-app-with-real-profile' };
-    if (!isPlainFile(join(deps.configDir, TEST_PROFILE_MARKER))) return { ok: false, reason: 'not-a-test-profile' };
-    return { ok: true, build: 'test', identifier: DESKTOP_TEST_IDENTIFIER };
+    return testProfileOrigin(deps.configDir, deps.folders ?? [], deps.realHome ?? accountHome(), deps.defaultConfigDir);
   }
   return { ok: false, reason: 'not-agent-comms', ...(parent === undefined ? {} : { parent }) };
+}
+
+/**
+ * The test build's origin, for the folders a command touches (the security review of 0.34.0, finding 1).
+ *
+ * The person's real folders are where core puts them for the account's own home — the config folder (with state and
+ * secrets in it) and the data folder — worked out from that home alone: `HOME`, `XDG_CONFIG_HOME` and the rest are set
+ * by whoever starts the command, so they can make the real folder look like any other. The test profile is the folder
+ * that holds the marked config folder, as `local-test-release.sh` writes it (`<profile>/config`). It must not be the
+ * account's home, hold any of the real folders, or sit inside one; and every folder the command touches must be inside
+ * it, by its path and by where it really is, links followed. Only paths are compared; nothing in them is read.
+ */
+function testProfileOrigin(
+  configDir: string,
+  folders: readonly TouchedFolder[],
+  home: string,
+  defaultConfigDir: string | undefined,
+): DesktopOrigin {
+  const realConfig = defaultConfigDir ?? join(home, '.config', APP_DIR_NAME);
+  const real = [realConfig, join(home, '.local', 'share', APP_DIR_NAME)];
+  if (sameFolder(configDir, realConfig)) return { ok: false, reason: 'test-app-with-real-profile' };
+  if (!isPlainFile(join(configDir, TEST_PROFILE_MARKER))) return { ok: false, reason: 'not-a-test-profile' };
+  const profile = dirname(resolve(configDir));
+  if (overlaps(home, profile) || real.some((folder) => overlaps(folder, profile) || overlaps(profile, folder))) {
+    return { ok: false, reason: 'test-profile-holds-real-folders' };
+  }
+  for (const { what, path } of folders) {
+    if (path === undefined || !containedIn(path, profile))
+      return { ok: false, reason: 'outside-test-profile', outside: what };
+  }
+  return { ok: true, build: 'test', identifier: DESKTOP_TEST_IDENTIFIER };
+}
+
+/** Whether `child` is `parent` or inside it, as paths. */
+function within(child: string, parent: string): boolean {
+  const path = relative(parent, child);
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+/**
+ * Where a path really is, links followed: its nearest folder that is there, resolved, and the rest of it after that. A
+ * path that is not there yet is where it would be made.
+ */
+function whereItIs(path: string): string {
+  const absolute = resolve(path);
+  let folder = absolute;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      return join(realpathSync(folder), ...rest);
+    } catch {
+      const parent = dirname(folder);
+      if (parent === folder) return absolute;
+      rest.unshift(basename(folder));
+      folder = parent;
+    }
+  }
+}
+
+/** Inside `parent` both by its path and by where it really is: a link out of the profile is not in it. */
+function containedIn(child: string, parent: string): boolean {
+  return within(resolve(child), resolve(parent)) && within(whereItIs(child), whereItIs(parent));
+}
+
+/** Inside `parent` by its path or by where it really is: either way it is the person's. */
+function overlaps(child: string, parent: string): boolean {
+  return within(resolve(child), resolve(parent)) || within(whereItIs(child), whereItIs(parent));
 }
 
 /** Whether two folders are one: by their real paths when both are there, by their resolved paths otherwise. */

@@ -412,8 +412,9 @@ export interface ApprovalRecord {
   /**
    * Where a person approved, or answered: the terminal, or a trusted client's form. Absent on a chat-route claim.
    * `standing` on a standing approval's child, and on nothing else: the person approved it in advance, at a terminal.
-   * `app` on a change, and on no other kind: the person approved it in the desktop app (0.32.0, `mcp install`'s
-   * `--app-approval`), the way judge setup's disclosures are approved there.
+   * `app` on a change, and on no other kind: the person approved it in the desktop app (`--app-approval`: `mcp install`
+   * from 0.32.0; `label`, `behaviour allow|clear` and `update` from 0.34.0), the way judge setup's disclosures are
+   * approved there.
    */
   approvedVia?: ApprovalChannel | 'standing' | 'app' | undefined;
   /** A send's or a change's approval: when, and the binding the person approved, which must still be the record's. */

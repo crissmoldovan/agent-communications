@@ -36,6 +36,7 @@ import { useCall } from '../../hooks/use-call.ts';
 import { useReloadOnReturn } from '../../hooks/use-reload-on-return.ts';
 import type { Call } from '../../ipc.ts';
 import { useNavigate } from '../../navigation.tsx';
+import type { Read } from '../Agent.tsx';
 import {
   ACTS,
   type ActingChannel,
@@ -51,12 +52,6 @@ import {
   switchCall,
 } from './acts.ts';
 import { type Flow, useFlow } from './change-flow.tsx';
-
-/** A read a section shows, and asks again after a change. */
-export interface Read<T> {
-  result: Loadable<T>;
-  reload(): Promise<void>;
-}
 
 /** The page's words that are not a sentence about one change. */
 export const AGENTS_HERE_COPY = {
