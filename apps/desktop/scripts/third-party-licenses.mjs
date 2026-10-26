@@ -200,12 +200,36 @@ export function packagesOf(ids, problems, { app = APP, root = ROOT, vite = () =>
       continue;
     }
     if (file !== null && comparable(file).startsWith(own) && !comparable(file).includes('/node_modules/')) continue;
+    // The repository's own code the app imports from a package's source — the rule text of `@agentcomms/events`
+    // (0.33.0) — is the app's own, under the app's own licence: no third party's, so no notice.
+    if (owner.kind === 'workspace' && firstPartySource(owner.file, root, app)) continue;
     problems.push(
       `the app's bundle includes ${JSON.stringify(id.replace(own, ''))}, which is neither the app's code nor an ` +
         'installed package, so there is no licence to name for it',
     );
   }
   return found;
+}
+
+/**
+ * Whether `file` is the source of one of this repository's own packages (`packages/<name>/src/…`), an `@agentcomms/*`
+ * package under the app's own licence. A package's vendored data, or anything outside its `src`, is not.
+ */
+export function firstPartySource(file, root = ROOT, app = APP) {
+  const packages = `${comparable(root).replace(/\/$/, '')}/packages/`;
+  const candidate = comparable(file);
+  if (!candidate.startsWith(packages)) return false;
+  const [name, top] = candidate.slice(packages.length).split('/');
+  if (!name || top !== 'src') return false;
+  try {
+    const manifest = JSON.parse(readFileSync(join(root, 'packages', name, 'package.json'), 'utf8'));
+    const ours = JSON.parse(readFileSync(join(app, 'package.json'), 'utf8'));
+    return (
+      typeof manifest.name === 'string' && manifest.name.startsWith('@agentcomms/') && manifest.license === ours.license
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** The JavaScript packages in the app's bundle, with the packages its stylesheets import. */
