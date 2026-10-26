@@ -64,14 +64,13 @@ describe('the marks and the swipe, in the source', () => {
         lists += 1;
       }
     }
-    expect(lists).toBe(5);
+    expect(lists).toBe(4);
   });
 
-  it('every tab strip is a page-level one, on the five screens that have one, and swipes', () => {
+  it('every tab strip is a page-level one, on the four screens that have one, and swipes', () => {
     const roots = files.flatMap(([path, text]) => openingTags(text, 'Tabs.Root').map((tag) => [path, tag] as const));
     expect(roots.map(([path]) => path).sort()).toEqual([
       'screens/Accounts.tsx',
-      'screens/Agent.tsx',
       'screens/Approvals.tsx',
       'screens/Events.tsx',
       'screens/Queue.tsx',

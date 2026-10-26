@@ -21,7 +21,7 @@ const LABELS: Record<Screen, string> = {
   connections: 'Connections New',
   approvals: 'Approvals',
   activity: 'Activity',
-  agent: 'Agent',
+  agent: 'Your agents',
   updates: 'Updates',
   events: 'Events',
   doctor: 'Doctor',
@@ -50,6 +50,7 @@ describe('what each CLI version supports', () => {
       judgeSetup: '0.32.0',
       messages: '0.32.0',
       ruleEditor: '0.33.0',
+      labelChanges: '0.34.0',
     });
     // Judge setup and AI provider keys are the event service's from 0.32.0, a pull request's build of it included.
     expect(supports('0.31.0', 'judgeSetup')).toBe(false);
@@ -113,7 +114,8 @@ describe('the gated sections', () => {
         ['Needs 0.24.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.'],
       ],
       ['accounts', ['Needs 0.22.0 or later; this machine has 0.21.0.']],
-      ['agent', ['Needs 0.22.0 or later; this machine has 0.21.0.', 'Needs 0.23.0 or later; this machine has 0.21.0.']],
+      // Your agents shows the label read-only before 0.34.0, and reads nothing behaviour needs before 0.22.0.
+      ['agent', ['Needs 0.34.0 or later; this machine has 0.21.0.']],
       ['updates', ['Needs 0.24.0 or later; this machine has 0.21.0.']],
       ['activity', ['Needs 0.29.0 or later; this machine has 0.21.0.']],
       // The queue is gated on the events service's own version, which the fake bridge gives as 0.24.0.
@@ -144,6 +146,10 @@ describe('the gated sections', () => {
       'queueDismiss',
       'queueReopen',
       'queueClear',
+      'labelWord',
+      'labelName',
+      'labelRuleAdd',
+      'labelRuleRemove',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.
@@ -154,7 +160,8 @@ describe('the gated sections', () => {
     const bridge = createFakeBridge();
     renderApp(bridge);
     await advance(0);
-    for (const name of ['overview', 'accounts', 'agent', 'updates'] as const) {
+    // Your agents changes the label from 0.34.0 (`your-agents.test.tsx`): before it, its update line is the one there.
+    for (const name of ['overview', 'accounts', 'updates'] as const) {
       const main = await open(name);
       expect(within(main).queryByText(COPY.updateToUse)).toBeNull();
     }

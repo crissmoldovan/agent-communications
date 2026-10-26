@@ -15,7 +15,9 @@ import type { Screen } from './copy.ts';
 export type Destination =
   | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' }
   | { readonly screen: 'events'; readonly tab: 'judges' }
-  | { readonly screen: 'messages'; readonly eventId: string };
+  | { readonly screen: 'messages'; readonly eventId: string }
+  // Accounts at one account's page (0.34.0), from Your agents' line for it; with no account, the list.
+  | { readonly screen: 'accounts'; readonly account?: string };
 
 /** The destination asked for, until the screen it names reads it. */
 let pending: Destination | null = null;

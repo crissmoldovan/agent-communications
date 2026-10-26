@@ -82,11 +82,23 @@ export interface EventsDoctorReport {
   }[];
 }
 
+/** core `AgentLabelRule` (`packages/core/src/agent-label.ts`): who some messages on an account appear to come from. */
+export interface LabelRule {
+  account: string;
+  accountId?: string;
+  conversation?: string;
+  kinds?: string[];
+  as: 'agent' | 'me';
+}
+
 /** core `LabelReport` (`packages/core/src/operations/label.ts:125`). */
 export interface LabelReport {
   word: string;
+  /** The words there are to choose from, in core's order (L2). */
+  words?: string[];
   name: string | null;
-  rules: { text: string; matches: boolean }[];
+  /** Each rule as stored (`rule`), in words, and whether it names an account connected now. */
+  rules: { rule?: LabelRule; text: string; matches: boolean }[];
   accounts: {
     account: string;
     platform: string;
