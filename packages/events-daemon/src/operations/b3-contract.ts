@@ -22,6 +22,15 @@ import {
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import type { CanonicalJudgeDocument } from '../domain/judges.ts';
 import {
+  isActivityKey,
+  isClaudeCodeSessionId,
+  isLaneName,
+  type LaneBindingV1,
+  type LaneBindResultV1,
+  type LaneListResultV1,
+  type LaneUnbindResultV1,
+} from '../domain/lanes.ts';
+import {
   isQueueItemId,
   QUEUE_CHANNELS,
   QUEUE_JUDGE_ANSWERS,
@@ -537,6 +546,9 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'queue-dismiss': QueueStateChangeResultV1;
   readonly 'queue-reopen': QueueStateChangeResultV1;
   readonly 'queue-clear': QueueClearResultV1;
+  readonly 'lane-list': LaneListResultV1;
+  readonly 'lane-bind': LaneBindResultV1;
+  readonly 'lane-unbind': LaneUnbindResultV1;
 };
 
 /**
@@ -681,6 +693,10 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'queue-dismiss': { readonly itemId: string };
   readonly 'queue-reopen': { readonly itemId: string };
   readonly 'queue-clear': Record<string, never>;
+  /** Routing's lanes (0.31.0): the person's three, at a terminal or in the app. */
+  readonly 'lane-list': Record<string, never>;
+  readonly 'lane-bind': { readonly lane: string; readonly window: string };
+  readonly 'lane-unbind': { readonly lane: string };
 }
 
 /** `queue list`'s closed filter shape (action queue design §8); every field is optional. */
@@ -814,7 +830,7 @@ const B3_ORDINARY_RESULT_ARRAY_OPERATIONS = new Set<string>([
   'dryrun-list',
 ]);
 
-const QUEUE_SUMMARY_FIELDS = ['id', 'state', 'stateAt', 'arrivedAt', 'expiresAt', 'rule', 'channel', 'account'];
+const QUEUE_SUMMARY_FIELDS = ['id', 'state', 'stateAt', 'arrivedAt', 'expiresAt', 'rule', 'channel', 'account', 'lane'];
 
 function assertIsoTime(value: unknown, name: string): void {
   if (typeof value !== 'string' || !Number.isFinite(Date.parse(value)) || new Date(value).toISOString() !== value)
@@ -836,6 +852,7 @@ function assertQueueItemSummary(value: unknown, name: string, extra: readonly st
   assertClosedRecord(value.account, ['id', 'alias'], `${name} account`);
   assertText(value.account.id, `${name} account id`);
   if (value.account.alias !== null) assertText(value.account.alias, `${name} account alias`);
+  if (value.lane !== null && !isLaneName(value.lane)) throw new TypeError(`${name} has a malformed lane`);
 }
 
 /** A content item: its sender-written fields are envelope strings; its judge part is closed per state (Q3). */
@@ -877,6 +894,29 @@ function assertQueueStateChange(value: Readonly<Record<string, unknown>>, name: 
   if (!isQueueItemId(value.item.id)) throw new TypeError(`${name} has a malformed item id`);
   if (!QUEUE_STATES.includes(value.item.state as never)) throw new TypeError(`${name} has an unknown state`);
   assertIsoTime(value.item.stateAt, `${name} stateAt`);
+}
+
+/** A lane's binding, as `lane list` and `lane bind` give it (routing design §6's JSON contract). */
+function assertLaneBinding(value: unknown, name: string): void {
+  assertClosedRecord(value, ['window', 'since'], name);
+  assertClosedRecord(value.window, ['sessionId', 'activityKey', 'folder', 'folderShown', 'client'], `${name} window`);
+  const window = value.window;
+  if (window.sessionId !== null && !isClaudeCodeSessionId(window.sessionId))
+    throw new TypeError(`${name} has a malformed session id`);
+  if (window.activityKey !== null && !isActivityKey(window.activityKey))
+    throw new TypeError(`${name} has a malformed activity key`);
+  if (window.sessionId === null && window.activityKey === null) throw new TypeError(`${name} names no window`);
+  if (window.folder !== null) assertText(window.folder, `${name} folder`);
+  if (window.folderShown !== null) assertText(window.folderShown, `${name} folder as shown`);
+  if ((window.folder === null) !== (window.folderShown === null))
+    throw new TypeError(`${name} shows a folder only when it has one`);
+  if (window.client !== null) {
+    if (!isRecord(window.client)) throw new TypeError(`${name} client must be a closed object`);
+    assertClosedRecord(window.client, Object.hasOwn(window.client, 'version') ? ['name', 'version'] : ['name'], name);
+    assertText(window.client.name, `${name} client name`);
+    if (window.client.version !== undefined) assertText(window.client.version, `${name} client version`);
+  }
+  assertIsoTime(value.since, `${name} since`);
 }
 
 function assertTighteningPreview(value: unknown): void {
@@ -927,6 +967,9 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'queue-dismiss': ['item'],
   'queue-reopen': ['item'],
   'queue-clear': ['cleared'],
+  'lane-list': ['lanes'],
+  'lane-bind': ['lane', 'binding'],
+  'lane-unbind': ['lane', 'unbound'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1146,6 +1189,31 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       return;
     case 'queue-clear':
       assertNonNegativeInteger(value.cleared, 'a queue clear count');
+      return;
+    case 'lane-list': {
+      if (!Array.isArray(value.lanes)) throw new TypeError('a lane list result needs its lanes');
+      for (const lane of value.lanes) {
+        assertClosedRecord(lane, ['name', 'rules', 'channels', 'open', 'binding'], 'a listed lane');
+        if (!isLaneName(lane.name)) throw new TypeError('a listed lane has a malformed name');
+        if (!Array.isArray(lane.rules)) throw new TypeError('a listed lane needs its rules');
+        for (const rule of lane.rules) {
+          assertClosedRecord(rule, ['id'], 'a listed lane rule');
+          assertText(rule.id, 'a listed lane rule id');
+        }
+        if (!Array.isArray(lane.channels) || lane.channels.some((channel) => !QUEUE_CHANNELS.includes(channel)))
+          throw new TypeError('a listed lane has an unknown channel');
+        assertNonNegativeInteger(lane.open, 'a listed lane open count');
+        if (lane.binding !== null) assertLaneBinding(lane.binding, 'a listed lane binding');
+      }
+      return;
+    }
+    case 'lane-bind':
+      if (!isLaneName(value.lane)) throw new TypeError('a lane bind result has a malformed lane name');
+      assertLaneBinding(value.binding, 'a lane bind binding');
+      return;
+    case 'lane-unbind':
+      if (!isLaneName(value.lane)) throw new TypeError('a lane unbind result has a malformed lane name');
+      if (value.unbound !== true) throw new TypeError('a lane unbind result says it unbound');
       return;
     case 'dryrun-show':
       for (const field of ['deliveryId', 'ruleId', 'targetId', 'eventId', 'accountId']) assertText(value[field], field);
@@ -1387,7 +1455,26 @@ export interface B3ApprovalPreviewTerminalView {
  * preview representation; it never consumes a secret operation or claims the approval. A B3 v3 rule preview naming a
  * Laya judge also carries D11's Laya limits, rendered after the preview.
  */
-export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerminalView {
+/**
+ * What the terminal knows beside a view: each lane's binding, from the person's `lane list`. A preview of a rule that
+ * sends to a bound lane names the window that will read it (review of 0.31.0). Never part of the v1 view itself, so no
+ * MCP caller is told another window's folder through an approval view (routing B4).
+ */
+export interface B3ApprovalPreviewContext {
+  readonly lanes?: readonly { readonly name: string; readonly binding: LaneBindingV1 | null }[] | undefined;
+}
+
+/** "~/work/x (claude-code), since …": the bound window as a person recognises it. */
+function boundWindowText(binding: LaneBindingV1): string {
+  const folder = binding.window.folderShown ?? binding.window.folder ?? 'a window whose folder is not known';
+  const client = binding.window.client === null ? '' : ` (${binding.window.client.name})`;
+  return `${folder}${client}, since ${binding.since}`;
+}
+
+export function renderB3ApprovalPreviewV1(
+  value: unknown,
+  context: B3ApprovalPreviewContext = {},
+): B3ApprovalPreviewTerminalView {
   if (
     !isRecord(value) ||
     typeof value.kind !== 'string' ||
@@ -1410,8 +1497,24 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
     typeof value.challenge.expiresAt !== 'number'
   )
     throw new TypeError('a ready approval preview is malformed');
-  normaliseActivationDocument(value.preview as ActivationDocumentV1);
+  const document = normaliseActivationDocument(value.preview as ActivationDocumentV1);
   const laya = Object.hasOwn(value, 'layaJudge') ? renderLayaJudgePreviewV3(value.layaJudge) : [];
+  // Routing B2: a lane's reading is part of the approved target, so the preview says who may read it.
+  const lanes =
+    document.kind === 'rule'
+      ? [
+          ...new Set(
+            document.rule.targets.flatMap((target) =>
+              target.kind === 'queue' && target.lane !== undefined ? [target.lane.name] : [],
+            ),
+          ),
+        ].map((name) => {
+          const binding = context.lanes?.find((lane) => lane.name === name)?.binding ?? null;
+          return binding === null
+            ? `Items in lane ${name} can be read by the agent window you bind to it.`
+            : `Items in lane ${name} will be read by the window bound to it: ${boundWindowText(binding)}.`;
+        })
+      : [];
   const structured = {
     approvalId: value.approvalId,
     digest: value.digest,
@@ -1431,6 +1534,7 @@ export function renderB3ApprovalPreviewV1(value: unknown): B3ApprovalPreviewTerm
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
+      ...lanes,
       ...laya,
       `Challenge ${value.challenge.challenge}`,
       `Expires ${new Date(value.challenge.expiresAt).toISOString()}`,

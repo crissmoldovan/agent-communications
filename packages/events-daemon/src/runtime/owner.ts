@@ -6,6 +6,7 @@ import {
   type AuditLog,
   CommsError,
   type ConfigStore,
+  isCommsError,
   openCore,
   resolvePaths,
   sha256Hex,
@@ -43,6 +44,7 @@ import {
   layaJudgeTermsFor,
   registerLayaEnablementInputs,
 } from '../domain/judges.ts';
+import { type LaneWindowIdentity, parseLaneWindowIdentity } from '../domain/lanes.ts';
 import { EventDomainError, JUDGE_KIND_LAYA } from '../domain/lifecycle.ts';
 import { normaliseSourceOptions, type SourceOptions } from '../domain/source-options.ts';
 import { ImmutableVersions } from '../domain/versions.ts';
@@ -102,6 +104,7 @@ import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
 import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeTestControl } from './judge-test.ts';
+import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
 import { EventLifecycle, type EventLifecycleStatus } from './lifecycle.ts';
@@ -113,7 +116,7 @@ import {
   requirePhaseDWhatsAppVisibilitySeam,
 } from './phase-d-whatsapp-owner-composition.ts';
 import { EventProjectionStore } from './projections.ts';
-import { QueueStore } from './queue.ts';
+import { type QueueScope, QueueStore } from './queue.ts';
 import { QueueDispatcher } from './queue-dispatcher.ts';
 import { tighteningPreviewFor } from './queue-tightening.ts';
 import { recoverActivations } from './recovery.ts';
@@ -1095,6 +1098,7 @@ async function startOwnerWithLock(
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
   // The action queue's local adapter and read model: dry-run's fences, with no network path (§2's anti-goals).
+  let notifyLaneAppend: () => void = () => undefined;
   const queueDispatcher = new QueueDispatcher({
     store: database,
     cipher,
@@ -1103,6 +1107,7 @@ async function startOwnerWithLock(
     expiry,
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
+    onAppended: () => notifyLaneAppend(),
   });
   const queue = new QueueStore({
     store: database,
@@ -1113,6 +1118,9 @@ async function startOwnerWithLock(
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
+  // Routing's lanes (routing design 2026-10-25): bindings, who the bound window is, and the wake's task store.
+  const lanes = new LaneService({ store: database, queue, now });
+  notifyLaneAppend = () => lanes.notifyAppended();
   const webhook = new WebhookDispatcher({
     store: database,
     cipher,
@@ -1541,6 +1549,8 @@ async function startOwnerWithLock(
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
+      // A lane's watches and long-polls end with the service (routing §3.4).
+      lanes.close();
       try {
         await scheduler.stop();
         await control?.close();
@@ -1600,6 +1610,7 @@ async function startOwnerWithLock(
           writerQuiescer,
           request,
           queue,
+          lanes,
           ownerB3Service,
           doctorReport,
           () => connectedEventAccounts(core.config),
@@ -1682,6 +1693,7 @@ async function handleControl(
   writerQuiescer: WriterQuiescer,
   request: AuthenticatedControlRequest,
   queue: QueueStore,
+  lanes: LaneService,
   b3OwnerService: B3OwnerService | undefined,
   doctorReport: () => Promise<unknown>,
   connectedAccounts: () => Promise<readonly ConnectedEventAccount[]> = async () => [],
@@ -1690,8 +1702,14 @@ async function handleControl(
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
   if (isB3ControlOperation(request.operation)) {
     if (!b3OwnerService) throw new CommsError('USAGE', 'the local B3 control operation is not available');
+    // Routing B4 (review of 0.31.0): an agent window's delivery list leaves out every lane it is not bound to.
+    const { caller, args } =
+      request.operation === OWNER_CONTROL_WIRES.deliveriesList
+        ? splitCaller(request.args)
+        : { caller: undefined, args: request.args };
     try {
-      return await b3OwnerService.handle({ operation: request.operation, args: request.args, origin: request.origin });
+      const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
+      return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
     } catch (error) {
       // A document the domain refuses is the caller's input: its fixed reason goes back, as every other operation's does.
       if (error instanceof EventDomainError)
@@ -1726,18 +1744,46 @@ async function handleControl(
       return queue.list(request.args);
     case OWNER_CONTROL_WIRES.queueShow:
       return queue.show(request.args.itemId);
-    case OWNER_CONTROL_WIRES.queueItems:
-      return queue.items(request.args);
+    // An agent window's call carries the window it comes from (`caller`), and sees no lane item but its own lane's
+    // since it was bound (routing B3, B4); the person's — the CLI and the app — carries none, and sees everything.
+    case OWNER_CONTROL_WIRES.queueItems: {
+      const { caller, args } = splitCaller(request.args);
+      return queue.items(args, callerScope(lanes, caller));
+    }
     case OWNER_CONTROL_WIRES.queueCounts:
-      return queue.counts();
+      return queue.counts(callerScope(lanes, splitCaller(request.args).caller));
     case OWNER_CONTROL_WIRES.queueDone:
-      return queue.done(request.args.itemId);
+      return queue.done(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
     case OWNER_CONTROL_WIRES.queueDismiss:
-      return queue.dismiss(request.args.itemId);
+      return queue.dismiss(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
     case OWNER_CONTROL_WIRES.queueReopen:
-      return queue.reopen(request.args.itemId);
+      return queue.reopen(request.args.itemId, callerScope(lanes, splitCaller(request.args).caller));
     case OWNER_CONTROL_WIRES.queueClear:
       return queue.clear();
+    // Routing's lanes. `lane bind` is the person's (B1) and carries the window to bind, never a caller; `lane list`
+    // and `lane unbind` are the person's without a caller, and a window's own with one; the rest are a window's.
+    case OWNER_CONTROL_WIRES.laneList: {
+      const { caller } = splitCaller(request.args);
+      return caller === undefined ? lanes.list() : lanes.listFor(caller);
+    }
+    case OWNER_CONTROL_WIRES.laneBind:
+      if (Object.hasOwn(request.args, 'caller'))
+        throw new CommsError('APPROVAL_REQUIRED', 'binding a lane is for a person at a terminal, not an agent window');
+      return lanes.bind(request.args.lane, request.args.window);
+    case OWNER_CONTROL_WIRES.laneUnbind:
+      return lanes.unbind(request.args.lane, splitCaller(request.args).caller);
+    case OWNER_CONTROL_WIRES.laneWhoami:
+      return lanes.whoami(requiredCaller(request.args));
+    case OWNER_CONTROL_WIRES.laneWatch:
+      return lanes.watch(request.args.lane, requiredCaller(request.args));
+    case OWNER_CONTROL_WIRES.laneTaskGet:
+      return lanes.taskGet(request.args.taskId, requiredCaller(request.args));
+    case OWNER_CONTROL_WIRES.laneTaskCancel:
+      return lanes.taskCancel(request.args.taskId, requiredCaller(request.args));
+    case OWNER_CONTROL_WIRES.laneWait:
+      return lanes.wait(request.args.lane, request.args.seconds, requiredCaller(request.args), request.signal);
+    case OWNER_CONTROL_WIRES.laneItem:
+      return lanes.item(request.args.itemId, requiredCaller(request.args));
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -1799,6 +1845,36 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+/** A control request's calling window, when it is an agent window's, and its other arguments. */
+function splitCaller(args: Readonly<Record<string, unknown>>): {
+  readonly caller: LaneWindowIdentity | undefined;
+  readonly args: Record<string, unknown>;
+} {
+  const { caller, ...rest } = args;
+  if (caller === undefined) return { caller: undefined, args: rest };
+  const parsed = parseLaneWindowIdentity(caller);
+  if (parsed === null) throw new CommsError('USAGE', 'the calling window is not one the event service can read');
+  return { caller: parsed, args: rest };
+}
+
+function requiredCaller(args: Readonly<Record<string, unknown>>): LaneWindowIdentity {
+  const { caller } = splitCaller(args);
+  if (caller === undefined) throw new CommsError('USAGE', 'this lane operation is an agent window’s, and names it');
+  return caller;
+}
+
+/** What a caller may see of the queue: everything for the person, and an agent window's lane scope for a window. */
+function callerScope(lanes: LaneService, caller: LaneWindowIdentity | undefined): QueueScope | undefined {
+  if (caller === undefined) return undefined;
+  try {
+    lanes.seen(caller);
+  } catch (error) {
+    // A report the lanes refuse (it names other ids for a recorded window) is not recorded; the scope still holds.
+    if (!isCommsError(error)) throw error;
+  }
+  return lanes.scopeFor(caller);
 }
 
 /** The client name chooses only the receipt channel; same-user token holders remain inside B3's trust boundary. */

@@ -11,6 +11,7 @@
         "version": 2,
         "name": "Mail that asks something"
       },
+      "lane": null,
       "channel": "gmail",
       "account": {
         "id": "in_01EXAMPLE0000000000000000",
@@ -46,6 +47,7 @@
         "version": 1,
         "name": "David on Slack"
       },
+      "lane": "david",
       "channel": "slack",
       "account": {
         "id": "ws_01EXAMPLE0000000000000000",
@@ -81,6 +83,7 @@
         "version": 1,
         "name": "Invoices"
       },
+      "lane": "billing",
       "channel": "gmail",
       "account": {
         "id": "in_01EXAMPLE0000000000000000",
@@ -110,6 +113,7 @@
         "version": 1,
         "name": "Family chat"
       },
+      "lane": null,
       "channel": "whatsapp",
       "account": {
         "id": "wa_01EXAMPLE0000000000000000",
@@ -134,6 +138,7 @@
         "version": 3,
         "name": "Receipts"
       },
+      "lane": "billing",
       "channel": "resend",
       "account": {
         "id": "rs_01EXAMPLE0000000000000000",

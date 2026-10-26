@@ -21,6 +21,7 @@ import { type Loadable, useAppData } from '../data.tsx';
 import { supports } from '../gates.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { type Call, type CliResult, errorMessage, type QueueChannel } from '../ipc.ts';
+import { filterLanes, itemLane, type LaneView, narrowingRule, readLaneList } from '../lanes.ts';
 import {
   FILTER_CHANNELS,
   filterRules,
@@ -36,6 +37,7 @@ import {
   readQueueList,
   readStateChange,
 } from '../queue.ts';
+import { LANES_COPY, LaneChip, LanesView } from './QueueLanes.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /** The screen's words (design 2026-10-25-action-queue §4.5): a few each, with what only explains in a hint. */
@@ -207,30 +209,82 @@ const ALL = 'all';
 interface Filters {
   rule: string | null;
   channel: QueueChannel | null;
+  /** A lane's name (0.31.0): the list read is filtered to the lane's items here, as `queue list` takes no lane. */
+  lane: string | null;
 }
 
-/** The call one tab's list makes, with only the filters set: each a closed word or a checked id. */
-function listCall(tab: QueueTab, filters: Filters): Call {
+/**
+ * The call one tab's list makes, with only the filters set: each a closed word or a checked id. A lane narrows it by
+ * the lane's one rule, when it has one and no rule is chosen, so the lane's items are not lost past the limit.
+ */
+function listCall(tab: QueueTab, filters: Filters, lanes: readonly LaneView[]): Call {
+  const lane = filters.lane === null ? undefined : lanes.find((each) => each.name === filters.lane);
+  const rule = filters.rule ?? (lane === undefined ? null : narrowingRule(lane));
   return {
     kind: 'queueList',
     state: tab,
-    ...(filters.rule === null ? {} : { rule: filters.rule }),
+    ...(rule === null ? {} : { rule }),
     ...(filters.channel === null ? {} : { channel: filters.channel }),
     limit: QUEUE_LIMIT,
   };
 }
 
+/** The screen's views: the three tabs of items, then its lanes (0.31.0). */
+type QueueView = QueueTab | 'lanes';
+
+/**
+ * Reads the events service's `lane list` (0.31.0) when it has lanes, and again whenever `reload` is called, keeping
+ * only the answer of the read asked last; `unsupported`, and nothing is asked, before it. A window's folder is shown
+ * with the person's home as `~`.
+ */
+function useLanes(supported: boolean): { lanes: Loadable<LaneView[]> | 'unsupported'; reload: () => Promise<void> } {
+  const bridge = useBridge();
+  const { installation } = useAppData();
+  const home = installation.state === 'ready' ? (installation.value.home ?? null) : null;
+  const [read, setRead] = useState<Loadable<LaneView[]>>({ state: 'loading' });
+  const asked = useRef(0);
+  const reload = useCallback(async () => {
+    if (!supported) return;
+    const ask = ++asked.current;
+    let next: Loadable<LaneView[]>;
+    try {
+      const result = await bridge.cli({ kind: 'laneList' });
+      if (result.status === 'ok') {
+        const value = readLaneList(result.data, home);
+        next = value === null ? { state: 'error', message: LANES_COPY.unreadable } : { state: 'ready', value };
+      } else {
+        next = { state: 'error', message: result.status === 'failed' ? result.message : LANES_COPY.unreadable };
+      }
+    } catch (error) {
+      next = { state: 'error', message: errorMessage(error) };
+    }
+    if (ask === asked.current) setRead(next);
+  }, [bridge, supported, home]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { lanes: supported ? read : 'unsupported', reload };
+}
+
 function QueueViews() {
-  const { queueCounts, refresh } = useAppData();
+  const { queueCounts, refresh, eventsVersion } = useAppData();
+  const version = eventsVersion !== 'absent' && eventsVersion.state === 'ready' ? eventsVersion.value : '';
+  const [view, setView] = useState<QueueView>('open');
+  // The items' tab last shown: its list stays read while the lanes are.
   const [tab, setTab] = useState<QueueTab>('open');
-  const [filters, setFilters] = useState<Filters>({ rule: null, channel: null });
+  const [filters, setFilters] = useState<Filters>({ rule: null, channel: null, lane: null });
   const [cleared, setCleared] = useState<string | null>(null);
   const [clearProblem, setClearProblem] = useState<string | null>(null);
-  const { read, reload } = useQueueList(listCall(tab, filters));
+  const lanesOn = supports(version, 'lanes');
+  const { lanes, reload: reloadLanes } = useLanes(lanesOn);
+  const known = lanes !== 'unsupported' && lanes.state === 'ready' ? lanes.value : [];
+  const { read, reload } = useQueueList(listCall(tab, filters, known));
   const again = useCallback(async () => {
-    await Promise.all([reload(), refresh('queue')]);
-  }, [reload, refresh]);
+    await Promise.all([reload(), refresh('queue'), reloadLanes()]);
+  }, [reload, refresh, reloadLanes]);
   useQueuePoll(reload, again);
+  // A binding is made at a terminal: the lanes are read again when the person comes back.
+  useReloadOnReturn(reloadLanes);
 
   const counts = typeof queueCounts === 'string' || queueCounts.state !== 'ready' ? null : queueCounts.value;
 
@@ -247,8 +301,12 @@ function QueueViews() {
         <Problem message={queueCounts.message} />
       ) : null}
       <Tabs.Root
-        value={tab}
-        onValueChange={(value) => setTab(value as QueueTab)}
+        value={view}
+        onValueChange={(value) => {
+          const next = value as QueueView;
+          setView(next);
+          if (next !== 'lanes') setTab(next);
+        }}
         className="flex flex-col gap-(--cue-space-4)"
       >
         <div className="flex flex-wrap items-center gap-(--cue-space-3)">
@@ -264,11 +322,19 @@ function QueueViews() {
               {QUEUE_COPY.tabs.dismissed}
               <QuietCount count={counts?.dismissed ?? null} />
             </Tabs.Tab>
+            <Tabs.Tab value={'lanes' satisfies QueueView}>
+              {LANES_COPY.tab}
+              <QuietCount count={known.length} />
+            </Tabs.Tab>
           </Tabs.List>
-          <InfoTip label="About the queue" text={QUEUE_COPY.about} />
+          {view === 'lanes' ? (
+            <InfoTip label="About lanes" text={LANES_COPY.about} />
+          ) : (
+            <InfoTip label="About the queue" text={QUEUE_COPY.about} />
+          )}
           <span className="ml-auto flex items-center gap-(--cue-space-2)">
             {/* Clear touches only the done and dismissed, so only their tabs offer it. */}
-            {tab === 'open' ? null : (
+            {view !== 'done' && view !== 'dismissed' ? null : (
               <ClearButton
                 counts={counts}
                 onCleared={(line) => {
@@ -281,7 +347,9 @@ function QueueViews() {
             <IconButton aria-label={QUEUE_COPY.refresh} icon={RefreshCw} size="sm" onClick={() => void again()} />
           </span>
         </div>
-        <FilterBar counts={counts} filters={filters} onChange={setFilters} />
+        {view === 'lanes' ? null : (
+          <FilterBar counts={counts} lanes={filterLanes(known)} filters={filters} onChange={setFilters} />
+        )}
         {cleared === null ? null : (
           <p role="status" className="text-(length:--cue-text-ui) text-fg-muted">
             {cleared}
@@ -294,12 +362,24 @@ function QueueViews() {
               <Items
                 tab={each}
                 read={read}
-                filtered={filters.rule !== null || filters.channel !== null}
+                lanes={lanesOn ? known : null}
+                lane={filters.lane}
+                filtered={filters.rule !== null || filters.channel !== null || filters.lane !== null}
                 onChanged={again}
               />
             </section>
           </Tabs.Panel>
         ))}
+        <Tabs.Panel value={'lanes' satisfies QueueView}>
+          <section aria-label={LANES_COPY.tab} className="flex flex-col gap-(--cue-space-3)">
+            <LanesView
+              version={version}
+              lanes={lanes === 'unsupported' ? { state: 'loading' } : lanes}
+              counts={counts}
+              onChanged={again}
+            />
+          </section>
+        </Tabs.Panel>
       </Tabs.Root>
     </div>
   );
@@ -331,13 +411,18 @@ function QuietCount({ count }: { count: number | null }) {
   );
 }
 
-/** The two filters, each a closed choice: the rules the counts name with an id the allow-list takes, and the channels. */
+/**
+ * The filters, each a closed choice: the rules the counts name with an id the allow-list takes, the channels, and —
+ * once there are lanes (0.31.0) — the lanes with a name the allow-list takes.
+ */
 function FilterBar({
   counts,
+  lanes,
   filters,
   onChange,
 }: {
   counts: QueueCounts | null;
+  lanes: readonly LaneView[];
   filters: Filters;
   onChange: (filters: Filters) => void;
 }) {
@@ -366,6 +451,18 @@ function FilterBar({
           onChange({ ...filters, channel: value === null || value === ALL ? null : (value as QueueChannel) })
         }
       />
+      {lanes.length === 0 ? null : (
+        <Select
+          aria-label={LANES_COPY.lane}
+          size="sm"
+          items={[
+            { value: ALL, label: LANES_COPY.allLanes },
+            ...lanes.map((lane) => ({ value: lane.name, label: lane.name })),
+          ]}
+          value={filters.lane ?? ALL}
+          onValueChange={(value) => onChange({ ...filters, lane: value === null || value === ALL ? null : value })}
+        />
+      )}
     </section>
   );
 }
@@ -429,18 +526,27 @@ const EMPTY: Readonly<Record<QueueTab, string>> = {
   dismissed: QUEUE_COPY.nothingDismissed,
 };
 
-/** One tab's items, newest first, as cards; what it says when there are none; and that more matched. */
+/**
+ * One tab's items, newest first, as cards, each with its lane when it is in one — once the events service has lanes
+ * (`lanes` is null before) — and only the chosen lane's, when one is; what it says when there are none; and that more
+ * matched.
+ */
 function Items({
   tab,
   read,
+  lanes,
+  lane,
   filtered,
   onChanged,
 }: {
   tab: QueueTab;
   read: Loadable<QueueListView>;
+  lanes: readonly LaneView[] | null;
+  lane: string | null;
   filtered: boolean;
   onChanged: () => Promise<void>;
 }) {
+  const laneOf = (item: QueueItem): string | null => (lanes === null ? null : itemLane(item, lanes));
   // An item marked here leaves its tab at once, before the list is read again; each new read says again what is here.
   const [left, setLeft] = useState<ReadonlySet<string>>(new Set());
   useEffect(() => {
@@ -448,7 +554,9 @@ function Items({
   }, [read]);
   if (read.state === 'loading') return <Spinner label={COPY.loading} />;
   if (read.state === 'error') return <Problem message={read.message} />;
-  const items = read.value.items.filter((item) => item.state === tab && !left.has(item.id));
+  const items = read.value.items.filter(
+    (item) => item.state === tab && !left.has(item.id) && (lane === null || laneOf(item) === lane),
+  );
   if (items.length === 0) {
     return (
       <Panel>
@@ -463,6 +571,7 @@ function Items({
           <ItemCard
             key={item.id}
             item={item}
+            lane={laneOf(item)}
             onChanged={async () => {
               setLeft((before) => new Set([...before, item.id]));
               await onChanged();
@@ -533,10 +642,13 @@ async function apply(cli: (call: Call) => Promise<CliResult>, call: Call): Promi
  */
 function ItemCard({
   item,
+  lane,
   onChanged,
   onGone,
 }: {
   item: QueueItem;
+  /** The lane it is in (0.31.0), or null. */
+  lane: string | null;
   onChanged: () => Promise<void>;
   onGone: () => Promise<void>;
 }) {
@@ -575,6 +687,7 @@ function ItemCard({
       <Panel className="flex flex-col gap-(--cue-space-3) p-(--cue-space-4)">
         <div className="flex items-center gap-(--cue-space-3) text-(length:--cue-text-label) text-fg-muted">
           <span data-slot="queue-where">{where}</span>
+          {lane === null ? null : <LaneChip lane={lane} />}
           <Chip tone="warn" variant="tag" data-slot="from-outside-label">
             {COPY.fromOutside}
           </Chip>

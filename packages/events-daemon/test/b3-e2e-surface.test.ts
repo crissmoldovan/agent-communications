@@ -39,9 +39,12 @@ interface Capability {
   readonly unchecked?: string;
 }
 
-function tty(): EventsCliStreams {
+/** An interactive terminal; `typed` is the line the person types when asked (lane bind asks for the lane's name). */
+function tty(typed?: string): EventsCliStreams {
+  const stdin = new PassThrough();
+  if (typed !== undefined) stdin.write(`${typed}\n`);
   return {
-    stdin: Object.assign(new PassThrough(), { isTTY: true }),
+    stdin: Object.assign(stdin, { isTTY: true }),
     stdout: Object.assign(new PassThrough(), { isTTY: true }),
     stderr: Object.assign(new PassThrough(), { isTTY: true }),
   };
@@ -52,13 +55,14 @@ async function cli(
   stateDir: string,
   options: {
     readonly human?: boolean;
+    readonly typed?: string | undefined;
     readonly readSecret?: () => Promise<string>;
     readonly owner?: B3OwnerService;
   } = {},
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const streams =
     options.human === true
-      ? tty()
+      ? tty(options.typed)
       : {
           stdin: new PassThrough(),
           stdout: new PassThrough(),
@@ -809,10 +813,23 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
         'the server-start exception is explicitly unchecked rather than silently omitted from CLI/MCP parity',
       );
       assert.equal(mcpServe?.mcp, null, 'the server-start exception cannot have an MCP route');
-      const rows = allRows.filter((row) => row.status === 'exception' && row.unchecked === undefined);
+      // Routing's window tools (0.31.0) are MCP-only exceptions: an agent window's own, with no command to run.
+      const windowRows = allRows.filter((row) => row.status === 'exception' && row.cli === null);
+      assert.deepEqual(
+        windowRows.map((row) => row.mcp).sort(),
+        ['events_lane_item', 'events_lane_whoami', 'events_wait', 'events_watch'],
+        'the only MCP-only daemon exceptions are the lane window tools',
+      );
+      const registered = new Set((await client.listTools()).tools.map((tool) => tool.name));
+      for (const row of windowRows) assert.ok(registered.has(row.mcp as string), `${row.id} is a registered tool`);
+      const rows = allRows.filter(
+        (row) => row.status === 'exception' && row.unchecked === undefined && row.cli !== null,
+      );
       for (const row of rows) {
         const result = await cli([...commandWords(row), ...exceptionArguments(row)], stateDir, {
           human: true,
+          // lane bind asks the person to type the lane's name, its first argument.
+          typed: row.id === 'events-daemon.lane.bind' ? exceptionArguments(row)[0] : undefined,
           readSecret: async () => 'https://receiver.invalid/synthetic-hidden-value',
         });
         assertProductionResponse(result, row);

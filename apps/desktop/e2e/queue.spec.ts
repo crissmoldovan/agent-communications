@@ -78,9 +78,10 @@ test('Queue lists the open items as cards, the judge as a chip and every sender-
   const navigation = page.getByRole('navigation', { name: 'Sections' });
   await expect(navigation.getByRole('button').nth(1)).toContainText('Queue');
   await expect(navigation.locator('[data-slot="queue-badge"]')).toContainText('5');
-  // Three tabs, Open first with its count.
+  // The three item tabs, Open first with its count, then Lanes (0.31.0's, which says this service needs an update).
   const tabs = page.getByRole('tablist', { name: 'Queue' });
-  await expect(tabs.getByRole('tab')).toHaveCount(3);
+  await expect(tabs.getByRole('tab')).toHaveCount(4);
+  await expect(tabs.getByRole('tab').nth(3)).toHaveText('Lanes');
   await expect(tabs.getByRole('tab', { name: 'Open 5 waiting' })).toHaveAttribute('aria-selected', 'true');
   await expect(tabs.getByRole('tab', { name: 'Done 2' })).toBeVisible();
   await expect(tabs.getByRole('tab', { name: 'Dismissed 1' })).toBeVisible();

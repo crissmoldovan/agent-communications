@@ -10,8 +10,9 @@ use std::fmt;
 
 pub use crate::allowlist::{
     AccountName, ActivityChannel, ActivityKind, ActivityOutcome, ActivitySince, Acts, ApprovalId,
-    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, PauseDays, QueueChannel,
-    QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday, UpdateLevel,
+    Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, LaneName, PauseDays,
+    QueueChannel, QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday,
+    UpdateLevel, WindowId,
 };
 pub use crate::launchers::Product;
 pub use crate::paths::{FolderOverrides, Folders};
@@ -56,6 +57,10 @@ pub struct Installation {
     pub folders: Folders,
     /// Why the version could not be read, when it could not.
     pub problem: Option<String>,
+    /// The person's home folder, as core reads it (`HOME`, or `USERPROFILE` on Windows), or none when it could not be
+    /// read: the window shows a folder inside it with the home as `~`, as core's own `folderShown` does (0.31.0's
+    /// Lanes, design 2026-10-25-routing §2).
+    pub home: Option<String>,
 }
 
 /// A failure of the app's own, before or instead of a CLI call. The code is one of `APP_REFUSED`, `APP_NOT_INSTALLED`,
@@ -165,6 +170,10 @@ pub enum TerminalCommand {
     /// kind enable <kind>`, as Laya's Enable is. Its preview and its approval happen there; the app prepares nothing,
     /// records no approval and never approves. The kind is closed, and never Laya's.
     JudgeKindEnable { judge_kind: EndpointJudgeKind },
+    /// Binding a lane to an agent window, which only the person does, at a terminal (0.31.0, design 2026-10-25-routing
+    /// B1, DA10): the events service's `lane bind <lane> --window <id>`. The app never runs it and records nothing; the
+    /// lane and the window are each a closed grammar, so no free text reaches the line.
+    LaneBind { lane: LaneName, window: WindowId },
 }
 
 /// What opening the terminal came to.
@@ -398,7 +407,15 @@ mod tests {
                 judge_kind: crate::allowlist::EndpointJudgeKind::LocalEndpoint
             }
         );
+        let lane_bind: TerminalCommand = serde_json::from_value(
+            json!({ "kind": "laneBind", "lane": "david", "window": "3f9a1c2e7b4d5a60" }),
+        )
+        .expect("laneBind");
+        assert!(matches!(lane_bind, TerminalCommand::LaneBind { .. }));
         for bad in [
+            json!({ "kind": "laneBind", "lane": "David", "window": "3f9a1c2e7b4d5a60" }),
+            json!({ "kind": "laneBind", "lane": "david", "window": "3F9A1C2E7B4D5A60" }),
+            json!({ "kind": "laneBind", "lane": "david" }),
             json!({ "kind": "judgeKindEnable", "judgeKind": "laya" }),
             json!({ "kind": "judgeKindEnable", "judgeKind": "anything" }),
             json!({ "kind": "approve", "product": "slack", "approvalId": "ap_x" }),
@@ -502,6 +519,7 @@ mod tests {
                 present: vec![Product::Core, Product::EventsDaemon],
                 folders,
                 problem: None,
+                home: Some("/example/home".into()),
             })
             .expect("json"),
             json!({
@@ -509,7 +527,8 @@ mod tests {
                 "version": "0.24.0",
                 "present": ["core", "events-daemon"],
                 "folders": { "configDir": "/c", "stateDir": "/s", "dataDir": "/d", "secretsDir": "/x" },
-                "problem": null
+                "problem": null,
+                "home": "/example/home"
             })
         );
         assert_eq!(

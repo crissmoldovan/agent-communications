@@ -44,6 +44,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'delivery',
     'held',
     'queue',
+    'lane',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
   }
@@ -107,8 +108,15 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_queue_done',
         'events_queue_dismiss',
         'events_queue_reopen',
+        'events_lane_whoami',
+        'events_lane_list',
+        'events_lane_unbind',
+        'events_watch',
+        'events_wait',
+        'events_lane_item',
       ].sort(),
     );
+    assert.ok(!names.includes('events_lane_bind'), 'binding a lane is the person’s act at a terminal (routing B1)');
     for (const contentRead of ['events_queue_list', 'events_queue_show', 'events_queue_clear'])
       assert.ok(
         !names.includes(contentRead),

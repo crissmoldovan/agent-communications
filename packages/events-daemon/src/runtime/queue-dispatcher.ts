@@ -52,6 +52,8 @@ export interface QueueDispatcherOptions {
   /** The concrete D6 gate is mandatory for every WhatsApp append. */
   readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
   readonly newItemId?: ((now: number) => string) | undefined;
+  /** Told after an item commits, so a lane's watches and long-polls settle at once (routing §3.4); never throws. */
+  readonly onAppended?: (() => void) | undefined;
 }
 
 /**
@@ -72,6 +74,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
   readonly #beforeCommit: (() => void) | undefined;
   readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
   readonly #newItemId: (now: number) => string;
+  readonly #onAppended: (() => void) | undefined;
 
   constructor(options: QueueDispatcherOptions) {
     this.#store = options.store;
@@ -85,6 +88,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
     this.#beforeCommit = options.beforeCommit;
     this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
     this.#newItemId = options.newItemId ?? newQueueItemId;
+    this.#onAppended = options.onAppended;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
@@ -191,6 +195,13 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
       }
       releaseDeliveryClaim(this.#store, row);
       throw error;
+    }
+    if (appended?.state === 'delivered') {
+      try {
+        this.#onAppended?.();
+      } catch {
+        // A lane's wake is told again on its next look; the committed item is unaffected.
+      }
     }
     return appended ?? { state: 'terminal', deliveryId };
   }

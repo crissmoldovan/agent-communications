@@ -7,7 +7,7 @@
 
 use crate::allowlist::Call;
 use crate::ipc::{AppError, CliResult, Installation};
-use crate::paths::{join, Folders, Platform};
+use crate::paths::{join, Folders, PathEnv, Platform};
 use crate::runner::{run, RunContext};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -224,6 +224,7 @@ pub fn program_for(
 /// What is installed here. Without `launch/core` nothing is run, and the app shows only the install screen; with it,
 /// core's version is read with `--version`.
 pub fn discover(ctx: &RunContext) -> Installation {
+    let home = Some(PathEnv::from_process().home).filter(|home| !home.is_empty());
     if find_launcher(&ctx.folders, ctx.platform, Product::Core).is_none() {
         return Installation {
             installed: false,
@@ -231,6 +232,7 @@ pub fn discover(ctx: &RunContext) -> Installation {
             present: vec![],
             folders: ctx.folders.clone(),
             problem: None,
+            home,
         };
     }
     let (version, problem) = match run(
@@ -252,6 +254,7 @@ pub fn discover(ctx: &RunContext) -> Installation {
         present: present(&ctx.folders, ctx.platform),
         folders: ctx.folders.clone(),
         problem,
+        home,
     }
 }
 

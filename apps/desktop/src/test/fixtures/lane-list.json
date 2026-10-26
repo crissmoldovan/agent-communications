@@ -1,0 +1,41 @@
+{
+  "lanes": [
+    {
+      "name": "david",
+      "rules": [
+        {
+          "id": "david-on-slack"
+        }
+      ],
+      "channels": ["slack"],
+      "open": 1,
+      "binding": {
+        "window": {
+          "sessionId": "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90",
+          "activityKey": "3f9a1c2e7b4d5a60",
+          "folder": "/example/home/work/acme-site",
+          "folderShown": "~/work/acme-site",
+          "client": {
+            "name": "claude-code",
+            "version": "2.1.0"
+          }
+        },
+        "since": "2026-10-25T09:12:03.000Z"
+      }
+    },
+    {
+      "name": "billing",
+      "rules": [
+        {
+          "id": "invoices"
+        },
+        {
+          "id": "receipts"
+        }
+      ],
+      "channels": ["gmail", "resend"],
+      "open": 2,
+      "binding": null
+    }
+  ]
+}

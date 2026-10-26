@@ -284,6 +284,8 @@ pub fn applescript_string(text: &str) -> String {
 ///   and takes its approval (E2 Task 11).
 /// - **Turning on Jev or a local model server:** the events service's `judge kind enable typesafe|local-endpoint`, the
 ///   kind from its closed enum, as Laya's Enable (0.27.1).
+/// - **Binding a lane:** the events service's `lane bind <lane> --window <id>` (0.31.0, design 2026-10-25-routing B1):
+///   the person runs it; the app never binds (DA10). The lane and the window each come from a closed grammar.
 pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>), AppError> {
     Ok(match command {
         TerminalCommand::Approve {
@@ -354,6 +356,16 @@ pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>)
                 "kind".to_string(),
                 "enable".to_string(),
                 judge_kind.word().to_string(),
+            ],
+        ),
+        TerminalCommand::LaneBind { lane, window } => (
+            Product::EventsDaemon,
+            vec![
+                "lane".to_string(),
+                "bind".to_string(),
+                lane.as_str().to_string(),
+                "--window".to_string(),
+                window.as_str().to_string(),
             ],
         ),
     })
@@ -496,6 +508,7 @@ pub fn open_with(
         TerminalCommand::Approve { .. }
         | TerminalCommand::SignIn { .. }
         | TerminalCommand::JudgeKindEnable { .. }
+        | TerminalCommand::LaneBind { .. }
         | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
@@ -2300,5 +2313,204 @@ mod tests {
         )
         .expect_err("no node");
         assert_eq!(refused.code, "APP_NO_NODE");
+    }
+
+    /// A lane's Bind in Terminal (0.31.0, design 2026-10-25-routing B1): the events service's own launcher, `lane bind
+    /// <lane> --window <id>` and the pins. The person runs it: nothing is revoked first, nothing is recorded, and the
+    /// terminal opens once.
+    #[test]
+    fn lane_bind_opens_the_events_launcher_with_the_pins_and_revokes_nothing() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let command: TerminalCommand = serde_json::from_value(serde_json::json!({
+            "kind": "laneBind", "lane": "david", "window": "3f9a1c2e7b4d5a60"
+        }))
+        .expect("Bind's shape");
+        let words = argv_for(&command, &ctx).expect("words");
+        assert_eq!(
+            words,
+            located(
+                &ctx,
+                Product::EventsDaemon,
+                &["lane", "bind", "david", "--window", "3f9a1c2e7b4d5a60"]
+            )
+        );
+        let effects = Fake::new(true);
+        let prepared = Prepared::default();
+        let outcome = open_with(command.clone(), &ctx, &effects, &prepared).expect("an outcome");
+        assert!(
+            matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+        assert!(prepared.map().is_empty());
+        // The person confirms the bind by typing the lane's name at that terminal (the event service's gate): the
+        // app's line never answers it. The lane is named once, and nothing skips, answers or quiets the question.
+        assert_eq!(words.iter().filter(|word| *word == "david").count(), 1);
+        for answer in [
+            "--yes",
+            "-y",
+            "--confirm",
+            "--force",
+            "--json",
+            "--approval",
+        ] {
+            assert!(
+                !words.iter().any(|word| word == answer),
+                "{answer}: {words:?}"
+            );
+        }
+        // A Claude Code session id binds the same way.
+        let by_session: TerminalCommand = serde_json::from_value(serde_json::json!({
+            "kind": "laneBind", "lane": "billing", "window": "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90"
+        }))
+        .expect("Bind's shape");
+        assert_eq!(
+            command_words(&by_session).expect("words"),
+            (
+                Product::EventsDaemon,
+                strings(&[
+                    "lane",
+                    "bind",
+                    "billing",
+                    "--window",
+                    "0f8b5c3e-2d41-4a7e-9c11-5b2e8d7f6a90"
+                ])
+            )
+        );
+        // Without the events service's launcher there is nothing to open.
+        let (_dir, bare) = installation(&[Product::Core]);
+        assert_eq!(
+            argv_for(&command, &bare).expect_err("not installed").code,
+            "APP_NOT_INSTALLED"
+        );
+    }
+
+    /// No free text reaches the bind line: the lane is 1 to 40 of `[a-z0-9-]`, the window a lowercase UUID or an
+    /// activity key, and the command takes no other field — no approval, no `--json`, no words of its own.
+    #[test]
+    fn lane_bind_refuses_a_bad_lane_a_bad_window_and_any_other_field() {
+        let refused = |value: serde_json::Value| {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(value.clone()).is_err(),
+                "{value}"
+            );
+        };
+        for lane in [
+            serde_json::json!(""),
+            serde_json::json!("-david"),
+            serde_json::json!("--json"),
+            serde_json::json!("David"),
+            serde_json::json!("david_slack"),
+            serde_json::json!("david slack"),
+            serde_json::json!("david; rm -rf ~"),
+            serde_json::json!("david$(id)"),
+            serde_json::json!("david`id`"),
+            serde_json::json!("david\n"),
+            serde_json::json!("david\u{202e}"),
+            serde_json::json!("x".repeat(41)),
+            serde_json::json!(7),
+            serde_json::json!(null),
+            serde_json::json!(["david"]),
+        ] {
+            refused(
+                serde_json::json!({ "kind": "laneBind", "lane": lane, "window": "3f9a1c2e7b4d5a60" }),
+            );
+        }
+        for window in [
+            serde_json::json!(""),
+            serde_json::json!("3f9a1c2e7b4d5a6"),
+            serde_json::json!("3F9A1C2E7B4D5A60"),
+            serde_json::json!("-f9a1c2e7b4d5a60"),
+            serde_json::json!("3f9a1c2e7b4d5a60 --json"),
+            serde_json::json!("3f9a1c2e7b4d5a60\n"),
+            serde_json::json!("0F8B5C3E-2D41-4A7E-9C11-5B2E8D7F6A90"),
+            serde_json::json!("0f8b5c3e2d414a7e9c115b2e8d7f6a90"),
+            serde_json::json!("~/work/acme-site"),
+            serde_json::json!(4100),
+            serde_json::json!(null),
+        ] {
+            refused(serde_json::json!({ "kind": "laneBind", "lane": "david", "window": window }));
+        }
+        refused(serde_json::json!({ "kind": "laneBind", "lane": "david" }));
+        refused(serde_json::json!({ "kind": "laneBind", "window": "3f9a1c2e7b4d5a60" }));
+        for (field, value) in [
+            ("approval", serde_json::json!(ID)),
+            ("approvalId", serde_json::json!(ID)),
+            ("revoke", serde_json::json!(ID)),
+            ("json", serde_json::json!(true)),
+            ("words", serde_json::json!(["--yes"])),
+            ("session", serde_json::json!("3f9a1c2e7b4d5a60")),
+        ] {
+            let mut given = serde_json::json!({ "kind": "laneBind", "lane": "david", "window": "3f9a1c2e7b4d5a60" });
+            given[field] = value;
+            refused(given);
+        }
+        // Unbinding is a call the app applies itself, never a terminal command; nothing else about a lane is one.
+        for kind in ["laneUnbind", "laneList", "laneWhoami", "laneItem"] {
+            refused(serde_json::json!({ "kind": kind, "lane": "david" }));
+        }
+    }
+
+    /// The bind line on each platform, as its shell reads it: the launcher (on Windows, Node and the launcher), then
+    /// `lane bind <lane> --window <id>`, then the pins, with neither `--json` nor `--approval` anywhere in it. On
+    /// Windows a key that starts with a digit is quoted, as core quotes such a word for cmd.exe and PowerShell.
+    #[test]
+    fn lane_bind_line_has_no_json_or_approval_on_macos_linux_and_windows() {
+        let command: TerminalCommand = serde_json::from_value(serde_json::json!({
+            "kind": "laneBind", "lane": "david", "window": "3f9a1c2e7b4d5a60"
+        }))
+        .expect("Bind's shape");
+        let (product, words) = command_words(&command).expect("words");
+        assert_eq!(product, Product::EventsDaemon);
+        let posix = |home: &str| Folders {
+            config_dir: format!("{home}/.config/agent-communications"),
+            state_dir: format!("{home}/.config/agent-communications/state"),
+            data_dir: format!("{home}/.local/share/agent-communications"),
+            secrets_dir: format!("{home}/.config/agent-communications/secrets"),
+        };
+        let windows = Folders {
+            config_dir: r"C:\Users\example\AppData\Roaming\agent-communications".into(),
+            state_dir: r"C:\Users\example\AppData\Roaming\agent-communications\state".into(),
+            data_dir: r"C:\Users\example\AppData\Local\agent-communications".into(),
+            secrets_dir: r"C:\Users\example\AppData\Roaming\agent-communications\secrets".into(),
+        };
+        let cases = [
+            (
+                Platform::MacOs,
+                posix("/home/example"),
+                vec!["/home/example/.local/share/agent-communications/launch/events-daemon"],
+                "/home/example/.local/share/agent-communications/launch/events-daemon lane bind david --window 3f9a1c2e7b4d5a60 --config-dir /home/example/.config/agent-communications --state-dir /home/example/.config/agent-communications/state --data-dir /home/example/.local/share/agent-communications --secrets-dir /home/example/.config/agent-communications/secrets",
+            ),
+            (
+                Platform::Linux,
+                posix("/home/example"),
+                vec!["/home/example/.local/share/agent-communications/launch/events-daemon"],
+                "/home/example/.local/share/agent-communications/launch/events-daemon lane bind david --window 3f9a1c2e7b4d5a60 --config-dir /home/example/.config/agent-communications --state-dir /home/example/.config/agent-communications/state --data-dir /home/example/.local/share/agent-communications --secrets-dir /home/example/.config/agent-communications/secrets",
+            ),
+            (
+                Platform::Windows,
+                windows,
+                vec![
+                    r"C:\Program Files\nodejs\node.exe",
+                    r"C:\Users\example\AppData\Local\agent-communications\launch\events-daemon",
+                ],
+                r#""C:\Program Files\nodejs\node.exe" C:\Users\example\AppData\Local\agent-communications\launch\events-daemon lane bind david --window "3f9a1c2e7b4d5a60" --config-dir C:\Users\example\AppData\Roaming\agent-communications --state-dir C:\Users\example\AppData\Roaming\agent-communications\state --data-dir C:\Users\example\AppData\Local\agent-communications --secrets-dir C:\Users\example\AppData\Roaming\agent-communications\secrets"#,
+            ),
+        ];
+        for (platform, folders, program, expected) in cases {
+            let program = crate::launchers::Program {
+                program: program[0].to_string(),
+                leading: program[1..].iter().map(|word| word.to_string()).collect(),
+            };
+            let argv = located_line(product, &words, &program, &folders);
+            let text = line(&argv, platform).expect("a line");
+            assert_eq!(text, expected, "{platform:?}");
+            assert!(
+                !text.contains("--json")
+                    && !text.contains("--approval")
+                    && !text.contains(" approve "),
+                "{platform:?}: {text}"
+            );
+        }
     }
 }

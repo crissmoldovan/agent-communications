@@ -1,9 +1,20 @@
 import { EventControlClient } from '../control/client.ts';
 
+import type { LaneWindowIdentity } from '../domain/lanes.ts';
+
 type Options = { readonly stateDir?: string | undefined };
 
-export async function deliveriesList(options: Options = {}): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir }).request('deliveriesList');
+/**
+ * Content-free delivery metadata. `caller` is the agent window an MCP call comes from: the owner then leaves out every
+ * lane target's deliveries but those of the lane that window is bound to (routing B4). The CLI passes none.
+ */
+export async function deliveriesList(
+  options: Options & { readonly caller?: LaneWindowIdentity | undefined } = {},
+): Promise<unknown> {
+  return new EventControlClient({ stateDir: options.stateDir }).request(
+    'deliveriesList',
+    options.caller === undefined ? {} : { caller: options.caller },
+  );
 }
 
 export async function retryDelivery(deliveryId: string, options: Options = {}): Promise<unknown> {

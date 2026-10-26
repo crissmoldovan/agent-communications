@@ -1,4 +1,5 @@
 import { EventControlClient } from '../control/client.ts';
+import type { LaneWindowIdentity } from '../domain/lanes.ts';
 import type {
   QueueClearResultV1,
   QueueCountsResultV1,
@@ -8,7 +9,15 @@ import type {
   QueueStateChangeResultV1,
 } from '../runtime/queue.ts';
 
-type Options = { readonly stateDir?: string | undefined };
+/**
+ * `caller` is the agent window an MCP call comes from, which the event service's MCP server passes: the owner then
+ * leaves out every lane item that window is not bound to (routing design B4). The CLI and the app pass none.
+ */
+type Options = { readonly stateDir?: string | undefined; readonly caller?: LaneWindowIdentity | undefined };
+
+function scoped(args: Record<string, unknown>, options: Options): Record<string, unknown> {
+  return options.caller === undefined ? args : { ...args, caller: options.caller };
+}
 
 /** `queue list`'s filters, as the CLI passes them: the owner parses and refuses anything else (64). */
 export interface QueueListFilters {
@@ -45,31 +54,37 @@ export async function queueItems(
 ): Promise<QueueItemsResultV1> {
   return (await new EventControlClient({ stateDir: options.stateDir }).request(
     'queue-items',
-    defined({ ...filters }),
+    scoped(defined({ ...filters }), options),
   )) as QueueItemsResultV1;
 }
 
 /** Content-free totals, for the app's badge and an agent's "is anything waiting". */
 export async function queueCounts(options: Options = {}): Promise<QueueCountsResultV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('queue-counts')) as QueueCountsResultV1;
+  return (await new EventControlClient({ stateDir: options.stateDir }).request(
+    'queue-counts',
+    scoped({}, options),
+  )) as QueueCountsResultV1;
 }
 
 export async function queueDone(itemId: string, options: Options = {}): Promise<QueueStateChangeResultV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('queue-done', {
-    itemId,
-  })) as QueueStateChangeResultV1;
+  return (await new EventControlClient({ stateDir: options.stateDir }).request(
+    'queue-done',
+    scoped({ itemId }, options),
+  )) as QueueStateChangeResultV1;
 }
 
 export async function queueDismiss(itemId: string, options: Options = {}): Promise<QueueStateChangeResultV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('queue-dismiss', {
-    itemId,
-  })) as QueueStateChangeResultV1;
+  return (await new EventControlClient({ stateDir: options.stateDir }).request(
+    'queue-dismiss',
+    scoped({ itemId }, options),
+  )) as QueueStateChangeResultV1;
 }
 
 export async function queueReopen(itemId: string, options: Options = {}): Promise<QueueStateChangeResultV1> {
-  return (await new EventControlClient({ stateDir: options.stateDir }).request('queue-reopen', {
-    itemId,
-  })) as QueueStateChangeResultV1;
+  return (await new EventControlClient({ stateDir: options.stateDir }).request(
+    'queue-reopen',
+    scoped({ itemId }, options),
+  )) as QueueStateChangeResultV1;
 }
 
 /** Purges done and dismissed items now; open items stay. */

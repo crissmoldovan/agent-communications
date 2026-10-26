@@ -2674,6 +2674,68 @@
       "reason": "an agent must not be able to make the person's queue disappear"
     },
     {
+      "id": "events-daemon.lane.list",
+      "package": "events-daemon",
+      "cli": "lane list",
+      "mcp": "events_lane_list",
+      "status": "both",
+      "operation": "laneList"
+    },
+    {
+      "id": "events-daemon.lane.bind",
+      "package": "events-daemon",
+      "cli": "lane bind",
+      "mcp": null,
+      "status": "exception",
+      "operation": "laneBind",
+      "argv": ["parity", "--window", "0123456789abcdef"],
+      "expect": { "lane": "parity", "window": "0123456789abcdef" },
+      "reason": "Binding a lane lets one agent window read what arrives in it, so it is the person's act at an interactive terminal, where they type the lane's name, or from the app through one: no tool binds, and the command refuses an agent's shell and the event service's MCP server. An agent learns its own window's id with events_lane_whoami and gives it to the person (routing design 2026-10-25, B1)."
+    },
+    {
+      "id": "events-daemon.lane.unbind",
+      "package": "events-daemon",
+      "cli": "lane unbind",
+      "mcp": "events_lane_unbind",
+      "status": "both",
+      "operation": "laneUnbind",
+      "argv": ["david"],
+      "args": { "lane": "david" },
+      "expect": { "lane": "david" }
+    },
+    {
+      "id": "events-daemon.lane.whoami",
+      "package": "events-daemon",
+      "cli": null,
+      "mcp": "events_lane_whoami",
+      "status": "exception",
+      "reason": "It says which agent window it is called from, as the event service's MCP server in that window works it out from its Claude Code session id and its activity session. A terminal is no agent window, so there is nothing for a command to say; the person sees every window in the app, from the activity log (routing design 2026-10-25, B1, B6)."
+    },
+    {
+      "id": "events-daemon.lane.watch",
+      "package": "events-daemon",
+      "cli": null,
+      "mcp": "events_watch",
+      "status": "exception",
+      "reason": "It answers with an MCP task that wakes the agent window it was called from when that window's lane has a new item. It means something only to a bound agent window, and a terminal has no window to wake (routing design 2026-10-25, §3.4, §3.7)."
+    },
+    {
+      "id": "events-daemon.lane.wait",
+      "package": "events-daemon",
+      "cli": null,
+      "mcp": "events_wait",
+      "status": "exception",
+      "reason": "It holds the bound agent window's own call until its lane's next item, for at most 50 seconds, for clients without the tasks extension. Only a bound agent window has a lane to wait on; the person sees the queue in the app (routing design 2026-10-25, §3.6, §3.7)."
+    },
+    {
+      "id": "events-daemon.lane.item",
+      "package": "events-daemon",
+      "cli": null,
+      "mcp": "events_lane_item",
+      "status": "exception",
+      "reason": "It reads a lane's item for the one agent window the person bound to that lane, and only items that arrived after the binding. The person reads every item, a lane's included, with the queue's own content reads at a terminal or in the app (routing design 2026-10-25, B2, B3, §3.7)."
+    },
+    {
       "id": "events-daemon.mcp.serve",
       "package": "events-daemon",
       "cli": "mcp",

@@ -8,18 +8,21 @@ export interface TerminalGateStreams {
 }
 
 /** Local retained content is a human-only terminal surface: neither JSON nor a detected agent can select it. */
-export function assertHumanTerminal(env: NodeJS.ProcessEnv, streams: TerminalGateStreams, json: boolean): void {
+export function assertHumanTerminal(
+  env: NodeJS.ProcessEnv,
+  streams: TerminalGateStreams,
+  json: boolean,
+  wording: { readonly agent: string; readonly terminal: string } = {
+    agent: 'only a person at an interactive terminal can view retained local content',
+    terminal: 'viewing retained local content needs an interactive terminal',
+  },
+): void {
   const marker = agentMarker(env);
   if (marker !== null)
-    throw new CommsError(
-      'APPROVAL_REQUIRED',
-      'only a person at an interactive terminal can view retained local content',
-      {
-        details: { marker },
-      },
-    );
-  if (!canPrompt(env, streams, { json }))
-    throw new CommsError('APPROVAL_REQUIRED', 'viewing retained local content needs an interactive terminal');
+    throw new CommsError('APPROVAL_REQUIRED', wording.agent, {
+      details: { marker },
+    });
+  if (!canPrompt(env, streams, { json })) throw new CommsError('APPROVAL_REQUIRED', wording.terminal);
 }
 
 /** Renders the already-authorised local record as untrusted terminal text, never as machine-readable output. */

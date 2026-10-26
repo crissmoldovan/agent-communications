@@ -843,6 +843,64 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
       "UPDATE meta SET value = '24' WHERE key = 'schema_version'",
     ],
   },
+  {
+    // Routing's lanes (routing design 2026-10-25, §6 B1, B3, B5). A binding is keyed by the lane's name and holds the
+    // window the person bound to it, and since when; a window is bound to one lane at most (the two UNIQUE ids). The
+    // windows the event service's MCP server has reported are kept so the person can bind one by either of its ids.
+    // A binding ends when no active rule's queue target carries its lane any more — the triggers run on every rule
+    // pointer change, whichever path makes it — and with disable-all, which revokes everything.
+    version: 25,
+    name: 'routing-lane-bindings-v1',
+    statements: [
+      `CREATE TABLE lane_bindings (
+        lane TEXT PRIMARY KEY CHECK (length(lane) BETWEEN 1 AND 40 AND lane NOT GLOB '*[^a-z0-9-]*'),
+        binding_id TEXT NOT NULL UNIQUE,
+        session_id TEXT UNIQUE CHECK (session_id IS NULL OR length(session_id) = 36),
+        activity_key TEXT UNIQUE CHECK (
+          activity_key IS NULL OR (length(activity_key) = 16 AND activity_key NOT GLOB '*[^0-9a-f]*')
+        ),
+        folder TEXT,
+        client_name TEXT,
+        client_version TEXT,
+        since INTEGER NOT NULL,
+        CHECK (session_id IS NOT NULL OR activity_key IS NOT NULL),
+        CHECK (client_name IS NOT NULL OR client_version IS NULL)
+      ) STRICT`,
+      `CREATE TABLE lane_windows (
+        activity_key TEXT PRIMARY KEY CHECK (length(activity_key) = 16 AND activity_key NOT GLOB '*[^0-9a-f]*'),
+        session_id TEXT CHECK (session_id IS NULL OR length(session_id) = 36),
+        grouped INTEGER NOT NULL CHECK (grouped IN (0, 1)),
+        folder TEXT,
+        client_name TEXT,
+        client_version TEXT,
+        last_seen_at INTEGER NOT NULL,
+        CHECK (client_name IS NOT NULL OR client_version IS NULL)
+      ) STRICT`,
+      'CREATE INDEX lane_windows_session ON lane_windows(session_id, last_seen_at) WHERE session_id IS NOT NULL',
+      'CREATE INDEX lane_windows_seen ON lane_windows(last_seen_at)',
+      ...(['UPDATE', 'DELETE'] as const).map(
+        (change) => `CREATE TRIGGER lane_bindings_follow_rule_pointer_${change.toLowerCase()}
+        AFTER ${change} ON active_versions WHEN OLD.kind = 'rule'
+        BEGIN
+          DELETE FROM lane_bindings WHERE lane NOT IN (
+            SELECT json_extract(target.value, '$.lane.name')
+              FROM active_versions AS pointer
+              JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
+              JOIN json_each(stored.document, '$.targets') AS target
+             WHERE pointer.kind = 'rule'
+               AND json_extract(target.value, '$.kind') = 'queue'
+               AND json_extract(target.value, '$.lane.name') IS NOT NULL
+          );
+        END`,
+      ),
+      `CREATE TRIGGER lane_bindings_end_with_disable_all
+        AFTER UPDATE OF enabled ON event_settings WHEN OLD.enabled = 1 AND NEW.enabled = 0
+        BEGIN
+          DELETE FROM lane_bindings;
+        END`,
+      "UPDATE meta SET value = '25' WHERE key = 'schema_version'",
+    ],
+  },
 ];
 
 function initialiseLedger(database: DatabaseSync): void {

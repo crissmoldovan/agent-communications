@@ -241,10 +241,45 @@ export class ImmutableVersions {
         this.activeVersion('judge-kind', rule.agentic.judge.kind) !== null,
       );
     }
+    this.#assertLanesFree(rule);
     return normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule }) as Extract<
       ActivationDocumentV1,
       { kind: 'rule' }
     >;
+  }
+
+  /**
+   * A lane is its name (routing design B5): unique among the queue targets of active rules. A rule whose queue target
+   * names a lane that another active rule's different target carries is refused, naming the lane. The same target id
+   * may carry it from more than one rule, and the rule's own active version is the one this activation replaces. Every
+   * authority gate re-plans through here, the final pointer swap included, so two activations cannot both take a lane.
+   */
+  #assertLanesFree(rule: CanonicalFullRuleDocument): void {
+    const lanes = new Map<string, string>();
+    for (const target of rule.targets)
+      if (target.kind === 'queue' && target.lane !== undefined) lanes.set(target.lane.name, target.targetId);
+    if (lanes.size === 0) return;
+    const carried = this.#database
+      .prepare(
+        `SELECT pointer.object_id AS rule_id, json_extract(target.value, '$.lane.name') AS lane,
+                json_extract(target.value, '$.targetId') AS target_id
+           FROM active_versions AS pointer
+           JOIN rule_versions AS stored ON stored.rule_id = pointer.object_id AND stored.version = pointer.version
+           JOIN json_each(stored.document, '$.targets') AS target
+          WHERE pointer.kind = 'rule' AND pointer.object_id <> ?
+            AND json_extract(target.value, '$.kind') = 'queue'
+            AND json_extract(target.value, '$.lane.name') IS NOT NULL
+          ORDER BY pointer.object_id`,
+      )
+      .all(rule.ruleId) as Array<{ rule_id: string; lane: string; target_id: string }>;
+    for (const other of carried) {
+      const mine = lanes.get(other.lane);
+      if (mine !== undefined && mine !== other.target_id)
+        throw new EventDomainError(
+          'LANE_NAME_IN_USE',
+          `lane ${other.lane} is already carried by another active rule's queue target; a lane is its name, so one target carries it`,
+        );
+    }
   }
 
   /**

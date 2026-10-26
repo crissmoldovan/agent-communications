@@ -74,9 +74,10 @@ export type ActivityChannel = (typeof ACTIVITY_CHANNELS)[number];
 
 /**
  * How far back the Activity screen reads (`allowlist.rs`, `ActivitySince`): 7 or 30 days, or today — the start of the
- * person's day, in whole seconds since the epoch, which Rust checks and writes as an ISO time.
+ * person's day, in whole seconds since the epoch, which Rust checks and writes as an ISO time. The Queue screen's lane
+ * picker reads the last 24 hours (0.31.0).
  */
-export type ActivitySince = '7d' | '30d' | { today: number };
+export type ActivitySince = '24h' | '7d' | '30d' | { today: number };
 
 /**
  * Which of the queue's items `queue list --state` reads (`allowlist.rs`, `QueueState`): one tab's, or all of them.
@@ -154,6 +155,10 @@ export type Call =
   | { kind: 'queueDismiss'; itemId: string }
   | { kind: 'queueReopen'; itemId: string }
   | { kind: 'queueClear' }
+  // The event service's lanes (0.31.0): the lanes, read; and unbind, a tightening the app applies itself (DA10). The
+  // lane is 1 to 40 of `[a-z0-9-]`. Binding is never a call: the person binds at a terminal (`laneBind` below).
+  | { kind: 'laneList' }
+  | { kind: 'laneUnbind'; lane: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -172,6 +177,11 @@ export interface Installation {
   present: Product[];
   folders: Folders;
   problem: string | null;
+  /**
+   * The person's home folder, as core reads it, or null (or left out) when it could not be read: a folder inside it is
+   * shown with the home as `~` (0.31.0's Lanes).
+   */
+  home?: string | null;
 }
 
 export type AppErrorCode =
@@ -197,7 +207,12 @@ export type TerminalCommand =
   /** Laya's enablement, in the terminal only: its preview and approval happen there, never in the app (E2 Task 11). */
   | { kind: 'eventsJudgeKindEnable' }
   /** Turning on Jev or a local model server, in the terminal only, as Laya's enablement (0.27.1). */
-  | { kind: 'judgeKindEnable'; judgeKind: EndpointJudgeKind };
+  | { kind: 'judgeKindEnable'; judgeKind: EndpointJudgeKind }
+  /**
+   * Binding a lane to an agent window, which only the person does, at a terminal (0.31.0, B1): `lane bind <lane>
+   * --window <id>`, the window an activity key or a Claude Code session id. The app never runs it.
+   */
+  | { kind: 'laneBind'; lane: string; window: string };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 

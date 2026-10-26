@@ -58,7 +58,7 @@
       "mutationTest": "D13: the approval preview a person reads at the terminal neutralises a bidi override instead of obeying it",
       "overlayInputs": ["packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json"],
       "mutation": {
-        "from": "  return escapeForDisplay(renderB3ApprovalPreviewV1(result).terminal);",
+        "from": "  return escapeForDisplay(renderB3ApprovalPreviewV1(result, context).terminal);",
         "to": "  return JSON.stringify(result);"
       },
       "loadedMarker": "cli-approval-view-renders-for-terminal"

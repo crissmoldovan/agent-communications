@@ -7,7 +7,7 @@
  * untrusted-content envelope and is kept as it came, as a string the screen shows as plain text marked From outside.
  */
 import { productLabel } from './components/ApprovalCard.tsx';
-import { isQueueItemId, isRuleId } from './grammar.ts';
+import { isLaneName, isQueueItemId, isRuleId } from './grammar.ts';
 import { QUEUE_CHANNELS, type QueueChannel } from './ipc.ts';
 
 /** The screen's three views, in its tab bar's order: what waits first (§4.5). */
@@ -50,6 +50,12 @@ export interface QueueItem {
   text: string | null;
   link: { kind: 'gmail' | 'slack'; url: string } | null;
   judge: QueueJudge;
+  /**
+   * The lane the item is in, as the event service says it (0.31.0): its name, or null for a plain queue's item — in no
+   * lane, whatever its rule. Left undefined only when the answer has no `lane` at all (a service older than 0.31.0):
+   * the screen then tells it from `lane list`'s rules (`lanes.ts`, `itemLane`).
+   */
+  lane: string | null | undefined;
 }
 
 export interface QueueListView {
@@ -91,6 +97,16 @@ function judgeOf(value: unknown): QueueJudge {
   };
 }
 
+/**
+ * An item's lane, as a name or `{ name }`: only a name a lane can have; null for null or anything else, which is no
+ * lane; undefined when the item has no `lane` at all.
+ */
+function laneNameOf(item: Record<string, unknown>): string | null | undefined {
+  if (!('lane' in item)) return undefined;
+  const name = isRecord(item.lane) ? text(item.lane.name) : text(item.lane);
+  return name !== null && isLaneName(name) ? name : null;
+}
+
 function linkOf(value: unknown): QueueItem['link'] {
   if (!isRecord(value)) return null;
   const url = text(value.url);
@@ -123,6 +139,7 @@ function itemOf(value: unknown): QueueItem | null {
     text: text(value.text),
     link: linkOf(value.link),
     judge: judgeOf(value.judge),
+    lane: laneNameOf(value),
   };
 }
 
