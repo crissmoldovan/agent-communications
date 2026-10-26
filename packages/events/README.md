@@ -165,7 +165,9 @@ events and not caller-configurable templates.
 to exactly the same document. Printing the same document always gives the same text. Anything the readable form has
 no words for is written as `raw` JSON in its place, so nothing is dropped. The parser checks the text only: the event
 service still checks the rule when the document is submitted, and the canonical JSON is still what is approved. The
-grammar is in [src/rule-text/GRAMMAR.md](src/rule-text/GRAMMAR.md).
+grammar is in [src/rule-text/GRAMMAR.md](src/rule-text/GRAMMAR.md). From 0.33.0 a target may be a Linear issue:
+`linear issue billing-issues, version 1, in team CUE, label Billing, assigned to me`, with its ids, title and
+description on the lines below.
 
 ```ts
 import { parseRuleText, printRuleText } from '@agentcomms/events';

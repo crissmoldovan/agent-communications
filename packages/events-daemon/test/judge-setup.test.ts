@@ -90,6 +90,9 @@ const PERSON_COMMANDS: readonly (readonly string[])[] = [
   ['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434'],
   ['provider', 'key', 'set', 'openrouter'],
   ['provider', 'key', 'remove', 'openrouter'],
+  // The Linear key a Linear target uses (0.33.0 design §3.4) is the person's in the same way.
+  ['provider', 'key', 'set', 'linear'],
+  ['provider', 'key', 'remove', 'linear'],
 ];
 
 test('judge setup and provider keys refuse every agent marker and the MCP server, before reading a key or calling the owner', async () => {
@@ -210,6 +213,8 @@ test('judge setup refuses a local model server that is not on this machine, befo
   for (const args of [
     ['judge', 'setup', 'laya'],
     ['judge', 'setup', 'typesafe', '--provider', 'someone-else'],
+    // Linear keeps a key beside the AI providers, but it serves no judge.
+    ['judge', 'setup', 'typesafe', '--provider', 'linear'],
     ['judge', 'setup', 'typesafe', '--url', 'http://127.0.0.1:11434'],
     ['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434', '--provider', 'openrouter'],
     ['provider', 'key', 'set', 'someone-else'],
@@ -263,6 +268,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
         { id: 'typesafe', name: 'TypeSafe', hasKey: false },
         { id: 'openrouter', name: 'OpenRouter', hasKey: false },
         { id: 'anthropic', name: 'Anthropic', hasKey: false },
+        { id: 'linear', name: 'Linear', hasKey: false },
       ],
     });
 
@@ -286,6 +292,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
         ['typesafe', false],
         ['openrouter', true],
         ['anthropic', false],
+        ['linear', false],
       ],
     );
 
@@ -384,7 +391,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
     });
     const unknownProvider = await cli(['provider', 'key', 'set', 'someone-else'], { stateDir, stdin: 'fake-x\n' });
     assert.equal(unknownProvider.code, USAGE_EXIT, unknownProvider.stderr);
-    assert.match(unknownProvider.stderr, /the AI provider is typesafe, openrouter or anthropic/u);
+    assert.match(unknownProvider.stderr, /the provider is typesafe, openrouter, anthropic or linear/u);
 
     // A local model server: its URL, checked again by the owner, and a new version when it changes.
     const local = await ok(['judge', 'setup', 'local-endpoint', '--url', 'http://127.0.0.1:11434']);

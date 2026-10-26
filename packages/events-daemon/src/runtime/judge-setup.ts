@@ -29,11 +29,15 @@ import { type WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts'
 
 export { PERSON_SETUP_ORIGINS } from '../domain/judge-setup.ts';
 
-/** The AI providers a person keeps keys for, as Settings → AI providers names them. */
+/**
+ * The providers a person keeps keys for, as the app names them: TypeSafe and OpenRouter in Settings → AI providers,
+ * and Linear in Settings → Integrations (0.33.0 design §3.4).
+ */
 export const PROVIDER_NAMES: Readonly<Record<EventSecretProvider, string>> = Object.freeze({
   typesafe: 'TypeSafe',
   openrouter: 'OpenRouter',
   anthropic: 'Anthropic',
+  linear: 'Linear',
 });
 
 export interface ProviderListResultV1 {
@@ -43,7 +47,7 @@ export interface ProviderListResultV1 {
 export interface ProviderKeyResultV1 {
   readonly provider: EventSecretProvider;
   readonly hasKey: boolean;
-  /** Live Jev judge versions of this provider that now hold the key, or, after a removal, hold none. */
+  /** Live Jev judge versions of this provider that now hold the key, or, after a removal, hold none; 0 for Linear. */
   readonly judges: number;
 }
 
@@ -89,7 +93,7 @@ export function judgeDestination(kind: SetupJudgeKind, provider: string): string
 }
 
 function provider(value: unknown): EventSecretProvider {
-  if (!isEventSecretProvider(value)) throw new CommsError('USAGE', `the AI provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
+  if (!isEventSecretProvider(value)) throw new CommsError('USAGE', `the provider is ${EVENT_SECRET_PROVIDER_WORDS}`);
   return value;
 }
 

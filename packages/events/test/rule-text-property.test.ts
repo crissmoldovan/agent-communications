@@ -5,7 +5,7 @@ import { type JsonObject, type JsonValue, parseRuleText, printRuleText } from '.
 /**
  * A property test of the rule text (0.33.0 design §3.2) over generated rule documents, with a fixed seed and no new
  * dependency. Readable documents are built from the condition AST, the source options, the agentic judge block, the
- * mapping template, the four target kinds and the retention fields; for each, printing then parsing gives the same
+ * mapping template, the five target kinds and the retention fields; for each, printing then parsing gives the same
  * document, printing twice gives the same text, and no escape is needed. Odd documents — fields missing, extra or of
  * the wrong type — must still come back whole through the escape form.
  */
@@ -310,7 +310,7 @@ function template(random: Random, depth: number): JsonObject {
 
 function target(random: Random, index: number): JsonObject {
   const identity = { targetId: `${name(random)}${index}`, version: random.int(0, 9) };
-  const kind = random.pick(['dry-run', 'queue', 'webhook', 'sse']);
+  const kind = random.pick(['dry-run', 'queue', 'webhook', 'sse', 'linear']);
   if (kind === 'dry-run') return { ...identity, kind, ...(random.chance(0.8) ? { retentionMs: count(random) } : {}) };
   if (kind === 'queue')
     return {
@@ -320,6 +320,7 @@ function target(random: Random, index: number): JsonObject {
       show: random.pick(['summary', 'minimal', name(random)]),
       ...(random.chance(0.5) ? { lane: { name: name(random) } } : {}),
     };
+  if (kind === 'linear') return linear(random, identity);
   if (kind === 'webhook') {
     const optional: Record<string, JsonValue> = {};
     if (random.chance(0.9))
@@ -351,6 +352,33 @@ function target(random: Random, index: number): JsonObject {
     kind,
     ...(random.chance(0.8) ? { subscriberId: name(random), subscriberVersion: random.int(0, 9) } : {}),
     ...(random.chance(0.8) ? { representation: random.pick(['plain', 'enveloped']) } : {}),
+  };
+}
+
+/**
+ * A Linear issue target (0.33.0 design §3.4): a team by key, id or both, labels all with ids or all by name alone, an
+ * assignee, and title and description templates whose text is anything at all.
+ */
+function linear(random: Random, identity: { targetId: string; version: number }): JsonObject {
+  const team: Record<string, JsonValue> = {};
+  const shape = random.int(0, 3);
+  if (shape !== 1) team.key = random.pick(['CUE', 'RGC', name(random)]);
+  if (shape !== 2) team.id = random.pick(['0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11', name(random)]);
+  const withIds = random.chance(0.7);
+  const labels = random
+    .some(0, 3, () => name(random))
+    .map((label) => (withIds ? { id: name(random), name: label } : { name: label }));
+  const template = () => ({
+    text: random.pick(['Invoice from {{from.address}}', '{{subject}}\n\nCheck it.', text(random), '']),
+  });
+  return {
+    ...identity,
+    kind: 'linear',
+    ...(shape === 3 ? {} : { team }),
+    ...(random.chance(0.9) ? { title: template() } : {}),
+    ...(random.chance(0.9) ? { description: template() } : {}),
+    labels,
+    assignee: random.pick(['me', null, { id: name(random) }]),
   };
 }
 

@@ -41,6 +41,8 @@ export interface DescribableTarget {
   readonly lane?: { readonly name: string } | undefined;
   readonly url?: unknown;
   readonly subscriberId?: string | undefined;
+  /** A Linear target's team (0.33.0): its key names it in the sentence. */
+  readonly team?: { readonly key?: unknown } | undefined;
 }
 
 /**
@@ -364,6 +366,14 @@ function target(entry: DescribableTarget): readonly RulePart[] {
       return [plain('send it to '), value(webhookHost(entry) ?? entry.targetId)];
     case 'sse':
       return [plain('stream it to '), value(entry.subscriberId ?? entry.targetId)];
+    case 'linear': {
+      const key = entry.team?.key;
+      return [
+        plain('add an issue to '),
+        value('Linear'),
+        ...(typeof key === 'string' && key !== '' ? [plain(', team '), value(key)] : []),
+      ];
+    }
     default:
       return [plain('deliver it to '), value(entry.targetId)];
   }

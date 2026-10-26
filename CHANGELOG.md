@@ -16,6 +16,25 @@ together under one version.
   one. It reads and sends no message content, and runs only at your terminal or in the app. `provider key set` takes
   `anthropic`; a judged decision now keeps its sender's domain, never the address, in its encrypted metadata (one
   automatic migration, 29, gives Anthropic a key slot).
+- **A rule can add a Linear issue** (`@agentcomms/events-daemon`, `@agentcomms/events`):
+  - **The key:** your Linear personal API key is kept beside the AI provider keys: `agent-events provider key set
+    linear`, from the app or your own terminal, never from an agent. `provider list` names Linear too.
+  - **What it can see:** `agent-events integration show linear [--team CUE] --json` gives the workspace and teams the
+    key can see, and a team's labels — the person's read for Settings → Integrations, refused inside an MCP server.
+  - **The target:** `{ kind: "linear", team, title, description, labels, assignee }`. The title and description are
+    text with `{{field}}` slots, each naming one of the rule's mapped fields, checked when the rule is activated; a
+    model-written one comes with the session target. The approval preview names the team, the labels, the assignee
+    and which fields fill the title and description. The rule text says it: `linear issue billing-issues, version 1,
+    in team CUE, label Billing, assigned to me`.
+  - **What a sender wrote stays text:** in the description each value from the message is a block quote labelled as
+    from outside, inside a code block, where Linear makes no link or mention from a URL, `@name` or issue id; in the
+    title it is flattened to one line.
+  - **Delivery:** one `issueCreate` through the pinned connection to `api.linear.app/graphql`, the one Linear address
+    the event service may reach. A rate limit or a 5xx is tried again as a webhook's failure is; Linear refusing it
+    fails at once with Linear's code. A retry never adds a second issue: each try looks for the issue by its own id
+    first. `deliveries list` and `delivery show` name the issue (`linear: { identifier, url }`), never what it says.
+  - **Migrations:** two event service migrations run on their own: 30, a key slot for Linear, and 31, a delivery that
+    can record its Linear issue.
 
 ## 0.32.0
 

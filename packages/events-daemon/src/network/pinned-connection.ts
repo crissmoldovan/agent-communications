@@ -36,6 +36,12 @@ export const ANALYSE_GLOBAL_ONLY_ENDPOINTS: readonly [
   'https://openrouter.ai/api/v1/chat/completions',
   'https://api.anthropic.com/v1/messages',
 ] = ['https://openrouter.ai/api/v1/chat/completions', 'https://api.anthropic.com/v1/messages'];
+/**
+ * Linear's GraphQL endpoint (0.33.0 design §3.4), where a Linear target adds its issues and `integration show linear`
+ * reads the workspace. It is admitted only to a caller that names the Linear purpose, which admits exactly this URL —
+ * scheme, host `api.linear.app`, port and path — and nothing else: a judge and Analyse never reach it.
+ */
+export const LINEAR_GLOBAL_ONLY_ENDPOINT = 'https://api.linear.app/graphql';
 
 export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly url: URL | string;
@@ -43,8 +49,11 @@ export type PreparePinnedConnectionOptions = AddressPolicyOptions & {
   readonly approvedAddressSetDigest?: string;
   /** Optional cancellation preserves B2's existing behavior for callers that omit it. */
   readonly signal?: AbortSignal;
-  /** Global-only only: `analyse` admits Analyse's model endpoints, and only them; omitted, a judge's two. */
-  readonly hostedPurpose?: 'analyse' | undefined;
+  /**
+   * Global-only only: `analyse` admits Analyse's model endpoints, and only them; `linear` admits Linear's GraphQL
+   * endpoint, and only it; omitted, a judge's two.
+   */
+  readonly hostedPurpose?: 'analyse' | 'linear' | undefined;
 };
 
 export interface PinnedTcpOptions {
@@ -148,6 +157,10 @@ export async function preparePinnedConnection(options: PreparePinnedConnectionOp
       // Analyse's model: exactly its fixed endpoints, and never a judge's.
       if (!(ANALYSE_GLOBAL_ONLY_ENDPOINTS as readonly string[]).includes(url.href))
         throw new AddressPolicyError('global-only address mode for Analyse is reserved for its fixed model endpoints');
+    } else if (options.hostedPurpose === 'linear') {
+      // A Linear target's issues and the Linear integration's read: exactly Linear's GraphQL endpoint.
+      if (url.href !== LINEAR_GLOBAL_ONLY_ENDPOINT)
+        throw new AddressPolicyError('global-only address mode for Linear is reserved for its GraphQL endpoint');
     } else if (url.href === OPENROUTER_GLOBAL_ONLY_ENDPOINT) {
       // Jev through OpenRouter: the second, and last, fixed hosted endpoint.
     } else if (url.href !== TYPESAFE_GLOBAL_ONLY_ENDPOINT)
