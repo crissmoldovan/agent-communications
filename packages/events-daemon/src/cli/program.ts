@@ -724,8 +724,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     if (canPrompt(env, streams, { json: program.opts<EventsCliOptions>().json === true }))
       return PERSON_SETUP_ORIGINS.terminal;
-    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin()))();
-    if (origin.ok) return PERSON_SETUP_ORIGINS.desktopApp;
+    // The config folder this run is for: a test build speaks only for a marked test profile's.
+    const configDir = program.opts<EventsCliOptions>().configDir ?? resolvePaths({ env }).configDir;
+    const origin = await (deps.desktopOrigin ?? (() => desktopAppOrigin({ configDir })))();
+    if (origin.ok)
+      return origin.build === 'test' ? PERSON_SETUP_ORIGINS.desktopAppTestBuild : PERSON_SETUP_ORIGINS.desktopApp;
     if (origin.reason === 'unattested-platform') return PERSON_SETUP_ORIGINS.desktopAppUnattested;
     throw new CommsError(
       'APPROVAL_REQUIRED',

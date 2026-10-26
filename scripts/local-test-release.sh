@@ -67,6 +67,9 @@ echo "2/5 Installing and building (a few minutes)"
 echo "3/5 Writing the test profile in $profile"
 mkdir -p "$profile/config" "$profile/state" "$profile/data/launch" "$profile/bin"
 chmod 700 "$profile" "$profile/config" "$profile/state" "$profile/data" "$profile/data/launch"
+# The test profile's mark, in its config folder and nowhere else: the test app's approvals speak only for a folder that
+# holds it (core's desktopAppOrigin), never for the real installation's.
+: > "$profile/config/.agentcomms-test-profile"
 pins="--config-dir '$profile/config' --state-dir '$profile/state' --data-dir '$profile/data' --secrets-dir '$profile/config/secrets'"
 for entry in core:core:agentcomms gmail:gmail:agent-gmail slack:slack:agent-slack resend:resend:agent-resend \
   whatsapp:whatsapp:agent-whatsapp events-daemon:events-daemon:agent-events; do

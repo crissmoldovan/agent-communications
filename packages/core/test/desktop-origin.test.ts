@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -11,6 +11,7 @@ import {
   DESKTOP_TEST_REQUIREMENT,
   desktopAppOrigin,
   type ExecFn,
+  TEST_PROFILE_MARKER,
 } from '../src/desktop-origin.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -22,9 +23,13 @@ import { tempDir } from './helpers/temp.ts';
  */
 
 const RELEASE_APP = '/Applications/Agent Comms.app/Contents/MacOS/agentcomms-desktop';
-const LOCAL_CLI = '/example/home/work/agent-communications/packages/core/dist/cli.mjs';
-const RELEASE_RUNTIME_CLI =
-  '/example/home/.local/share/agent-communications/runtime/0.32.0-core/node_modules/@agentcomms/core/dist/cli.mjs';
+/** The real default config folder, as core resolves it with no pin, and a test profile's, marked as the script marks it. */
+const REAL_CONFIG = '/example/home/.config/agent-communications';
+function testProfile(marked = true): string {
+  const dir = tempDir('origin-profile-');
+  if (marked) writeFileSync(join(dir, TEST_PROFILE_MARKER), '');
+  return dir;
+}
 
 /** A machine: what `ps` says the parent calls itself, and which requirements its running code satisfies. */
 function machine(options: { parent: string; satisfies?: ('release' | 'test')[] }): { exec: ExecFn; ran: string[][] } {
@@ -59,7 +64,7 @@ const DARWIN = { ppid: 4242, platform: 'darwin' as const };
 
 test('the release app is attested by its running code: the pid verifies against the owner-team requirement', async () => {
   const { exec, ran } = machine({ parent: RELEASE_APP, satisfies: ['release'] });
-  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, selfPath: RELEASE_RUNTIME_CLI }), {
+  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG }), {
     ok: true,
     build: 'release',
     identifier: DESKTOP_RELEASE_IDENTIFIER,
@@ -75,32 +80,72 @@ test('the release app is attested by its running code: the pid verifies against 
 test('a parent that only calls itself the app is refused: argv[0] is the name a process gives itself', async () => {
   // `exec -a "/Applications/Agent Comms.app/…" /bin/sh`: `ps` says the app, and its running code is the shell's.
   const { exec } = machine({ parent: RELEASE_APP, satisfies: [] });
-  const origin = await desktopAppOrigin({ ...DARWIN, exec, selfPath: LOCAL_CLI });
+  const origin = await desktopAppOrigin({ ...DARWIN, exec, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG });
   assert.deepEqual(origin, { ok: false, reason: 'not-agent-comms', parent: RELEASE_APP });
   // And one whose `ps` cannot say is judged by its running code alone.
   const silent: ExecFn = async (file, args) => {
     if (file === '/bin/ps') throw new Error('ps: no such process');
     return machine({ parent: '', satisfies: ['release'] }).exec(file, args);
   };
-  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec: silent, selfPath: LOCAL_CLI }), {
-    ok: true,
-    build: 'release',
-    identifier: DESKTOP_RELEASE_IDENTIFIER,
-  });
+  assert.deepEqual(
+    await desktopAppOrigin({ ...DARWIN, exec: silent, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG }),
+    {
+      ok: true,
+      build: 'release',
+      identifier: DESKTOP_RELEASE_IDENTIFIER,
+    },
+  );
 });
 
-test('the test app is accepted by its running code beside a local build, and refused beside a release runtime', async () => {
+test('the test app is accepted only for a marked test profile, never the real one: its own audit name follows', async () => {
   const { exec } = machine({
     parent: '/example/home/Applications/Agent Comms Test.app/Contents/MacOS/x',
     satisfies: ['test'],
   });
-  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, selfPath: LOCAL_CLI }), {
+  const profile = testProfile();
+  assert.deepEqual(await desktopAppOrigin({ ...DARWIN, exec, configDir: profile, defaultConfigDir: REAL_CONFIG }), {
     ok: true,
     build: 'test',
     identifier: DESKTOP_TEST_IDENTIFIER,
   });
-  const origin = await desktopAppOrigin({ ...DARWIN, exec, selfPath: RELEASE_RUNTIME_CLI });
-  assert.equal(origin.ok ? '' : origin.reason, 'test-app-with-release-runtime');
+  // A folder the script did not mark: any home-made ad-hoc app with the test identifier, beside any install of the CLI.
+  const unmarked = await desktopAppOrigin({
+    ...DARWIN,
+    exec,
+    configDir: testProfile(false),
+    defaultConfigDir: REAL_CONFIG,
+  });
+  assert.equal(unmarked.ok ? '' : unmarked.reason, 'not-a-test-profile');
+  // The real, default folder, even marked.
+  const real = testProfile();
+  const atReal = await desktopAppOrigin({ ...DARWIN, exec, configDir: real, defaultConfigDir: real });
+  assert.equal(atReal.ok ? '' : atReal.reason, 'test-app-with-real-profile');
+  // No folder named: nothing to check, so nothing accepted.
+  const unknown = await desktopAppOrigin({ ...DARWIN, exec, defaultConfigDir: REAL_CONFIG });
+  assert.equal(unknown.ok ? '' : unknown.reason, 'test-profile-unknown');
+  // A marker that is a link, not the file the script writes, does not count.
+  const linked = testProfile(false);
+  symlinkSync(join(profile, TEST_PROFILE_MARKER), join(linked, TEST_PROFILE_MARKER));
+  const viaLink = await desktopAppOrigin({ ...DARWIN, exec, configDir: linked, defaultConfigDir: REAL_CONFIG });
+  assert.equal(viaLink.ok ? '' : viaLink.reason, 'not-a-test-profile');
+  // The release needs no marker: it speaks for any folder, the real one included.
+  const release = machine({ parent: RELEASE_APP, satisfies: ['release'] });
+  assert.equal(
+    (await desktopAppOrigin({ ...DARWIN, exec: release.exec, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG }))
+      .ok,
+    true,
+  );
+});
+
+test("the local test release marks its test profile's config folder with this marker, and nothing else", () => {
+  const script = readFileSync(
+    fileURLToPath(new URL('../../../scripts/local-test-release.sh', import.meta.url)),
+    'utf8',
+  );
+  const writes = script
+    .split('\n')
+    .filter((line) => line.includes(TEST_PROFILE_MARKER) && !line.trim().startsWith('#'));
+  assert.deepEqual(writes, [`: > "$profile/config/${TEST_PROFILE_MARKER}"`]);
 });
 
 test('any other parent is refused: a shell, a terminal, node, another app', async () => {
@@ -111,7 +156,7 @@ test('any other parent is refused: a shell, a terminal, node, another app', asyn
     '',
   ]) {
     const { exec } = machine({ parent, satisfies: [] });
-    const origin = await desktopAppOrigin({ ...DARWIN, exec, selfPath: LOCAL_CLI });
+    const origin = await desktopAppOrigin({ ...DARWIN, exec, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG });
     assert.equal(origin.ok, false, parent);
     assert.equal(origin.ok ? '' : origin.reason, 'not-agent-comms', parent);
   }
@@ -120,10 +165,13 @@ test('any other parent is refused: a shell, a terminal, node, another app', asyn
 test('on Windows and Linux nothing is attested, and nothing is run', async () => {
   for (const platform of ['win32', 'linux'] as const) {
     const { exec, ran } = machine({ parent: '/usr/bin/agentcomms-desktop', satisfies: ['release', 'test'] });
-    assert.deepEqual(await desktopAppOrigin({ ppid: 4242, platform, exec, selfPath: LOCAL_CLI }), {
-      ok: false,
-      reason: 'unattested-platform',
-    });
+    assert.deepEqual(
+      await desktopAppOrigin({ ppid: 4242, platform, exec, configDir: REAL_CONFIG, defaultConfigDir: REAL_CONFIG }),
+      {
+        ok: false,
+        reason: 'unattested-platform',
+      },
+    );
     assert.deepEqual(ran, []);
   }
 });

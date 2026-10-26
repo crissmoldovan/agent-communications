@@ -434,7 +434,7 @@ async function appliedFromApp<T>(
     }
     // On macOS the process that started this one must be Agent Comms itself, verified by its signature; Windows and
     // Linux attest nothing, and keep the checks above (known limit).
-    origin = await (options.appOrigin ?? (() => desktopAppOrigin()))();
+    origin = await (options.appOrigin ?? (() => desktopAppOrigin({ configDir: core.paths.configDir })))();
     if (!origin.ok && origin.reason !== 'unattested-platform') {
       throw new CommsError(
         'APPROVAL_REQUIRED',
@@ -455,7 +455,11 @@ async function appliedFromApp<T>(
   await approveChangeInApp(core, approvalId, request, {
     surface: 'app',
     platform,
-    approvedBy: origin.ok ? 'desktop-app' : 'desktop-app (unattested)',
+    approvedBy: !origin.ok
+      ? 'desktop-app (unattested)'
+      : origin.build === 'test'
+        ? 'desktop-app (test build)'
+        : 'desktop-app',
   });
   try {
     const { consent } = await claimChangeApproval(core, approvalId, request, { surface: 'app', platform });

@@ -115,7 +115,12 @@ test('judge setup and provider keys refuse every agent marker and the MCP server
 });
 
 test('from a pipe, the person’s setup is refused unless Agent Comms started it: a key is read from the app or a terminal only', async () => {
-  for (const reason of ['not-agent-comms', 'test-app-with-release-runtime']) {
+  for (const reason of [
+    'not-agent-comms',
+    'not-a-test-profile',
+    'test-app-with-real-profile',
+    'test-profile-unknown',
+  ]) {
     for (const args of PERSON_COMMANDS) {
       const ran = await cli(args, { stdin: `${OPENROUTER_KEY}\n`, desktopOrigin: async () => ({ ok: false, reason }) });
       assert.equal(ran.code, APPROVAL_EXIT, `${args.join(' ')} ${reason}: ${ran.stderr}`);
@@ -386,15 +391,29 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       desktopOrigin: async () => ({ ok: false, reason: 'unattested-platform' }),
     });
     assert.equal(unattested.code, 0, unattested.stderr);
+    // The local test build, for its own test profile, is said to be the test build's: never the release app's.
+    const typedAgain = await cli(['provider', 'key', 'set', 'typesafe'], {
+      stateDir,
+      tty: true,
+      readSecret: async () => TYPESAFE_KEY,
+    });
+    assert.equal(typedAgain.code, 0, typedAgain.stderr);
+    const fromTestBuild = await cli(['--json', 'provider', 'key', 'remove', 'typesafe'], {
+      stateDir,
+      desktopOrigin: async () => ({ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }),
+    });
+    assert.equal(fromTestBuild.code, 0, fromTestBuild.stderr);
     const keyLines = (await openCore({ pathOverrides: { stateDir, configDir } }).audit.tail({ limit: 100 })).filter(
       (line) => line.operation === 'events.providerKeySet' || line.operation === 'events.providerKeyRemove',
     );
     const lastSet = keyLines.filter((line) => line.operation === 'events.providerKeySet').at(-1);
     assert.equal(lastSet?.ids?.approvedBy, 'terminal');
     assert.equal(lastSet?.surface, 'cli');
-    const lastRemove = keyLines.filter((line) => line.operation === 'events.providerKeyRemove').at(-1);
-    assert.equal(lastRemove?.ids?.approvedBy, 'desktop-app (unattested)');
-    assert.equal(lastRemove?.surface, 'app');
+    const removes = keyLines.filter((line) => line.operation === 'events.providerKeyRemove');
+    assert.equal(removes.at(-2)?.ids?.approvedBy, 'desktop-app (unattested)');
+    assert.equal(removes.at(-2)?.surface, 'app');
+    assert.equal(removes.at(-1)?.ids?.approvedBy, 'desktop-app (test build)');
+    assert.equal(removes.at(-1)?.surface, 'app');
     // `judge kind disable` stays the off switch.
     await ok(['judge', 'kind', 'disable', 'typesafe']);
     assert.equal((await kinds()).typesafe, 'disabled');

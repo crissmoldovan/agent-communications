@@ -256,7 +256,12 @@ test('on macOS a process the app did not start cannot approve in the app: refuse
   const { core } = coreWith('never');
   const change = setSendPolicy(core, 'chat');
   const approvalId = await prepared(core, change);
-  for (const reason of ['not-agent-comms', 'test-app-with-release-runtime']) {
+  for (const reason of [
+    'not-agent-comms',
+    'not-a-test-profile',
+    'test-app-with-real-profile',
+    'test-profile-unknown',
+  ]) {
     await assert.rejects(
       gatedChangeAtTerminal(core, change, {
         ...APP,
@@ -273,6 +278,20 @@ test('on macOS a process the app did not start cannot approve in the app: refuse
   }
   assert.deepEqual(await standing(core), { state: 'pending', via: undefined });
   assert.equal(await policyNow(core), 'never');
+});
+
+test('the local test build approves only as itself: its audit line says desktop-app (test build), never desktop-app', async () => {
+  const { core } = coreWith('never');
+  const change = setSendPolicy(core, 'chat');
+  const approvalId = await prepared(core, change);
+  const applied = await gatedChangeAtTerminal(core, change, {
+    ...APP,
+    appOrigin: async () => ({ ok: true, build: 'test', identifier: 'com.cueplusplus.agentcomms.test' }),
+    appApproval: approvalId,
+  });
+  assert.equal(applied, 'chat');
+  const approve = (await auditLines(core)).find((line) => line.operation === 'change.approve' && line.outcome === 'ok');
+  assert.equal(approve?.approvedBy, 'desktop-app (test build)');
 });
 
 test('on Windows and Linux, where nothing attests the app, the audit says the approval was unattested', async () => {
