@@ -179,15 +179,20 @@ function stopped(): CommsError {
 }
 
 function sameWindow(owner: Task['owner'], caller: LaneWindowIdentity): boolean {
-  if (owner.sessionId !== null || caller.sessionId !== null) return owner.sessionId === caller.sessionId;
-  return owner.grouped && caller.grouped && owner.activityKey === caller.activityKey;
+  return isBoundWindow({ session_id: owner.sessionId, activity_key: owner.grouped ? owner.activityKey : null }, caller);
 }
 
-/** §3.3: the session id decides when either side has one; otherwise a grouped activity key, and only a grouped one. */
-function isBoundWindow(binding: BindingRow, caller: LaneWindowIdentity): boolean {
-  if (binding.session_id !== null || caller.sessionId !== null)
-    return binding.session_id !== null && binding.session_id === caller.sessionId;
-  return caller.grouped && binding.activity_key !== null && binding.activity_key === caller.activityKey;
+/**
+ * §3.3: the session id decides when either side has one; otherwise a grouped activity key, and only a grouped one.
+ * A binding that recorded both — a Claude Code window with a grouped key — needs both to match (review of 0.31.0).
+ */
+function isBoundWindow(binding: Pick<BindingRow, 'session_id' | 'activity_key'>, caller: LaneWindowIdentity): boolean {
+  const key = binding.activity_key !== null && caller.grouped && binding.activity_key === caller.activityKey;
+  if (binding.session_id !== null || caller.sessionId !== null) {
+    if (binding.session_id === null || binding.session_id !== caller.sessionId) return false;
+    return binding.activity_key === null || key;
+  }
+  return key;
 }
 
 function bindingView(row: BindingRow, home: string): LaneBindingV1 {
@@ -237,10 +242,30 @@ export class LaneService {
     this.#home = options.home ?? homeDirectory();
   }
 
-  /** Records a window the event service's MCP server reported, so the person can bind it by either id (B1). */
+  /**
+   * Records a window the event service's MCP server reported, so the person can bind it by either id (B1). A report
+   * may refresh a recorded window's folder, client and time, never its identity: one that names another Claude Code
+   * session id for a recorded activity key — or none for one that had one, or flips whether it was grouped — is
+   * refused and changes nothing, so no process can redirect a binding the person makes by that key (review of 0.31.0).
+   */
   seen(window: LaneWindowIdentity): void {
     const now = this.#now();
     this.#store.immediate(() => {
+      const recorded = this.#store.database
+        .prepare('SELECT session_id, grouped FROM lane_windows WHERE activity_key = ?')
+        .get(window.activityKey) as { session_id: string | null; grouped: number } | undefined;
+      if (
+        recorded !== undefined &&
+        (recorded.session_id !== window.sessionId || recorded.grouped !== (window.grouped ? 1 : 0))
+      )
+        throw new CommsError(
+          'BAD_DATA',
+          'this activity session was reported before with another Claude Code session id or grouping, so the event service refused this report and changed nothing',
+          {
+            hint: 'A window keeps the ids it was first reported with; a report that changes them is not that window.',
+            details: { reason: 'WINDOW_REPORT_CONFLICT' },
+          },
+        );
       this.#store.database
         .prepare(
           `INSERT INTO lane_windows (activity_key, session_id, grouped, folder, client_name, client_version, last_seen_at)

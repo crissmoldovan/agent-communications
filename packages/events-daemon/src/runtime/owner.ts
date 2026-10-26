@@ -6,6 +6,7 @@ import {
   type AuditLog,
   CommsError,
   type ConfigStore,
+  isCommsError,
   openCore,
   resolvePaths,
   sha256Hex,
@@ -1861,7 +1862,12 @@ function requiredCaller(args: Readonly<Record<string, unknown>>): LaneWindowIden
 /** What a caller may see of the queue: everything for the person, and an agent window's lane scope for a window. */
 function callerScope(lanes: LaneService, caller: LaneWindowIdentity | undefined): QueueScope | undefined {
   if (caller === undefined) return undefined;
-  lanes.seen(caller);
+  try {
+    lanes.seen(caller);
+  } catch (error) {
+    // A report the lanes refuse (it names other ids for a recorded window) is not recorded; the scope still holds.
+    if (!isCommsError(error)) throw error;
+  }
   return lanes.scopeFor(caller);
 }
 
