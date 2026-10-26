@@ -1,6 +1,7 @@
 import { type AuditLog, CommsError, canonicalJson } from '@agentcomms/core';
 import { HumanSecret } from '../domain/human-secret.ts';
 import {
+  changeAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
   localSetupModel,
@@ -276,10 +277,6 @@ export class JudgeSetupService {
           'APPROVAL_REQUIRED',
           'at your terminal, approve a rule with approve <approval-id>, which asks for its challenge',
         );
-      // Only an attested app — the release, or the test build for its own profile — approves here: an unattested
-      // origin (Windows, Linux) is sent to the terminal, so a standing disclosure is never approved on a missing
-      // marker alone, and the record's `approvedVia: app` always means the attested app (security review, finding 2).
-      if (approver === 'desktop-app (unattested)') throw ruleApprovalAtTerminal(approvalId);
       const row = this.#store.database
         .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
         .get(approvalId) as { document: string; digest: string; status: string } | undefined;
@@ -419,6 +416,13 @@ export class JudgeSetupService {
       await record('refused', 'PERSON_SETUP_ONLY');
       throw new CommsError('APPROVAL_REQUIRED', 'this is the person’s own setup, from the app or their terminal');
     }
+    // Every one of these is a change the person makes — a standing disclosure approved, a judge set up, a key set or
+    // removed — so an origin nothing attests (Windows, Linux) is sent to the terminal, should any client claim it; and
+    // an `app` approval always means the attested app (second look of the 0.33.0 security review).
+    if (approver === 'desktop-app (unattested)') {
+      await record('refused', 'ORIGIN_UNATTESTED');
+      throw unattestedChange(operation, ids);
+    }
     try {
       const result = await work();
       await record('ok');
@@ -433,5 +437,25 @@ export class JudgeSetupService {
       else await record('failed');
       throw error;
     }
+  }
+}
+
+/** The terminal refusal of each person-only change, with the event service's words to type there. */
+function unattestedChange(
+  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove',
+  ids: Readonly<Record<string, string>>,
+): CommsError {
+  switch (operation) {
+    case 'ruleApprove':
+      return ruleApprovalAtTerminal(ids.approvalId);
+    case 'judgeSetup':
+      return changeAtTerminal('set up a judge', `judge setup ${ids.kind ?? '<kind>'}, with the same options`);
+    case 'providerKeySet':
+      return changeAtTerminal(
+        "set a provider's key",
+        `provider key set ${ids.provider ?? '<provider>'}, which asks for the key, hidden`,
+      );
+    case 'providerKeyRemove':
+      return changeAtTerminal("remove a provider's key", `provider key remove ${ids.provider ?? '<provider>'}`);
   }
 }

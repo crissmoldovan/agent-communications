@@ -1,7 +1,7 @@
 import { isAbsolute, normalize, relative, sep } from 'node:path';
 import { type AuditLog, CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { personSetupApprover } from '../domain/judge-setup.ts';
+import { changeAtTerminal, personSetupApprover } from '../domain/judge-setup.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { isSessionFolder, sessionTargetFiles } from '../domain/session-target.ts';
 import type { EventDatabase } from '../store/database.ts';
@@ -282,6 +282,15 @@ export class AgentSessionService {
       throw new CommsError(
         'APPROVAL_REQUIRED',
         'where Agent Comms finds your claude-stream relay is your own setting, from the app or your terminal',
+      );
+    }
+    // Repointing the relay decides which listener receives session prompts: from an origin nothing attests (Windows,
+    // Linux) it is the terminal's, should any client claim it (second look of the 0.33.0 security review).
+    if (approver === 'desktop-app (unattested)') {
+      await audit('refused', 'ORIGIN_UNATTESTED');
+      throw changeAtTerminal(
+        'change where Agent Comms finds your claude-stream relay',
+        'integration set agent-sessions, with the same options',
       );
     }
     try {

@@ -2795,7 +2795,7 @@
       "operation": "judgeSetup",
       "argv": ["typesafe"],
       "expect": { "kind": "typesafe" },
-      "reason": "Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the desktop app or their terminal: it refuses an agent's shell and the event service's MCP server, and no tool performs it (owner decision 2026-10-26; events design D2)."
+      "reason": "Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the attested desktop app or an interactive terminal: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, and no tool performs it (owner decision 2026-10-26; events design D2)."
     },
     {
       "id": "events-daemon.provider.list",
@@ -2825,7 +2825,7 @@
       "operation": "providerKeyRemove",
       "argv": ["openrouter"],
       "expect": { "provider": "openrouter" },
-      "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does (owner decision 2026-10-26)."
+      "reason": "An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does. On Windows and Linux, which attest nothing, setting or removing one is done at the person's terminal (owner decision 2026-10-26)."
     },
     {
       "id": "events-daemon.rule.approve",
@@ -2884,7 +2884,7 @@
       "operation": "integrationSet",
       "argv": ["agent-sessions", "--relay-port", "4318"],
       "expect": { "integration": "agent-sessions" },
-      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a rule can prompt, with that relay's control token, so it is the person's, from the app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
+      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a rule can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
     },
     {
       "id": "events-daemon.session-queue.list",

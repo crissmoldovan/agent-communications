@@ -490,7 +490,8 @@ two weaknesses beside it. Each is fixed:
   setup, come only from the app the check found (the key on stdin) or an interactive terminal (hidden input, never a
   pipe), and the audit records the real origin.
 - **What it does not close:** Windows and Linux check nothing (§7). There the app's path keeps the marker checks, and
-  its audit line says `desktop-app (unattested)`.
+  its audit line says `desktop-app (unattested)`. (0.33.0's second look closed that path for the event service's
+  changes: there judge setup and a provider key are done at a terminal; see §7.)
 
 **Settled after the second look (2026-10-26).** An independent second look confirmed the high finding above closed, and
 found the origin check spoofable two ways and two smaller gaps. Each is fixed:
@@ -541,6 +542,9 @@ No migration is asked of anyone. Two schema migrations run automatically: `queue
 - **The dry-run log** keeps an entry 24 hours at most, so a dry run older than that shows its delivery but not its
   content.
 - **The app's origin is checked on macOS only, and only as a speed bump.** On macOS it confirms the app started the
-  command, which code running as you can get around. On Windows and Linux an approval in the app (adding a server,
-  judge setup, a provider key) rests on the agent-marker checks, a speed bump an agent's shell could get past; its
-  audit line says `desktop-app (unattested)`. The event service's origin label is a same-user control client's word.
+  command, which code running as you can get around. On Windows and Linux nothing is checked, so since 0.33.0's second
+  look the event service's changes go through a terminal: judge setup, a provider key set or removed (and, in 0.33.0,
+  Integrations → Agent sessions and a rule's approval) from an origin nothing attests are refused with
+  `APPROVAL_REQUIRED` and `ORIGIN_UNATTESTED`, audited as `desktop-app (unattested)`, and the app offers Do it in
+  Terminal. Adding a server in the app (core's `--app-approval`) still rests there on the agent-marker checks, a speed
+  bump an agent's shell could get past. The event service's origin label is a same-user control client's word.

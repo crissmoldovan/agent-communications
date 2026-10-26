@@ -61,6 +61,13 @@ together under one version.
   and the MCP tool `events_judge_show` give one judge version's canonical document — kind, provider, model, endpoint,
   prompt template, protocol — with its digest and whether it is live or revoked, so the app's rule editor can embed any
   judge in a rule, not only one another rule already carries. A judge's key is never part of its document.
+- **On Windows and Linux, changes go through a terminal** (`@agentcomms/events-daemon`, the security review's second
+  look): nothing there attests that the app started a command, so `judge setup`, `provider key set|remove` and
+  `integration set agent-sessions`, as `rule approve` already did, refuse an origin nothing attests with
+  `APPROVAL_REQUIRED` (exit 10, `ORIGIN_UNATTESTED`), naming the words to type at your terminal; the event service
+  refuses it too and audits the refusal. The app offers Do it in Terminal. On macOS nothing changes, and
+  `approvedVia: app`, judge setup's included, now always means the attested app. `rule analyse` changes nothing and
+  keeps its rule.
 
 ## 0.32.0
 

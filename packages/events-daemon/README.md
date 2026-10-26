@@ -460,18 +460,22 @@ agent-events judge setup local-endpoint --url http://127.0.0.1:11434 --model nim
 `judge setup` adds the judge (`jev`, or `local-model`), gives Jev its provider's stored key, approves the daemon-wide
 budget when there is none for the judge's provider — 60 calls per rolling hour, 1,000,000 input tokens per rolling 30
 days and two calls at a time, overall and for that provider — and turns the kind on. Running the command is your
-approval of those enablements: each is recorded as approved through the app (`approvedVia: app` on its approval), and
-the audit log says where you ran it — `approvedBy: desktop-app` from the Agent Comms app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
+approval of those enablements: each is recorded with where you approved it (`approvedVia: app` on its approval from
+the attested Agent Comms app, `terminal` at a terminal), and the audit log says the same — `approvedBy: desktop-app` from
+the app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
 provider, the URL or the model changed; a rule keeps using the judge version it names until you update it. A local
 model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `provider key set` again replaces a key,
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
 refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
 where you are: at an interactive terminal, where a key is your hidden input, or in the Agent Comms app, which sends the
 key on stdin. On macOS the command first checks that the app started this process: a speed bump against agents, not a boundary against code running as you (core's `desktopAppOrigin`, which has codesign verify the running parent by its pid; the local test
-build counts only for its own marked test profile). Windows and Linux check nothing, a known limit: there a command
-without an agent's marker counts as the app's, and its audit line says `desktop-app (unattested)`. The result and the
-audit line say where you were — `desktop-app`, `desktop-app (test build)`, `desktop-app (unattested)` or `terminal` —
-as the CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
+build counts only for its own marked test profile). Windows and Linux check nothing, so there these changes go
+through a terminal: a command that is neither at an interactive terminal nor attested as the app's is refused with
+`APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
+says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
+`integration set agent-sessions` and `rule approve`. `rule analyse` changes nothing and still runs from the app there.
+The result and the audit line say where you were — `desktop-app`, `desktop-app (test build)` or `terminal` — as the
+CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
 refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`
 says only whether each provider has a key.
 

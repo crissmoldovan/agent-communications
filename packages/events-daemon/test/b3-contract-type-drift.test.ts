@@ -452,6 +452,30 @@ test('B3 v1 keeps every closed success result attached to its owning operation',
   );
 });
 
+test('B3 v1: a person-only change is never approved by the app unattested — that origin is sent to the terminal', async () => {
+  const schema = record(
+    JSON.parse(await readFile(join(CONTRACTS, 'b3-control-v1.schema.json'), 'utf8')) as unknown,
+    'B3 control schema',
+  );
+  const doctor = record(
+    JSON.parse(await readFile(join(CONTRACTS, 'doctor-v1.schema.json'), 'utf8')) as unknown,
+    'doctor schema',
+  );
+  const validateVector = vectorValidator(schema, doctor);
+  const seeded = JSON.parse(await readFile(join(FIXTURES, 'seeded-results.json'), 'utf8')) as readonly {
+    readonly name: string;
+    readonly result: Record<string, unknown>;
+  }[];
+  for (const name of ['judge-setup-result', 'rule-approve-result']) {
+    const vector = seeded.find((entry) => entry.name === name);
+    assert.ok(vector, `the fixture set carries ${name}`);
+    assert.equal(validateVector(vector), true, `${name} validates as checked in`);
+    const unattested = { ...vector, result: { ...vector.result, approvedBy: 'desktop-app (unattested)' } };
+    assert.equal(validateVector(unattested), false, `${name}: the schema has no unattested approver`);
+    assert.throws(() => assertB3ControlContractVectorV1(unattested), TypeError, `${name}: nor the runtime guard`);
+  }
+});
+
 test('B3 v1 gives every desktop wire a closed result schema that rejects empty and unknown result objects', async () => {
   const schema = record(
     JSON.parse(await readFile(join(CONTRACTS, 'b3-control-v1.schema.json'), 'utf8')) as unknown,
