@@ -1094,8 +1094,13 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
   const server = SERVERS.find((each) => serverFacts(each).binary === remedy.binary);
   if (server === undefined) return error;
   const maker = await requireHandoffs(core).registered();
+  // A channel's own `mcp install` registers an entry of its own only with `--standalone` (D17); core's always does.
+  const words =
+    server === 'core' || !isChannel(server)
+      ? remedy.words
+      : [...remedy.words.slice(0, 4), '--standalone', ...remedy.words.slice(4)];
   const handoff = isChannel(server)
-    ? maker.of(server, remedy.words)
+    ? maker.of(server, words)
     : maker.core(['mcp', 'install', '--server', server, ...remedy.words.slice(2)]);
   return new CommsError(error.code, error.message, {
     hint: handoffSentence(handoff, remedy.say),
