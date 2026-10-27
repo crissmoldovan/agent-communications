@@ -45,6 +45,7 @@ import { NavigationProvider, takeDestination } from '../navigation.tsx';
 import { DeliveriesTab } from './events/DeliveriesTab.tsx';
 import { useEventsLists, useEventsNav } from './events/lists.ts';
 import { RulesTab } from './events/RulesTab.tsx';
+import { SubscribersTab } from './events/SubscribersTab.tsx';
 import { Watching, WatchWords } from './events/Watching.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
@@ -77,7 +78,13 @@ const isRecord = (value: unknown): value is Row => typeof value === 'object' && 
 
 /** The screen's own words beside the event service's and the judges' (below): its tabs, and the hints it moved. */
 export const EVENTS_COPY = {
-  tabs: { service: 'Service', judges: 'Judges', rules: 'Workflows', deliveries: 'Deliveries' },
+  tabs: {
+    service: 'Service',
+    judges: 'Judges',
+    rules: 'Workflows',
+    deliveries: 'Deliveries',
+    subscribers: 'Subscribers',
+  },
   toLookAt: 'to look at',
   failed: 'could not be read',
   needsUpdate: 'needs an update',
@@ -1387,6 +1394,7 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
             <Count count={deliveries.state === 'ready' ? deliveries.value.length : null} />
           ),
         )}
+        {tab('subscribers', null)}
         <Tabs.Indicator />
       </Tabs.List>
       <Tabs.Panel value={'service' satisfies EventsTab} keepMounted>
@@ -1404,6 +1412,9 @@ function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
       </Tabs.Panel>
       <Tabs.Panel value={'deliveries' satisfies EventsTab} keepMounted>
         <DeliveriesTab lists={lists} nav={nav} onScreen={onScreen} />
+      </Tabs.Panel>
+      <Tabs.Panel value={'subscribers' satisfies EventsTab} keepMounted>
+        <SubscribersTab />
       </Tabs.Panel>
     </Tabs.Root>
   );
