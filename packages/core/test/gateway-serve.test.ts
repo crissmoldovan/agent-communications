@@ -182,7 +182,9 @@ test('D10: the right key serves the parts, which never see it; the gateway forge
   assert.equal(seen.connection, held.id);
   assert.equal(env.AGENT_COMMS_CONNECTION_KEY, undefined, 'taken out of the environment it was handed');
   const instructions = client.getInstructions() ?? '';
-  assert.match(instructions, /the connection "Work — Claude Code"/);
+  // The app and the place, never the connection's name — text a person, or an agent, chose (0.35.0 review, M1).
+  assert.match(instructions, /^Agent Comms, for Claude Code in every folder: /);
+  assert.equal(instructions.includes(held.name), false, 'no name in the instructions');
   assert.ok(Buffer.byteLength(instructions) <= INSTRUCTIONS_MAX_BYTES);
   // Written as each part moves: the last write says both run.
   await waitFor(async () => {

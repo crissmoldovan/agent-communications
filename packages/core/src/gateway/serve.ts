@@ -11,7 +11,7 @@ import {
 } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { VERSION } from '../version.ts';
-import { gatewayInstructions, refusedInstructions } from './instructions.ts';
+import { connectionPlaceWords, gatewayInstructions, refusedInstructions } from './instructions.ts';
 import { connectionExtensions, type PartsContext, partSpecs } from './parts.ts';
 import { type PartSpec, Router } from './router.ts';
 import { markConnectionUsed, removeGatewayStatus, writeGatewayStatus } from './status.ts';
@@ -179,7 +179,8 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     );
   };
   const initial = await specsOf(served, config as Config);
-  let name = served.name;
+  // Which connection this is, in the instructions: its app and place, never its name (0.35.0 review, M1).
+  const place = connectionPlaceWords(served);
   let lastStat: string | null = null;
   let lastUsedMark = 0;
   let statusQueue: Promise<void> = Promise.resolve();
@@ -228,7 +229,6 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     const found = connectionById(next, options.connection);
     if (found === undefined || !found.readable) return 'this connection’s record in Agent Comms could not be read';
     config = next;
-    name = found.record.name;
     const { start, stop } = partsDiff(router.specs(), await specsOf(found.record, next));
     for (const server of stop) await router.removePart(server);
     for (const spec of start) await router.addPart(spec);
@@ -252,7 +252,7 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     connectionId: options.connection,
     serverInfo: { name: 'agentcomms', version: VERSION },
     extensions: connectionExtensions(served),
-    instructions: (input) => gatewayInstructions(name, input),
+    instructions: (input) => gatewayInstructions(place, input),
     log,
     onStatus: () => writeStatus(null),
     beforeRequest: follow,
