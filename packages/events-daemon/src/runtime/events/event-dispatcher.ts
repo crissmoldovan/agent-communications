@@ -103,6 +103,11 @@ const LEASE_MARGIN_MS = 2_000;
 const STREAM_RETENTION_MAX_MS = 604_800_000;
 const DEFAULT_DEAD_LETTER_MS = 604_800_000;
 
+/** One subscriber version's queue, as `pump` keys the attempt it has going. */
+function queueKey(row: Pick<DeliveryRow, 'subscriber_id' | 'subscriber_version'>): string {
+  return JSON.stringify([row.subscriber_id, row.subscriber_version]);
+}
+
 function reasonOf(error: unknown): string {
   if (error instanceof CommsError) {
     const reason = error.details?.reason;
@@ -152,7 +157,7 @@ export class EventDispatcher {
     if (this.#stopped) return 0;
     this.#recover();
     let started = 0;
-    for (const row of this.#due()) if (this.#start(row)) started += 1;
+    for (const row of this.#due(this.#inFlight)) if (this.#start(row)) started += 1;
     return started;
   }
 
@@ -161,7 +166,7 @@ export class EventDispatcher {
    * one starts the next at once: a retry keeps its backoff, and a dead letter or a refusal waits for the next pass.
    */
   #start(row: DeliveryRow): boolean {
-    const key = JSON.stringify([row.subscriber_id, row.subscriber_version]);
+    const key = queueKey(row);
     if (this.#inFlight.has(key)) return false;
     const apart = this.#options.apart ?? ((work) => work());
     const attempt = apart(() => this.#attempt(row))
@@ -214,15 +219,22 @@ export class EventDispatcher {
     });
   }
 
-  /** The head of each subscriber version's queue, when it is due: strict order, a later one waits for the first. */
-  #due(): readonly DeliveryRow[] {
+  /**
+   * The head of each subscriber version's queue, when it is due: strict order, a later one waits for the first. At most
+   * a batch, chosen among the heads that are due (security review of 0.36.0, L5): a head being sent or waiting out its
+   * backoff is passed over before the limit, not after it, and so is one whose attempt `pump` has already started, so
+   * a batch of them never hides a later subscriber version whose event is due.
+   */
+  #due(started: ReadonlyMap<string, unknown> = new Map()): readonly DeliveryRow[] {
     const now = this.#now();
+    const batch = this.#options.batchSize ?? 64;
     const heads = this.#options.store.database
       .prepare(
         `SELECT delivery.event_id, delivery.subscriber_id, delivery.subscriber_version, delivery.kind, delivery.state,
                 delivery.attempts, delivery.next_at
            FROM event_deliveries AS delivery
-          WHERE delivery.state IN ('queued', 'retryable', 'disclosing')
+          WHERE (delivery.state = 'queued'
+                 OR (delivery.state = 'retryable' AND (delivery.next_at IS NULL OR delivery.next_at <= ?)))
             AND delivery.ordering_sequence = (
               SELECT MIN(head.ordering_sequence) FROM event_deliveries AS head
                WHERE head.subscriber_id = delivery.subscriber_id
@@ -231,8 +243,9 @@ export class EventDispatcher {
           ORDER BY delivery.subscriber_id, delivery.subscriber_version
           LIMIT ?`,
       )
-      .all(this.#options.batchSize ?? 64) as unknown as DeliveryRow[];
-    return heads.filter((row) => this.#isDue(row, now));
+      // Those already started are among the rows read, at most one each: read that many more, then pass them over.
+      .all(now, batch + started.size) as unknown as DeliveryRow[];
+    return heads.filter((row) => this.#isDue(row, now) && !started.has(queueKey(row))).slice(0, batch);
   }
 
   #isDue(row: DeliveryRow, now: number): boolean {
