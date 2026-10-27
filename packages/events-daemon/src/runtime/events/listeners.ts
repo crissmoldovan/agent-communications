@@ -97,6 +97,13 @@ export class SubscriberListeners {
     return running.server.writeEvent({ eventStreamLogId: frame.eventStreamLogId });
   }
 
+  /** A workflow SSE target's frame, just put in `stream_log`, to the subscriber's open streams. */
+  async pushRule(subscriberId: string, version: number, frame: { readonly streamLogId: string }): Promise<number> {
+    const running = this.#running.get(key(subscriberId, version));
+    if (running === undefined) return 0;
+    return running.server.writeRule({ streamLogId: frame.streamLogId });
+  }
+
   async close(): Promise<void> {
     this.#closed = true;
     await this.#turn;

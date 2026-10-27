@@ -70,6 +70,8 @@ export interface SseServer {
    * record is opened. Returns how many streams it reached.
    */
   writeEvent(input: Readonly<{ eventStreamLogId: string }>): Promise<number>;
+  /** One workflow SSE target's frame, from this subscriber's `stream_log`, to every open stream that is still current. */
+  writeRule(input: Readonly<{ streamLogId: string }>): Promise<number>;
   preflightCount(): number;
 }
 
@@ -286,6 +288,27 @@ class LoopbackSseServer implements SseServer {
           this.#bearerGenerationLive(connection.generation),
         writeFrame: (frame) => {
           connection.write(connection.transport === 'sse' ? frame : frameData(frame));
+        },
+      });
+      if (wrote) written += 1;
+    }
+    return written;
+  }
+
+  async writeRule(input: Readonly<{ streamLogId: string }>): Promise<number> {
+    let written = 0;
+    for (const connection of [...this.#connections]) {
+      if (!this.#connectionIsCurrent(connection)) {
+        connection.close();
+        continue;
+      }
+      const wrote = await this.#replay.writeRule({
+        streamLogId: input.streamLogId,
+        transport: connection.transport,
+        isStreamCurrent: () =>
+          this.#connections.has(connection) && this.#subscriberIsCurrent() && this.#connectionIsCurrent(connection),
+        writeFrame: (frame) => {
+          connection.write(frame);
         },
       });
       if (wrote) written += 1;

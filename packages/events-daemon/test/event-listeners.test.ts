@@ -248,3 +248,34 @@ test('D3: a frame written after subscriber remove returns never reaches the stre
     { eventDispatchTestPoint: async (point) => (point === 'after-fence' ? removeDuring?.() : undefined) },
   );
 });
+
+test("a workflow SSE target's frame reaches an open stream at once, not only on the next replay", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const port = await freePort();
+  await withLiveEvents(
+    [{ document: sseSubscriber({ port, patterns: ['acme.*.*.*'] }), bound: true }],
+    async (harness) => {
+      const token = harness.tokens.get('events-dashboard') ?? '';
+      const live = await openSse({ port, subscriberId: 'events-dashboard', token });
+      assert.equal(live.status, 200);
+      harness.lane.mailbox.send('a rule frame while the stream is open');
+      let logged: { id: string } | undefined;
+      for (let index = 0; index < 20 && logged === undefined; index += 1) {
+        await harness.tick();
+        logged = readDatabase(harness.stateDir, (db) =>
+          db.prepare('SELECT id FROM stream_log ORDER BY delivered_at DESC LIMIT 1').get(),
+        ) as { id: string } | undefined;
+      }
+      assert.ok(logged, "the mail reached the subscriber's rule frames");
+      await live.waitFor(1, 2_000);
+      const frames = live.frames();
+      live.close();
+      assert.deepEqual(
+        frames.map((frame) => ({ id: frame.id, event: frame.event })),
+        [{ id: logged.id, event: null }],
+        'the open stream got the rule frame without reconnecting',
+      );
+    },
+  );
+});

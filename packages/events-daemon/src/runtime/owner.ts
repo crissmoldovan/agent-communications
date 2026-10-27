@@ -1372,6 +1372,9 @@ async function startOwnerWithLock(
     hasConcreteWhatsAppVisibilityFence: true,
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
+    // `listeners` is made just below; a delivery reaches this only on a tick, after both exist.
+    live: (frame) =>
+      listeners.pushRule(frame.subscriberId, frame.subscriberVersion, { streamLogId: frame.streamLogId }),
   });
   // Workflow events (0.36.0, W31–W33): the owner's live listeners — one per subscriber version something may deliver to
   // — and the dispatcher that delivers raised events to them and to webhook subscribers, both run every tick.

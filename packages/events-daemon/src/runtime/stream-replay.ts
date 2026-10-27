@@ -438,6 +438,27 @@ export class StreamReplay {
     return wrote;
   }
 
+  /**
+   * The live writer for a workflow SSE target's frame, once the dispatcher has put it in `stream_log`: the same gate as
+   * its replay, and the stream's own current-generation check.
+   */
+  async writeRule(input: {
+    readonly streamLogId: string;
+    readonly transport?: 'sse' | 'websocket' | undefined;
+    readonly isStreamCurrent: () => boolean;
+    readonly writeFrame: (frame: string) => void;
+  }): Promise<boolean> {
+    const row = this.#row(input.streamLogId);
+    if (row === undefined) return false;
+    let wrote = false;
+    await this.#replayRuleRow(row, input.transport ?? 'sse', (frame) => {
+      if (!input.isStreamCurrent()) return;
+      input.writeFrame(frame);
+      wrote = true;
+    });
+    return wrote;
+  }
+
   /** The live writer for an event frame: the same gate as replay, and the stream's own current-generation check. */
   async writeEvent(input: {
     readonly eventStreamLogId: string;
