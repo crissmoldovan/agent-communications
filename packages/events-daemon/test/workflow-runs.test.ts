@@ -390,6 +390,10 @@ test('B6: runs show names its version and that version’s steps, with paths for
       );
       assert.equal(shown.notRaised, 0);
       assert.deepEqual(shown.events, []);
+      // The story line a list card shows, from the settled steps' closed outputs: no folder, no sender's text.
+      const summary = { project: 'acme-site', issue: 'ACME-1', session: 'started', turn: null };
+      assert.deepEqual(shown.summary, summary);
+      assert.deepEqual((await json<RunsListResultV1>(harness.stateDir, ['runs', 'list'])).runs[0]?.summary, summary);
       // The list carries no step's output, so no folder: those are for `runs show`, the person's one view of them.
       const listed = await cli(harness.stateDir, ['runs', 'list']);
       assert.equal(listed.code, 0, listed.stderr);

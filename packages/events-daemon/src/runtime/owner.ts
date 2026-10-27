@@ -90,11 +90,7 @@ import {
   type PendingRuleJudgeTestSelector,
   verifyPendingRuleJudgeTestContext,
 } from './b3-pending-rule-judge-test.ts';
-import {
-  createRetainedRuleTestControl,
-  type RetainedRuleTestControl,
-  runCatalogueRuleTest,
-} from './b3-retained-control.ts';
+import { createRetainedRuleTestControl, type RetainedRuleTestControl } from './b3-retained-control.ts';
 import { consumeGeneratedTerminalReveal, type SecretReceipt } from './b3-secret-control.ts';
 import {
   B3TargetTestControl,
@@ -162,6 +158,7 @@ import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowEngine, WorkflowFailpoint } from './workflow/engine.ts';
+import { checkRuleDocument, runRuleTest } from './workflow/flow-test.ts';
 import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
@@ -625,7 +622,15 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             request.args.agentView === true,
           );
         case 'ruleTest':
-          return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
+          // A workflow with a flow is walked over the example, each step answering as asked or with its first outcome
+          // (0.36.0 §7.7): no I/O; one without a flow is tested as before.
+          return runRuleTest({
+            document: request.args.document,
+            catalogue: request.args.catalogue as never,
+            outcomes: request.args.outcomes,
+            installationId: options.store.installationId,
+            now,
+          });
         case 'ruleTestRetained':
           if (options.retainedRuleTest === undefined)
             throw new CommsError('CONFIG', 'the owner has no retained rule-test reader');
@@ -1782,6 +1787,8 @@ async function startOwnerWithLock(
         accountLive: ({ source, accountId }) => assertLiveEventAccount(core.config, { source, accountId }),
         whatsappVisibilityFence: whatsappComposition.visibilityFence,
         now,
+        // A workflow with a flow is walked on the message (0.36.0 §7.7): judges, route and find for real; the rest would.
+        flow: (input) => workflows.tryRetained(input),
       }),
       judgeTest: new JudgeTestControl({
         store: database,
@@ -2277,13 +2284,19 @@ async function handleControl(
         { store: database, cancel: (runId, input) => requireWorkflows(workflows).cancel(runId, input) },
         request,
       );
+    // `workflow check` (0.36.0 §7.7): what is wrong with a document, every problem named; it writes nothing.
+    case OWNER_CONTROL_WIRES.ruleCheck:
+      return checkRuleDocument(database.database, request.args.document);
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow: {
       if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
       // An agent window's call names the window: it gets no counts of a lane it is not bound to (review 0.32.0, 8).
       const { caller, args } = splitCaller(request.args);
-      const entries = await readers.rules.show(requiredText(args.ruleId, 'rule id'));
+      const { ruleId, version } = args;
+      if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1))
+        throw new CommsError('USAGE', 'a workflow version is a positive integer');
+      const entries = await readers.rules.show(requiredText(ruleId, 'rule id'), version as number | undefined);
       return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);
     }
     case OWNER_CONTROL_WIRES.createRule:

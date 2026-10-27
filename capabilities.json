@@ -2768,6 +2768,16 @@
       "expect": { "catalogue.type": "gmail.message.received", "catalogue.version": 1, "catalogue.exampleIndex": 0 }
     },
     {
+      "id": "events-daemon.rule.check",
+      "package": "events-daemon",
+      "cli": "workflow check",
+      "mcp": "events_rule_check",
+      "status": "both",
+      "operation": "ruleCheck",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
       "id": "events-daemon.runs.list",
       "package": "events-daemon",
       "cli": "runs list",

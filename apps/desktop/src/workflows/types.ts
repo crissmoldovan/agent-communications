@@ -72,6 +72,20 @@ export interface RunWaitingV1 {
   needsYouInClaudeStream: boolean;
 }
 
+/** Whether a run reached a session: one it found, or one it started. */
+export const RUN_SUMMARY_SESSIONS = ['found', 'started'] as const;
+
+/**
+ * A run's story line, for a list card: the project chosen, the issue made, the session found or started, and how its
+ * turn ended — each from a settled step's closed output. An event service before it sends none.
+ */
+export interface RunSummaryV1 {
+  project: string | null;
+  issue: string | null;
+  session: (typeof RUN_SUMMARY_SESSIONS)[number] | null;
+  turn: string | null;
+}
+
 /** One run, as `runs list --json` lists it. */
 export interface RunListEntryV1 {
   runId: string;
@@ -86,6 +100,7 @@ export interface RunListEntryV1 {
   depth: number;
   shadow: boolean;
   waiting: RunWaitingV1 | null;
+  summary?: RunSummaryV1;
 }
 
 /** `runs list --json`: newest first, at most 200. */
@@ -330,6 +345,16 @@ function readWaiting(value: unknown, what: string): RunWaitingV1 | null {
   };
 }
 
+function readSummary(value: unknown, what: string): RunSummaryV1 {
+  const fields = object(value, what);
+  return {
+    project: textOrNull(fields.project, `${what}.project`),
+    issue: textOrNull(fields.issue, `${what}.issue`),
+    session: fields.session === null ? null : word(fields.session, RUN_SUMMARY_SESSIONS, `${what}.session`),
+    turn: textOrNull(fields.turn, `${what}.turn`),
+  };
+}
+
 function readRunEntry(value: unknown, what: string): RunListEntryV1 {
   const fields = object(value, what);
   return {
@@ -345,6 +370,7 @@ function readRunEntry(value: unknown, what: string): RunListEntryV1 {
     depth: whole(fields.depth, `${what}.depth`),
     shadow: flag(fields.shadow, `${what}.shadow`),
     waiting: readWaiting(fields.waiting, `${what}.waiting`),
+    ...(fields.summary === undefined ? {} : { summary: readSummary(fields.summary, `${what}.summary`) }),
   };
 }
 

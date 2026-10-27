@@ -73,6 +73,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_workflow_events_show',
         'events_approval_view',
         'events_rule_test',
+        'events_rule_check',
         'events_target_test',
         'events_subscribers_list',
         'events_subscriber_add',

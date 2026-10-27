@@ -233,6 +233,10 @@ agent-events workflow|rule [options] [command]
 agent-events workflow show [options] <workflow-id>
 ```
 
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` | that one version alone, as a run of it draws its graph | — |
+
 ### `agent-events workflow create`
 
 ```
@@ -265,9 +269,15 @@ agent-events workflow remove [options] <workflow-id>
 
 ### `agent-events workflow test`
 
+try a workflow on a catalogue example; a flow is walked, each effect a would, with no I/O
+
 ```
 agent-events workflow test [options] <document> <catalogue-example>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--outcome <step=outcome>` | the outcome a step of the flow answers with (repeat for more); every other step answers its first | `[]` |
 
 ### `agent-events workflow test-retained`
 
@@ -279,6 +289,14 @@ agent-events workflow test-retained [options] <event-id>
 |---|---|---|
 | `--workflow <workflow-id>` |  | — |
 | `--version <version>` |  | — |
+
+### `agent-events workflow check`
+
+check a workflow document as the event service reads it, every problem named; - reads it from stdin
+
+```
+agent-events workflow check [options] <document>
+```
 
 ### `agent-events workflow analyse`
 

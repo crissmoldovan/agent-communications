@@ -84,6 +84,21 @@ export interface RunWaitingV1 {
   readonly needsYouInClaudeStream: boolean;
 }
 
+/** A session a run reached: one it found, or one it started. */
+export const RUN_SUMMARY_SESSIONS: readonly ['found', 'started'] = Object.freeze(['found', 'started'] as const);
+
+/**
+ * A run's story line, for a list card (lead's decision for Track F): the project Which project? chose, the issue a Linear
+ * step made, whether a session was found or started, and how the turn it was given ended — each from a settled step's
+ * closed output, the newest of each kind; never a folder, never a sender's text.
+ */
+export interface RunSummaryV1 {
+  readonly project: string | null;
+  readonly issue: string | null;
+  readonly session: (typeof RUN_SUMMARY_SESSIONS)[number] | null;
+  readonly turn: string | null;
+}
+
 /** One run, as `runs list` lists it (plan I6). */
 export interface RunListEntryV1 {
   readonly runId: string;
@@ -98,6 +113,7 @@ export interface RunListEntryV1 {
   readonly depth: number;
   readonly shadow: boolean;
   readonly waiting: RunWaitingV1 | null;
+  readonly summary: RunSummaryV1;
 }
 
 /** `runs list`: newest first, at most 200. */
@@ -242,7 +258,40 @@ function waitingOf(database: DatabaseSync, run: RunRow, steps: readonly StepRow[
   return null;
 }
 
-function entryOf(database: DatabaseSync, run: RunRow, steps: readonly StepRow[]): RunListEntryV1 {
+/** The run's story line from its settled steps, oldest settle first, so the newest of each kind is the one kept. */
+function summaryOf(flow: FlowDocumentV1 | null, steps: readonly StepRow[]): RunSummaryV1 {
+  let project: string | null = null;
+  let issue: string | null = null;
+  let session: RunSummaryV1['session'] = null;
+  let turn: string | null = null;
+  const settled = steps
+    .filter((step) => step.state === 'done' && step.settle_seq !== null)
+    .sort((left, right) => (left.settle_seq as number) - (right.settle_seq as number));
+  for (const step of settled) {
+    const kind = flow?.steps[step.step_id]?.kind;
+    const output = outputOf(step);
+    if (kind === undefined || output === null) continue;
+    if (kind === 'route' && step.outcome === 'chosen' && typeof output.projectName === 'string')
+      project = output.projectName;
+    if (kind === 'deliver') {
+      const made = output.issue as { readonly identifier?: unknown } | null | undefined;
+      if (typeof made === 'object' && made !== null && !Array.isArray(made) && typeof made.identifier === 'string')
+        issue = made.identifier;
+    }
+    if (kind === 'start-session' && step.outcome === 'started') session = 'started';
+    if (kind === 'find-session' && (step.outcome === 'idle' || step.outcome === 'busy') && session !== 'started')
+      session = 'found';
+    if (kind === 'wait' && output.for === 'turn-end' && step.outcome !== null) turn = step.outcome;
+  }
+  return { project, issue, session, turn };
+}
+
+function entryOf(
+  database: DatabaseSync,
+  run: RunRow,
+  steps: readonly StepRow[],
+  flow: FlowDocumentV1 | null,
+): RunListEntryV1 {
   return {
     runId: run.id,
     ruleId: run.rule_id,
@@ -256,6 +305,7 @@ function entryOf(database: DatabaseSync, run: RunRow, steps: readonly StepRow[])
     depth: run.depth,
     shadow: run.shadow === 1,
     waiting: waitingOf(database, run, steps),
+    summary: summaryOf(flow, steps),
   };
 }
 
@@ -285,7 +335,12 @@ export function listRuns(
     )
     .all(...values) as unknown as RunRow[];
   const flowOf = flowReader(database);
-  return { runs: rows.map((run) => entryOf(database, run, inOrder(flowOf(run), stepsOf(database, run.id)))) };
+  return {
+    runs: rows.map((run) => {
+      const flow = flowOf(run);
+      return entryOf(database, run, inOrder(flow, stepsOf(database, run.id)), flow);
+    }),
+  };
 }
 
 /** `runs show`: one run, of its own version, with its path, its steps and the events it raised. */
@@ -354,7 +409,7 @@ export function showRun(database: DatabaseSync, runId: string): RunShowResultV1 
     })),
   }));
   return {
-    ...entryOf(database, run, rows),
+    ...entryOf(database, run, rows, flow),
     path,
     notRaised: run.events_not_raised,
     steps,

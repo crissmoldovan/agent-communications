@@ -159,6 +159,8 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'runsList', wireOperation: 'runs-list', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'runShow', wireOperation: 'run-show', desktopCallable: true, family: 'owner' },
   { capabilityOperation: 'runCancel', wireOperation: 'run-cancel', desktopCallable: true, family: 'owner' },
+  // `workflow check` (0.36.0 §7.7): a document checked as the event service reads it, writing nothing; CLI and MCP.
+  { capabilityOperation: 'ruleCheck', wireOperation: 'rule-check', desktopCallable: true, family: 'owner' },
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step, and
   // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
   // origin only; the provider list says only whether each has a key.

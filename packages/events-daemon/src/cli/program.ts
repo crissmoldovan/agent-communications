@@ -101,6 +101,7 @@ import {
   queueReopen,
   queueShow,
 } from '../operations/queue.ts';
+import { ruleCheck } from '../operations/rule-check.ts';
 import { ruleTest, ruleTestRetained } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -508,10 +509,18 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     print(await rulesList(controlOptions(program)));
   });
   const rule = program.command('workflow').alias('rule').description('create, inspect and control immutable workflows');
-  rule.command('show <workflow-id>').action(async (ruleId: string) => {
-    ran = true;
-    print(await ruleShow(ruleId, controlOptions(program)));
-  });
+  rule
+    .command('show <workflow-id>')
+    .option('--version <version>', 'that one version alone, as a run of it draws its graph')
+    .action(async (ruleId: string, options: { readonly version?: string }) => {
+      ran = true;
+      print(
+        await ruleShow(ruleId, {
+          ...controlOptions(program),
+          ...(options.version === undefined ? {} : { version: parseVersion(options.version) }),
+        }),
+      );
+    });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
     print(await createRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
@@ -535,14 +544,26 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
   rule.command('test <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {
     ran = true;
+    // A workflow with a flow is walked over the example (0.36.0 §7.7): each step named answers as asked, every other
+    // with its first outcome. `-` reads the document from stdin, as the app gives it.
+    const outcomes = outcomeArguments(ruleTestCommand.opts<{ readonly outcome: string[] }>().outcome);
     print(
-      await ruleTest(
-        jsonArgument(document, 'workflow document'),
-        catalogueArgument(catalogueExample),
-        controlOptions(program),
-      ),
+      await ruleTest(await documentArgument(document, 'workflow document'), catalogueArgument(catalogueExample), {
+        ...controlOptions(program),
+        ...(outcomes === undefined ? {} : { outcomes }),
+      }),
     );
   });
+  // The command just made: the guarded line above is left as it is, and its option is added here.
+  const ruleTestCommand = rule.commands.at(-1) as Command;
+  ruleTestCommand
+    .description('try a workflow on a catalogue example; a flow is walked, each effect a would, with no I/O')
+    .option(
+      '--outcome <step=outcome>',
+      'the outcome a step of the flow answers with (repeat for more); every other step answers its first',
+      collect,
+      [],
+    );
   rule
     .command('test-retained <event-id>')
     .addOption(new Option('--workflow <workflow-id>'))
@@ -560,6 +581,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           ruleTestRetained(eventId, ruleId, ruleVersion, controlOptions(program)),
         ),
       );
+    });
+  rule
+    .command('check <document>')
+    .description('check a workflow document as the event service reads it, every problem named; - reads it from stdin')
+    .action(async (document: string) => {
+      ran = true;
+      print(await ruleCheck(await documentArgument(document, 'workflow document'), controlOptions(program)));
     });
   // A workflow's runs (0.36.0 workflows design §7.6, §11.1): `runs`, not `run`, which starts the service. Each command is
   // the person's alone, from the app or their terminal: personSetupOrigin refuses the event service's MCP server, an
@@ -1763,6 +1791,20 @@ function isTerminalSecretReveal(
 }
 
 /** Commander's repeatable option: each value given, in order. */
+/** `--outcome <step>=<outcome>`, each once: the steps of a flow a test answers for (0.36.0 §7.7). */
+function outcomeArguments(values: readonly string[] | undefined): Readonly<Record<string, string>> | undefined {
+  if (values === undefined || values.length === 0) return undefined;
+  const outcomes: Record<string, string> = {};
+  for (const value of values) {
+    const match = /^([a-z][a-z0-9-]{0,31})=([a-z][a-z-]{0,31})$/u.exec(value);
+    if (match === null) throw new CommsError('USAGE', '--outcome is a step and its outcome: step=outcome');
+    const [, step, outcome] = match as unknown as [string, string, string];
+    if (Object.hasOwn(outcomes, step)) throw new CommsError('USAGE', `--outcome names the step ${step} twice`);
+    Object.defineProperty(outcomes, step, { value: outcome, enumerable: true });
+  }
+  return outcomes;
+}
+
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }

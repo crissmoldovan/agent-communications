@@ -18,6 +18,12 @@
         "since": 1792915262000,
         "ahead": 1,
         "needsYouInClaudeStream": false
+      },
+      "summary": {
+        "project": "acme-site",
+        "issue": "ACME-123",
+        "session": "found",
+        "turn": null
       }
     },
     {

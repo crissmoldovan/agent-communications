@@ -13,12 +13,17 @@ export async function rulesList(options: Options = {}): Promise<unknown> {
  */
 export async function ruleShow(
   ruleId: string,
-  options: Options & { readonly caller?: LaneWindowIdentity | undefined } = {},
+  options: Options & {
+    readonly caller?: LaneWindowIdentity | undefined;
+    /** One version alone (0.36.0): the one a run of it draws its graph from. */
+    readonly version?: number | undefined;
+  } = {},
 ): Promise<unknown> {
-  return new EventControlClient({ stateDir: options.stateDir }).request(
-    'rule-show',
-    options.caller === undefined ? { ruleId } : { ruleId, caller: options.caller },
-  );
+  return new EventControlClient({ stateDir: options.stateDir }).request('rule-show', {
+    ruleId,
+    ...(options.version === undefined ? {} : { version: options.version }),
+    ...(options.caller === undefined ? {} : { caller: options.caller }),
+  });
 }
 
 export async function createRule(document: unknown, options: Options = {}): Promise<unknown> {

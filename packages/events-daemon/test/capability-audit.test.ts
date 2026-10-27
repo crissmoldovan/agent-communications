@@ -242,10 +242,12 @@ const EXPECTED_WORKFLOW_EVENT_ROWS = [
 ] as const;
 
 /**
- * A workflow's runs and its checks (0.36.0 workflows design §7.6, §7.7, plan B6–B7): listing, showing and cancelling a
- * run are the person's, CLI-only, with no tool. They sit after `workflow test`.
+ * A workflow's runs and its checks (0.36.0 workflows design §7.6, §7.7, plan B6–B7): checking a document is content-free,
+ * CLI and MCP alike; listing, showing and cancelling a run are the person's, CLI-only, with no tool. They sit after
+ * `workflow test`.
  */
 const EXPECTED_WORKFLOW_RUN_ROWS = [
+  ['events-daemon.rule.check', 'workflow check', 'events_rule_check', 'both', 'ruleCheck'],
   ['events-daemon.runs.list', 'runs list', null, 'exception', 'runsList'],
   ['events-daemon.runs.show', 'runs show', null, 'exception', 'runShow'],
   ['events-daemon.runs.cancel', 'runs cancel', null, 'exception', 'runCancel'],
@@ -430,7 +432,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.session-queue.drop',
     'events-daemon.subscriber.approve',
     ...EXPECTED_PROJECT_ROWS.map(([id]) => id),
-    ...EXPECTED_WORKFLOW_RUN_ROWS.map(([id]) => id),
+    ...EXPECTED_WORKFLOW_RUN_ROWS.filter(([, , mcp]) => mcp === null).map(([id]) => id),
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

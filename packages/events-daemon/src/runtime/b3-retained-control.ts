@@ -13,6 +13,7 @@ import { evaluateRuleProjection } from './mapping.ts';
 import type { EventProjectionStore, ProjectionReference, StoredProjection } from './projections.ts';
 import { sanitiseSenderFields } from './untrusted.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import type { FlowTestResultV1 } from './workflow/flow-test.ts';
 
 type HumanTerminal = {
   readonly env: NodeJS.ProcessEnv;
@@ -73,7 +74,8 @@ function rejectRuleTestInput(message: string): never {
   throw new EventDomainError('VERSION_DOCUMENT_INVALID', message);
 }
 
-function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocument): Record<string, unknown> {
+/** The catalogue example a test selects, for the rule's own event, its sender's fields neutralised as a live event's are. */
+export function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocument): Record<string, unknown> {
   if (typeof selector !== 'object' || selector === null || Array.isArray(selector))
     return rejectRuleTestInput('a rule test selects one catalogue example');
   const record = selector as Record<string, unknown>;
@@ -128,6 +130,16 @@ export function runCatalogueRuleTest(input: {
   return { agentic: 'not-evaluated', outcome, rendered: renderFencedBody(enveloped) };
 }
 
+/**
+ * A workflow with a flow, tried on a retained message (0.36.0 §7.7): judges, route and find answer for real; every
+ * effect and event is a "would". The engine's, composed by the owner.
+ */
+export type RetainedFlowTry = (input: {
+  readonly rule: CanonicalFullRuleDocument;
+  readonly event: Record<string, unknown>;
+  readonly eventId: string;
+}) => Promise<FlowTestResultV1>;
+
 export interface ExactRetainedRuleSelector {
   readonly eventId: string;
   readonly ruleId: string;
@@ -168,6 +180,7 @@ export class RetainedRuleTestControl {
     readonly accountId: string;
   }) => Promise<void>;
   readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+  readonly #flow: RetainedFlowTry | undefined;
 
   constructor(options: {
     readonly projections: Pick<EventProjectionStore, 'row' | 'read'>;
@@ -177,14 +190,17 @@ export class RetainedRuleTestControl {
       readonly accountId: string;
     }) => Promise<void>;
     readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+    /** A workflow with a flow is walked on the message (0.36.0 §7.7): the engine's try, every effect a "would". */
+    readonly flow?: RetainedFlowTry | undefined;
   }) {
     this.#projections = options.projections;
     this.#snapshot = options.snapshot;
     this.#accountLive = options.accountLive;
     this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
+    this.#flow = options.flow;
   }
 
-  async test(input: unknown): Promise<CatalogueRuleTestResult> {
+  async test(input: unknown): Promise<CatalogueRuleTestResult | FlowTestResultV1> {
     const selector = exactRetainedSelector(input);
     const before = this.#snapshot(selector);
     if (before === null) throw new CommsError('NOT_FOUND', 'the exact retained rule projection is not available');
@@ -195,7 +211,11 @@ export class RetainedRuleTestControl {
     if (after === null)
       throw new CommsError('APPROVAL_VOID', 'the retained projection changed while it was being read');
     await this.#accountLive({ source: after.rule.source.channel, accountId: after.accountId });
-    const render = () => renderRetainedRuleResult(after.rule, projection);
+    const flow = this.#flow;
+    const render = () =>
+      flow !== undefined && after.rule.flow !== undefined
+        ? flow({ rule: after.rule, event: projection.event, eventId: selector.eventId })
+        : renderRetainedRuleResult(after.rule, projection);
     if (before.reference.whatsappMessageId === null) return render();
     if (this.#whatsappVisibilityFence === undefined)
       throw new CommsError(
@@ -232,9 +252,11 @@ export function createRetainedRuleTestControl(input: {
   }) => Promise<void>;
   readonly now?: (() => number) | undefined;
   readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+  readonly flow?: RetainedFlowTry | undefined;
 }): RetainedRuleTestControl {
   const now = input.now ?? Date.now;
   return new RetainedRuleTestControl({
+    flow: input.flow,
     projections: input.projections,
     snapshot: (selector) => {
       const row = input.store.database

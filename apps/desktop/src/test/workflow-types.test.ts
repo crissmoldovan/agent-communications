@@ -83,7 +83,18 @@ describe("workflows' results, read (0.36.0, plan I8)", () => {
       ['wfr_0123456789abcdefghjkmnpqrs', 'waiting', 'session-idle'],
       ['wfr_zyxwvtsrqpnmkjhgfedcba9876', 'done', null],
     ]);
+    expect(runs[0]?.summary).toEqual({ project: 'acme-site', issue: 'ACME-123', session: 'found', turn: null });
+    expect(Object.hasOwn(runs[1] ?? {}, 'summary')).toBe(false);
     expect(readRunsList({ runs: [] }).runs).toEqual([]);
+    expect(() =>
+      readRunsList(
+        changed(runsListFixture, (list) => {
+          Object.assign(list.runs[0] ?? {}, {
+            summary: { project: null, issue: null, session: 'borrowed', turn: null },
+          });
+        }),
+      ),
+    ).toThrow(UnknownShapeError);
     expect(() =>
       readRunsList(
         changed(runsListFixture, (list) => {

@@ -72,15 +72,24 @@ export class RuleReader {
     this.#accounts = input.accounts ?? (async () => []);
   }
 
-  async show(ruleId: string): Promise<readonly RuleShowEntryV1[]> {
-    const rows = this.#store.database
+  /**
+   * Every version of the workflow, oldest first; or with `version`, that one version alone (0.36.0, plan B7), as a run
+   * of it draws its graph: a run keeps its version's, whatever was saved since.
+   */
+  async show(ruleId: string, version?: number): Promise<readonly RuleShowEntryV1[]> {
+    const all = this.#store.database
       .prepare(
         `SELECT version, document, digest, state, approval_id, authorization_activation_id, activated_at, superseded_at,
                 revoked_at
            FROM rule_versions WHERE rule_id = ? ORDER BY version`,
       )
       .all(ruleId) as unknown as RuleVersionRow[];
-    if (rows.length === 0) throw new CommsError('NOT_FOUND', 'the requested rule does not exist');
+    if (all.length === 0) throw new CommsError('NOT_FOUND', 'the requested rule does not exist');
+    const rows = version === undefined ? all : all.filter((row) => row.version === version);
+    if (rows.length === 0)
+      throw new CommsError('NOT_FOUND', `the workflow ${ruleId} has no version ${version}`, {
+        details: { reason: 'VERSION_UNKNOWN' },
+      });
     const aliases = Object.fromEntries((await this.#accounts()).map((entry) => [entry.accountId, entry.account]));
     const since = this.#now() - RULE_COUNT_WINDOW_MS;
     return rows.map((row) => {

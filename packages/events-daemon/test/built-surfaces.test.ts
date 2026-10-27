@@ -116,6 +116,7 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_catalogue_list',
           'events_approval_view',
           'events_rule_test',
+          'events_rule_check',
           'events_target_test',
           'events_subscribers_list',
           'events_subscriber_add',

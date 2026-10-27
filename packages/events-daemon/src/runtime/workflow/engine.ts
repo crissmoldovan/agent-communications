@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import {
   FAILURE_OUTCOMES,
@@ -33,6 +33,7 @@ import {
   type WorkflowEventSink,
 } from './contracts.ts';
 import { STEP_KIND_UNAVAILABLE } from './executors.ts';
+import { type FlowAnswer, type FlowTestResultV1, TRY_READING_KINDS, tryRetainedFlow } from './flow-test.ts';
 import { limitInTransaction } from './limits.ts';
 import {
   anyRunMayStartInTransaction,
@@ -54,6 +55,7 @@ import {
   stepStates,
   takeRunsEndedElsewhere,
 } from './runs.ts';
+import { insertShadowRecordInTransaction, type PreparedShadowRecord, shadowHandles, shadowStep } from './shadow.ts';
 import { SPLIT_OUTCOME } from './steps/split.ts';
 
 /*
@@ -209,6 +211,57 @@ export class WorkflowEngine {
     const work = this.#queue.then(() => this.#cancel(runId, input));
     this.#queue = work.catch(() => undefined);
     return work;
+  }
+
+  /**
+   * `workflow test-retained` for a workflow with a flow (§7.7): the person's try on a recent message. A condition, a
+   * judge, Which project? and a find answer for real, through this engine's own executors, reading only — a find by
+   * thread with the message's own ids; every effect and event is a "would". No run is made and nothing is written.
+   */
+  tryRetained(input: {
+    readonly rule: CanonicalFullRuleDocument;
+    readonly event: Record<string, unknown>;
+    readonly eventId: string;
+  }): Promise<FlowTestResultV1> {
+    return tryRetainedFlow({
+      rule: input.rule,
+      event: input.event,
+      eventId: input.eventId,
+      answer: this.#answer(input.rule),
+      installationId: this.#store.installationId,
+      now: this.#now,
+    });
+  }
+
+  /** A try's reading steps, answered by their executors with a context that charges, fences and keeps nothing. */
+  #answer(rule: CanonicalFullRuleDocument): FlowAnswer {
+    return async ({ run, message, fields, stepId, step, outputs }) => {
+      if (!TRY_READING_KINDS.has(step.kind)) return null;
+      try {
+        const executor = this.#executors.get(step.kind);
+        const context: StepContext = {
+          run,
+          rule,
+          stepId,
+          step,
+          attempt: { id: 'workflow-try', number: 1 },
+          now: this.#now,
+          fields: async () => fields,
+          trigger: async () => null,
+          message: async () => message,
+          output: (id) => outputs.get(id) ?? null,
+          // A try makes nothing, so nothing counts against a limit.
+          charge: () => ({ ok: true }),
+          judge: this.#judge ?? (async () => ({ kind: 'failed', code: 'JUDGE_NOT_COMPOSED' })),
+          fence: async () => {},
+        };
+        const result = await executor.run(context);
+        return result.kind === 'settled' ? { outcome: result.outcome, output: result.output } : null;
+      } catch {
+        // A kind not composed here, or one that cannot answer now, takes the outcome named for it, or its first.
+        return null;
+      }
+    };
   }
 
   async #cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
@@ -437,9 +490,29 @@ export class WorkflowEngine {
       fence,
     });
     let result: StepResult;
+    let shadowRecord: PreparedShadowRecord | null = null;
     try {
-      const executor = this.#executors.get(step.kind);
-      result = claim.wake === null ? await executor.run(context) : await executor.resume(context, claim.wake);
+      if (row.shadow === 1 && shadowHandles(step)) {
+        // A shadow version (§7.7) runs no effect: each becomes a dry-run record, and a wait times out at once.
+        const shadowed = await shadowStep({
+          cipher: this.#cipher,
+          run: runViewOf(row),
+          rule,
+          stepId,
+          step,
+          fields: await context.fields(),
+          outputs,
+          path: this.#path(before, null, false),
+          installationId: this.#store.installationId,
+          now: this.#now(),
+          newDeliveryId: () => randomUUID(),
+        });
+        result = shadowed.result;
+        shadowRecord = shadowed.record;
+      } else {
+        const executor = this.#executors.get(step.kind);
+        result = claim.wake === null ? await executor.run(context) : await executor.resume(context, claim.wake);
+      }
     } catch (error) {
       if (isAuthorityGone(error)) {
         await this.#cancelForAuthority(row, rule, reasonOf(error));
@@ -461,7 +534,7 @@ export class WorkflowEngine {
         delivery = await this.#deliveries.prepare({ run: runViewOf(row), rule, request: result.delivery, context });
       }
     }
-    await this.#settle(row, rule, claim, result, delivery);
+    await this.#settle(row, rule, claim, result, delivery, shadowRecord);
     return true;
   }
 
@@ -506,6 +579,7 @@ export class WorkflowEngine {
     claim: ClaimedStep,
     result: StepResult,
     delivery: { readonly deliveryId: string } | null,
+    shadowRecord: PreparedShadowRecord | null = null,
   ): Promise<void> {
     const database = this.#store.database;
     for (let tries = 0; tries < SETTLE_TRIES; tries += 1) {
@@ -515,6 +589,7 @@ export class WorkflowEngine {
       const settled = this.#store.immediate(() => {
         if (!settleStepInTransaction(database, planned.settle)) return false;
         if (delivery !== null) this.#deliveries?.insertInTransaction(database, delivery);
+        if (shadowRecord !== null) insertShadowRecordInTransaction(database, row, shadowRecord);
         this.#sink.commitInTransaction(database, prepared);
         this.#failpoint?.('before-settle-commit');
         return true;
