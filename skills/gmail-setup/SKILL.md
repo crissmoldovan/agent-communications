@@ -197,9 +197,8 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    person that link, warn them about the unverified-app screen *before* they meet it, then
    `gmail_inbox_finish` with the `flowId`. `APPROVAL_PENDING` means they have not finished yet and the
    link is still good: wait and call again, never start a second one. A sign-in `agent-gmail setup
-   --mcp-client` started can come back with `pendingRegistration`: the mailbox is connected and the server
-   is not registered. Call the core server's `comms_server_install` with its `arguments`, show the preview,
-   and claim it after their yes.
+   --mcp-client` started can come back with `pendingRegistration`: the mailbox is connected, Gmail is not in
+   the app's connection yet. Call the core tool it names with its `arguments`, show the preview, claim it.
 
    The OAuth client is registered with `gmail_client_add`, from the **path** of the JSON they downloaded —
    `candidates` in `gmail_setup` lists the ones in their Downloads folder. Never ask them to paste the
@@ -224,10 +223,10 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
 
    Registering the client is `client add` underneath, approved the same way: the first run exits `10`
    with `APPROVAL_PENDING`, the preview in `error.details.preview` and the command to run again in the
-   hint. Registering the MCP server is `mcp install` underneath, and asks too, but as a stop rather than an
-   error: exit `10` with `blocked: { step: "mcp", approvalId, preview, hint }` in the report and nothing
-   registered. Show `preview`, and after the user's yes run the command in `hint` — it carries
-   `--mcp-approval <id>`, not `--approval`, which is the client's.
+   hint. The agent connection is `mcp install` underneath — Gmail put into the app's MCP connection, or an
+   entry of its own with `--standalone` (only that takes `--replace-server`) — and asks as a stop: exit `10`
+   with `blocked: { step: "mcp", approvalId, preview, hint }` and nothing registered. Show `preview`, and
+   after the user's yes run the command in `hint` — it carries `--mcp-approval <id>`, not `--approval`.
 
    The mailbox step is the boundary. Consent is granted on Google's own screen, in a browser this
    command does not drive, so that call returns `handoff: { authUrl, finish }` rather than waiting: give
@@ -236,17 +235,16 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    `did` lists what the run changed. Never claim a step succeeded that is not in `did`.
 
    `--inbox` with `--mcp-client` stops at the mailbox too, and the registration goes with the sign-in:
-   `handoff.registerWith` names the client (and `replace`, when `--replace-server` came too), and
-   `finish` registers the server once the mailbox is connected. From an agent that finish exits `10` with
-   the mailbox connected and `registration: { status: "approval-required", approvalId, preview, claim }`:
-   show `preview`, and after the user's yes run `claim` — `agent-gmail mcp install --client <client>
-   --approval <id>`, with `--force` when replacing, and `--inbox <mailbox>` when the entry there served
-   another mailbox: the replacement serves the one just connected, and the preview says what the old one
-   served. `"already-registered"` means the client's `gmail` entry already serves this mailbox; nothing was
-   asked. `"not-registered"` means it did not happen, and `reason` says why — somebody else's server under
-   that name, ours there without `--replace-server` (its `hint` then names a second entry for this mailbox,
-   under a name of its own), or a client this cannot write to. The mailbox is connected all the same, and
-   nothing was replaced.
+   `handoff.registerWith` names the client (and `standalone`, `replace` when given), and `finish` makes it
+   once the mailbox is connected. From an agent that finish exits `10` with the mailbox connected and
+   `registration: { status: "approval-required", approvalId, preview, claim }`: show `preview`, and after the
+   user's yes run `claim` — `agent-gmail mcp install --client <client> --approval <id>`; after `--standalone`
+   with `--standalone`, `--force` when replacing, and `--inbox <mailbox>` when the entry there served another
+   mailbox: the replacement serves the one just connected. `"already-registered"` means the app's connection
+   (or, after `--standalone`, its `gmail` entry) already reaches this mailbox; nothing was asked.
+   `"not-registered"` means it did not happen, and `reason` says why — several connections, somebody else's
+   server under that name, ours without `--replace-server` (its `hint` names a second entry), or a client this
+   cannot write to. The mailbox is connected all the same, and nothing was replaced.
    **Complete when:** every step you can drive has run, and anything left is named in `blocked`.
 
 2. **Offer the import when a legacy setup exists.** If `~/.gmail-mcp` is there, run

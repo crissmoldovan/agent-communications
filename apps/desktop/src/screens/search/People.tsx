@@ -32,6 +32,7 @@ import {
   ChannelMark,
   PersonName,
   SentAt,
+  storyOf,
   storyReads,
   useAccountsInfo,
   useIndexOnOpen,
@@ -39,6 +40,7 @@ import {
   useSearchStatus,
   useSearchSupported,
   useStories,
+  useStoryTakes,
   whereLine,
 } from './parts.tsx';
 import { SEARCH_LIMIT } from './Search.tsx';
@@ -316,7 +318,23 @@ function PersonPage({
   const stories = useStories(toJoin, { days, aliases: accounts.aliases });
   const joinedOf = (sourceId: string): JoinedMessage | null | undefined =>
     stories === null ? undefined : (stories.bySource.get(sourceId) ?? null);
-  const opened = open === null || stories === null ? undefined : stories.bySource.get(open);
+  // Who has each message (0.35.0), read as Messages reads it once a story is open: its Who has it, from here too.
+  const storyTakes = useStoryTakes(open !== null);
+  const reads = useMemo(
+    () =>
+      stories === null
+        ? null
+        : storyReads(stories, days, accounts, {
+            takes: storyTakes.takes,
+            taking: storyTakes.taking,
+            readAt: storyTakes.readAt,
+          }),
+    [stories, days, accounts, storyTakes.takes, storyTakes.taking, storyTakes.readAt],
+  );
+  const opened =
+    open === null || stories === null || reads === null
+      ? undefined
+      : storyOf(stories, open, reads, messages?.find((each) => each.sourceId === open)?.account);
 
   const searchHere = async () => {
     const why = questionProblem(draft);
@@ -336,14 +354,15 @@ function PersonPage({
     }
   };
 
-  if (opened !== undefined && stories !== null) {
+  if (opened !== undefined && reads !== null) {
     return (
       <MessageStory
         listed={opened}
-        reads={storyReads(stories, days, accounts)}
+        reads={reads}
         context={context}
         onBack={() => setOpen(null)}
         onScreen={onScreen}
+        onChanged={storyTakes.reload}
       />
     );
   }

@@ -404,6 +404,8 @@ export class Router {
   private readonly restartTimers = new Set<NodeJS.Timeout>();
   private handle: { close(): Promise<void> } | undefined;
   private refusal: string | null = null;
+  /** The refusal's stopping of every part, in flight or done: whoever meets the refusal waits for it (D15). */
+  private refusing: Promise<void> = Promise.resolve();
   private closed = false;
 
   constructor(options: RouterOptions) {
@@ -683,24 +685,34 @@ export class Router {
       if (why !== null) await this.refuse(why);
     }
     if (this.refusal !== null) {
+      // A refusal another look began may still be stopping the parts: the call is answered once they have stopped.
+      await this.refusing.catch(() => undefined);
       throw wireError({ code: ProtocolErrorCode.InvalidRequest, message: this.refusal });
     }
   }
 
-  /** Stops every part and serves nothing from now on, saying why (D15: a connection cut off, removed or re-keyed). */
-  async refuse(why: string): Promise<void> {
-    if (this.refusal !== null) return;
+  /**
+   * Stops every part and serves nothing from now on, saying why (D15: a connection cut off, removed or re-keyed).
+   *
+   * Whoever calls it again while the first is stopping the parts waits for that one: it returned at once, so a request
+   * whose own look found the reason too was answered "replaced" while the parts the timer's look was stopping still ran.
+   */
+  refuse(why: string): Promise<void> {
+    if (this.refusal !== null) return this.refusing;
     this.refusal = why;
     this.log(`[gateway] ${why}`);
     for (const timer of this.restartTimers) clearTimeout(timer);
     this.restartTimers.clear();
-    await Promise.all(
-      [...this.parts.values()].map((part) => {
-        part.givenUp = true;
-        return part.close(why);
-      }),
-    );
-    await this.listChanged();
+    this.refusing = (async () => {
+      await Promise.all(
+        [...this.parts.values()].map((part) => {
+          part.givenUp = true;
+          return part.close(why);
+        }),
+      );
+      await this.listChanged();
+    })();
+    return this.refusing;
   }
 
   private install(server: Server): void {

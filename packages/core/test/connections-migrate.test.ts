@@ -4,7 +4,15 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
-import { connectionKeyMatches, readConnections } from '../src/connections.ts';
+import {
+  type ConnectionRecord,
+  connectionKeyHash,
+  connectionKeyMatches,
+  newConnectionId,
+  newConnectionKey,
+  readConnections,
+  withConnection,
+} from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherPaths } from '../src/launcher.ts';
@@ -14,6 +22,7 @@ import {
   type MigrationResult,
   type MigrationUndoResult,
 } from '../src/operations/connection-migrate.ts';
+import { connectionList } from '../src/operations/connections.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -189,6 +198,17 @@ test(
     );
     assert.ok((read.record.migratedFrom?.backups.length ?? 0) >= 3, 'each removed entry was saved first');
     for (const backup of read.record.migratedFrom?.backups ?? []) assert.ok(existsSync(backup));
+    // `connection list` says it came from a migration, and which entries it replaced — never where they were saved.
+    const [view] = (await connectionList(m.core, m.env)).connections;
+    assert.deepEqual(view?.migratedFrom, {
+      at: read.record.migratedFrom?.at,
+      entries: [
+        { server: 'core', name: 'agentcomms' },
+        { server: 'gmail', name: 'gmail' },
+        { server: 'slack', name: 'slack' },
+        { server: 'events', name: 'events' },
+      ],
+    });
 
     // The undo: each part an entry of its own again, under its old name, the connection gone.
     const undo = await gatedChange(m.core, connectionMigrateUndoChange(m.core, m.env, { id: read.record.id }, 'cli'), {
@@ -268,6 +288,48 @@ test(
     );
   },
 );
+
+test('a connection no migration made says so, and its undo is refused before anything is asked or changed', async () => {
+  /*
+   * Before 0.35.0's finish, `connection migrate --undo` took any connection: one made by `connection add` or a
+   * channel's own `mcp install` was, once approved, taken out of its app and each part registered as an entry of its
+   * own under its default name — "undoing" a migration that never happened, into the six-entry shape.
+   */
+  const m = machine();
+  const key = newConnectionKey();
+  const made: ConnectionRecord = {
+    id: newConnectionId(),
+    name: 'Claude Code',
+    app: 'claude-code',
+    where: { scope: 'user', folder: null, configDir: null },
+    entry: { name: 'agentcomms', path: m.claudeJson },
+    launcher: 'managed',
+    parts: [{ server: 'core' }, { server: 'gmail' }],
+    keyHash: connectionKeyHash(key),
+    keyIssuedAt: '2026-10-27T09:00:00.000Z',
+    createdAt: '2026-10-27T09:00:00.000Z',
+    revokedAt: null,
+  };
+  await m.core.config.update((config) => ({ ...config, connections: withConnection(config, { put: made }) }), {
+    consent: { kind: 'loosening-consent' as const, paths: [`connections["${made.name}"]`] },
+  });
+  const [view] = (await connectionList(m.core, m.env)).connections;
+  assert.equal(view?.migratedFrom, null);
+  await assert.rejects(
+    gatedChange(m.core, connectionMigrateUndoChange(m.core, m.env, { id: made.id }, 'cli'), {
+      surface: 'cli',
+      channel: 'core',
+    }),
+    (error: { code?: string; message?: string; hint?: string }) => {
+      assert.equal(error.code, 'USAGE');
+      assert.match(String(error.message), /"Claude Code" came from no migration, so there is nothing to undo/);
+      assert.match(String(error.hint), /connection remove/);
+      return true;
+    },
+  );
+  assert.deepEqual(await m.core.approvals.list(), [], 'nothing was prepared');
+  assert.equal(readConnections(await m.core.config.load()).connections.length, 1, 'the connection is as it was');
+});
 
 test('an app config that cannot be read stops a migration before anything is planned', NOT_ON_WINDOWS, async () => {
   const m = machine();

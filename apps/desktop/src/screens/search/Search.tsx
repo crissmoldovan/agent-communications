@@ -26,6 +26,7 @@ import {
   LocalLine,
   MessagesTabs,
   PersonName,
+  storyOf,
   storyReads,
   useAccountsInfo,
   useIndexOnOpen,
@@ -33,6 +34,7 @@ import {
   useSearchStatus,
   useSearchSupported,
   useStories,
+  useStoryTakes,
 } from './parts.tsx';
 
 /** How many hits one search asks for: the most core gives, so a state narrows the best 50 (§6). */
@@ -162,16 +164,33 @@ function SearchView({ onScreen }: { onScreen?: ((screen: Screen) => void) | unde
   const stories = useStories(toJoin, { days, aliases: accounts.aliases });
   const joinedOf = (sourceId: string): JoinedMessage | null | undefined =>
     stories === null ? undefined : (stories.bySource.get(sourceId) ?? null);
-  const opened = open === null || stories === null ? undefined : stories.bySource.get(open);
+  // Who has each message (0.35.0), read as Messages reads it once a story is open: its Who has it, from here too.
+  const storyTakes = useStoryTakes(open !== null);
+  const reads = useMemo(
+    () =>
+      stories === null
+        ? null
+        : storyReads(stories, days, accounts, {
+            takes: storyTakes.takes,
+            taking: storyTakes.taking,
+            readAt: storyTakes.readAt,
+          }),
+    [stories, days, accounts, storyTakes.takes, storyTakes.taking, storyTakes.readAt],
+  );
+  const opened =
+    open === null || stories === null || reads === null
+      ? undefined
+      : storyOf(stories, open, reads, hits?.find((hit) => hit.sourceId === open)?.account);
 
-  if (opened !== undefined && stories !== null) {
+  if (opened !== undefined && reads !== null) {
     return (
       <MessageStory
         listed={opened}
-        reads={storyReads(stories, days, accounts)}
+        reads={reads}
         context={context}
         onBack={() => setOpen(null)}
         onScreen={onScreen}
+        onChanged={storyTakes.reload}
       />
     );
   }

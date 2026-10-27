@@ -14,9 +14,10 @@ import { supports } from '../../gates.ts';
 import { useReloadOnReturn } from '../../hooks/use-reload-on-return.ts';
 import { errorMessage, type Product } from '../../ipc.ts';
 import { type AccountsInfo, readAccounts } from '../../messages/accounts.ts';
-import type { JoinedMessage } from '../../messages/join.ts';
-import type { Millis } from '../../messages/read.ts';
+import { type JoinedMessage, join, takeContext } from '../../messages/join.ts';
+import type { Millis, TakesRead, TakingRead } from '../../messages/read.ts';
 import { cardSteps, type StoryContext } from '../../messages/story.ts';
+import { readTakes, readTakingSettings } from '../../messages/takes.ts';
 import {
   foundBy,
   handleParts,
@@ -173,11 +174,15 @@ export function usePeople(enabled = true): {
   return { people: loaded.state === 'ready' ? loaded.value : [], loaded, reload };
 }
 
-/** The accounts the app reads (`accounts`), for the story's link into Gmail or Slack and the accounts' names. */
+/**
+ * The accounts the app reads (`accounts`), for the story's link into Gmail or Slack and the accounts' names — and, once
+ * core takes messages (`TAKING_VERSION`), Resend's too, as Messages reads them, so a take of a received email is named.
+ */
 export function useAccountsInfo(): AccountsInfo {
   const bridge = useBridge();
   const { installation } = useAppData();
   const present = installation.state === 'ready' ? installation.value.present.join(',') : '';
+  const resend = supports(installation.state === 'ready' ? installation.value.version : null, 'taking');
   const [accounts, setAccounts] = useState<AccountsInfo>(() => ({
     aliases: new Map(),
     gmailAddresses: new Map(),
@@ -185,14 +190,53 @@ export function useAccountsInfo(): AccountsInfo {
   }));
   useEffect(() => {
     let live = true;
-    void readAccounts(bridge, present === '' ? [] : (present.split(',') as Product[])).then((read) => {
+    void readAccounts(bridge, present === '' ? [] : (present.split(',') as Product[]), { resend }).then((read) => {
       if (live) setAccounts(read);
     });
     return () => {
       live = false;
     };
-  }, [bridge, present]);
+  }, [bridge, present, resend]);
   return accounts;
+}
+
+/** Who has each message, as Messages reads it (0.35.0): core's takes and each account's taking settings. */
+export interface StoryTakes {
+  readonly takes: Loadable<TakesRead> | 'off';
+  readonly taking: Loadable<TakingRead> | 'off';
+  /** When they were read: the moment "nobody took it" is judged at. */
+  readonly readAt: Millis;
+}
+
+/**
+ * Core's takes and taking settings for a story opened from Search or People (taking design §9), read as Messages
+ * reads them — once `enabled` (a story is open), again on `reload` (after Take back, Give to… or I'll handle it) — and
+ * only from a core that takes messages (`TAKING_VERSION`); `off` before it, when nothing of taking is read.
+ */
+export function useStoryTakes(enabled: boolean): StoryTakes & { reload: () => Promise<void> } {
+  const bridge = useBridge();
+  const { installation } = useAppData();
+  const on = supports(installation.state === 'ready' ? installation.value.version : null, 'taking');
+  const [read, setRead] = useState<StoryTakes>(() => ({
+    takes: on ? { state: 'loading' } : 'off',
+    taking: on ? { state: 'loading' } : 'off',
+    readAt: Date.now(),
+  }));
+  const asked = useRef(0);
+  const reload = useCallback(async () => {
+    const ask = ++asked.current;
+    if (!on) {
+      setRead({ takes: 'off', taking: 'off', readAt: Date.now() });
+      return;
+    }
+    if (!enabled) return;
+    const [takes, taking] = await Promise.all([readTakes(bridge), readTakingSettings(bridge)]);
+    if (ask === asked.current) setRead({ takes, taking, readAt: Date.now() });
+  }, [bridge, on, enabled]);
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+  return { ...read, reload };
 }
 
 /**
@@ -247,18 +291,56 @@ export function useStories(
   return stories;
 }
 
-/** What `MessageStory` reads beside the message: the join's own activity and events, and the accounts. */
-export function storyReads(stories: JoinedStories, days: number, accounts: AccountsInfo): MessagesReads {
+/**
+ * What `MessageStory` reads beside the message: the join's own activity and events, the accounts, and who has each
+ * message — the takes and taking settings `useStoryTakes` read, so the story's Who has it is there from Search too.
+ */
+export function storyReads(
+  stories: JoinedStories,
+  days: number,
+  accounts: AccountsInfo,
+  takes: StoryTakes = { takes: 'off', taking: 'off', readAt: Date.now() },
+): MessagesReads {
   return {
     since: joinSince(days),
-    readAt: Date.now(),
+    readAt: takes.readAt,
     events: { state: 'ready', value: { messages: stories.events, before: null, more: false } },
     activity: { state: 'ready', value: stories.activity },
     accounts,
-    // A story opened from Search shows what was done, not who has it now: Messages reads the takes.
-    takes: 'off',
-    taking: 'off',
+    takes: takes.takes,
+    taking: takes.taking,
   };
+}
+
+/**
+ * The found message `sourceId` as its story tells it: joined again with the takes once they are read, as Messages
+ * joins it, so it says who has it; the stories' own join until then, and wherever the takes could not be read.
+ *
+ * A take is found by `<channel>:<accountId>:<id>`, and a message only agents read has its account from its activity
+ * lines — which a Slack read does not name. The found message says which account it came in to (`account`, from core's
+ * index), so lines that name none are joined with it: otherwise its story would say nobody has it.
+ */
+export function storyOf(
+  stories: JoinedStories,
+  sourceId: string,
+  reads: MessagesReads,
+  account?: { readonly id: string; readonly alias: string } | undefined,
+): JoinedMessage | undefined {
+  const listed = stories.bySource.get(sourceId);
+  const { takes, taking } = reads;
+  if (takes === 'off' || takes.state !== 'ready') return listed;
+  const lines = stories.activity.get(sourceId);
+  const activity =
+    account === undefined || lines === undefined || lines.some((line) => line.account !== null)
+      ? stories.activity
+      : new Map([...stories.activity, [sourceId, lines.map((line) => ({ ...line, account }))]]);
+  // As Messages' `joinOptionsOf` joins: settings that could not be read judge no message "nobody took it".
+  const settings = taking !== 'off' && taking.state === 'ready' ? taking.value.accounts : [];
+  const taken = join(stories.events, activity, {
+    aliases: reads.accounts.aliases,
+    takes: takeContext(takes.value.takes, settings, reads.readAt),
+  }).find((message) => message.sourceId === sourceId);
+  return taken ?? listed;
 }
 
 /** Searched on this Mac: nothing leaves it (§7) — said where a search ran on the checked local model, or by words. */

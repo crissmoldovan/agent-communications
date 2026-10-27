@@ -398,7 +398,7 @@ export async function setupState(context: GmailContext, options: SetupStateOptio
   const gmailProfileApplies = setupClientChoiceNeedsMailbox(config);
 
   // Unreadable client configs are not a setup failure; the MCP step simply cannot be skipped automatically.
-  const registeredWith = await clientsRegisteredWith(context.env);
+  const registeredWith = await clientsRegisteredWith(context.env, config);
   const target = gmailProfileApplies && options.alias ? lookupName(config, 'inbox', options.alias) : undefined;
   const selected =
     gmailProfileApplies && options.alias && !target

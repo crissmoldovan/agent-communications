@@ -365,7 +365,8 @@ test('printing an entry, or `--client json`, writes nothing and so asks nobody',
 test('`setup --mcp-client` stops for approval without registering, and only `--mcp-approval` carries it', async () => {
   const { harness, home, env } = await machine();
   const cursor = join(home, '.cursor', 'mcp.json');
-  const argv = ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--json'];
+  // `--standalone`: the entry of Gmail's own, as before 0.35.0 — install-connection.test.ts holds the default.
+  const argv = ['setup', '--mcp-client', 'cursor', '--standalone', '--launcher', 'local', '--json'];
 
   const first = await cli(harness, argv, { env });
   assert.equal(first.code, 10, `a registration nobody approved must not exit 0: ${first.stdout}`);
@@ -380,6 +381,7 @@ test('`setup --mcp-client` stops for approval without registering, and only `--m
     'setup',
     '--mcp-client',
     'cursor',
+    '--standalone',
     '--launcher',
     'local',
     '--json',
@@ -412,7 +414,7 @@ test('`setup --mcp-client` stops for approval without registering, and only `--m
 
   // Read by a person, the report says what they are agreeing to and what to run once they have.
   const other = await machine();
-  const plain = await cli(other.harness, ['setup', '--mcp-client', 'cursor', '--launcher', 'local'], {
+  const plain = await cli(other.harness, ['setup', '--mcp-client', 'cursor', '--standalone', '--launcher', 'local'], {
     env: other.env,
   });
   assert.equal(plain.code, 10, plain.stderr);
@@ -422,7 +424,7 @@ test('`setup --mcp-client` stops for approval without registering, and only `--m
 });
 
 test('an interactive setup given `--mcp-client` asks as `mcp install` does: nobody has answered anything yet', async () => {
-  const argv = ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--no-browser', '--no-tui'];
+  const argv = ['setup', '--mcp-client', 'cursor', '--standalone', '--launcher', 'local', '--no-browser', '--no-tui'];
 
   // A terminal held by an agent: the preview and the id, the flag to carry it back, and nothing registered.
   const { harness, home, env } = await machine();
@@ -448,7 +450,7 @@ test('an interactive setup given `--mcp-client` asks as `mcp install` does: nobo
 });
 
 test('an interactive setup that asked "Connect this to an agent?" takes the yes under chat, and the code under confirm', async () => {
-  const argv = ['setup', '--launcher', 'local', '--no-browser', '--no-tui'];
+  const argv = ['setup', '--standalone', '--launcher', 'local', '--no-browser', '--no-tui'];
   // The target mailbox is already connected: yes to connecting an agent, then the fourth client in the list, Cursor.
   const answers = [
     [/which one\?/, '1'],
@@ -492,7 +494,7 @@ test('an agent at a terminal that picked the client from the list is told to run
    * and an approval the run then never claimed would have been dropped past the update check's stop. So the command
    * an agent is told to run again carries the client it picked, and that command registers it.
    */
-  const argv = ['setup', '--launcher', 'local', '--no-browser', '--no-tui'];
+  const argv = ['setup', '--standalone', '--launcher', 'local', '--no-browser', '--no-tui'];
   const { harness, home, env } = await machine();
   const agentEnv = { ...env, CLAUDECODE: '1' };
   const asked = await cli(harness, argv, {
@@ -687,6 +689,7 @@ async function clientOnly(): Promise<{ harness: Harness; env: NodeJS.ProcessEnv;
 }
 
 /** `setup` asked for a mailbox and the agent connection at once, with the launcher that needs nothing from npm. */
+/** With `--standalone`: an entry of Gmail's own, as before 0.35.0 — install-connection.test.ts holds the default. */
 const BOTH = [
   'setup',
   '--inbox',
@@ -695,12 +698,17 @@ const BOTH = [
   'sam@example.test',
   '--mcp-client',
   'cursor',
+  '--standalone',
   '--launcher',
   'local',
 ];
 
 interface HandOff {
-  handoff: { authUrl: string; finish: string; registerWith?: { client: string; launcher?: string; replace?: boolean } };
+  handoff: {
+    authUrl: string;
+    finish: string;
+    registerWith?: { client: string; launcher?: string; replace?: boolean; standalone?: boolean };
+  };
   blocked: { step: string; hint: string };
   did: string[];
 }
@@ -741,6 +749,7 @@ test('`setup --inbox --mcp-client` hands the registration on with the sign-in, a
   assert.deepEqual((await flowRecord(machine.harness, String(finish[1]))).registerWith, {
     client: 'cursor',
     launcher: 'local',
+    standalone: true,
   });
   assert.equal(existsSync(machine.cursor), false);
   const link = /^\s+(http\S+)$/m.exec(run.stdout)?.[1];
@@ -751,7 +760,7 @@ test('`setup --inbox --mcp-client` hands the registration on with the sign-in, a
 test('finishing it without a terminal connects the mailbox and hands back the registration, which `mcp install --approval` claims', async () => {
   const machine = await clientOnly();
   const report = await handedOff(machine);
-  assert.deepEqual(report.handoff.registerWith, { client: 'cursor', launcher: 'local' });
+  assert.deepEqual(report.handoff.registerWith, { client: 'cursor', launcher: 'local', standalone: true });
   assert.match(report.blocked.hint, /also registers the server with cursor/);
   assert.deepEqual(report.did, ['started a sign-in for "home"'], 'nothing claims the registration happened');
 
@@ -1035,7 +1044,12 @@ test('`setup --replace-server` travels with the sign-in, and the finish replaces
   const machine = await clientOnly();
   await cursorHolds(machine, { gmail: ours() });
   const report = await handedOff(machine, ['--replace-server']);
-  assert.deepEqual(report.handoff.registerWith, { client: 'cursor', launcher: 'local', replace: true });
+  assert.deepEqual(report.handoff.registerWith, {
+    client: 'cursor',
+    launcher: 'local',
+    replace: true,
+    standalone: true,
+  });
   // In the sign-in's record, where the finish reads it.
   const flowId = String(/--finish (fl_\w+)/.exec(report.handoff.finish)?.[1]);
   assert.deepEqual((await flowRecord(machine.harness, flowId)).registerWith, report.handoff.registerWith);

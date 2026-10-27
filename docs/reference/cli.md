@@ -800,8 +800,9 @@ agent-gmail setup [options]
 | `--client <name>` | sign that mailbox in through this OAuth client | — |
 | `--profile <file>` | add this organisation profile before continuing setup | — |
 | `--org-approval <id>` | add the organisation profile this approval was given for | — |
-| `--mcp-client <client>` | register with this MCP client when the mailbox is connected (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode") | — |
-| `--replace-server` | replace an MCP entry of the same name that is already there | `false` |
+| `--mcp-client <client>` | put Gmail into this MCP client's connection when the mailbox is connected (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode") | — |
+| `--standalone` | register the server as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
+| `--replace-server` | with --standalone: replace an MCP entry of the same name that is already there | `false` |
 | `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
 | `--move` | delete the downloaded client JSON once its secret is stored | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |

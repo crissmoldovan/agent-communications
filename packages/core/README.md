@@ -25,7 +25,7 @@ npx @agentcomms/core label name "Jo Example"  # your name, for where a channel h
 npx @agentcomms/core label rule add acme/slack --kinds reaction --as me  # reactions sent as you, unlabelled (you approve it)
 npx @agentcomms/core label icon acme/slack :jo-agent:  # the workspace emoji the app's Slack posts show (you approve it)
 npx @agentcomms/core label style acme/slack labelled  # every agent message there as you, labelled, not as the app (you approve it)
-npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
+npx @agentcomms/core channels      # which servers exist, which are installed, where each is registered, and what each takes as a connection's part
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core mcp uninstall --client cursor --server gmail   # take one server out of one client, at once
@@ -113,8 +113,9 @@ command or the labelled PowerShell `&` line the result provides.
 Core keeps a private log of what each agent window read, did and sent: `<state>/activity/`, a file a day, kept 30
 days. It holds ids, subjects, senders and file names, and never a message body, an attachment or a secret.
 
-- `agentcomms activity sessions` lists the agent windows, newest first; `agentcomms activity show <session>` lists
-  what one did.
+- `agentcomms activity sessions` lists the agent windows, newest first — each with the MCP connection it was last
+  used through (`connection`, by id and name, from 0.35.0) — and `agentcomms activity show <session>` lists what one
+  did.
 - `agentcomms activity items [--since <ms>] [--ids <id,…>] --json` lists every call that names an item, grouped by
   the item: a Gmail message by its id, a Slack message as `<channelId>/<ts>`. Each line names the window (its key,
   folder and client), the operation, when, and how it ended. A reply also links to what it answers: a Gmail reply
@@ -354,6 +355,8 @@ agentcomms connection migrate            # your app's separate entries into one 
   often committed and would carry the key into the repository.
 - **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one
   connection per app reaching exactly what those entries reached, saves each entry it removes, and can be undone.
+  `connection list --json` says which connections a migration made (`migratedFrom`, with the entries it replaced), and
+  `connection migrate --undo` refuses any other: one you added replaced nothing, so there is nothing to put back.
 - `connection` commands are `comms_connections_list`, `comms_connection_show`, `comms_connection_add`,
   `comms_connection_change`, `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` and
   `comms_connection_migrate` over MCP; a Manual connection is the one thing they do not do. Inside a connection,

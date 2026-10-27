@@ -579,8 +579,12 @@ function standIn(pkg, name, fn) {
     }
     // Setup reaches server registration only after its state says the named mailbox is already connected. The sealed
     // drive replaces setupState like every operation, so give precisely that prerequisite when this drive is proving
-    // the setup-registration row; every other setup row retains the ordinary inert answer.
-    if (id === 'gmail:setupState' && drive.wanted.has('core:serverInstallChange')) {
+    // a setup-registration row — Gmail into the app's connection (D17), or `--standalone`'s entry of its own; every
+    // other setup row retains the ordinary inert answer.
+    if (
+      id === 'gmail:setupState' &&
+      (drive.wanted.has('core:serverInstallChange') || drive.wanted.has('core:connectionPartChange'))
+    ) {
       return {
         next: 'mcp',
         done: ['client', 'inbox'],

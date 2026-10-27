@@ -241,6 +241,15 @@ export interface ConnectionView {
   readonly key: { readonly issuedAt: string | null; readonly revoked: boolean };
   readonly createdAt: string | null;
   readonly lastUsed: string | null;
+  /**
+   * Whether `connection migrate` made it (D16), and the entries of their own it replaced, by server and entry name —
+   * what `connection migrate --undo` registers again; null for a connection made any other way, which has nothing to
+   * undo. Never where those entries were saved.
+   */
+  readonly migratedFrom: {
+    readonly at: string;
+    readonly entries: readonly { readonly server: string; readonly name: string }[];
+  } | null;
   readonly problems: readonly string[];
 }
 
@@ -317,6 +326,7 @@ async function viewOf(
       key: { issuedAt: null, revoked: false },
       createdAt: null,
       lastUsed: null,
+      migratedFrom: null,
       problems: read.problems,
     };
   }
@@ -338,6 +348,13 @@ async function viewOf(
     key: { issuedAt: record.keyIssuedAt, revoked: record.revokedAt !== null },
     createdAt: record.createdAt,
     lastUsed: await connectionLastUsed(core.paths.stateDir, record.id),
+    migratedFrom:
+      record.migratedFrom === undefined
+        ? null
+        : {
+            at: record.migratedFrom.at,
+            entries: record.migratedFrom.entries.map((entry) => ({ server: entry.server, name: entry.name })),
+          },
     problems: read.problems,
   };
 }
@@ -1051,6 +1068,26 @@ function appConnections(config: Config, env: NodeJS.ProcessEnv, app: ConnectionA
         : profile !== null && resolve(record.where.configDir) === profile;
     return record.revokedAt === null && record.app === app && record.where.scope === 'user' && here ? [record] : [];
   });
+}
+
+/**
+ * The app's connection a channel's own `mcp install --client <app>` puts its part into (`appConnections`), with that
+ * part, when the connection has it: what a finish checks before it puts the part in again — Gmail's `setup` hands its
+ * registration to the finish of a sign-in. Null when the app has no such connection, has several (`mcp install` then
+ * names none), or the connection has no part of `server`.
+ */
+export function appConnectionPart(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  app: string,
+  server: string,
+): { readonly connection: ConnectionRecord; readonly part: ConnectionPart } | null {
+  if (app === 'manual' || !(CONNECTION_APPS as readonly unknown[]).includes(app)) return null;
+  const mine = appConnections(config, env, app as ConnectionApp);
+  if (mine.length !== 1) return null;
+  const connection = mine[0] as ConnectionRecord;
+  const part = connection.parts.find((each) => each.server === server);
+  return part === undefined ? null : { connection, part };
 }
 
 /** A name no connection here has, ignoring case: `Claude Code`, then `Claude Code 2`, and so on. */

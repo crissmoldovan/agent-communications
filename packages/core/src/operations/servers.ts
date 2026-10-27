@@ -21,7 +21,7 @@ import { accountNoun, hasNarrowing, listed, narrowingOwner, pinOption } from '..
 import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import { registeredOrConnected } from '../connection-registrations.ts';
-import { CONNECTION_KEY_ENV, readConnections, withConnection } from '../connections.ts';
+import { CONNECTION_KEY_ENV, partFacts, readConnections, withConnection } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { writeFileAtomic } from '../fs.ts';
@@ -1454,6 +1454,15 @@ export interface ChannelAvailability {
   registered: ChannelRegistration[];
   /** The MCP connections that reach this server (§9.2): each by id, name and app. */
   viaConnections: { id: string; name: string; app: string }[];
+  /**
+   * What it takes as a part of an MCP connection (§11, D20) — the account it can be kept to, by its option and what one
+   * is called, and whether it can be started read-only — so the app keeps no table of its own; null for a server no
+   * connection can have.
+   */
+  part: {
+    account: { option: 'inbox' | 'workspace' | 'account'; noun: string } | null;
+    readOnly: boolean;
+  } | null;
 }
 
 export interface ChannelsReport {
@@ -1485,6 +1494,16 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
     dir = dirname(dir);
   }
   return null;
+}
+
+/** A server's choices as a connection's part, from core's snapshot of the declarations (`partFacts`). */
+function partChoice(server: string): ChannelAvailability['part'] {
+  const facts = partFacts(server);
+  if (facts === undefined) return null;
+  return {
+    account: facts.pin === undefined ? null : { option: facts.pin, noun: facts.noun ?? 'account' },
+    readOnly: facts.readOnlySwitch,
+  };
 }
 
 /**
@@ -1540,6 +1559,7 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
       onPath,
       registered,
       viaConnections,
+      part: partChoice(channel),
     });
   }
   return { core: VERSION, channels, unreadable: scan.unreadable };

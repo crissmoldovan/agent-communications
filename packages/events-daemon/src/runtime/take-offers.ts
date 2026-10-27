@@ -6,14 +6,16 @@ import {
   type Notifier,
   readTakingSettings,
   TAKE_OFFER_MS,
+  type TakeHolder,
   type TakeLine,
   type TakeMessage,
+  type TakenView,
   type TakeRecord,
   type TakeStore,
   type TakeWindow,
   takingFor,
 } from '@agentcomms/core';
-import { sqlTargetLane } from '../domain/lanes.ts';
+import { type LaneWindowIdentity, sqlTargetLane } from '../domain/lanes.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { parseEventSource } from './event-source.ts';
 
@@ -92,6 +94,13 @@ export interface LaneOfferPort {
     window: { readonly sessionId: string | null; readonly activityKey: string | null },
     at: number,
   ): string | null;
+  /**
+   * `events_lane_item`'s `taken` (taking design §6, T7): who has the item's message, as the window reading it may see
+   * it — `you`, `another session` or `the person`, offered to you or to another session, done, and the closed reasons
+   * it was handed back for — or null: nobody, or an item a take is not about. Never another session's folder, client,
+   * key or session id. Nothing is written. Never throws.
+   */
+  takenOfItem(itemId: string, window: LaneWindowIdentity): Promise<TakenView>;
 }
 
 /** One account's notice in a sweep: how many messages it named. */
@@ -114,7 +123,7 @@ export interface TakeSweepReport {
 
 export interface TakeOffersOptions {
   readonly store: EventDatabase;
-  readonly takes: Pick<TakeStore, 'offer' | 'handOffer' | 'lapseOffer' | 'lapse' | 'list'>;
+  readonly takes: Pick<TakeStore, 'offer' | 'handOffer' | 'lapseOffer' | 'lapse' | 'list' | 'views'>;
   readonly config: Pick<ConfigStore, 'load'>;
   /** Raises the sweep's notices; none is raised without one. */
   readonly notify?: Notifier | undefined;
@@ -317,6 +326,37 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
     const until = iso(at + TAKE_OFFER_MS);
     void this.#takes.handOffer(entry.message, entry.delivery, until).catch(() => undefined);
     return until;
+  }
+
+  async takenOfItem(itemId: string, window: LaneWindowIdentity): Promise<TakenView> {
+    try {
+      const row = this.#store.database
+        .prepare(
+          `SELECT i.type, i.dedupe_key, qi.account_id
+             FROM queue_items qi
+             JOIN ingest i ON i.event_id = qi.event_id
+            WHERE qi.id = ?`,
+        )
+        .get(itemId) as { type: string; dedupe_key: string; account_id: string } | undefined;
+      if (row === undefined) return null;
+      const message = takeMessageOfEvent(row.type, row.dedupe_key, row.account_id);
+      if (message === null) return null;
+      // The window as a take would hold it (T2): matched by its Claude Code session id, or by its agent window's key.
+      // Its process is none a channel server records, so a take is never "yours" by a process it shares with nobody.
+      const caller: TakeHolder = {
+        key: window.activityKey,
+        grouped: window.grouped,
+        process: `lane-window:${window.activityKey}`,
+        sessionId: window.sessionId,
+        parent: null,
+        folder: window.folder,
+        client: window.client,
+      };
+      return (await this.#takes.views([message], caller)).get(message.id) ?? null;
+    } catch {
+      // Who has it is said where it can be read; an item is never refused for it.
+      return null;
+    }
   }
 
   /**

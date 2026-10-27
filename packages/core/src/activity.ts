@@ -521,6 +521,11 @@ export interface ActivitySessionSummary {
   readonly channels: readonly string[];
   readonly accounts: readonly string[];
   readonly counts: ActivityCounts;
+  /**
+   * The MCP connection it was last used through (single-server design D11), by id and the name it had then — what
+   * `session.connection` is on its timeline — or null for a session no line of which came through one.
+   */
+  readonly connection: ActivityConnection | null;
 }
 
 /** What a session's lines add up to, in a form two days' worth can be added together. */
@@ -543,6 +548,8 @@ interface Aggregate {
   accounts: string[];
   kind: Record<ActivityKind, number>;
   outcome: Record<ActivityOutcome, number>;
+  /** The connection of its latest line that came through one, with that line's time; null for none. */
+  connection: { id: string; name: string; at: string } | null;
 }
 
 function emptyKinds(): Record<ActivityKind, number> {
@@ -576,6 +583,10 @@ function aggregateOf(line: ActivityLine): Aggregate {
     accounts: line.account.alias ? [line.account.alias] : [],
     kind,
     outcome,
+    connection:
+      line.session.connection === undefined
+        ? null
+        : { id: line.session.connection.id, name: line.session.connection.name, at: line.at },
   };
 }
 
@@ -606,6 +617,12 @@ function merge(a: Aggregate, b: Aggregate): Aggregate {
     accounts: union(a.accounts, b.accounts),
     kind,
     outcome,
+    connection:
+      a.connection === null
+        ? b.connection
+        : b.connection === null || a.connection.at >= b.connection.at
+          ? a.connection
+          : b.connection,
   };
 }
 
@@ -628,6 +645,7 @@ function summaryOf(aggregate: Aggregate): ActivitySessionSummary {
     channels: [...aggregate.channels].sort(),
     accounts: [...aggregate.accounts].sort(),
     counts: { kind: { ...aggregate.kind }, outcome: { ...aggregate.outcome } },
+    connection: aggregate.connection === null ? null : { id: aggregate.connection.id, name: aggregate.connection.name },
   };
 }
 
@@ -649,7 +667,13 @@ function aggregatesOf(raw: unknown): Aggregate[] | null {
       !strings(held.processes) ||
       !strings(held.channels) ||
       !strings(held.accounts) ||
-      !strings(held.surfaces)
+      !strings(held.surfaces) ||
+      !(
+        held.connection === null ||
+        (typeof held.connection?.id === 'string' &&
+          typeof held.connection.name === 'string' &&
+          typeof held.connection.at === 'string')
+      )
     ) {
       return null;
     }
@@ -719,6 +743,8 @@ export interface ActivityLogOptions {
 
 const FAILURE_FILE = 'activity-failure.json';
 const INDEX_DIR = '.index';
+/** The day index's shape: 2 since a session's summary names its connection. */
+const INDEX_VERSION = 2;
 /**
  * Each day's server windows: one small line for each server process's window on that day — its key, parent and
  * folder — so a CLI call finds the window it runs in without reading the day (`sessionOfAncestor`).
@@ -973,7 +999,8 @@ export class ActivityLog {
         mark?: unknown;
         sessions?: unknown;
       };
-      const sessions = held.version === 1 && held.mark === mark ? aggregatesOf(held.sessions) : null;
+      // Version 2 keeps each session's connection (D11); an index of version 1 is made again from the day's lines.
+      const sessions = held.version === INDEX_VERSION && held.mark === mark ? aggregatesOf(held.sessions) : null;
       if (sessions !== null) return sessions;
     } catch {
       // No index yet, or one that cannot be read: made again below.
@@ -981,7 +1008,9 @@ export class ActivityLog {
     const groups = new Map<string, Aggregate>();
     for (const line of await this.#lines(day)) add(groups, aggregateOf(line));
     const sessions = [...groups.values()];
-    await writeFileAtomic(index, `${JSON.stringify({ version: 1, mark, sessions })}\n`).catch(() => undefined);
+    await writeFileAtomic(index, `${JSON.stringify({ version: INDEX_VERSION, mark, sessions })}\n`).catch(
+      () => undefined,
+    );
     return sessions;
   }
 
