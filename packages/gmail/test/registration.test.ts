@@ -197,6 +197,7 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
       'install',
       '--client',
       'cursor',
+      '--standalone',
       '--launcher',
       'npx',
       '--inbox',
@@ -246,7 +247,11 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
     // ── Prepared at the command line, claimed in chat — with the default launcher, whose runtime is here ──
     await readyRuntime(harness);
     const gemini = join(home, '.gemini', 'settings.json');
-    const asked = await cli(harness, ['mcp', 'install', '--client', 'gemini', '--no-verify', '--json'], { env });
+    const asked = await cli(
+      harness,
+      ['mcp', 'install', '--client', 'gemini', '--standalone', '--no-verify', '--json'],
+      { env },
+    );
     const approvalId = pendingApproval(asked);
     assert.match(
       String(envelopeError(asked)?.details?.preview),
@@ -277,7 +282,18 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
     // Spent: the same approval registers nothing a second time, from either surface.
     const again = await cli(
       harness,
-      ['mcp', 'install', '--client', 'gemini', '--no-verify', '--force', '--json', '--approval', approvalId],
+      [
+        'mcp',
+        'install',
+        '--client',
+        'gemini',
+        '--standalone',
+        '--no-verify',
+        '--force',
+        '--json',
+        '--approval',
+        approvalId,
+      ],
       {
         env,
       },
@@ -302,11 +318,15 @@ test('an approval from comms_server_install registers from `agent-gmail mcp inst
 
 test('a person at the terminal approves a registration there and then, having read what it does', async () => {
   const { harness, home, env } = await machine();
-  const run = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify'], {
-    env,
-    tty: true,
-    answer: true,
-  });
+  const run = await cli(
+    harness,
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify'],
+    {
+      env,
+      tty: true,
+      answer: true,
+    },
+  );
   assert.equal(run.code, 0, `${run.stdout}${run.stderr}`);
   assert.match(run.stdout, /CHANGE PREVIEW[\s\S]*registers the Gmail MCP server with cursor/, 'shown before asked');
   assert.match(run.stderr, /Type yes to apply this change/);
@@ -314,11 +334,15 @@ test('a person at the terminal approves a registration there and then, having re
 
   // An agent holding a terminal is not a person at it: it gets the preview and the id, and nothing is written.
   const other = await machine();
-  const agent = await cli(other.harness, ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify'], {
-    env: { ...other.env, CLAUDECODE: '1' },
-    tty: true,
-    answer: true,
-  });
+  const agent = await cli(
+    other.harness,
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify'],
+    {
+      env: { ...other.env, CLAUDECODE: '1' },
+      tty: true,
+      answer: true,
+    },
+  );
   assert.equal(agent.code, 10, `${agent.stdout}${agent.stderr}`);
   assert.match(agent.stderr, /--approval ap_/);
   assert.equal(existsSync(join(other.home, '.cursor', 'mcp.json')), false);
@@ -327,8 +351,8 @@ test('a person at the terminal approves a registration there and then, having re
 test('printing an entry, or `--client json`, writes nothing and so asks nobody', async () => {
   const { harness, home, env } = await machine();
   for (const argv of [
-    ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--print', '--json'],
-    ['mcp', 'install', '--client', 'json', '--launcher', 'npx', '--no-verify', '--json'],
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify', '--print', '--json'],
+    ['mcp', 'install', '--client', 'json', '--standalone', '--launcher', 'npx', '--no-verify', '--json'],
   ]) {
     const run = await cli(harness, argv, { env });
     assert.equal(run.code, 0, `${argv.join(' ')}: ${run.stdout}`);
@@ -546,7 +570,9 @@ test('a server name that could rewrite the preview is refused by `agent-gmail mc
   // Quoted in the sentence the person approves, this name read as a pin and `--read-only` the entry would not have.
   const { harness, home, env } = await machine();
   const spoof = 'gmail", pinned to the mailbox work, read-only, "';
-  const run = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--name', spoof, '--json'], { env });
+  const run = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--standalone', '--name', spoof, '--json'], {
+    env,
+  });
   assert.equal(run.code, 64, run.stdout);
   assert.match(String(envelopeError(run)?.message), /a server name is 1 to 64 letters/);
   assert.deepEqual(await harness.core.approvals.list(), [], 'nobody was asked');
@@ -567,9 +593,13 @@ test('`agent-gmail mcp install` and comms_server_install warn about the same ung
   );
   const server = await coreServer(harness, env);
   try {
-    const command = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--print', '--no-verify', '--json'], {
-      env,
-    });
+    const command = await cli(
+      harness,
+      ['mcp', 'install', '--client', 'cursor', '--standalone', '--print', '--no-verify', '--json'],
+      {
+        env,
+      },
+    );
     assert.equal(command.code, 0, command.stdout);
     const fromCommand = command.envelope<{ warnings: string[] }>().data?.warnings ?? [];
     const fromChat = applied<{ warnings: string[] }>(
@@ -747,7 +777,17 @@ test('finishing it without a terminal connects the mailbox and hands back the re
     // For darwin, the shell `cli` gives the command that printed the claim.
     gmailCommand(
       machine.harness.core.paths,
-      ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--approval', String(registration?.approvalId)],
+      [
+        'mcp',
+        'install',
+        '--client',
+        'cursor',
+        '--standalone',
+        '--launcher',
+        'local',
+        '--approval',
+        String(registration?.approvalId),
+      ],
       'darwin',
     ),
   );
@@ -775,7 +815,7 @@ test('finishing it without a terminal connects the mailbox and hands back the re
   assert.match(plain.stdout, /Connected sam@example\.test as "home"/);
   assert.match(plain.stdout, /register the Gmail server with cursor\. That waits for the person's approval/);
   assert.match(plain.stdout, /CHANGE PREVIEW[\s\S]*registers the Gmail MCP server with cursor/);
-  assert.match(plain.stdout, /run `[^`]* mcp install --client cursor --launcher local --approval ap_\w+`/);
+  assert.match(plain.stdout, /run `[^`]* mcp install --client cursor --standalone --launcher local --approval ap_\w+`/);
   assertNoBareCommand(plain.stdout);
 });
 
@@ -877,6 +917,7 @@ test('an entry of ours pinned to another mailbox does not serve this one: the fi
     'install',
     '--client',
     'cursor',
+    '--standalone',
     '--name',
     'gmail-home',
     '--inbox',
@@ -1027,6 +1068,7 @@ test('`setup --replace-server` travels with the sign-in, and the finish replaces
         'install',
         '--client',
         'cursor',
+        '--standalone',
         '--launcher',
         'local',
         '--force',
@@ -1065,6 +1107,7 @@ test('`setup --replace-server` over an entry pinned to another mailbox pins the 
         'install',
         '--client',
         'cursor',
+        '--standalone',
         '--launcher',
         'local',
         '--inbox',
@@ -1105,6 +1148,7 @@ test('gmail_inbox_finish hands the mailbox just connected back as the pin, when 
     'install',
     '--client',
     'cursor',
+    '--standalone',
     '--launcher',
     'local',
     '--inbox',
@@ -1215,6 +1259,7 @@ test('gmail_inbox_finish decides `pendingRegistration` by the entry that serves 
     'install',
     '--client',
     'cursor',
+    '--standalone',
     '--launcher',
     'local',
     '--name',
@@ -1262,7 +1307,16 @@ test('gmail_inbox_finish hands `--replace-server` back as `force`, which comms_s
   assert.ok(pending, 'replacing was asked for, so the registration is pending');
   const args = pending.arguments as Record<string, unknown>;
   assert.deepEqual(args, { channel: 'gmail', client: 'cursor', launcher: 'local', force: true });
-  locatedGmailLine(String(pending.next), ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--force']);
+  locatedGmailLine(String(pending.next), [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'local',
+    '--force',
+  ]);
 
   // And the core server takes those arguments as the replacement they are, where without `force` it refuses.
   const server = await coreServer(machine.harness, machine.env);

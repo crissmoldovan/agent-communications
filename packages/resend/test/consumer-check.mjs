@@ -173,7 +173,18 @@ try {
  * The entry `mcp install --launcher npx` writes runs the whole CLI, so it must say `mcp`. `--client json --print`
  * writes nothing and `--no-verify` starts nothing from the registry.
  */
-const printed = run('mcp', 'install', '--client', 'json', '--launcher', 'npx', '--print', '--no-verify', '--json');
+const printed = run(
+  'mcp',
+  'install',
+  '--client',
+  'json',
+  '--standalone',
+  '--launcher',
+  'npx',
+  '--print',
+  '--no-verify',
+  '--json',
+);
 assert.equal(printed.status, 0, `mcp install --print failed: ${printed.stdout.slice(0, 400)}`);
 const install = JSON.parse(printed.stdout);
 assert.equal(install.ok, true);

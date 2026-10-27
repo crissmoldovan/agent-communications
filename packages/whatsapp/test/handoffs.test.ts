@@ -342,12 +342,34 @@ test('approve refused to an agent, or away from a terminal, names this installat
 test('a change waiting for approval is run again with this installation’s own mcp install, located', async () => {
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
   await harness.ready(ACCOUNT);
-  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--account', ACCOUNT];
+  const argv = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'npx',
+    '--no-verify',
+    '--account',
+    ACCOUNT,
+  ];
   const asked = await harness.cli([...argv, '--json']);
   assert.equal(asked.code, 10, asked.stdout);
   const error = asked.json().error as { hint: string; details: { approvalId: string } };
   const { approvalId } = error.details;
-  const rerun = ['mcp', 'install', '--client', 'cursor', '--account', ACCOUNT, '--launcher', 'npx', '--no-verify'];
+  const rerun = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--account',
+    ACCOUNT,
+    '--launcher',
+    'npx',
+    '--no-verify',
+  ];
   assert.equal(
     error.hint,
     `Show the person the preview. Once they say yes, run ${ownInline(harness.env, [...rerun, '--approval', approvalId])}.`,

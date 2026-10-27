@@ -2313,7 +2313,7 @@ test('every option `mcp` and `mcp install` both define reaches the registered en
 
   for (const option of shared) {
     const typed = [option, ...(expected[option]?.value ? [expected[option].value] : [])];
-    const install = ['--client', 'json', '--launcher', 'local', '--no-verify'];
+    const install = ['--client', 'json', '--standalone', '--launcher', 'local', '--no-verify'];
     for (const argv of [
       ['mcp', 'install', ...typed, ...install],
       ['mcp', ...typed, 'install', ...install],
@@ -2340,7 +2340,7 @@ test("mcp install names its client, and exits non-zero when that client's CLI is
   const home = tempDir();
   const missing = await cli(
     harness,
-    ['--json', 'mcp', 'install', '--client', 'claude-code', '--launcher', 'local', '--no-verify'],
+    ['--json', 'mcp', 'install', '--client', 'claude-code', '--standalone', '--launcher', 'local', '--no-verify'],
     { env: { HOME: home, USERPROFILE: home, PATH: tempDir() } },
   );
   assert.equal(missing.code, EXIT_CODES.UNAVAILABLE, missing.stdout);
@@ -2357,7 +2357,7 @@ test(
     await chmod(join(bin, 'npx'), 0o755);
     const home = tempDir();
     const env = { HOME: home, USERPROFILE: home, PATH: bin };
-    const argv = ['mcp', 'install', '--client', 'json', '--launcher', 'npx'];
+    const argv = ['mcp', 'install', '--client', 'json', '--standalone', '--launcher', 'npx'];
 
     const json = await cli(harness, ['--json', ...argv], { env });
     assert.equal(json.code, EXIT_CODES.UNAVAILABLE, json.stdout);
@@ -2383,6 +2383,7 @@ test('`mcp install --workspace` actually pins the registered server', async () =
     'install',
     '--client',
     'json',
+    '--standalone',
     '--launcher',
     'local',
     '--workspace',
@@ -2404,6 +2405,7 @@ test('`mcp install` refuses a workspace that does not exist, before writing anyt
     'install',
     '--client',
     'json',
+    '--standalone',
     '--launcher',
     'local',
     '--workspace',

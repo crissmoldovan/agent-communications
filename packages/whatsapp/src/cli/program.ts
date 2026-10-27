@@ -7,6 +7,8 @@ import {
   cliHandoffs,
   colorEnabled,
   commandPathOf,
+  connectionPartChange,
+  connectionPartExitStatus,
   EXIT_CODES,
   exemptFromUpdateNotice,
   type GatedChange,
@@ -20,6 +22,8 @@ import {
   PATH_OPTIONS,
   paint,
   pathOverridesFromCliOptions,
+  refuseStandaloneOptions,
+  renderConnectionPart,
   renderInstall,
   renderPrune,
   resolvePaths,
@@ -527,8 +531,14 @@ a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 con
     .option('--account <name>', 'pin the server to one account')
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
-    .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
-    .option('--print', 'only print what would be written', false)
+    .option('--force', "with --standalone: replace this server's own earlier entry — this is how you upgrade", false)
+    .option('--print', 'with --standalone: only print what would be written', false)
+    .option('--connection <id>', "the app's connection to put it into, when the app has several")
+    .option(
+      '--standalone',
+      "register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection",
+      false,
+    )
     .option('--approval <approvalId>', 'register the server this approval was given for')
     .action(
       act(async (context, options, flags: Options) => {
@@ -555,11 +565,67 @@ a macOS dialog may be waiting) · 77 permission needed (macOS privacy) · 78 con
          */
         // The pin is checked against `config.json` by core, so the spike's accounts have to be there first.
         await context.migration();
+        /*
+         * From 0.35.0 this puts WhatsApp into the app's MCP connection (single-server design D17), or makes the app one
+         * with Agent Comms itself and WhatsApp: the change comms_connection_change makes with `add`, approved the same
+         * way — so an approval either prepared is claimed by the other. What names an entry of WhatsApp's own is
+         * refused here, never taken as asking for one; `--standalone` registers that entry, as before.
+         */
+        if (flags.standalone !== true) {
+          refuseStandaloneOptions({
+            client: String(flags.client),
+            name,
+            defaultName: WHATSAPP_MCP.defaultServerName,
+            force: flags.force === true,
+            print: flags.print === true,
+          });
+          const added = await changeAt(
+            context,
+            connectionPartChange(
+              context.core,
+              env,
+              {
+                server: 'whatsapp',
+                app: String(flags.client),
+                ...(flags.connection === undefined ? {} : { id: String(flags.connection) }),
+                ...(pinned === undefined ? {} : { account: pinned }),
+                ...(launcher === undefined ? {} : { launcher }),
+                ...(flags.verify === false ? { noVerify: true } : {}),
+                ...(flags.approval === undefined ? {} : { approvalId: String(flags.approval) }),
+              },
+              'cli',
+              // This command cannot verify a release: it may install the one it is running, as its entry did.
+              { running: { packageName: WHATSAPP_MCP.packageName, version: WHATSAPP_MCP.version } },
+            ),
+            flags,
+            [
+              'mcp',
+              'install',
+              '--client',
+              String(flags.client),
+              ...(pinned !== undefined ? ['--account', pinned] : []),
+              ...(launcher !== undefined ? ['--launcher', launcher] : []),
+              ...(flags.verify === false ? ['--no-verify'] : []),
+              ...(flags.connection !== undefined ? ['--connection', String(flags.connection)] : []),
+            ],
+          );
+          const status = connectionPartExitStatus(added);
+          if (status !== EXIT_CODES.OK) softExit = status;
+          writeResult(added, output(), () => renderConnectionPart(added, options.color), streams);
+          return;
+        }
+        if (flags.connection !== undefined) {
+          throw new CommsError(
+            'USAGE',
+            '--connection names the connection to put WhatsApp into: not with --standalone',
+          );
+        }
         const again = [
           'mcp',
           'install',
           '--client',
           String(flags.client),
+          '--standalone',
           ...(name !== undefined && name !== 'whatsapp' ? ['--name', name] : []),
           ...(pinned !== undefined ? ['--account', pinned] : []),
           ...(launcher !== undefined ? ['--launcher', launcher] : []),
