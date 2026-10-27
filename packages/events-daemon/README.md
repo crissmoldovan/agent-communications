@@ -415,8 +415,9 @@ agent-events workflow show client-asks --version 5 --json                     # 
   message's own ids — and every start, worktree, delivery, notice and event is a "would". Nothing is started.
 - **A shadow version** (`flow.shadow: true`) is approved like any other and runs on real messages, route and find for
   real; every start, worktree, delivery, notice and raised event becomes a dry-run record of what it would have done,
-  kept 24 hours (`agent-events dryrun list`, `dryrun show <id>`), and each wait ends at once, `timed-out`. Nothing
-  leaves, and it raises no event.
+  kept 24 hours (`agent-events dryrun list`, `dryrun show <id>`), and each wait ends at once, `timed-out`. Each event
+  ticked on a step it does run — a condition, Which project?, a find — and each of the run's own is a dry-run record
+  too. Nothing leaves, and it raises no event, so no subscriber gets one.
 - **A flow's approval** lists, after the workflow's plain words, one numbered line per step that does something, as
   `describeFlow` says it.
 

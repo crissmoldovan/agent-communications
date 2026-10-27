@@ -55,7 +55,13 @@ import {
   stepStates,
   takeRunsEndedElsewhere,
 } from './runs.ts';
-import { insertShadowRecordInTransaction, type PreparedShadowRecord, shadowHandles, shadowStep } from './shadow.ts';
+import {
+  insertShadowRecordInTransaction,
+  type PreparedShadowRecord,
+  shadowHandles,
+  shadowStep,
+  withShadowEvents,
+} from './shadow.ts';
 import { SPLIT_OUTCOME } from './steps/split.ts';
 
 /*
@@ -182,7 +188,13 @@ export class WorkflowEngine {
     this.#approvals = options.approvals;
     this.#config = options.config;
     this.#executors = options.executors;
-    this.#sink = options.sink ?? NO_WORKFLOW_EVENTS;
+    // A shadow run's ticked events, of the steps it does run and of the run, are dry-run records, never raised (§7.7).
+    this.#sink = withShadowEvents({
+      sink: options.sink ?? NO_WORKFLOW_EVENTS,
+      cipher: options.cipher,
+      installationId: options.store.installationId,
+      now: options.now ?? Date.now,
+    });
     this.#onRunEnded = options.onRunEnded ?? [];
     this.activationChecks = options.activationChecks ?? [];
     this.#judgeFor = options.judgeFor;

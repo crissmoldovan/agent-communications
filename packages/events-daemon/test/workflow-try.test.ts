@@ -536,6 +536,97 @@ test('B7: a shadow version records a dry run for each effect and raise, and its 
   }
 });
 
+test("a shadow run's ticked events, of the steps it runs and of the run, are dry-run records and never raised", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const look = standIn('find-session', () => ({
+    kind: 'settled',
+    outcome: 'none',
+    output: { session: null, provider: 'claude' },
+  }));
+  const document = {
+    ...rule(1, []),
+    flow: {
+      flowVersion: 1,
+      shadow: true,
+      limits: limits(),
+      events: { namespace: 'acme', workflow: 'shadowed', run: ['finished'] },
+      start: 'look',
+      steps: {
+        look: {
+          kind: 'find-session',
+          in: { folder: '/example/home/work/x' },
+          provider: 'claude',
+          emit: ['not-found'],
+          next: { none: 'check' },
+        },
+        check: {
+          kind: 'condition',
+          when: { path: '/fields/subject', op: 'exists' },
+          emit: ['matched'],
+          next: { yes: 'tell' },
+        },
+        tell: { kind: 'notify', text: 'a shadow saw a mail', next: {} },
+      },
+    },
+  };
+  await withLaneOwner(
+    async (harness) => {
+      await enable(harness, document);
+      harness.mailbox.send('A shadow run');
+      await harness.tick();
+      await harness.tick();
+      const [run] = readDatabase(harness.stateDir, (database) =>
+        database.prepare('SELECT id, state FROM workflow_runs').all(),
+      ) as Array<{ id: string; state: string }>;
+      assert.equal(run?.state, 'done');
+      const kept = written(harness);
+      assert.equal(kept.workflow_events, 0, 'no event is raised, so none can be delivered');
+      assert.equal(
+        readDatabase(
+          harness.stateDir,
+          (database) =>
+            (database.prepare('SELECT COUNT(*) AS count FROM event_deliveries').get() as { count: number }).count,
+        ),
+        0,
+      );
+      const records = readDatabase(harness.stateDir, (database) =>
+        database
+          .prepare(
+            `SELECT d.id, d.target_id, substr(d.target_key, 1, 13) AS key, d.state, l.expires_at - l.delivered_at AS kept
+               FROM deliveries AS d JOIN dryrun_log AS l ON l.delivery_id = d.id WHERE d.run_id = ? ORDER BY d.target_id`,
+          )
+          .all(run?.id as string),
+      ) as Array<{ id: string; target_id: string; key: string; state: string; kept: number }>;
+      assert.deepEqual(
+        records.map((record) => [record.target_id, record.key, record.state, record.kept]),
+        [
+          ['check', 'shadow-event:', 'delivered', 86_400_000],
+          ['look', 'shadow-event:', 'delivered', 86_400_000],
+          ['run', 'shadow-event:', 'delivered', 86_400_000],
+          ['tell', 'shadow:tell', 'delivered', 86_400_000],
+        ],
+        "each ticked event a dry-run record, as the notice's step is",
+      );
+      const shown = await json<{ record: { type: string; stepId: string | null; data: Record<string, unknown> } }>(
+        harness.stateDir,
+        ['dryrun', 'show', records.find((record) => record.target_id === 'look')?.id as string],
+      );
+      assert.equal(shown.record.type, 'acme.shadowed.look.not-found');
+      assert.equal(shown.record.stepId, 'look');
+      assert.equal((shown.record.data.step as { id?: string } | undefined)?.id, 'look');
+      assert.ok(!Object.hasOwn(shown.record.data, 'fields'));
+      const finished = await json<{ record: { type: string } }>(harness.stateDir, [
+        'dryrun',
+        'show',
+        records.find((record) => record.target_id === 'run')?.id as string,
+      ]);
+      assert.equal(finished.record.type, 'acme.shadowed.run.finished');
+    },
+    { workflows: { parts: [{ executors: [look] }] } },
+  );
+});
+
 test('B7: workflow show --version 2 returns that version alone', { skip: WINDOWS_SKIP }, async () => {
   await withLaneOwner(async (harness) => {
     await harness.control.request('target-add', { document: dryRun });

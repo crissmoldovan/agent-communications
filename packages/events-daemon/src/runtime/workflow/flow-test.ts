@@ -319,6 +319,30 @@ function issueFor(input: {
   });
 }
 
+/**
+ * The events these transitions would raise, each with its step and its data (`data.fields` never: a Raise step's fields
+ * are not opened here), by D's own sink with a cipher that seals nothing. Writes nothing.
+ */
+export async function previewWorkflowEvents(
+  installationId: string,
+  transitions: readonly StepTransition[],
+): Promise<readonly { readonly stepId: string | null; readonly type: string; readonly data: JsonValue }[]> {
+  let counter = 0;
+  const sink = createWorkflowEventSink({
+    cipher: { encrypt: async () => Buffer.alloc(0) },
+    installationId,
+    newEventId: () => {
+      counter += 1;
+      return `wfe_${String(counter).padStart(26, '0')}`;
+    },
+  });
+  return ((await sink.prepare(transitions)).rows as readonly PreparedWorkflowEvent[]).map((row) => ({
+    stepId: row.stepId,
+    type: row.type,
+    data: row.data as unknown as JsonValue,
+  }));
+}
+
 /** A sink that seals nothing: it says which events a transition would raise, and with what data, writing nothing. */
 function eventPreview(installationId: string) {
   let counter = 0;

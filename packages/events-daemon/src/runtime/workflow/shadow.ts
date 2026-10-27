@@ -1,12 +1,13 @@
+import { randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import { canonicalJson } from '@agentcomms/core';
 import type { FlowStep, JsonValue, StepId } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../../domain/activation-documents.ts';
 import type { ProjectionCipher } from '../projections.ts';
-import type { Output, RunView, StepResult } from './contracts.ts';
-import { renderTryStep, successOutcome, wouldStepOutput } from './flow-test.ts';
+import type { Output, PreparedEvents, RunView, StepResult, StepTransition, WorkflowEventSink } from './contracts.ts';
+import { previewWorkflowEvents, renderTryStep, successOutcome, wouldStepOutput } from './flow-test.ts';
 import { newEventId } from './ids.ts';
-import type { RunRow } from './runs.ts';
+import { type RunRow, readRun } from './runs.ts';
 
 /*
  * A shadow version (workflows design §7.7; plan B7): approved like any other, it runs on real messages, and route and
@@ -39,6 +40,9 @@ export function shadowHandles(step: FlowStep): boolean {
 export interface PreparedShadowRecord {
   readonly deliveryId: string;
   readonly stepId: StepId;
+  /** What the record's delivery row names: the step it stands for (its target id), and its key in the run. */
+  readonly targetId: string;
+  readonly targetKey: string;
   readonly sealed: Buffer;
   readonly at: number;
   readonly expiresAt: number;
@@ -106,6 +110,8 @@ export async function shadowStep(input: {
     record: {
       deliveryId,
       stepId: input.stepId,
+      targetId: input.stepId,
+      targetKey: `shadow:${input.stepId}`,
       sealed,
       at: input.now,
       expiresAt: input.now + SHADOW_RECORD_MS,
@@ -138,8 +144,8 @@ export function insertShadowRecordInTransaction(
       run.account_id,
       run.rule_id,
       run.rule_version,
-      `shadow:${record.stepId}`,
-      record.stepId,
+      record.targetKey,
+      record.targetId,
       run.rule_version,
       record.expiresAt,
       run.switch_generation,
@@ -157,7 +163,7 @@ export function insertShadowRecordInTransaction(
       record.deliveryId,
       run.rule_id,
       run.rule_version,
-      record.stepId,
+      record.targetId,
       run.rule_version,
       run.event_id,
       run.account_id,
@@ -165,4 +171,73 @@ export function insertShadowRecordInTransaction(
       record.at,
       record.expiresAt,
     );
+}
+
+/**
+ * The events a shadow run's steps that do run — a condition, a judge, Which project?, a find, a split — and the run
+ * itself would raise when ticked are dry-run records too, as its raises are (§7.7, W33; the lead's decision): each a
+ * sealed record of the event's type and data, kept 24 hours, and never written to the outbox, so no subscriber gets one.
+ * A step a shadow does not run keeps the events it would raise in its own record. Every other transition goes to `sink`.
+ */
+export function withShadowEvents(input: {
+  readonly sink: WorkflowEventSink;
+  readonly cipher: ProjectionCipher;
+  readonly installationId: string;
+  readonly now: () => number;
+}): WorkflowEventSink {
+  return {
+    async prepare(transitions: readonly StepTransition[]): Promise<PreparedEvents> {
+      const prepared = await input.sink.prepare(transitions);
+      const shadowed = transitions.filter((transition) => {
+        if (!transition.run.shadow) return false;
+        if (transition.stepId === null) return true;
+        const step = transition.rule.flow?.steps[transition.stepId];
+        return step !== undefined && !shadowHandles(step);
+      });
+      const records: { readonly runId: string; readonly record: PreparedShadowRecord }[] = [];
+      for (const transition of shadowed) {
+        const runId = transition.run.id;
+        const events = await previewWorkflowEvents(input.installationId, [
+          { ...transition, run: { ...transition.run, shadow: false } },
+        ]);
+        for (const event of events) {
+          const deliveryId = randomUUID();
+          const at = input.now();
+          const record = {
+            record: 'workflow-shadow-event',
+            runId,
+            stepId: event.stepId,
+            type: event.type,
+            data: event.data,
+          };
+          const plaintext = Buffer.from(
+            JSON.stringify({ cloudEventBytes: canonicalJson(record as never), untrusted: [], representation: 'plain' }),
+          );
+          records.push({
+            runId,
+            record: {
+              deliveryId,
+              stepId: event.stepId ?? 'run',
+              targetId: event.stepId ?? 'run',
+              targetKey: `shadow-event:${deliveryId}`,
+              sealed: await input.cipher.encrypt(shadowRecordLocation(deliveryId), plaintext),
+              at,
+              expiresAt: at + SHADOW_RECORD_MS,
+            },
+          });
+        }
+      }
+      return { rows: [prepared, records] };
+    },
+    commitInTransaction(database: DatabaseSync, prepared: PreparedEvents): void {
+      input.sink.commitInTransaction(database, (prepared.rows[0] as PreparedEvents | undefined) ?? { rows: [] });
+      for (const { runId, record } of (prepared.rows[1] ?? []) as readonly {
+        readonly runId: string;
+        readonly record: PreparedShadowRecord;
+      }[]) {
+        const run = readRun(database, runId);
+        if (run !== undefined) insertShadowRecordInTransaction(database, run, record);
+      }
+    },
+  };
 }
