@@ -2,7 +2,7 @@ import type { FlowStep, JsonValue } from '@agentcomms/events';
 import type { EventDatabase } from '../../../store/database.ts';
 import type { ReadyRelay } from '../../agent-sessions.ts';
 import type { ProjectionCipher } from '../../projections.ts';
-import type { RelaySnapshotV1 } from '../../relay-client.ts';
+import { needsThePerson, type RelaySnapshotV1 } from '../../relay-client.ts';
 import type { StepContext, StepExecutor, StepResult, WakeReason } from '../contracts.ts';
 import { addRunSummary } from '../runs.ts';
 
@@ -65,8 +65,16 @@ async function turnEnded(
   // The relay cannot say now: the step waits on, to its deadline, and the follower finds the end when it is back.
   if (seen === null) return { kind: 'wait', wait: 'turn-end', key: turn, wakeAt: deadline(deps, ctx, step) };
   const { ready, snapshot } = seen;
+  // The turn goes on: it waits, and says when the turn is waiting on the person in claude-stream (§6.5) — the run view's
+  // "Needs you in claude-stream". The relay's follower keeps that word as the session's snapshot changes.
   if (snapshot !== null && snapshot.session.activeRunId === turn)
-    return { kind: 'wait', wait: 'turn-end', key: turn, wakeAt: deadline(deps, ctx, step) };
+    return {
+      kind: 'wait',
+      wait: 'turn-end',
+      key: turn,
+      wakeAt: deadline(deps, ctx, step),
+      output: { for: 'turn-end', reported: null, needsYouInClaudeStream: needsThePerson(snapshot, turn) },
+    };
   const status = snapshot?.runs.find((run) => run.id === turn)?.status ?? null;
   const deliver = ctx.rule.flow?.steps[turnEnd];
   const report = deliver?.kind === 'deliver' ? deliver.report : undefined;

@@ -189,6 +189,25 @@ export class FakeRelay {
     this.#publish({ sessionId, runId: `run_${uuid()}`, type: `run.${status}` });
   }
 
+  /** The open requests to the person, as a session's snapshot lists them: who asked, never what. */
+  readonly personRequests: { requestId: string; sessionId: string; runId: string; kind: string; state: string }[] = [];
+
+  /** The session's live turn asks the person something (an approval), as claude-stream's `request.requested`. */
+  askThePerson(sessionId: string): void {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.activeRunId === undefined) throw new Error('no live run to ask from');
+    const requestId = `apr_${uuid()}`;
+    this.personRequests.push({ requestId, sessionId, runId: session.activeRunId, kind: 'approval', state: 'pending' });
+    this.#publish({ sessionId, runId: session.activeRunId, type: 'request.requested' });
+  }
+
+  /** The person answers every open request of the session. */
+  answerThePerson(sessionId: string): void {
+    for (let index = this.personRequests.length - 1; index >= 0; index -= 1)
+      if (this.personRequests[index]?.sessionId === sessionId) this.personRequests.splice(index, 1);
+    this.#publish({ sessionId, type: 'request.resolved' });
+  }
+
   /** Writes `text` as it is to every open follow stream: a relay that sends what no record is. */
   writeRaw(text: string): void {
     for (const stream of this.#streams) stream.write(text);
@@ -296,7 +315,7 @@ export class FakeRelay {
         session,
         runs: this.runs.filter((run) => run.sessionId === session.id),
         pendingApprovals: [],
-        pendingRequests: [],
+        pendingRequests: this.personRequests.filter((request) => request.sessionId === session.id),
         cursor: this.#journal.length,
       });
     }

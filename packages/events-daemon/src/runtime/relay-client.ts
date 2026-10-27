@@ -328,6 +328,16 @@ export interface RelaySnapshotV1 {
   readonly session: RelaySessionV1;
   readonly runs: readonly RelayRunV1[];
   readonly cursor: number;
+  /**
+   * The session's open requests to the person — an approval, a question, any kind (api-contract `pendingRequests`, read
+   * 2026-10-27) — each by the turn that asked, when the relay says it. Only that: never what was asked.
+   */
+  readonly pendingRequests?: readonly { readonly runId: string | null }[] | undefined;
+}
+
+/** Whether the person is needed for `turn` in claude-stream: an open request of that turn, or of the session's own. */
+export function needsThePerson(snapshot: RelaySnapshotV1, turn: string): boolean {
+  return (snapshot.pendingRequests ?? []).some((request) => request.runId === null || request.runId === turn);
 }
 
 export interface RelayInfoV1 {
@@ -518,7 +528,15 @@ export class RelayClient {
     if (body.status === 404) return null;
     if (!isRecord(body.value) || !Array.isArray(body.value.runs) || typeof body.value.cursor !== 'number')
       throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a session in a shape this client cannot read');
-    return { session: session(body.value.session), runs: body.value.runs.map(run), cursor: body.value.cursor };
+    const pending = Array.isArray(body.value.pendingRequests) ? body.value.pendingRequests : [];
+    return {
+      session: session(body.value.session),
+      runs: body.value.runs.map(run),
+      cursor: body.value.cursor,
+      pendingRequests: pending.filter(isRecord).map((request) => ({
+        runId: typeof request.runId === 'string' && RUN_ID.test(request.runId) ? request.runId : null,
+      })),
+    };
   }
 
   /** `POST /v1/sessions`: a new session in `cwd`, which the relay checks is inside its allowed roots. */
