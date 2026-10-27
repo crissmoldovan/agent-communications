@@ -10,6 +10,7 @@ import { installErrorSink } from '../network/error-sink.ts';
  * - a client may send only ping, pong and close, each at most 125 bytes and masked. A data frame closes with 1008, a
  *   frame over 125 bytes with 1009, and anything malformed — unmasked, fragmented, reserved bits — with 1002;
  * - the server pings every 30 seconds and closes with 4408 when no pong comes within 60;
+ * - a reader that leaves more than 1 MiB unread is closed, as a policy close (1008), not buffered for;
  * - no extension is ever negotiated, so no `permessage-deflate`.
  */
 
@@ -31,6 +32,13 @@ const CONTROL_MAX = 125;
 
 /** The only subprotocol the listener ever answers with: never a bearer, never a cursor. */
 export const WEBSOCKET_PROTOCOL = 'agentcomms.events.v1';
+
+/**
+ * The most a live stream — SSE or WebSocket — may hold unsent for a reader that has stopped reading (security review
+ * of 0.36.0, L8): 1 MiB. Past it the stream is closed rather than buffered for; its reader reconnects with
+ * Last-Event-ID, or `agentcomms.after.<id>`, and the log replays what it missed.
+ */
+export const LIVE_STREAM_BUFFER_MAX: number = 1_048_576;
 
 /** The close codes this endpoint uses (W31): normal, policy, protocol, too big, the token's end, a lost pong. */
 export const WEBSOCKET_CLOSE: Readonly<{
@@ -215,6 +223,12 @@ class PushSocket implements WebSocketPush {
   #write(bytes: Buffer): void {
     if (!this.#socket.writable) return;
     this.#socket.write(bytes);
+    // A reader that has fallen too far behind is not buffered for: a close frame would wait behind the same bytes, so
+    // the socket is destroyed at once, and the stream ends as a policy close.
+    if (this.#socket.writableLength > LIVE_STREAM_BUFFER_MAX) {
+      this.#finish(WEBSOCKET_CLOSE.policy);
+      this.#socket.destroy();
+    }
   }
 
   #finish(code: number): void {

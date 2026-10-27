@@ -34,6 +34,8 @@ export interface SubscriberListenersOptions {
   readonly websocket?: WebSocketTiming | undefined;
   /** Test seam: the listener factory. Production uses `startSseServer`. */
   readonly startServer?: ((options: SseServerOptions) => Promise<SseServer>) | undefined;
+  /** Test seam: the longest one listener's close is waited for. Production: 3 seconds. */
+  readonly closeBoundMs?: number | undefined;
 }
 
 /** Where one subscriber version is listening, or why it is not. */
@@ -54,6 +56,25 @@ interface Wanted {
 
 function key(subscriberId: string, version: number): string {
   return `${subscriberId}\u0000${version}`;
+}
+
+/**
+ * The longest the owner waits for one listener to close (security review of 0.36.0, M1). The listener destroys what
+ * its clients leave open well within it; this bounds the reconcile and the stop, which run inside the owner's tick,
+ * even if a close never settles.
+ */
+const LISTENER_CLOSE_BOUND_MS = 3_000;
+
+async function closeWithin(server: SseServer, boundMs: number): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  await Promise.race([
+    server.close().catch(() => undefined),
+    new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, boundMs);
+      timer.unref();
+    }),
+  ]);
+  clearTimeout(timer);
 }
 
 export class SubscriberListeners {
@@ -110,7 +131,7 @@ export class SubscriberListeners {
     for (const [name, running] of [...this.#running]) {
       this.#running.delete(name);
       running.unregister();
-      await running.server.close().catch(() => undefined);
+      await closeWithin(running.server, this.#options.closeBoundMs ?? LISTENER_CLOSE_BOUND_MS);
     }
   }
 
@@ -121,7 +142,8 @@ export class SubscriberListeners {
       if (wanted.has(name)) continue;
       this.#running.delete(name);
       running.unregister();
-      await running.server.close().catch(() => undefined);
+      // Bounded: the tick that reconciles holds the writer lease, and no client may hold it (M1).
+      await closeWithin(running.server, this.#options.closeBoundMs ?? LISTENER_CLOSE_BOUND_MS);
     }
     for (const name of [...this.#errors.keys()]) if (!wanted.has(name)) this.#errors.delete(name);
     for (const [name, entry] of wanted) {
