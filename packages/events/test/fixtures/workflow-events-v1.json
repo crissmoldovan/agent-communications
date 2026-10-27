@@ -1,0 +1,80 @@
+{
+  "raise": { "outputs": ["name", "fields"], "own": [], "standard": [] },
+  "run": {
+    "outputs": ["steps", "endCode"],
+    "own": ["started", "held", "finished", "failed", "cancelled", "expired"],
+    "standard": []
+  },
+  "step.condition": {
+    "outputs": [],
+    "own": ["matched", "not-matched"],
+    "standard": ["started", "succeeded", "skipped"]
+  },
+  "step.deliver.dry-run": {
+    "outputs": ["delivery"],
+    "own": ["delivered"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.linear": {
+    "outputs": ["delivery", "issue"],
+    "own": ["created"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.linear-change": {
+    "outputs": ["delivery", "issue", "changed", "state"],
+    "own": ["changed", "commented", "closed"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.queue": {
+    "outputs": ["delivery"],
+    "own": ["delivered"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.session": {
+    "outputs": ["delivery", "session", "turn", "ahead"],
+    "own": ["given", "left-in-queue"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.sse": {
+    "outputs": ["delivery"],
+    "own": ["delivered"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.deliver.webhook": {
+    "outputs": ["delivery", "status"],
+    "own": ["delivered"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.find-session": {
+    "outputs": ["session", "provider"],
+    "own": ["found", "busy", "not-found", "watched"],
+    "standard": ["started", "succeeded", "failed", "skipped", "retrying"]
+  },
+  "step.judge": {
+    "outputs": ["score"],
+    "own": ["yes", "no", "unsure"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.notify": { "outputs": ["raised"], "own": ["notified"], "standard": ["started", "succeeded", "skipped"] },
+  "step.route": {
+    "outputs": ["project", "projectName", "reason", "score"],
+    "own": ["matched", "none", "unsure"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.split": { "outputs": ["branches"], "own": [], "standard": ["started", "succeeded", "skipped"] },
+  "step.start-session": {
+    "outputs": ["session", "provider", "mode", "refusal"],
+    "own": ["session-started", "refused"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  },
+  "step.wait": {
+    "outputs": ["for", "reported"],
+    "own": ["finished", "timed-out", "free", "elapsed"],
+    "standard": ["started", "succeeded", "waiting", "skipped"]
+  },
+  "step.worktree": {
+    "outputs": ["branch", "refusal"],
+    "own": ["made", "refused"],
+    "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"]
+  }
+}

@@ -9,9 +9,13 @@
  * - `{ generate: { provider, model, instruction, from: [pointer] } }`: text a model writes from the named mapped
  *   fields at dispatch. It is sender-derived, so it goes inside the envelope too.
  * - `{ file: path }`: a file the person keeps, read at dispatch.
+ * - `{ step, field }`: a closed output of an earlier step of a workflow's flow (workflows design §6.4): an issue's
+ *   identifier, a project's name. Agent Comms wrote it, not a sender, so the frame labels it "From Agent Comms" and
+ *   writes it outside the envelope. Only a flow has steps: the event service refuses the part anywhere else.
  *
  * The Linear target reuses `canonicalContextParts` and the generate part for its templates.
  */
+import type { StepId } from '../flow/types.ts';
 import { canonicalJson, type JsonValue } from '../json.ts';
 import { getPointer, parsePointer } from '../pointer.ts';
 import type { Issue, Result } from '../result.ts';
@@ -74,7 +78,13 @@ export type ContextPart =
   | { readonly text: string }
   | { readonly fields: readonly string[] }
   | { readonly generate: ContextGenerate }
-  | { readonly file: string };
+  | { readonly file: string }
+  | { readonly step: StepId; readonly field: string };
+
+/** A step's id, as a flow names it (`^[a-z][a-z0-9-]{0,31}$`, not reserved), and one of its closed outputs' names. */
+const STEP_ID = /^[a-z][a-z0-9-]{0,31}$/;
+const RESERVED_STEPS: readonly string[] = ['run', 'trigger', 'end', 'otherwise'];
+const OUTPUT_NAME = /^[a-z][a-zA-Z0-9]{0,63}$/;
 
 /** A model name as providers write one: `anthropic/claude-sonnet-4.5`. */
 const MODEL = /^[a-z0-9][a-z0-9._:/-]{0,127}$/u;
@@ -173,9 +183,25 @@ function checkGenerate(value: unknown, at: string, issues: Issue[]): ContextGene
   return { provider: value.provider as ContextGenerateProvider, model: value.model, instruction, from };
 }
 
+const SHAPES = 'a context part is one of { text }, { fields }, { generate }, { file } or { step, field }';
+
+/** A closed output of a flow's step: the step's id and the output's name, both as the flow writes them. */
+function checkStepPart(value: Readonly<Record<string, unknown>>, at: string, issues: Issue[]): ContextPart | undefined {
+  if (typeof value.step !== 'string' || !STEP_ID.test(value.step) || RESERVED_STEPS.includes(value.step)) {
+    issues.push(issue(`${at}/step`, "a step part names a step by its id, as the workflow's flow writes it"));
+    return undefined;
+  }
+  if (typeof value.field !== 'string' || !OUTPUT_NAME.test(value.field)) {
+    issues.push(issue(`${at}/field`, "a step part names one of the step's closed outputs, such as identifier"));
+    return undefined;
+  }
+  return { step: value.step, field: value.field };
+}
+
 function checkPart(value: unknown, at: string, issues: Issue[]): ContextPart | undefined {
+  if (isRecord(value) && onlyKeys(value, ['step', 'field'])) return checkStepPart(value, at, issues);
   if (!isRecord(value) || Object.keys(value).length !== 1) {
-    issues.push(issue(at, 'a context part is one of { text }, { fields }, { generate } or { file }'));
+    issues.push(issue(at, SHAPES));
     return undefined;
   }
   if (Object.hasOwn(value, 'text')) {
@@ -194,12 +220,12 @@ function checkPart(value: unknown, at: string, issues: Issue[]): ContextPart | u
     const file = checkPath(value.file, `${at}/file`, issues);
     return file === undefined ? undefined : { file };
   }
-  issues.push(issue(at, 'a context part is one of { text }, { fields }, { generate } or { file }'));
+  issues.push(issue(at, SHAPES));
   return undefined;
 }
 
 /**
- * Checks a context list and returns its canonical form: the parts in the order given, each exactly one of the four
+ * Checks a context list and returns its canonical form: the parts in the order given, each exactly one of the five
  * shapes, with the limits of `CONTEXT_LIMITS`. An empty list is allowed: the frame then carries only the match's
  * header. Whether each pointer names a field the rule maps is `assertContextFieldsMapped`'s, which needs the mapping.
  */
@@ -300,7 +326,9 @@ export type ResolvedContextPart =
       readonly reason: GenerateFailure;
     }
   | { readonly kind: 'file'; readonly path: string; readonly text: string }
-  | { readonly kind: 'file-missing'; readonly path: string; readonly reason: FileFailure };
+  | { readonly kind: 'file-missing'; readonly path: string; readonly reason: FileFailure }
+  /** A step's closed output, as the run settled it; `value` is absent when the step has none of that name. */
+  | { readonly kind: 'step'; readonly step: StepId; readonly field: string; readonly value?: JsonValue };
 
 /**
  * Where text from outside the rule came from, for the envelope: the message itself, a model writing from it, or a file
@@ -407,6 +435,11 @@ function partBlock(part: ResolvedContextPart, input: SessionPromptInput): string
       return `From the file ${part.path}, as it reads now:\n${input.envelope(part.text, 'file')}`;
     case 'file-missing':
       return `From the file ${part.path}: left out, because ${FILE_FAILURES[part.reason]}.`;
+    case 'step':
+      // A closed output — an id, an identifier, a closed word — that Agent Comms wrote, never a sender: no envelope.
+      return part.value === undefined
+        ? `From Agent Comms, the step ${part.step}’s ${part.field}: (none in this run)`
+        : `From Agent Comms, the step ${part.step}’s ${part.field}: ${canonicalJson(part.value)}`;
   }
 }
 
@@ -441,6 +474,7 @@ export function buildSessionPrompt(input: SessionPromptInput): Result<string> {
 export function describeContextPart(part: ContextPart): string {
   if ('text' in part) return `fixed text ${JSON.stringify(part.text)}`;
   if ('fields' in part) return `the mapped fields ${part.fields.map(contextFieldName).join(', ')}`;
+  if ('step' in part) return `the step ${part.step}'s ${part.field}, from Agent Comms`;
   if ('generate' in part)
     return `text ${part.generate.model} writes through ${PROVIDER_NAMES[part.generate.provider]}, which is sent ${part.generate.from
       .map(contextFieldName)
