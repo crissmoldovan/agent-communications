@@ -30,6 +30,8 @@ for (const { mode, version } of [
     t.after(async () => {
       await client.close().catch(() => undefined);
       await handle.close();
+      // The harness's loopback Resend, which keeps the process alive until it is closed.
+      await harness.close();
     });
     assert.equal(client.getNegotiatedProtocolVersion(), version);
     const names = (await client.listTools()).tools.map((tool) => tool.name);
