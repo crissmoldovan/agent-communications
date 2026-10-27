@@ -305,10 +305,15 @@ test("C's composition holds the route executor and the candidates' activation ch
   try {
     const store = await openEventDatabase({ stateDir });
     try {
-      const composition = composeProjects({ store });
+      const sessions = {
+        relay: async () => assert.fail('no relay'),
+        sessionRoots: async () => [],
+        deniedFolders: () => [],
+      };
+      const composition = composeProjects({ store, sessions } as unknown as Parameters<typeof composeProjects>[0]);
       assert.deepEqual(
         composition.executors.map((entry) => entry.kind),
-        ['route'],
+        ['route', 'find-session', 'start-session'],
       );
       assert.deepEqual(composition.activationChecks, [routeCandidatesCheck]);
       assert.equal(profileHash(''), createHash('sha256').update('').digest('hex'));

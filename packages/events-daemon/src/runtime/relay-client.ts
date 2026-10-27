@@ -297,6 +297,8 @@ export interface RelaySessionV1 {
   readonly provider: string;
   readonly cwd: string;
   readonly createdAt: string;
+  /** Its title, as whoever started it gave it: a workflow's marks the run that made it (0.36 §7.4). */
+  readonly title?: string | undefined;
   readonly nativeSessionId?: string | undefined;
   readonly activeRunId?: string | undefined;
   readonly requestedMode?: string | undefined;
@@ -378,6 +380,7 @@ function session(value: unknown): RelaySessionV1 {
     provider: value.provider,
     cwd: value.cwd,
     createdAt: value.createdAt,
+    ...(optionalText(value.title) === undefined ? {} : { title: (value.title as string).slice(0, 200) }),
     ...(optionalText(value.nativeSessionId) === undefined ? {} : { nativeSessionId: value.nativeSessionId as string }),
     ...(activeRunId === undefined ? {} : { activeRunId }),
     ...(optionalText(value.requestedMode) === undefined ? {} : { requestedMode: value.requestedMode as string }),
