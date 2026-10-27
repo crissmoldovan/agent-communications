@@ -2197,6 +2197,8 @@ function contextPartPreview(part: SessionTargetDocument['context'][number]): str
   if ('text' in part) return `fixed text ${authorLiteral(part.text)}`;
   if ('fields' in part) return `the mapped fields ${part.fields.map(authorLiteral).join(', ')}`;
   if ('file' in part) return `the file ${authorLiteral(part.file)}, read when the match is passed on (at most 64 KB)`;
+  if ('step' in part)
+    return `what the workflow's step ${authorLiteral(part.step)} settled as its ${authorLiteral(part.field)}, from Agent Comms`;
   const route = ANALYSE_ROUTES[part.generate.provider];
   return `what ${authorLiteral(part.generate.model)} writes, asked ${authorLiteral(part.generate.instruction)} — it is sent the mapped fields ${part.generate.from
     .map(authorLiteral)

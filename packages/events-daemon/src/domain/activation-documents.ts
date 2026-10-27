@@ -35,7 +35,12 @@ import {
   isQueueRetention,
   type QueueTargetDocument,
 } from './queue-target.ts';
-import { assertSessionMapping, canonicalSessionTarget, type SessionTargetDocument } from './session-target.ts';
+import {
+  assertSessionMapping,
+  assertSessionStepParts,
+  canonicalSessionTarget,
+  type SessionTargetDocument,
+} from './session-target.ts';
 import { normaliseSourceOptions, type SourceOptions } from './source-options.ts';
 import {
   canonicalSseSubscriber,
@@ -351,6 +356,8 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   const queued = targets.some(targetQueues);
   // §2's anti-goal: a session receives no field the approved rule does not map.
   for (const target of targets) if (target.kind === 'session') assertSessionMapping(target, mapping);
+  // A `{ step, field }` context part reads a flow step's closed output: no step exists outside a flow (0.36 §6.4).
+  for (const target of targets) if (target.kind === 'session') assertSessionStepParts(target, false);
   if (queued && retention.queueMs === undefined) return fail('a rule with a queue target sets retention.queueMs');
   if (!queued && retention.queueMs !== undefined)
     return fail('retention.queueMs applies only to a rule with a queue target');
