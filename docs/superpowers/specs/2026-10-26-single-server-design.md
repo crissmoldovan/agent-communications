@@ -807,3 +807,7 @@ The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes 
 - **A key is never written back into an entry the person took out.** `connection key replace` reads the app's
   config first: an entry that is not there any more — removed by hand — or a config that cannot be read is refused
   ("its entry isn't in ~/.claude.json any more … add the connection again"), and nothing is written, the key included.
+- **The gateway fails closed on a `config.json` it can no longer read.** A look that finds the file changed and
+  cannot read it — a broken hand edit — stops every part and refuses every later call with the reason ("Agent Comms
+  could not read its configuration…"), where it kept serving the last record it read (D15). Both of the gateway's race
+  fixes stay as they were: one look at a time, and a look that finds nothing new answers with the last look's verdict.

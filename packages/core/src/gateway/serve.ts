@@ -28,7 +28,7 @@ import { markConnectionUsed, removeGatewayStatus, writeGatewayStatus } from './s
  * It follows its connection live (D15): before every request, and every 30 seconds, it looks at `config.json`; a part
  * added is started, one taken out stopped, one whose pin or switch changed started again, and the client is told with
  * `tools/list_changed`. A connection cut off or removed, or whose key was replaced, stops every part at once, and every
- * later call is refused with the reason.
+ * later call is refused with the reason — as does a `config.json` that can no longer be read: it fails closed.
  */
 
 export interface GatewayOptions {
@@ -222,7 +222,9 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     try {
       next = await core.config.load();
     } catch {
-      return null;
+      // Fails closed (0.35.0 security review, LOW): a file that cannot be read — a hand edit that broke it — stops every
+      // part, rather than serving on the last record it read, which may be wider than what the person meant now.
+      return 'Agent Comms could not read its configuration, so this connection serves nothing until it can and the app is restarted';
     }
     const why = connectionRefusal(next, options.connection, key);
     if (why !== null) return why;

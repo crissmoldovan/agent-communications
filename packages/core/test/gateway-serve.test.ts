@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -365,6 +365,24 @@ test('D15: the gateway follows its connection on a timer too, and a connection r
   // Without any call: the 100 ms timer of this test finds it, and stops the part.
   await waitFor(() => served.router?.status().every((part) => part.state === 'stopped') === true);
   await assert.rejects(client.callTool({ name: 'slack_echo', arguments: { text: 'x' } }), /removed/);
+});
+
+test('LOW (0.35.0 review): config.json turned unreadable while the gateway runs stops every part and refuses with why', async (t) => {
+  const m = machine();
+  const key = newConnectionKey();
+  const held = record({ key, parts: [{ server: 'slack' }, { server: 'gmail' }] });
+  await put(m, held);
+  const { client, served } = await gateway(t, m, held.id, key);
+  assert.ok(served.router);
+  await waitFor(() => served.router?.status().every((part) => part.state === 'running') === true);
+  // A hand edit that breaks the file: the last record it read is not what it serves from now on.
+  writeFileSync(m.core.config.path, '{ "connections": { oops');
+  await waitFor(() => served.router?.status().every((part) => part.state === 'stopped') === true);
+  await assert.rejects(
+    client.callTool({ name: 'slack_echo', arguments: { text: 'x' } }),
+    /could not read its configuration/,
+  );
+  assert.deepEqual((await client.listTools()).tools, [], 'no tools listed either');
 });
 
 function alive(pid: number): boolean {
