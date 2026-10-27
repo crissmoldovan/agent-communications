@@ -185,7 +185,8 @@ test('Events: the screen opens on Service, and the Judges tab counts the kinds o
   await installMockIpc(page, scenario('typesafe-on'));
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
-  await expect(page.getByRole('tablist', { name: 'Events' }).getByRole('tab')).toHaveCount(4);
+  // Service, Judges, Workflows, Deliveries and, from 0.36.0, Subscribers.
+  await expect(page.getByRole('tablist', { name: 'Events' }).getByRole('tab')).toHaveCount(5);
   await expect(page.getByRole('tab', { name: 'Service', exact: true })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('region', { name: 'Judges' })).toHaveCount(0);
   // Jev is on with no judge: its tab says so while another is open, so nothing waits unseen behind it.

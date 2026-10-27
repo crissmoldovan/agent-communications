@@ -33,6 +33,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Queue',
     'Messages New',
     'People New',
+    'Projects New',
     'Accounts',
     'MCP connections New',
     'Approvals',

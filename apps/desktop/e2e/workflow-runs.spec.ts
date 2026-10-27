@@ -276,7 +276,8 @@ test('a subscriber’s pattern outside its namespaces is refused as it is typed'
   );
   await tab.getByRole('button', { name: 'Add a subscriber…' }).click();
   const form = page.getByRole('region', { name: 'Add a subscriber' });
-  await form.getByRole('textbox', { name: 'Its name' }).fill('ops-board');
+  // Exact: "Its name" is also the start of "Its namespaces".
+  await form.getByRole('textbox', { name: 'Its name', exact: true }).fill('ops-board');
   await form.getByRole('textbox', { name: 'Its namespaces' }).fill('acme');
   await form.getByRole('textbox', { name: 'What it receives' }).fill('globex.*.*.failed');
   await expect(form).toContainText('Line 1: the namespace globex is not one this subscriber was given.');

@@ -236,7 +236,11 @@ async function calls(page: Page, kind: string): Promise<Recorded[]> {
 
 /** Drags a palette step onto the canvas, dropped `at` a point of the canvas's own box. */
 async function dragOn(editor: Locator, item: string, at: { x: number; y: number }): Promise<void> {
-  await editor.locator(`[data-palette="${item}"]`).dragTo(editor.locator('.react-flow'), { targetPosition: at });
+  // The canvas in the middle of the window first: a step's settings, opened by the drop before, can move it so far
+  // that the drop point lies outside the window, where the page's scroller takes the drop (CI, 2026-10-27).
+  const canvas = editor.locator('.react-flow');
+  await canvas.evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await editor.locator(`[data-palette="${item}"]`).dragTo(canvas, { targetPosition: at });
 }
 
 /** The middle of an element on the page. */
@@ -266,9 +270,9 @@ test('a workflow made on an empty canvas by dragging, two events ticked, approve
   await expect(editor.locator('[data-step]')).toHaveCount(0);
 
   // Two steps, each dragged from the palette to where it should go.
-  await dragOn(editor, 'wait-time', { x: 200, y: 420 });
+  await dragOn(editor, 'wait-time', { x: 200, y: 240 });
   await expect(editor.locator('[data-step="wait-1"]')).toBeVisible();
-  await dragOn(editor, 'notify', { x: 620, y: 420 });
+  await dragOn(editor, 'notify', { x: 620, y: 240 });
   const tell = editor.locator('[data-settings="notify-1"]');
   await expect(tell).toBeVisible();
   await tell.getByRole('textbox', { name: 'It says' }).fill('Time to look at it again');
