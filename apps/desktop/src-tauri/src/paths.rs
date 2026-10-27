@@ -499,7 +499,13 @@ mod tests {
                     .any(|word| word.starts_with("--") && word.ends_with("-dir")));
             } else {
                 assert!(words.pins, "{call:?} carries the pins");
-                assert!(line.ends_with(&pins), "{call:?} ends {line:?}");
+                // The pins end the options: the line, or what comes before a `--` and the free text after it (0.35.0).
+                let options = line
+                    .iter()
+                    .position(|word| word == "--")
+                    .unwrap_or(line.len());
+                assert!(line[..options].ends_with(&pins), "{call:?} ends {line:?}");
+                assert!(line.len() - options <= 2, "{call:?} ends {line:?}");
             }
         }
     }

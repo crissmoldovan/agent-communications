@@ -9,8 +9,10 @@ import {
   MessagesSquare,
   Plug,
   RefreshCw,
+  Search,
   Settings,
   Stethoscope,
+  UserRound,
   Users,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
@@ -19,7 +21,7 @@ import { AppearanceMenu } from './components/AppearanceMenu.tsx';
 import { NewTag } from './components/NewTag.tsx';
 import { QueueBadge } from './components/QueueBadge.tsx';
 import { TestBuildBand, TestProfile } from './components/TestBuild.tsx';
-import { COPY, type Screen, SECTIONS, SETTINGS } from './copy.ts';
+import { COPY, type Screen, SECTION_OF, SECTIONS, SETTINGS } from './copy.ts';
 import { useAppData } from './data.tsx';
 import { isMac } from './platform.ts';
 
@@ -27,6 +29,8 @@ const ICONS: Record<Screen, ComponentType> = {
   overview: LayoutDashboard,
   queue: Inbox,
   messages: MessagesSquare,
+  people: UserRound,
+  search: Search,
   accounts: Users,
   connections: Plug,
   approvals: CheckCheck,
@@ -70,7 +74,7 @@ export function Shell({
     <Sidebar.Item
       key={target}
       icon={ICONS[target]}
-      active={screen === target}
+      active={(SECTION_OF[screen] ?? screen) === target}
       onClick={() => onScreen(target)}
       // The queue's open count, once there is one (0.30.0), and a section new in this release's "New" (0.32.0).
       {...(target === 'queue' ? { badge: <QueueBadge /> } : isNew ? { badge: <NewTag /> } : {})}

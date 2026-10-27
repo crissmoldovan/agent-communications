@@ -8,7 +8,8 @@
 //! `eventsCollectionApprove` (`collection approve`) answers only the one Events → Service prepared with
 //! `eventsEnableAll`, for its digest. Since 0.34.0 the label's changes are too (`label`): a `labelWord`, `labelName`,
 //! `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app prepared for the same call
-//! without it.
+//! without it. Since 0.35.0 so are Search's three loosenings (`search`): a `searchOn`, `searchAccountsAdd` or
+//! `searchModelSet` with `appApproval` answers only the approval the app prepared for the same call without it.
 
 use crate::connections::{
     McpClient, McpServer, McpServers, MCP_APP_APPROVAL_VERSION, MCP_SEVERAL_VERSION,
@@ -21,6 +22,10 @@ use crate::label::{
 };
 use crate::launchers::Product;
 use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
+use crate::search::{
+    IndexBudget, ModelAddress, PersonId, PersonLabel, PersonLimit, QueryLimit, SearchAccounts,
+    SearchChannel, SearchDirection, SearchHandle, SearchModel, SearchText, SEARCH_VERSION,
+};
 use crate::taking::{self, TakingSetting, TAKING_VERSION};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -1236,6 +1241,102 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app_approval: Option<ApprovalId>,
     },
+    /// Core `search status` (0.35.0, design 2026-10-26-local-search §8, `search`): on or off, the accounts, what is
+    /// kept by count and size and for how long, the local model's state, backups and disk encryption. Content-free.
+    SearchStatus {},
+    /// Core `search query [--person <id>] [--account <name>]… [--channel gmail|slack] [--since <ms>] [--until <ms>]
+    /// [--direction in|out|any] [--limit <n>] -- <words>` (0.35.0): what people asked, by words and by meaning, on this
+    /// machine. The person's read, refused inside an MCP server and to an agent's shell (S13); the words go last, after
+    /// `--`.
+    SearchQuery {
+        text: SearchText,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        person: Option<PersonId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accounts: Option<SearchAccounts>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<SearchChannel>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<EpochMs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        until: Option<EpochMs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        direction: Option<SearchDirection>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<QueryLimit>,
+    },
+    /// Core `search people [--since <ms>]` (0.35.0, S5): every person a message is kept from, their handles, the latest
+    /// name they gave, how many messages and when they last wrote. The person's read.
+    SearchPeople {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<EpochMs>,
+    },
+    /// Core `search person <id> [--since <ms>] [--limit <n>]` (0.35.0): what one person sent, newest first, a line each.
+    SearchPerson {
+        person_id: PersonId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        since: Option<EpochMs>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        limit: Option<PersonLimit>,
+    },
+    /// Core `search show <sourceId>` (0.35.0): one kept message in full, and the replies sent to it.
+    SearchShow { source_id: ItemId },
+    /// Core `search index [--budget <seconds>]` (0.35.0, S10): keeps what agents read since the last run, makes missing
+    /// vectors for the budget, and deletes what is past Activity's days. Upkeep, refused to an agent.
+    SearchIndex {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<IndexBudget>,
+    },
+    /// Core `search rebuild [--budget <seconds>]` (0.35.0): every vector made again from the kept text; the old ones
+    /// serve meanwhile.
+    SearchRebuild {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        budget: Option<IndexBudget>,
+    },
+    /// Core `search link <person> <person>` (0.35.0, S5): the second person is the first. Only the person joins people;
+    /// it is their own data, applied at once.
+    SearchLink {
+        person_id: PersonId,
+        other_id: PersonId,
+    },
+    /// Core `search unlink <handle>` (0.35.0): an address or a Slack user becomes a person of its own again.
+    SearchUnlink { handle: SearchHandle },
+    /// Core `search label <person> -- <name>` (0.35.0): the name the person knows someone by.
+    SearchLabel {
+        person_id: PersonId,
+        label: PersonLabel,
+    },
+    /// Core `search on [--app-approval <id>]` (0.35.0, S1): a loosening. Without `appApproval` it is prepared, and core
+    /// answers with its preview; with it, the person approved in the app the change the app prepared, once.
+    SearchOn {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `search off` (0.35.0): a tightening, applied at once. What is kept stays until its days pass.
+    SearchOff {},
+    /// Core `search accounts add <account> [--app-approval <id>]` (0.35.0): a loosening, prepared and approved as
+    /// `searchOn` is.
+    SearchAccountsAdd {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `search accounts remove <account>` (0.35.0): a tightening, applied at once; what is kept of it is deleted.
+    SearchAccountsRemove { account: AccountName },
+    /// Core `search model set <address> <model> [--app-approval <id>]` (0.35.0, S9): meaning too, with a model of the
+    /// reviewed list that Ollama runs at this machine's loopback address. A loosening, prepared and approved as `searchOn`
+    /// is.
+    SearchModelSet {
+        address: ModelAddress,
+        model: SearchModel,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `search model none` (0.35.0): words only, applied at once; every vector is dropped.
+    SearchModelNone {},
+    /// Core `search delete --all --confirm` (0.35.0, §7): everything Search keeps, and its key, deleted at once, once
+    /// the person confirms in the app. It takes no argument.
+    SearchDeleteAll {},
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -1886,6 +1987,24 @@ impl Call {
                 core(&[]),
                 taking::change_words(account.as_str(), *change, app_approval)?,
             ),
+            // Search on this machine (0.35.0): its own module builds core's `search …` words.
+            Call::SearchStatus {}
+            | Call::SearchQuery { .. }
+            | Call::SearchPeople { .. }
+            | Call::SearchPerson { .. }
+            | Call::SearchShow { .. }
+            | Call::SearchIndex { .. }
+            | Call::SearchRebuild { .. }
+            | Call::SearchLink { .. }
+            | Call::SearchUnlink { .. }
+            | Call::SearchLabel { .. }
+            | Call::SearchOn { .. }
+            | Call::SearchOff {}
+            | Call::SearchAccountsAdd { .. }
+            | Call::SearchAccountsRemove { .. }
+            | Call::SearchModelSet { .. }
+            | Call::SearchModelNone {}
+            | Call::SearchDeleteAll {} => return self.search_words(),
         })
     }
 
@@ -1908,8 +2027,8 @@ impl Call {
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
     /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
-    /// a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and a taking change that loosens,
-    /// without the app's approval (0.35.0), and only those.
+    /// a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and a taking change that loosens or
+    /// one of Search's three loosenings, each without the app's approval (0.35.0), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1947,7 +2066,7 @@ impl Call {
                 app_approval: None,
                 ..
             } if change.loosens()
-        )
+        ) || self.prepares_search_change()
     }
 
     /// The CLI version the call needs (DA12), when it needs a later one than any the app supports.
@@ -2029,6 +2148,7 @@ impl Call {
             | Call::TakesKeep { .. }
             | Call::Taking {}
             | Call::TakingChange { .. } => Some(TAKING_VERSION),
+            call if call.is_search() => Some(SEARCH_VERSION),
             _ => None,
         }
     }
@@ -2232,6 +2352,40 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "nothing" } }),
         json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "unclaimed", "minutes": 15 } }),
         json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "notify", "on": false } }),
+        json!({ "kind": "searchStatus" }),
+        json!({ "kind": "searchQuery", "text": "invoices" }),
+        json!({
+            "kind": "searchQuery",
+            "text": "-what did David ask?",
+            "person": "p_K19FVJ41QS08HPWN3XC3RQ2K7B",
+            "accounts": ["acme/gmail", "acme/slack"],
+            "channel": "gmail",
+            "since": SINCE_MS,
+            "until": BEFORE_MS,
+            "direction": "any",
+            "limit": 50
+        }),
+        json!({ "kind": "searchPeople" }),
+        json!({ "kind": "searchPeople", "since": SINCE_MS }),
+        json!({ "kind": "searchPerson", "personId": "p_K19FVJ41QS08HPWN3XC3RQ2K7B" }),
+        json!({ "kind": "searchPerson", "personId": "p_K19FVJ41QS08HPWN3XC3RQ2K7B", "since": SINCE_MS, "limit": 50 }),
+        json!({ "kind": "searchShow", "sourceId": "18c2f0a1b2c3d4e5" }),
+        json!({ "kind": "searchIndex" }),
+        json!({ "kind": "searchIndex", "budget": 20 }),
+        json!({ "kind": "searchRebuild", "budget": 20 }),
+        json!({ "kind": "searchLink", "personId": "p_K19FVJ41QS08HPWN3XC3RQ2K7B", "otherId": "p_8GE1HWF42A0071A07VARPJWX1D" }),
+        json!({ "kind": "searchUnlink", "handle": "slack:T0ACME/U0DAVID" }),
+        json!({ "kind": "searchLabel", "personId": "p_K19FVJ41QS08HPWN3XC3RQ2K7B", "label": "David Park" }),
+        json!({ "kind": "searchOn" }),
+        json!({ "kind": "searchOn", "appApproval": ID }),
+        json!({ "kind": "searchOff" }),
+        json!({ "kind": "searchAccountsAdd", "account": "acme/slack" }),
+        json!({ "kind": "searchAccountsAdd", "account": "acme/slack", "appApproval": ID }),
+        json!({ "kind": "searchAccountsRemove", "account": "acme/gmail" }),
+        json!({ "kind": "searchModelSet", "address": "http://127.0.0.1:11434", "model": "qwen3-embedding:0.6b" }),
+        json!({ "kind": "searchModelSet", "address": "http://[::1]:11434", "model": "bge-m3:latest", "appApproval": ID }),
+        json!({ "kind": "searchModelNone" }),
+        json!({ "kind": "searchDeleteAll" }),
     ];
     values
         .into_iter()
@@ -3047,6 +3201,9 @@ mod tests {
                 json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false } }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "eyes" } }),
+                json!({ "kind": "searchOn" }),
+                json!({ "kind": "searchAccountsAdd", "account": "acme/slack" }),
+                json!({ "kind": "searchModelSet", "address": "http://127.0.0.1:11434", "model": "qwen3-embedding:0.6b" }),
             ]
         );
     }

@@ -88,7 +88,7 @@ test('Doctor puts what to look at first, with its fix to copy, and keeps passing
   expect(calls).not.toContain('cli:doctor:gmail');
   for (const call of calls) {
     expect(call).toMatch(
-      /^(installation|take_deep_link|event_service_state|app_build|copy_text|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+|version:events-daemon|taking|takesList|eventsMessagesList|accounts:[a-z]+))$/,
+      /^(installation|take_deep_link|event_service_state|app_build|copy_text|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor:[a-z-]+|version:events-daemon|taking|takesList|eventsMessagesList|accounts:[a-z]+|searchIndex))$/,
     );
   }
 });

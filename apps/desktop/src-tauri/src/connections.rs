@@ -89,11 +89,12 @@ impl Call {
                     style: *style,
                 },
             )),
-            // A label change (0.34.0, Your agents), or a taking change (0.35.0): the same change, without the approval
-            // the app prepared it for.
+            // A label change (0.34.0, Your agents), a taking change or one of Search's loosenings (0.35.0): the same
+            // change, without the approval the app prepared it for.
             _ => self
                 .answers_label_approval()
-                .or_else(|| self.answers_taking_approval()),
+                .or_else(|| self.answers_taking_approval())
+                .or_else(|| self.answers_search_approval()),
         }
     }
 }

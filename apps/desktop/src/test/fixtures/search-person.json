@@ -1,0 +1,39 @@
+{
+  "person": {
+    "id": "p_K19FVJ41QS08HPWN3XC3RQ2K7B",
+    "linked": false,
+    "label": null,
+    "name": "<untrusted-content boundary=\"Nh4eL5Un\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"Nh4eL5Un\">",
+    "handles": [
+      {
+        "handle": "email:david@example.com",
+        "name": "<untrusted-content boundary=\"NQSBGXCy\" field=\"from-name\">\nDavid Example\n</untrusted-content boundary=\"NQSBGXCy\">"
+      }
+    ],
+    "count": 1,
+    "lastAt": 1792928400000
+  },
+  "messages": [
+    {
+      "sourceId": "18c2f0a1b2c3d4e5",
+      "eventId": null,
+      "channel": "gmail",
+      "account": {
+        "id": "in_01EXAMPLE0000000000000000",
+        "alias": "example/gmail"
+      },
+      "at": 1792928400000,
+      "line": "<untrusted-content boundary=\"yik8YGvm\" field=\"line\" inbox=\"example/gmail\" id=\"18c2f0a1b2c3d4e5\">\nCan you send the March invoice?\n</untrusted-content boundary=\"yik8YGvm\">",
+      "subject": "<untrusted-content boundary=\"2pb62r7H\" field=\"subject\" inbox=\"example/gmail\" id=\"18c2f0a1b2c3d4e5\">\nCan you send the March invoice?\n</untrusted-content boundary=\"2pb62r7H\">",
+      "flags": [],
+      "partial": false,
+      "answeredBy": [
+        {
+          "sourceId": "18c2f0a1b2c3d4f0",
+          "at": 1792928713000
+        }
+      ]
+    }
+  ],
+  "more": false
+}

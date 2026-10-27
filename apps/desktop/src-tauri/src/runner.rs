@@ -61,17 +61,27 @@ impl RunContext {
 }
 
 /// The whole command line, program first: the program, its leading words, the call's words, `--json` when asked
-/// for, then the pins when the call takes them. The terminal shows the same line without `--json` (Task 6).
+/// for, then the pins when the call takes them, and last the words after a `--`, if the call has one. The terminal
+/// shows the same line without `--json` (Task 6).
 pub fn argv(words: &Words, program: &Program, folders: &Folders, json: bool) -> Vec<String> {
     let mut line = vec![program.program.clone()];
     line.extend(program.leading.iter().cloned());
-    line.extend(words.words.iter().cloned());
+    // A call's free text goes after `--` (0.35.0: a search's words, a person's label), past which nothing is read as an
+    // option: `--json` and the pins go before it. No other word can be `--`, since every checked value is refused one
+    // that starts with `-`.
+    let options = words
+        .words
+        .iter()
+        .position(|word| word == "--")
+        .unwrap_or(words.words.len());
+    line.extend(words.words[..options].iter().cloned());
     if json {
         line.push("--json".into());
     }
     if words.pins {
         line.extend(folders.pins());
     }
+    line.extend(words.words[options..].iter().cloned());
     line
 }
 
