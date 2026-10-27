@@ -406,7 +406,8 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
  * prepared for, and only on a command that passes this option — `mcp install` (0.32.0), the person-only changes the
  * app makes from 0.34.0: `label word|name|rule add|rule remove|icon|style`, `behaviour allow|clear` and `update` (design
- * 2026-10-26-desktop-0340 §3, B1–B3), and `connection add|change|migrate` from 0.35.0 (single-server design §8.1). No
+ * 2026-10-26-desktop-0340 §3, B1–B3), and `connection add|change|migrate|remove` from 0.35.0 (single-server design §8.1;
+ * a remove where it widens what agents in its place reach). No
  * MCP tool does. Where nothing attests the app, the refusal names the
  * command itself, without the option, to run at the person's terminal.
  */

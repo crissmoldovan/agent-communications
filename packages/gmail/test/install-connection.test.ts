@@ -45,7 +45,7 @@ test('D17: mcp install puts Gmail into a connection it makes for the app, approv
   const asked = await cli(harness, words, { env });
   const approvalId = pendingApproval(asked);
   const preview = String(asked.envelope().error?.details?.preview);
-  assert.match(preview, /Add the connection "Cursor" for Cursor/);
+  assert.match(preview, /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(preview, /Agent Comms itself; Gmail, every mailbox/);
   assert.equal(existsSync(cursor), false, 'nothing written while it waits');
   const done = await cli(harness, [...words, '--approval', approvalId], { env });
@@ -182,7 +182,7 @@ test('D17: setup --mcp-client puts Gmail into the app’s connection — approve
   }>().data;
   assert.equal(report?.blocked.step, 'mcp');
   assert.equal(report?.blocked.needs, "a person's approval to put Gmail into cursor's MCP connection");
-  assert.match(String(report?.blocked.preview), /Add the connection "Cursor" for Cursor/);
+  assert.match(String(report?.blocked.preview), /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(String(report?.blocked.preview), /Agent Comms itself; Gmail, every mailbox/);
   assert.doesNotMatch(String(report?.blocked.preview), /registers the Gmail MCP server/);
   assert.match(
@@ -230,7 +230,7 @@ test('D17: the finish of a sign-in setup handed off prepares Gmail into the conn
     registration: { client: string; status: string; approvalId: string; preview: string; claim: string };
   }>().data?.registration;
   assert.equal(registration?.status, 'approval-required');
-  assert.match(String(registration?.preview), /Add the connection "Cursor" for Cursor/);
+  assert.match(String(registration?.preview), /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   // This installation's own `mcp install`, with no --standalone: the same change, located.
   assert.equal(
     registration?.claim,
@@ -253,7 +253,7 @@ test('D17: the finish of a sign-in setup handed off prepares Gmail into the conn
   const other = await clientOnly();
   const plain = await cli(other.harness, gmailRetryWords((await handedOff(other)).handoff.finish), { env: other.env });
   assert.equal(plain.code, EXIT_CODES.APPROVAL, `${plain.stdout}${plain.stderr}`);
-  assert.match(plain.stdout, /CHANGE PREVIEW[\s\S]*Add the connection "Cursor" for Cursor/);
+  assert.match(plain.stdout, /CHANGE PREVIEW[\s\S]*Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(plain.stdout, /run `[^`]* mcp install --client cursor --launcher local --approval ap_\w+`/);
 });
 
@@ -297,4 +297,104 @@ test('D17: a finish whose app’s connection reaches the mailbox already changes
     status: 'already-registered',
     connection: 'Cursor',
   });
+});
+
+/*
+ * Setup asks for Gmail for every mailbox, as `mcp install` with no `--inbox` does (decision 5 of the 0.35.0 review's
+ * fixes). Where the app's connection already has a Gmail part kept to one mailbox, or read-only, asking for every
+ * mailbox is a loosening the person never asked setup for: setup leaves that part as it is, prepares nothing, and
+ * says so — with the command that would let the connection reach the new mailbox too.
+ */
+
+/** Cursor's connection, made with Gmail kept to `inbox` (and read-only when asked) — what the person chose. */
+async function keptTo(
+  harness: Awaited<ReturnType<typeof newHarness>>,
+  env: Record<string, string>,
+  inbox: string,
+  { readOnly = false, launcher = 'npx' }: { readOnly?: boolean; launcher?: 'npx' | 'local' } = {},
+) {
+  const words = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--launcher',
+    launcher,
+    '--no-verify',
+    '--inbox',
+    inbox,
+    ...(readOnly ? ['--read-only'] : []),
+    '--json',
+  ];
+  const asked = await cli(harness, words, { env });
+  const made = await cli(harness, [...words, '--approval', pendingApproval(asked)], { env });
+  assert.equal(made.code, 0, made.stdout + made.stderr);
+  return (made.envelope<ConnectionPartResult>().data as ConnectionPartResult).connection;
+}
+
+const pendingChanges = async (harness: Awaited<ReturnType<typeof newHarness>>) =>
+  (await harness.core.approvals.list()).filter(
+    (stored) => (stored as { record?: { state?: string } }).record?.state === 'pending',
+  );
+
+test('decision 5: setup --mcp-client leaves a Gmail part kept to one mailbox, or read-only, as it is — and names the command', async () => {
+  const { harness, env } = await machine();
+  const connection = await keptTo(harness, env, 'work', { readOnly: true });
+  const run = await cli(harness, ['setup', '--mcp-client', 'cursor', '--launcher', 'npx', '--json'], { env });
+  assert.equal(run.code, 0, `${run.stdout}${run.stderr}`);
+  assert.deepEqual(await pendingChanges(harness), [], 'no loosening prepared');
+  const report = run.envelope<{ did: string[]; warnings: string[]; blocked: unknown }>().data;
+  assert.equal(report?.blocked, null);
+  const said = [...(report?.did ?? []), ...(report?.warnings ?? [])].join('\n');
+  assert.match(
+    said,
+    /Gmail in the connection "Cursor" \(Cursor, every folder, cn_\w{4}…\) is kept to the mailbox work, read-only: setup left it as it is/,
+  );
+  assert.match(said, new RegExp(`connection change ${connection.id} --parts core,gmail:read-only`));
+  // The part is as the person left it.
+  const shown = await cli(
+    harness,
+    ['mcp', 'install', '--client', 'cursor', '--inbox', 'work', '--read-only', '--json'],
+    { env },
+  );
+  assert.equal(shown.envelope<ConnectionPartResult>().data?.changed, false);
+});
+
+test('decision 5: the finish of a sign-in leaves a Gmail part kept to another mailbox as it is, at a terminal and over MCP', async () => {
+  const machine = await clientOnly();
+  await machine.harness.addInbox({ alias: 'work', email: 'jo@example.test', refreshToken: 'rt_x' });
+  const connection = await keptTo(machine.harness, machine.env, 'work', { launcher: 'local' });
+  const handed = await handedOff(machine);
+  const finished = await cli(machine.harness, [...gmailRetryWords(handed.handoff.finish), '--json'], {
+    env: machine.env,
+  });
+  assert.equal(finished.code, 0, `${finished.stdout}${finished.stderr}`);
+  assert.deepEqual(await pendingChanges(machine.harness), [], 'no loosening prepared');
+  const registration = finished.envelope<{ registration: Record<string, unknown> }>().data?.registration;
+  assert.equal(registration?.status, 'left-alone');
+  assert.equal(registration?.part, 'Gmail, the mailbox work');
+  assert.match(String(registration?.next), /does not reach home/);
+  assert.match(String(registration?.next), new RegExp(`connection change ${connection.id} --parts core,gmail\``));
+
+  // The same over MCP: nothing pending to call, and why.
+  const other = await clientOnly();
+  await other.harness.addInbox({ alias: 'work', email: 'jo@example.test', refreshToken: 'rt_x' });
+  await keptTo(other.harness, other.env, 'work', { launcher: 'local' });
+  const report = await handedOff(other);
+  const flowId = /--finish (fl_\w+)/.exec(report.handoff.finish)?.[1];
+  const server = await connect({
+    core: other.harness.core,
+    env: { ...other.harness.env, ...other.env },
+    platform: 'darwin',
+  });
+  try {
+    const result = wire(await server.call('gmail_inbox_finish', { flowId, waitSeconds: 10 }));
+    assert.equal(result.pendingRegistration, undefined, 'no loosening handed back to call');
+    const left = result.connectionLeftAlone as Record<string, unknown> | undefined;
+    assert.equal(left?.part, 'Gmail, the mailbox work');
+    assert.match(String(left?.next), /setup left it as it is/);
+  } finally {
+    await server.close();
+  }
+  assert.deepEqual(await pendingChanges(other.harness), []);
 });

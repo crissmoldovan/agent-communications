@@ -21,7 +21,7 @@ import { accountNoun, hasNarrowing, listed, narrowingOwner, pinOption } from '..
 import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import { registeredOrConnected } from '../connection-registrations.ts';
-import { CONNECTION_KEY_ENV, partFacts, readConnections, withConnection } from '../connections.ts';
+import { CONNECTION_KEY_ENV, connectionLabel, partFacts, readConnections, withConnection } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { writeFileAtomic } from '../fs.ts';
@@ -262,6 +262,11 @@ export interface ServerInstallRequest {
 export interface ConnectionEntryRequest {
   readonly id: string;
   readonly name: string;
+  /**
+   * How the preview names it (`connectionLabel`): its name, app, place and short id — "new" for one being added. Left
+   * out, its name alone: an entry only applied, never previewed.
+   */
+  readonly label?: string | undefined;
   readonly key: string;
   readonly scope?: 'user' | 'local' | undefined;
   readonly folder?: string | undefined;
@@ -702,7 +707,7 @@ export function serverInstallChange(
         effects.push(
           request.connection === undefined
             ? `registers the ${label} MCP server with ${request.client} as "${name}"${pins.length > 0 ? `, ${pins.join(', ')}` : ''}${replacing}`
-            : `registers the connection "${request.connection.name}" with ${request.client} as "${name}"${request.connection.scope === 'local' ? `, for the project ${request.connection.folder ?? ''} only` : ''}: one entry that starts Agent Comms with its parts, its key in the entry's environment${previous.length > 0 ? ', replacing its own earlier entry' : ''}`,
+            : `registers the connection ${request.connection.label ?? `"${request.connection.name}"`} with ${request.client} as "${name}"${request.connection.scope === 'local' ? `, for the project ${request.connection.folder ?? ''} only` : ''}: one entry that starts Agent Comms with its parts, its key in the entry's environment${previous.length > 0 ? ', replacing its own earlier entry' : ''}`,
         );
         /*
          * What it may reach, said when it is everything rather than left to be inferred from a pin not mentioned.
@@ -732,7 +737,7 @@ export function serverInstallChange(
           if (!read.readable || read.record.revokedAt !== null || read.record.app !== request.client) continue;
           if (!read.record.parts.some((part) => part.server === request.channel)) continue;
           effects.push(
-            `${request.client} reaches the ${label} server through the connection "${read.record.name}" already: registered on its own too, the agent sees the same tools twice`,
+            `${request.client} reaches the ${label} server through the connection ${connectionLabel(read.record, read.record.id)} already: registered on its own too, the agent sees the same tools twice`,
           );
         }
       }

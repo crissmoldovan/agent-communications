@@ -651,6 +651,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       inbox: connected.alias,
     });
     if (serving !== null) return { client, status: 'already-registered', connection: serving.name };
+    // Kept to another mailbox, or read-only: every mailbox would loosen it, which setup never asks for (decision 5).
+    const { gmailPartLeftAlone } = await import('../mcp/install.ts');
+    const leftAlone = gmailPartLeftAlone(await context.core.config.load(), env, context.handoffs, {
+      client,
+      inbox: connected.alias,
+    });
+    if (leftAlone !== null) {
+      return {
+        client,
+        status: 'left-alone',
+        connection: leftAlone.connection.label,
+        part: leftAlone.part,
+        next: leftAlone.next,
+      };
+    }
     // `mcp install` with what `setup` was given: the request `connectionRegistration` makes, the same change.
     const install = ['mcp', 'install', '--client', client, ...(intent.launcher ? ['--launcher', intent.launcher] : [])];
     const person =
@@ -2173,6 +2188,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             ...(pin ? { inbox: pin } : {}),
           });
         };
+        /** The app's connection's Gmail part setup leaves as it is, and why (`gmailPartLeftAlone`), or null. */
+        const partLeftAlone = async (client: string) => {
+          const { gmailPartLeftAlone } = await import('../mcp/install.ts');
+          return gmailPartLeftAlone(await context.core.config.load(), env, context.handoffs, {
+            client,
+            ...(options.inbox ? { inbox: String(options.inbox) } : {}),
+          });
+        };
         /** What the registration step asks a person for, in the report's words. */
         const asksFor = (client: string) =>
           standalone
@@ -2458,7 +2481,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
           if (!blocked && (state.next === 'mcp' || options.mcpClient)) {
             const which = options.mcpClient ? String(options.mcpClient) : '';
-            if (which) {
+            // Kept to one mailbox, or read-only: setup's every mailbox would loosen it, so it is left as it is and said
+            // (decision 5) — unless the person approved that very change already, which `--mcp-approval` carries.
+            const leftAlone = which && !standalone && mcpApproval === undefined ? await partLeftAlone(which) : null;
+            if (leftAlone !== null) {
+              warnings.push(leftAlone.next);
+              state = await setupState(context, setupStateOptions());
+            } else if (which) {
               /*
                * Registered through the change flow, as `mcp install` is — this step registered with nobody's
                * approval while `mcp install` asked, so an agent could hand a client a new set of tools by calling
@@ -2802,31 +2831,36 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
              * anything with an agent's marker gets the preview and the approval id, to run this again with
              * `--mcp-approval` once the person agrees.
              */
-            const result = await gatedChangeAtTerminal<ServerInstallResult | ConnectionPartResult>(
-              context.core,
-              await registration(which),
-              {
-                channel: 'gmail',
-                approvalId: mcpApproval,
-                env,
-                output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
-                // The client picked from the list is named in the command to run again: `--mcp-approval` is claimed
-                // only for a client named with `--mcp-client`, and refused without one.
-                rerun: named ? againForMcp() : insertWordsBeforeSentinel(againForMcp(), '--mcp-client', which),
-                approvalFlag: '--mcp-approval',
-                answered: named === '',
-                streams,
-              },
-            );
-            out.write(
-              `\n${
-                standalone
-                  ? renderInstall(result as ServerInstallResult, globalOptions.color)
-                  : renderConnectionPart(result as ConnectionPartResult, globalOptions.color)
-              }\n`,
-            );
-            if (!standalone && connectionPartExitStatus(result as ConnectionPartResult) !== EXIT_CODES.OK) {
-              softExit = connectionPartExitStatus(result as ConnectionPartResult);
+            const leftAlone = !standalone && mcpApproval === undefined ? await partLeftAlone(which) : null;
+            if (leftAlone !== null) {
+              out.write(`\n${leftAlone.next}\n`);
+            } else {
+              const result = await gatedChangeAtTerminal<ServerInstallResult | ConnectionPartResult>(
+                context.core,
+                await registration(which),
+                {
+                  channel: 'gmail',
+                  approvalId: mcpApproval,
+                  env,
+                  output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
+                  // The client picked from the list is named in the command to run again: `--mcp-approval` is claimed
+                  // only for a client named with `--mcp-client`, and refused without one.
+                  rerun: named ? againForMcp() : insertWordsBeforeSentinel(againForMcp(), '--mcp-client', which),
+                  approvalFlag: '--mcp-approval',
+                  answered: named === '',
+                  streams,
+                },
+              );
+              out.write(
+                `\n${
+                  standalone
+                    ? renderInstall(result as ServerInstallResult, globalOptions.color)
+                    : renderConnectionPart(result as ConnectionPartResult, globalOptions.color)
+                }\n`,
+              );
+              if (!standalone && connectionPartExitStatus(result as ConnectionPartResult) !== EXIT_CODES.OK) {
+                softExit = connectionPartExitStatus(result as ConnectionPartResult);
+              }
             }
           }
         }

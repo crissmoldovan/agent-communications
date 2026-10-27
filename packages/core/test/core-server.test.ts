@@ -268,13 +268,15 @@ const CHANGING = [
   'comms_connection_add',
   'comms_connection_change',
   'comms_connection_migrate',
+  // A tightening, at once — except where its entry shadows a wider one the agents there would use (0.35.0 review, H1).
+  'comms_connection_remove',
 ];
 /**
  * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, narrowing or
  * ending standing approvals (design 2026-10-19-standing-approvals, S8), and taking a server out of a client (design
  * 2026-10-26-owner-feedback-0320 §3.3).
  */
-const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall', 'comms_connection_remove'];
+const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall'];
 /**
  * Tools whose change gives an agent nothing more, so it applies at once and is audited, taking no approval: renaming an
  * MCP connection, and replacing its key (single-server design §6.2).

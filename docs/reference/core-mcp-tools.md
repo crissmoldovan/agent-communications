@@ -46,9 +46,9 @@ applies a change it did not plan itself.
 | [`comms_connection_show`](#comms_connection_show) | One MCP connection, as comms_connections_list gives it, and the Agent Comms running for it now, part by part. |
 | [`comms_connection_add`](#comms_connection_add) | Add a connection for an app — its own key, and one entry in that app that starts Agent Comms with its parts — and register it. |
 | [`comms_connection_change`](#comms_connection_change) | Every part a connection has from now on, with `id` and `parts`. |
-| [`comms_connection_rename`](#comms_connection_rename) | Rename a connection. |
-| [`comms_connection_key_replace`](#comms_connection_key_replace) | Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. |
-| [`comms_connection_remove`](#comms_connection_remove) | Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. |
+| [`comms_connection_rename`](#comms_connection_rename) | Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. |
+| [`comms_connection_key_replace`](#comms_connection_key_replace) | Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. |
+| [`comms_connection_remove`](#comms_connection_remove) | Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. |
 | [`comms_connection_migrate`](#comms_connection_migrate) | Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. |
 | [`comms_update`](#comms_update) | Bring this machine to the latest published release. |
 | [`comms_names_migrate`](#comms_names_migrate) | Rename every mailbox and workspace to `organisation/platform`. |
@@ -396,7 +396,7 @@ Every part a connection has from now on, with `id` and `parts`. Or, with `add`, 
 
 ### `comms_connection_rename`
 
-Rename a connection. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.
+Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.
 
 *writes · idempotent*
 
@@ -407,7 +407,7 @@ Rename a connection. It gives agents nothing more, so it applies at once and tak
 
 ### `comms_connection_key_replace`
 
-Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.
+Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. Another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.
 
 *writes · destructive*
 
@@ -417,13 +417,14 @@ Give a connection a new key, written into its app’s entry and never shown; the
 
 ### `comms_connection_remove`
 
-Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.
+Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
+| `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_connection_migrate`
 

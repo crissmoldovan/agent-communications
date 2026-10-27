@@ -304,7 +304,7 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_server_uninstall` | take one `channel`'s server out of one `client`, at once, as `mcp uninstall`: every user-scope entry of it there, saved first; a project's own entry is left, and said |
 | `comms_connections_list`, `comms_connection_show` | the MCP connections — each place an app uses Agent Comms, its parts, accounts and entry — never with a key; with no id inside a connection, `comms_connection_show` is that connection |
 | `comms_connection_add`, `comms_connection_change`, `comms_connection_migrate` | add a connection, change its parts, or move an app's separate entries into one: approved first where it reaches more, at once where it only narrows |
-| `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` | rename one, give it a new key (written into its entry, the old one stopping), or remove it: each at once |
+| `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` | rename the connection the server is a part of, give it a new key (written into its entry, the old one stopping), or remove it: each at once — but a remove that lets agents in its folder reach more is approved first; another connection is the person's, at their terminal or in the app |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
@@ -348,13 +348,21 @@ agentcomms connection migrate            # your app's separate entries into one 
 - **Adding a connection, or letting one reach more** — a part added, an account let go or moved, read-only off — is
   shown first and approved, at your terminal, in the app (`--app-approval`, macOS), or in a chat under the `chat` change
   policy. **Taking away applies at once**: a part removed, kept to one account, read-only on, the connection removed.
-  Renaming it and replacing its key give an agent nothing more, and apply at once too.
+  Except one removal: a one-project connection over the app's Agent Comms for every folder — its entry shadows that
+  one, so once it is gone the agents in that folder use the wider one. That remove waits for you like a loosening,
+  and its preview says what they would use instead. Renaming it and replacing its key give an agent nothing more, and
+  apply at once too. An agent — over MCP, or from
+  its shell — renames, re-keys and removes only the connection it is a part of; any other is yours, at your terminal
+  or in the app.
 - **The key** is not a password: apps on this Mac start Agent Comms as you, so it keeps out no program running as you —
   such a program can read the app's config, or start a channel's server itself, as it always could. What it does: it
   says which connection a call came through, so Activity says "used by <name>", and removing the connection or
   replacing its key stops every copy of it at once. Agent Comms keeps only its hash, writes it into the app's entry
   (in the entry's environment, never its arguments), and shows it only for a Manual snippet, once — at your terminal
-  or in the app, never to an agent. If Agent Comms is ever reachable over a network, the key becomes a real secret.
+  or in the app, never to an agent. The gateway takes it out of its own environment once it has checked it, and no
+  part is given it; but the environment a process started with stays readable while it runs, so `ps eww` shows the
+  key to programs running as you for as long as that gateway runs — accepted, since such a program can read the app's
+  config anyway. If Agent Comms is ever reachable over a network, the key becomes a real secret.
 - **One project** is Claude Code's own local scope, kept in `~/.claude.json` and never in a `.mcp.json`, which is
   often committed and would carry the key into the repository.
 - **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one

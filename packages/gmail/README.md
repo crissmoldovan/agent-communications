@@ -74,8 +74,10 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 
 The one step it cannot finish is the grant: it returns the sign-in link and the command that completes it, which
 goes on to put Gmail into that app's MCP connection when `--mcp-client` came with the mailbox (`--standalone`
-registers an entry of Gmail's own instead, as before 0.35.0). Registering the OAuth client and connecting the MCP
-server are changes you approve. Run by an agent, `setup` stops at each with the preview and an
+registers an entry of Gmail's own instead, as before 0.35.0). It asks for Gmail for every mailbox; where the app's
+connection already has Gmail kept to one mailbox, or read-only, it leaves that as you chose it, asks nothing, and says
+so with the `agentcomms connection change` that would let it reach the new mailbox too. Registering the OAuth client
+and connecting the MCP server are changes you approve. Run by an agent, `setup` stops at each with the preview and an
 approval id, and runs again with `--approval <id>` for the OAuth client or `--mcp-approval <id>` for the MCP server
 once you have said yes; at a terminal it asks you there.
 

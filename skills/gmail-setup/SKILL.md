@@ -199,6 +199,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    link is still good: wait and call again, never start a second one. A sign-in `agent-gmail setup
    --mcp-client` started can come back with `pendingRegistration`: the mailbox is connected, Gmail is not in
    the app's connection yet. Call the core tool it names with its `arguments`, show the preview, claim it.
+   `connectionLeftAlone` instead: its Gmail is kept to another mailbox, or read-only — left so; tell them `next`.
 
    The OAuth client is registered with `gmail_client_add`, from the **path** of the JSON they downloaded —
    `candidates` in `gmail_setup` lists the ones in their Downloads folder. Never ask them to paste the
@@ -242,6 +243,7 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    with `--standalone`, `--force` when replacing, and `--inbox <mailbox>` when the entry there served another
    mailbox: the replacement serves the one just connected. `"already-registered"` means the app's connection
    (or, after `--standalone`, its `gmail` entry) already reaches this mailbox; nothing was asked.
+   `"left-alone"` (from `setup`, a line in `warnings`): kept to another mailbox, or read-only; tell them `next`.
    `"not-registered"` means it did not happen, and `reason` says why — several connections, somebody else's
    server under that name, ours without `--replace-server` (its `hint` names a second entry), or a client this
    cannot write to. The mailbox is connected all the same, and nothing was replaced.

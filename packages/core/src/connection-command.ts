@@ -225,9 +225,13 @@ export async function connectionCommand(
       if (rest.length !== 1) throw usage(USAGE.remove);
       onlyFor('remove', []);
       const id = rest[0] as string;
+      // At once, unless its entry shadows a wider one the agents there would use instead (H1): then approved at this
+      // terminal, with --approval, or in the app (--app-approval).
       const result = await gatedChangeAtTerminal(core, connectionRemoveChange(core, env, { id }, 'cli'), {
         ...approval,
         rerun: ['connection', 'remove', id],
+        appApproval,
+        appReach: { clients: true },
       });
       writeResult(result, output, renderRemoved);
       return;

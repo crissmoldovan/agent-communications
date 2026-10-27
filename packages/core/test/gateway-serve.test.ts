@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type TestContext, test } from 'node:test';
 import { setTimeout as sleep } from 'node:timers/promises';
@@ -20,6 +20,7 @@ import type { PartSpec } from '../src/gateway/router.ts';
 import { connectionRefusal, runGateway } from '../src/gateway/serve.ts';
 import { runningGateways } from '../src/gateway/status.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -73,7 +74,7 @@ function record(over: Partial<ConnectionRecord> & { key: string }): ConnectionRe
 
 async function put(m: Machine, held: ConnectionRecord, consent = true): Promise<void> {
   await m.core.config.update((config: Config) => ({ ...config, connections: withConnection(config, { put: held }) }), {
-    ...(consent ? { consent: { kind: 'loosening-consent' as const, paths: [`connections["${held.name}"]`] } } : {}),
+    ...(consent ? { consent: connectionConsent(held) } : {}),
   });
 }
 
@@ -181,7 +182,9 @@ test('D10: the right key serves the parts, which never see it; the gateway forge
   assert.equal(seen.connection, held.id);
   assert.equal(env.AGENT_COMMS_CONNECTION_KEY, undefined, 'taken out of the environment it was handed');
   const instructions = client.getInstructions() ?? '';
-  assert.match(instructions, /the connection "Work — Claude Code"/);
+  // The app and the place, never the connection's name — text a person, or an agent, chose (0.35.0 review, M1).
+  assert.match(instructions, /^Agent Comms, for Claude Code in every folder: /);
+  assert.equal(instructions.includes(held.name), false, 'no name in the instructions');
   assert.ok(Buffer.byteLength(instructions) <= INSTRUCTIONS_MAX_BYTES);
   // Written as each part moves: the last write says both run.
   await waitFor(async () => {
@@ -362,6 +365,24 @@ test('D15: the gateway follows its connection on a timer too, and a connection r
   // Without any call: the 100 ms timer of this test finds it, and stops the part.
   await waitFor(() => served.router?.status().every((part) => part.state === 'stopped') === true);
   await assert.rejects(client.callTool({ name: 'slack_echo', arguments: { text: 'x' } }), /removed/);
+});
+
+test('LOW (0.35.0 review): config.json turned unreadable while the gateway runs stops every part and refuses with why', async (t) => {
+  const m = machine();
+  const key = newConnectionKey();
+  const held = record({ key, parts: [{ server: 'slack' }, { server: 'gmail' }] });
+  await put(m, held);
+  const { client, served } = await gateway(t, m, held.id, key);
+  assert.ok(served.router);
+  await waitFor(() => served.router?.status().every((part) => part.state === 'running') === true);
+  // A hand edit that breaks the file: the last record it read is not what it serves from now on.
+  writeFileSync(m.core.config.path, '{ "connections": { oops');
+  await waitFor(() => served.router?.status().every((part) => part.state === 'stopped') === true);
+  await assert.rejects(
+    client.callTool({ name: 'slack_echo', arguments: { text: 'x' } }),
+    /could not read its configuration/,
+  );
+  assert.deepEqual((await client.listTools()).tools, [], 'no tools listed either');
 });
 
 function alive(pid: number): boolean {

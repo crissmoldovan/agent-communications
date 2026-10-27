@@ -102,6 +102,8 @@ export function ConnectionPage({
   const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [partsWaiting, setPartsWaiting] = useState<PartsWaiting | null>(null);
+  // A remove core asked about first: its entry shadows a wider one the agents in its folder would then use (H1).
+  const [removeWaiting, setRemoveWaiting] = useState<Waiting | null>(null);
   // A Manual connection's new snippet, with its key in it: held only while it is shown, and let go at Done.
   const [snippets, setSnippets] = useState<SnippetSet | null>(null);
 
@@ -172,24 +174,33 @@ export function ConnectionPage({
     await reload();
   };
 
+  /** The list's words for a connection removed, at once or once approved: what was done, and any entry left. */
+  const gone = (data: unknown, approved: boolean) => {
+    const { kept } = readRemoved(data);
+    const lines = [
+      approved
+        ? MCP_COPY.removedApprovedSaid(name, manual ? 'the app' : app)
+        : MCP_COPY.removedSaid(name, manual ? 'the app' : app, manual),
+      ...kept.map((each) => ONE_COPY.keptEntry(each.name, each.path, each.reason)),
+    ];
+    onGone(lines.join(' '));
+  };
+
   const remove = async () => {
     setBusy(true);
     const outcome = await change.run({ kind: 'connectionRemove', connectionId: view.id });
     setBusy(false);
-    if (outcome.state !== 'applied') {
-      setAsking(null);
-      refuse(
-        ONE_COPY.notRemoved(outcome.state === 'failed' ? outcome.message : 'it asked for an approval'),
-        outcome.state === 'failed' ? outcome.hint : null,
-      );
+    setAsking(null);
+    if (outcome.state === 'needsTerminal') {
+      // Its entry shadows a wider one: core prepared it, and the person approves it here, as a loosening.
+      setRemoveWaiting(outcome);
       return;
     }
-    const { kept } = readRemoved(outcome.data);
-    const lines = [
-      MCP_COPY.removedSaid(name, manual ? 'the app' : app, manual),
-      ...kept.map((each) => ONE_COPY.keptEntry(each.name, each.path, each.reason)),
-    ];
-    onGone(lines.join(' '));
+    if (outcome.state !== 'applied') {
+      refuse(ONE_COPY.notRemoved(outcome.message), outcome.hint);
+      return;
+    }
+    gone(outcome.data, false);
   };
 
   /** Every part after one change: sent at once, as the board applies each switch. */
@@ -575,6 +586,49 @@ export function ConnectionPage({
           }
         >
           <p className="text-(length:--cue-text-ui) text-fg-subtle">{ONE_COPY.removeLead(App)}</p>
+          {removeWaiting === null ? null : (
+            <div className="flex flex-col gap-(--cue-space-2)">
+              <p className="text-fg">{ONE_COPY.removeWider}</p>
+              <ChangePreview
+                key={removeWaiting.approvalId}
+                change={removeWaiting}
+                onDone={(result) => {
+                  setRemoveWaiting(null);
+                  setSaid({ tone: 'quiet', text: result === 'cancelled' ? MCP_COPY.cancelled : MCP_COPY.inTerminal });
+                }}
+                inApp={
+                  approveHere
+                    ? {
+                        title: ONE_COPY.removeAsk(name),
+                        approve: MCP_COPY.approve,
+                        call: {
+                          kind: 'connectionRemove',
+                          connectionId: view.id,
+                          appApproval: removeWaiting.approvalId,
+                        },
+                        failed: ONE_COPY.notRemoved,
+                        onApproved: (result) => {
+                          setRemoveWaiting(null);
+                          gone(result.data, true);
+                        },
+                        onVoid: () => {
+                          setRemoveWaiting(null);
+                          void change.run({ kind: 'connectionRemove', connectionId: view.id }).then((outcome) => {
+                            if (outcome.state === 'needsTerminal') {
+                              setRemoveWaiting(outcome);
+                              setSaid({ tone: 'quiet', text: MCP_COPY.prepareAgain });
+                            } else if (outcome.state === 'failed') {
+                              refuse(ONE_COPY.notRemoved(outcome.message), outcome.hint);
+                            } else gone(outcome.data, false);
+                          });
+                        },
+                        onRefused: () => void reload(),
+                      }
+                    : undefined
+                }
+              />
+            </div>
+          )}
           {asking === 'remove' ? (
             <Ask title={ONE_COPY.removeTitle(name)}>
               <p className="text-fg-muted">{manual ? ONE_COPY.removeManual : ONE_COPY.removeKnown(App, file)}</p>

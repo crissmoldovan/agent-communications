@@ -1428,7 +1428,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Rename an MCP connection',
       description:
-        'Rename a connection. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
+        'Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
       inputSchema: { id: connectionId, name: z.string().describe('its new name, 1 to 64 characters') },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -1439,7 +1439,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Replace an MCP connection’s key',
       description:
-        'Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.',
+        'Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. Another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.',
       inputSchema: { id: connectionId },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
@@ -1461,11 +1461,11 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove an MCP connection',
       description:
-        'Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.',
-      inputSchema: { id: connectionId },
+        'Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.',
+      inputSchema: { id: connectionId, ...approvalArg },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), undefined),
+    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), args.approvalId),
   );
 
   server.registerTool(

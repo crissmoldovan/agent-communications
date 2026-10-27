@@ -9,6 +9,7 @@ import {
   type ConnectionRecord,
   connectionById,
   connectionKeyHash,
+  connectionLabel,
   newConnectionId,
   newConnectionKey,
   partFacts,
@@ -29,7 +30,7 @@ import {
   removeEntries,
   type SupportedClient,
 } from '../mcp-install.ts';
-import { lookupName } from '../names.ts';
+import { findById, lookupName } from '../names.ts';
 import { homeDirectory, shortenHome } from '../paths.ts';
 import { launcherOf, registrationPathPins } from '../registrations.ts';
 import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange } from './servers.ts';
@@ -292,7 +293,7 @@ export function connectionMigrateChange(
       const effects: string[] = [];
       for (const group of plan.groups) {
         effects.push(
-          `moves ${group.entries.map((entry) => `"${entry.name}"`).join(', ')} in ${shortenHome(group.path, home)} into one connection, "${group.name}": one entry, "${group.entryName}", that starts ${group.parts.map((part) => partText(part.server, { pin: part.pin ?? null, readOnly: part.readOnly === true })).join('; ')}; each entry it removes is saved first`,
+          `moves ${group.entries.map((entry) => `"${entry.name}"`).join(', ')} in ${shortenHome(group.path, home)} into one connection, ${connectionLabel({ name: group.name, app: group.app, where: { scope: 'user', folder: null, configDir: null } }, null)}: one entry, "${group.entryName}", that starts ${group.parts.map((part) => partText(part.server, { pin: part.pin ?? null, readOnly: part.readOnly === true })).join('; ')}; each entry it removes is saved first`,
         );
       }
       for (const each of plan.left)
@@ -438,6 +439,33 @@ export function connectionMigrateChange(
   };
 }
 
+/**
+ * Each part's pin, as the undo registers it: the account it is kept to found by its immutable id, under the name that
+ * account has now — never the alias the record kept when it was pinned, which a rename may since have given another
+ * account (0.35.0 security review, LOW). A part kept to an account no longer here refuses the undo, before anything is
+ * prepared: registered with no pin it would reach every account.
+ */
+function pinsNow(config: Config, record: ConnectionRecord): Map<string, string> {
+  const pins = new Map<string, string>();
+  for (const part of record.parts) {
+    if (part.pin === undefined) continue;
+    const facts = partFacts(part.server);
+    const now =
+      facts?.accounts === 'inboxes' ? findById(config, 'inbox', part.pin.id) : findById(config, 'account', part.pin.id);
+    if (now === null) {
+      throw new CommsError(
+        'USAGE',
+        `${facts?.label ?? part.server} is kept to the ${facts?.noun ?? 'account'} ${part.pin.alias}, which is no longer connected, so this was not undone: nothing was changed`,
+        {
+          hint: 'Registered on its own with no account it would reach every one. Connect it again, or take the part out with connection change first.',
+        },
+      );
+    }
+    pins.set(part.server, now.alias);
+  }
+  return pins;
+}
+
 export interface MigrationUndoResult {
   readonly id: string;
   readonly name: string;
@@ -458,6 +486,8 @@ export function connectionMigrateUndoChange(
   deps: ServerInstallDeps = {},
 ): GatedChange<MigrationUndoResult> {
   let record: ConnectionRecord | undefined;
+  /** Each pinned part's account, by the name it has now (`pinsNow`). */
+  let pins = new Map<string, string>();
   return {
     plan: (config): ChangeRequest => {
       const read = connectionById(config, request.id);
@@ -473,6 +503,7 @@ export function connectionMigrateUndoChange(
         });
       }
       record = read.record;
+      pins = pinsNow(config, read.record);
       const names = new Map((read.record.migratedFrom?.entries ?? []).map((entry) => [entry.server, entry.name]));
       return {
         before: config,
@@ -480,11 +511,11 @@ export function connectionMigrateUndoChange(
         effects: [
           ...read.record.parts.map(
             (part) =>
-              `registers the ${serverLabel(part.server)} MCP server with ${read.record.app} as "${names.get(part.server) ?? serverFacts(part.server).defaultServerName}"${part.pin === undefined ? '' : `, pinned to ${part.pin.alias}`}${part.readOnly ? ', read-only' : ''}`,
+              `registers the ${serverLabel(part.server)} MCP server with ${read.record.app} as "${names.get(part.server) ?? serverFacts(part.server).defaultServerName}"${pins.has(part.server) ? `, pinned to ${pins.get(part.server)}` : ''}${part.readOnly ? ', read-only' : ''}`,
           ),
-          `takes the connection "${read.record.name}" and its entry out of ${read.record.app}`,
+          `takes the connection ${connectionLabel(read.record, read.record.id)} and its entry out of ${read.record.app}`,
         ],
-        summary: `Undo the connection "${read.record.name}": its parts as entries of their own again`,
+        summary: `Undo the connection ${connectionLabel(read.record, read.record.id)}: its parts as entries of their own again`,
       };
     },
     apply: async (): Promise<MigrationUndoResult> => {
@@ -502,7 +533,9 @@ export function connectionMigrateUndoChange(
       const registered: MigrationUndoResult['registered'][number][] = [];
       for (const part of held.parts) {
         const facts = partFacts(part.server);
-        const pin = part.pin === undefined || facts?.pin === undefined ? {} : { [facts.pin]: part.pin.alias };
+        // By the account's id, under its name now: the plan resolved it, and the approval bound that name.
+        const alias = pins.get(part.server);
+        const pin = alias === undefined || facts?.pin === undefined ? {} : { [facts.pin]: alias };
         const install = serverInstallChange(
           core,
           env,

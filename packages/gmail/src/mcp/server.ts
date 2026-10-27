@@ -91,7 +91,7 @@ import {
 } from '../operations/signin.ts';
 import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
-import { clientServesInbox, connectionServesInbox, mailboxServedElsewhere } from './install.ts';
+import { clientServesInbox, connectionServesInbox, gmailPartLeftAlone, mailboxServedElsewhere } from './install.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
 export interface GmailMcpOptions extends GmailContextOptions {
@@ -2012,7 +2012,18 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               ])
               .optional()
               .describe(
-                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and that client’s MCP connection does not reach this mailbox yet: nothing was registered — call the tool it names, comms_connection_change, with `arguments`, show its preview, and claim it after the user says yes. A sign-in `setup --standalone` handed off names comms_server_install instead, for an entry of Gmail’s own, when no entry of this server in that client serves this mailbox — or `setup` was given `--replace-server`, which `force` carries; there `inbox` pins it to this mailbox, where the entry under that name serves another, and `name` names a second entry when that one is not being replaced',
+                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and that client’s MCP connection does not reach this mailbox yet — and its Gmail part, if it has one, is not kept to another mailbox or read-only (then see `connectionLeftAlone`): nothing was registered — call the tool it names, comms_connection_change, with `arguments`, show its preview, and claim it after the user says yes. A sign-in `setup --standalone` handed off names comms_server_install instead, for an entry of Gmail’s own, when no entry of this server in that client serves this mailbox — or `setup` was given `--replace-server`, which `force` carries; there `inbox` pins it to this mailbox, where the entry under that name serves another, and `name` names a second entry when that one is not being replaced',
+              ),
+            connectionLeftAlone: z
+              .object({
+                client: z.string(),
+                connection: z.object({ id: z.string(), name: z.string() }),
+                part: z.string().describe('the Gmail part as it is: "Gmail, the mailbox acme/gmail, read-only"'),
+                next: z.string(),
+              })
+              .optional()
+              .describe(
+                'present instead when that client’s connection has Gmail kept to another mailbox, or read-only: setup asks for every mailbox, which would loosen it, so it was left as it is and nothing is pending — tell the person `next`, which names the command that would let it reach this mailbox too, a change they approve',
               ),
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
@@ -2060,8 +2071,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
                       client: intent.client,
                       inbox: result.alias,
                     }) !== null;
+            // Kept to another mailbox, or read-only: every mailbox would loosen it — left as it is, and said (decision 5).
+            const leftAlone =
+              intent && !served && intent.standalone !== true && !replace
+                ? gmailPartLeftAlone(await context.core.config.load(), context.env, context.handoffs, {
+                    client: intent.client,
+                    inbox: result.alias,
+                  })
+                : null;
             const pending =
-              intent && !served
+              intent && !served && leftAlone === null
                 ? await pendingRegistrationOf(context.env, intent, result.alias, replace, context.handoffs)
                 : undefined;
             return reply({
@@ -2074,6 +2093,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               missingScopes: result.missingScopes,
               inbox: saved,
               ...(pending ? { pendingRegistration: pending } : {}),
+              ...(intent && leftAlone !== null
+                ? {
+                    connectionLeftAlone: {
+                      client: intent.client,
+                      connection: { id: leftAlone.connection.id, name: leftAlone.connection.name },
+                      part: leftAlone.part,
+                      next: leftAlone.next,
+                    },
+                  }
+                : {}),
             });
           } catch (error) {
             return fail(error);

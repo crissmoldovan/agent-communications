@@ -5,7 +5,13 @@ import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
 import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
-import { connectionKeyMatches, readConnections } from '../src/connections.ts';
+import {
+  type ConnectionRecord,
+  connectionKeyMatches,
+  connectionLabel,
+  connectionPath,
+  readConnections,
+} from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
@@ -14,6 +20,7 @@ import {
   type ConnectionChangeResult,
   type ConnectionPartRequest,
   type ConnectionPartResult,
+  type ConnectionView,
   connectionAddChange,
   connectionChangeChange,
   connectionKeyReplaceChange,
@@ -25,6 +32,7 @@ import {
   parsePartsSpec,
 } from '../src/operations/connections.ts';
 import { VERSION } from '../src/version.ts';
+import { asPartOf } from './helpers/gateway/as-part.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -90,6 +98,11 @@ const claudeServers = (m: Machine) =>
     }
   ).mcpServers ?? {};
 
+/** How a preview names a connection that is there (0.35.0 review, M1): its name, app, place and short id. */
+const heldLabel = (view: ConnectionView): string =>
+  connectionLabel(view as Pick<ConnectionRecord, 'name' | 'app' | 'where'>, view.id);
+const heldPath = (view: ConnectionView): string => connectionPath(heldLabel(view));
+
 function auditText(m: Machine): string {
   const dir = join(m.env.AGENT_COMMS_STATE_DIR as string, 'audit');
   try {
@@ -120,12 +133,12 @@ test(
     if (first.status !== 'approval-required') return;
     assert.deepEqual(
       first.prepared.loosened.map((change) => change.path),
-      ['connections["Work — Claude Code"]'],
+      ['connections["Work — Claude Code" (Claude Code, every folder, new)]'],
     );
     assert.match(first.prepared.preview, /Agent Comms itself/);
     assert.ok(
       first.prepared.effects.some((effect) =>
-        /registers the connection "Work — Claude Code" with claude-code as "agentcomms": one entry that starts Agent Comms with its parts, its key in the entry's environment/.test(
+        /registers the connection "Work — Claude Code" \(Claude Code, every folder, new\) with claude-code as "agentcomms": one entry that starts Agent Comms with its parts, its key in the entry's environment/.test(
           effect,
         ),
       ),
@@ -215,7 +228,7 @@ test(
     if (widened.status === 'approval-required') {
       assert.deepEqual(
         widened.prepared.loosened.map((change) => change.path),
-        ['connections["Work"].parts.events'],
+        [`${heldPath(added.connection)}.parts.events`],
       );
     }
     // Renaming applies at once, and is audited.
@@ -427,14 +440,9 @@ test('§8.1: --app-approval covers connection add and change, and is refused ins
 
 test('D11 (§7): an audit line written inside a part of a connection names the connection, by id', async () => {
   const m = machine();
-  const before = process.env.AGENTCOMMS_CONNECTION;
-  process.env.AGENTCOMMS_CONNECTION = 'cn_0123456789ABCDEFGHJKMNPQRS';
-  try {
-    await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
-  } finally {
-    if (before === undefined) delete process.env.AGENTCOMMS_CONNECTION;
-    else process.env.AGENTCOMMS_CONNECTION = before;
-  }
+  await asPartOf('cn_0123456789ABCDEFGHJKMNPQRS', () =>
+    m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' }),
+  );
   await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
   const lines = auditText(m)
     .trim()
@@ -484,7 +492,10 @@ test(
       preview,
       /what is marked done at once is done already; the rest has not been changed, and approving changes only the rest/,
     );
-    assert.match(preview, /Let agents in "Work" reach more; what narrows was applied at once/);
+    assert.match(
+      preview,
+      /Let agents in "Work" \(Claude Code, every folder, cn_[0-9A-Z]{4}…\) reach more; what narrows was applied at once/,
+    );
     assert.match(preview, /Done already, at once, as this was prepared:\n {2}- Events taken out/);
     const stored = await m.core.approvals.get(first.prepared.approvalId);
     assert.deepEqual(stored?.form === 'v2' ? stored.record.change?.doneAtOnce : null, ['Events taken out'], 'bound');
@@ -605,10 +616,15 @@ test(
     assert.equal(first.status, 'approval-required', 'making a connection is a loosening the person approves');
     if (first.status !== 'approval-required') return;
     // The preview names the connection it makes, and every part it reaches.
-    assert.match(first.prepared.preview, /Add the connection "Claude Code" for Claude Code/);
+    assert.match(first.prepared.preview, /Add the connection "Claude Code" \(Claude Code, every folder, new\)/);
     assert.deepEqual(
       first.prepared.loosened.map((change) => [change.path, change.after]),
-      [['connections["Claude Code"]', 'Claude Code (claude-code): Agent Comms itself; Gmail, every mailbox']],
+      [
+        [
+          'connections["Claude Code" (Claude Code, every folder, new)]',
+          'Claude Code (claude-code): Agent Comms itself; Gmail, every mailbox',
+        ],
+      ],
     );
     assert.deepEqual(readConnections(await m.core.config.load()).connections, [], 'nothing written while it waits');
     const done = (await gatedChange(m.core, part(m, { server: 'gmail' }), {
@@ -639,10 +655,10 @@ test(
     const first = await gatedChange(m.core, part(m, { server: 'slack' }), { surface: 'cli', channel: 'slack' });
     assert.equal(first.status, 'approval-required');
     if (first.status !== 'approval-required') return;
-    assert.match(first.prepared.preview, /Let agents in "Work" reach more/);
+    assert.ok(first.prepared.preview.includes(`Let agents in ${heldLabel(work.connection)} reach more`));
     assert.deepEqual(
       first.prepared.loosened.map((change) => [change.path, change.after]),
-      [['connections["Work"].parts.slack', 'Slack, every workspace']],
+      [[`${heldPath(work.connection)}.parts.slack`, 'Slack, every workspace']],
     );
     const done = (await gatedChange(m.core, part(m, { server: 'slack' }), {
       surface: 'cli',
@@ -680,7 +696,7 @@ test(
   async () => {
     const m = machine();
     withMailbox(m);
-    await addConnection(m, 'Work', 'core,gmail');
+    const work = await addConnection(m, 'Work', 'core,gmail');
     const pinned = (await gatedChange(m.core, part(m, { server: 'gmail', account: 'cue/gmail', readOnly: true }), {
       surface: 'cli',
       channel: 'gmail',
@@ -696,8 +712,8 @@ test(
       assert.deepEqual(
         freed.prepared.loosened.map((change) => [change.path, change.before, change.after]),
         [
-          ['connections["Work"].parts.gmail.pin', 'cue/gmail', 'every mailbox'],
-          ['connections["Work"].parts.gmail.readOnly', true, false],
+          [`${heldPath(work.connection)}.parts.gmail.pin`, 'cue/gmail', 'every mailbox'],
+          [`${heldPath(work.connection)}.parts.gmail.readOnly`, true, false],
         ],
       );
     }
@@ -731,7 +747,10 @@ test(
     });
     assert.equal(named.status, 'approval-required');
     if (named.status === 'approval-required')
-      assert.match(named.prepared.preview, /Let agents in "Personal" reach more/);
+      assert.match(
+        named.prepared.preview,
+        /Let agents in "Personal" \(Claude Code, every folder, cn_[0-9A-Z]{4}…\) reach more/,
+      );
   },
 );
 
@@ -746,7 +765,7 @@ test(
     const made = await gatedChange(m.core, part(m, { server: 'gmail' }), { surface: 'cli', channel: 'gmail' });
     assert.equal(made.status, 'approval-required');
     if (made.status === 'approval-required') {
-      assert.match(made.prepared.preview, /Add the connection "Claude Code 2" for Claude Code/);
+      assert.match(made.prepared.preview, /Add the connection "Claude Code 2" \(Claude Code, every folder, new\)/);
     }
   },
 );
@@ -814,7 +833,10 @@ test(
         };
       const asked = await call({ app: 'claude-code', add: { server: 'slack' } });
       assert.equal(asked.structuredContent.approvalRequired, true, JSON.stringify(asked.structuredContent));
-      assert.match(String(asked.structuredContent.preview), /Let agents in "Work" reach more/);
+      assert.match(
+        String(asked.structuredContent.preview),
+        /Let agents in "Work" \(Claude Code, every folder, cn_[0-9A-Z]{4}…\) reach more/,
+      );
       const done = await call({
         app: 'claude-code',
         add: { server: 'slack' },

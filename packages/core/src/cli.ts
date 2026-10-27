@@ -630,7 +630,7 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
     case 'taking':
       return sub !== undefined;
     case 'connection':
-      return sub === 'add' || sub === 'change' || sub === 'migrate';
+      return sub === 'add' || sub === 'change' || sub === 'migrate' || sub === 'remove';
     default:
       return false;
   }
@@ -680,15 +680,16 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
 /**
  * Whether a command takes `--app-approval`: a change the desktop app makes as the person's own act, approved there
  * (design 2026-10-26-desktop-0340 §3) — `mcp install` (0.32.0); `label word|name|rule|icon|style`, `behaviour
- * allow|clear` and `update` itself (0.34.0); `taking <account>` and `search on|accounts add|model set` (0.35.0). A report
- * takes none, and `update` refuses it beside any of its other modes.
+ * allow|clear` and `update` itself (0.34.0); `taking <account>`, `search on|accounts add|model set` and `connection
+ * add|change|migrate|remove` (0.35.0 — a remove where it widens what agents in its place reach). A report takes none,
+ * and `update` refuses it beside any of its other modes.
  */
 function takesAppApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
     case 'mcp':
       return sub === 'install';
     case 'connection':
-      return sub === 'add' || sub === 'change' || sub === 'migrate';
+      return sub === 'add' || sub === 'change' || sub === 'migrate' || sub === 'remove';
     case 'label':
     case 'behaviour':
     case 'taking':
