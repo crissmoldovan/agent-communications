@@ -334,3 +334,28 @@ test(
     assert.equal(read.record.keyHash, was.record.keyHash, 'the key is the one it had');
   },
 );
+
+test(
+  'LOW 1: a remove checked while the app’s config cannot be parsed waits for the person — never at once',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { project, acme } = await twoConnections(m);
+    const real = realpathSync(project);
+    const good = readFileSync(m.claudeJson, 'utf8');
+    // The re-review's race: a write in flight leaves half the file when the remove is checked.
+    writeFileSync(m.claudeJson, good.slice(0, Math.floor(good.length / 2)));
+    const asked = await run(m, connectionRemoveChange(m.core, partEnv(m.env, acme.id), { id: acme.id }, 'mcp'), 'mcp');
+    assert.equal(asked.status, 'approval-required', 'an unreadable config is not one with nothing wider in it');
+    if (asked.status !== 'approval-required') return;
+    assert.equal(asked.prepared.loosened.length, 1);
+    assert.match(
+      String(asked.prepared.loosened[0]?.after),
+      /^removed: agents in .* use whatever Claude Code calls "agentcomms" for every folder — its settings could not be read to say what that reaches$/,
+    );
+    // The write finishes: nothing was taken out while it waited.
+    writeFileSync(m.claudeJson, good);
+    assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, 'the folder’s entry is still there');
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+  },
+);

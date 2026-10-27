@@ -828,3 +828,13 @@ The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes 
 - **Accepted, and documented: the key in the gateway's initial environment.** `ps eww` shows it to programs running
   as the person while the gateway runs (§6.3, §14, core's README beside "the key is not a password"); they can read
   the app's config, which holds it, already.
+
+## 17. The 0.35.0 re-review's LOWs (2026-10-27)
+
+The lead's decisions on the re-review of the 0.35.0 security fixes.
+- **A config that cannot be parsed is one that cannot be read** (LOW 1). Claude Code's scan lists a file it cannot
+  parse rather than failing, so a remove checked while `~/.claude.json` was half written found nothing wider behind it
+  and applied at once — and once the write finished, the agents in that folder used the entry for every folder. The
+  remove's check (`widerBehind`) now reads this app's own file listed as unreadable as "could not be read": the remove
+  is prepared, its loosening line says the app's settings could not be read to say what that reaches, and the person
+  approves it, as §8.1's H1 note says.

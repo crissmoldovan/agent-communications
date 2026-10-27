@@ -38,7 +38,7 @@ import { connectionLastUsed, type GatewayStatus, runningGateways } from '../gate
 import { handoffSentence } from '../handoff-text.ts';
 import { requireHandoffs } from '../handoffs.ts';
 import { launcherName, readPointer } from '../launcher.ts';
-import { scanRegisteredServers } from '../mcp-clients.ts';
+import { knownClientConfigs, scanRegisteredServers } from '../mcp-clients.ts';
 import {
   connectionOfEntry,
   type InstallContext,
@@ -1655,8 +1655,12 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
   const home = homeDirectory(env);
   const place = `${shortenHome(record.where.folder ?? '', home)}${record.where.configDir === null ? '' : ` (profile ${shortenHome(record.where.configDir, home)})`}`;
   const client = APP_CLIENT[record.app];
-  const scan = await scanRegisteredServers(envFor(env, record)).catch(() => null);
-  if (scan === null) {
+  const appEnv = envFor(env, record);
+  const scan = await scanRegisteredServers(appEnv).catch(() => null);
+  // A scan lists a file it could not parse rather than throwing (0.35.0 re-review, LOW 1): this app's own file among
+  // them is a config that cannot be read, never one with nothing wider in it — a write in flight would let the remove
+  // through at once, and the entry for every folder would serve the folder.
+  if (scan === null || unreadableAppConfig(appEnv, client, scan.unreadable)) {
     return `removed: agents in ${place} use whatever ${APP_LABELS[record.app]} calls "${record.entry.name}" for every folder — its settings could not be read to say what that reaches`;
   }
   const behind = scan.servers.find(
@@ -1678,6 +1682,23 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
   }
   const own = PART_FACTS.find((facts) => isProductServer(behind, serverFacts(facts.server)));
   return `removed: agents in ${place} use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`}`;
+}
+
+/** Whether the scan could not read `client`'s own config file — the one an entry for every folder is kept in. */
+function unreadableAppConfig(
+  env: NodeJS.ProcessEnv,
+  client: SupportedClient,
+  unreadable: readonly { client: string; path: string }[],
+): boolean {
+  let files: string[];
+  try {
+    files = knownClientConfigs(env)
+      .filter((file) => file.client === client)
+      .map((file) => file.path);
+  } catch {
+    return true;
+  }
+  return unreadable.some((each) => each.client === client && files.includes(each.path));
 }
 
 export interface ConnectionRemoveResult {
