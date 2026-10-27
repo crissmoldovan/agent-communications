@@ -51,9 +51,10 @@ test('one line per step that does something, in stepOrder, numbered from 1', () 
 });
 
 test('a start line names its folder, provider and mode in words', () => {
+  // The find before it has no line of its own, so its "If …" names where it looked, never "there".
   assert.equal(
     text(line(owner, 'start')),
-    'If no session is idle there, start a Claude Code session in the worktree tree made that asks before it acts.',
+    'If no session is idle in the project route chose, start a Claude Code session in the worktree tree made that asks before it acts.',
   );
   const steps = { ...owner.flow.steps, start: { ...owner.flow.steps.start, in: { project: 'route' }, mode: 'plan' } };
   const inProject = text(line({ ...owner, flow: { ...owner.flow, steps } as FlowDocumentV1 }, 'start'));
