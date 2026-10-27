@@ -159,6 +159,9 @@ import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
+import { composeWorkflows } from './workflow/compose.ts';
+import type { WorkflowComposition } from './workflow/contracts.ts';
+import type { WorkflowFailpoint } from './workflow/engine.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -285,6 +288,18 @@ export interface EventOwnerOptions {
   readonly eventDispatchTestPoint?: EventDispatcherOptions['testPoint'];
   /** Test seam only: the live listeners' WebSocket ping interval and pong deadline (production: 30 and 60 seconds). */
   readonly eventsWebSocket?: WebSocketTiming | undefined;
+  /**
+   * Workflows (0.36), test seams only: more compositions than the owner's own — a stand-in executor for a kind another
+   * track adds — the notifier a notify step raises its notice through, and a crash at a point of a step's life.
+   * Production composes every track's part and raises notices on the person's own screen.
+   */
+  readonly workflows?:
+    | {
+        readonly parts?: readonly WorkflowComposition[] | undefined;
+        readonly notifier?: Notifier | undefined;
+        readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
+      }
+    | undefined;
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -1532,6 +1547,20 @@ async function startOwnerWithLock(
       database.close();
     },
   });
+  // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  const workflows = composeWorkflows(
+    {
+      store: database,
+      cipher,
+      approvals: core.approvals,
+      config: core.config,
+      notifier: options.workflows?.notifier ?? makeNotifier({ platform: process.platform, env: process.env }),
+      writerQuiescer,
+      now,
+      failpoint: options.workflows?.failpoint,
+    },
+    [...(options.workflows?.parts ?? [])],
+  );
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -1539,6 +1568,7 @@ async function startOwnerWithLock(
     gmailSourceFor,
     assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
     assertLinearTargets: (rule) => readers.linear?.assertActivation(rule) ?? Promise.resolve('none'),
+    flowActivationChecks: workflows.activationChecks,
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
@@ -1715,6 +1745,7 @@ async function startOwnerWithLock(
       await listeners.reconcile();
       await eventDispatcher.tick();
     },
+    workflows,
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
@@ -2393,9 +2424,14 @@ function domain<T>(work: () => T): T {
     return work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
+}
+
+/** A refusal's fixed reason, and the closed detail some carry beside it (a workflow's `FLOW_INVALID` problems). */
+function domainRefusalDetails(error: EventDomainError): Record<string, unknown> {
+  return { ...error.details, reason: error.code };
 }
 
 /** `domain` for an operation that awaits: a refusal is the caller's input, with the same fixed reason. */
@@ -2404,7 +2440,7 @@ async function domainAwaited<T>(work: () => Promise<T>): Promise<T> {
     return await work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
 }

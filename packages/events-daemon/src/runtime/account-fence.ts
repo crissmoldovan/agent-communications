@@ -7,6 +7,7 @@ import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeQueueItemsForAccount } from './queue-retention.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export interface EventAccountScope {
   readonly source: SourceOptions['channel'];
@@ -166,6 +167,8 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
   database.prepare(`DELETE FROM dryrun_log WHERE ${ownedBy('dryrun_log')}`).run(...owned);
+  // The account's workflow runs end with it (workflows design W10): cancelled, each record purged.
+  cancelRunsInTransaction(database, { accountId, source }, 'ACCOUNT_REMOVED', now);
   purgeQueueItemsForAccount(database, { source, accountId });
   database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
   database

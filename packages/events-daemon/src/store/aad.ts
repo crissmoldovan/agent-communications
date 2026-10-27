@@ -16,6 +16,8 @@ const PRIMARY_KEY_COMPONENT_COUNTS = {
   // Workflow events (0.36.0, §4.3): a raised event's sealed record, and each subscriber's frame of it.
   'workflow_events.encryptedRecord': 1,
   'event_stream_log.encryptedRecord': 1,
+  // A workflow run's mapped values (workflows design §4.3, W7), purged when the run ends.
+  'workflow_runs.encryptedRecord': 1,
 } as const;
 
 export type AadComponent =

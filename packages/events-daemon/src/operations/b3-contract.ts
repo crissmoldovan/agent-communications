@@ -35,6 +35,7 @@ import {
   type LaneUnbindResultV1,
 } from '../domain/lanes.ts';
 import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { linearChangeTargetDisclosure } from '../domain/linear-change-target.ts';
 import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   isEventId,
@@ -2440,7 +2441,9 @@ function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
     const where =
       'folder' in target.find
         ? `a ${provider} session working in ${authorLiteral(target.find.folder)}`
-        : `the ${provider} session behind the agent window bound to lane ${target.find.lane}`;
+        : 'lane' in target.find
+          ? `the ${provider} session behind the agent window bound to lane ${target.find.lane}`
+          : `the ${provider} session this workflow's steps found or started`;
     const lines = [
       `${named}: each match's mapped fields and the context below go to ${where}, a coding agent there, which may act: ${SESSION_MODE_PREVIEW[target.mode] ?? target.mode}.`,
       // Security review of 0.33.0: what the relay keeps is outside Agent Comms' retention, and the person is told so.
@@ -2467,7 +2470,11 @@ function sessionDisclosure(document: ActivationDocumentV1): readonly string[] {
 function linearTargetLines(document: ActivationDocumentV1, linearConnected?: boolean): readonly string[] {
   if (document.kind !== 'rule') return [];
   const lines = document.rule.targets.flatMap((target) =>
-    target.kind === 'linear' ? [neutralise(linearTargetDisclosure(target)).text] : [],
+    target.kind === 'linear'
+      ? [neutralise(linearTargetDisclosure(target)).text]
+      : target.kind === 'linear-change'
+        ? [neutralise(linearChangeTargetDisclosure(target)).text]
+        : [],
   );
   // With no Linear key, activation could not ask Linear whether each team key and label name match their ids.
   if (lines.length > 0 && linearConnected === false)

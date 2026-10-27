@@ -16,6 +16,7 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { assertFlowChainAvailable } from '../domain/flow.ts';
 import { JUDGE_BUDGET_ID, type LayaEnablementInputs } from '../domain/judges.ts';
 import { assertJudgeKindEnabled, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
@@ -44,6 +45,7 @@ import {
 } from './replacements.ts';
 import type { DSourceRetentionTighteningDispatcher } from './retained-content-hooks.ts';
 import { addActiveRuleTargetReferences, removeActiveRuleTargetReferences } from './target-version-references.ts';
+import type { FlowActivationCheck } from './workflow/contracts.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
 
@@ -203,6 +205,12 @@ export interface ActivationRuntimeOptions {
   readonly assertLinearTargets?:
     | ((rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']) => Promise<unknown>)
     | undefined;
+  /**
+   * A workflow's activation checks beyond its own (workflows plan I4): each track's composition hands its own — the
+   * route step's candidates against the projects as they are now, among them — and `assertFlowActivation` runs them
+   * after the flow's.
+   */
+  readonly flowActivationChecks?: readonly FlowActivationCheck[] | undefined;
   /** Tests may inject strict reviewed fixture bytes; production always reads the daemon's shipped asset bytes. */
   readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
   /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
@@ -217,6 +225,21 @@ export interface ActivationRuntimeOptions {
 export type ActivationDeadlineFailpoint = (
   edge: 'before-claim-deadline' | 'before-baseline-deadline' | 'before-finalise-deadline',
 ) => void;
+
+/**
+ * The activation-time checks of a workflow's flow (workflows design §4.1, W34; plan B1): those that need the event
+ * service — a chained start while chains are not available — then each `FlowActivationCheck` a composition handed in,
+ * in order. Each throws `EventDomainError` to refuse; a workflow without a flow has none.
+ */
+export async function assertFlowActivation(
+  rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+  database: EventDatabase['database'],
+  checks: readonly FlowActivationCheck[] = [],
+): Promise<void> {
+  if (rule.flow === undefined) return;
+  assertFlowChainAvailable(rule);
+  for (const check of checks) await check(rule, database);
+}
 
 /** D2/D12 recoverable standing-authority activation for Gmail first activations, exact replacements and enable-all. */
 export class ActivationRuntime {
@@ -240,6 +263,7 @@ export class ActivationRuntime {
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
   readonly #assertSessionTargets: ActivationRuntimeOptions['assertSessionTargets'];
   readonly #assertLinearTargets: ActivationRuntimeOptions['assertLinearTargets'];
+  readonly #flowActivationChecks: readonly FlowActivationCheck[];
   readonly #layaInputs: LayaEnablementInputs;
   readonly #onJudgeKindEnabled: ActivationRuntimeOptions['onJudgeKindEnabled'];
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
@@ -273,6 +297,7 @@ export class ActivationRuntime {
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
     this.#assertSessionTargets = options.assertSessionTargets;
     this.#assertLinearTargets = options.assertLinearTargets;
+    this.#flowActivationChecks = options.flowActivationChecks ?? [];
     this.#layaInputs = {
       ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
       ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
@@ -289,6 +314,9 @@ export class ActivationRuntime {
     await this.#assertDocumentSecretsReady(document.rule);
     await this.#assertSessionTargets?.(document.rule);
     await this.#assertLinearTargets?.(document.rule);
+    // A workflow's flow, where lanes and its event names were checked (`versions.prepareRule`): what needs this
+    // service's state, then every composition's own check.
+    await assertFlowActivation(document.rule, this.#store.database, this.#flowActivationChecks);
     this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {

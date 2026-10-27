@@ -11,6 +11,7 @@ import {
   type TargetDocument,
   targetLane,
 } from './activation-documents.ts';
+import { assertFlowEventNameFree } from './flow.ts';
 import {
   assertCreatableLayaJudge,
   assertLayaJudgeKindAvailable,
@@ -248,6 +249,8 @@ export class ImmutableVersions {
       );
     }
     this.#assertLanesFree(rule);
+    // A workflow's events are named as it alone (W24), across active workflows, as a lane is.
+    assertFlowEventNameFree(this.#database, rule);
     return normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule }) as Extract<
       ActivationDocumentV1,
       { kind: 'rule' }

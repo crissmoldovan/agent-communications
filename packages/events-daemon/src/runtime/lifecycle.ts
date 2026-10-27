@@ -5,6 +5,7 @@ import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeAllQueueItems } from './queue-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export interface EventLifecycleStatus {
   readonly enabled: boolean;
@@ -92,6 +93,8 @@ export class EventLifecycle {
           "UPDATE activation_intents SET status = 'cancelled', updated_at = ? WHERE status IN ('pending', 'pending-completion')",
         )
         .run(now);
+      // Every workflow run ends with collection (workflows design W10): cancelled, its record purged.
+      cancelRunsInTransaction(database, { all: true }, 'DISABLED_ALL', now);
       database
         .prepare(
           'UPDATE event_settings SET enabled = 0, switch_generation = switch_generation + 1, changed_at = ? WHERE singleton = 1',

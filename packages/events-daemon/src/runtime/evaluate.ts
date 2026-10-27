@@ -16,6 +16,7 @@ import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
 import { keepSenderDomain, senderDomainLocation } from './sender-domains.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
+import { prepareFlowRun } from './workflow/runs.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 type EvaluationFenceRequest = Omit<ActiveDisclosableRequest, 'approvals' | 'config'>;
@@ -226,8 +227,13 @@ export class EventEvaluator {
 
     // The fence is intentionally before projection decryption, mapping and every persistent outbox mutation.
     let authorised: DisclosureSnapshot | undefined;
+    // Each bound target, or — a workflow whose flow delivers to none — the version and account alone (0.36 W1).
+    const bounds: readonly { readonly targetId?: string; readonly targetVersion?: number }[] =
+      rule.targets.length > 0
+        ? rule.targets.map((target) => ({ targetId: target.targetId, targetVersion: target.version }))
+        : [{}];
     try {
-      for (const target of rule.targets) {
+      for (const bound of bounds) {
         const snapshot = await this.#fence({
           database: this.#store.database,
           accountId: ingest.account_id,
@@ -235,8 +241,7 @@ export class EventEvaluator {
           ruleId: input.ruleId,
           ruleVersion: input.ruleVersion,
           switchGeneration: this.#switchGeneration(),
-          targetId: target.targetId,
-          targetVersion: target.version,
+          ...bound,
         });
         if (authorised !== undefined && authorised.switchGeneration !== snapshot.switchGeneration) {
           throw new CommsError('APPROVAL_VOID', 'the disclosure fence changed generations during target evaluation');
@@ -358,6 +363,17 @@ export class EventEvaluator {
                   newId: this.#newId,
                   data: evaluated.mapped.data,
                 });
+          // A match of a workflow with a flow is a run, its mapped values sealed here, outside the transaction, as a
+          // delivery's are (workflows design §5, W7).
+          const run =
+            evaluated === null || outcome !== 'matched'
+              ? undefined
+              : await prepareFlowRun({
+                  cipher: this.#cipher,
+                  rule,
+                  data: evaluated.mapped.data,
+                  createdAt: this.#now(),
+                });
           // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
           // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
           if (evaluated !== null)
@@ -401,6 +417,7 @@ export class EventEvaluator {
                       },
                     }),
                 deliveries,
+                ...(run === undefined ? {} : { run }),
                 settlement: {
                   reservationId: judged.reservationId,
                   actualInputTokens: judged.actualInputTokens,
@@ -459,6 +476,11 @@ export class EventEvaluator {
             newId: this.#newId,
             data: evaluated.mapped.data,
           });
+    // A match of a workflow with a flow is a run, its mapped values sealed outside the transaction (0.36 §5, W7).
+    const run =
+      evaluated === null
+        ? undefined
+        : await prepareFlowRun({ cipher: this.#cipher, rule, data: evaluated.mapped.data, createdAt: now });
     // Taint is part of the disclosure boundary. A failed flush retains the projection and creates no outbox row.
     if (evaluated !== null)
       await this.#taint.record({
@@ -508,6 +530,7 @@ export class EventEvaluator {
                 },
               }),
           deliveries,
+          ...(run === undefined ? {} : { run }),
         },
         this.#failpoint,
       ),

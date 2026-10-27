@@ -37,6 +37,10 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   // back into that record (so a busy session's next try sends the same words), and seals the queue item a match
   // becomes, through the same centrally leased cipher.
   'packages/events-daemon/src/runtime/session-dispatcher.ts',
+  // Workflows (0.36): a run's sealed record — its mapped values — is sealed when the match commits and opened for the
+  // step that reads it, both through the centrally leased cipher.
+  'packages/events-daemon/src/runtime/workflow/runs.ts',
+  'packages/events-daemon/src/runtime/workflow/context.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',

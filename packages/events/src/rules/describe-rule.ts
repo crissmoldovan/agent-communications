@@ -42,7 +42,9 @@ export interface DescribableTarget {
   readonly url?: unknown;
   readonly subscriberId?: string | undefined;
   /** An agent-session target's (0.33.0 design §3.5): where its session is found, and what happens when none is, or it is busy. */
-  readonly find?: { readonly folder?: string | undefined; readonly lane?: string | undefined } | undefined;
+  readonly find?:
+    | { readonly folder?: string | undefined; readonly lane?: string | undefined; readonly flow?: true | undefined }
+    | undefined;
   readonly ifNone?: string | undefined;
   readonly ifBusy?: string | undefined;
   readonly provider?: string | undefined;

@@ -78,6 +78,11 @@ export interface EventSchedulerOptions {
    * no longer authorises.
    */
   readonly workflowWork?: (() => Promise<void>) | undefined;
+  /**
+   * The workflow engine (workflows design §5): each tick it ends expired runs, whatever the switch, and — collection on
+   * and not paused — starts held runs and runs every step whose time has come, before deliveries go out.
+   */
+  readonly workflows?: { tick(): Promise<number> } | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly deliveryBatchSize?: number | undefined;
@@ -103,6 +108,7 @@ export class EventScheduler {
   readonly #whatsappVisibilityFence: WhatsAppVisibilityFence | undefined;
   readonly #writerQuiescer: WriterQuiescer;
   readonly #workflowWork: (() => Promise<void>) | undefined;
+  readonly #workflows: EventSchedulerOptions['workflows'];
   readonly #tickMs: number;
   readonly #pollIntervalMs: number;
   readonly #deliveryBatchSize: number;
@@ -133,6 +139,7 @@ export class EventScheduler {
     });
     this.#writerQuiescer = options.writerQuiescer;
     this.#workflowWork = options.workflowWork;
+    this.#workflows = options.workflows;
     if ('writerQuiescer' in options.cipher && this.#writerQuiescer !== options.cipher.writerQuiescer)
       throw new Error('the scheduler and record cipher must use the same owner writer quiescer');
     this.#tickMs = positiveInterval(options.tickMs ?? DEFAULT_TICK_MS, 'tick interval');
@@ -184,6 +191,7 @@ export class EventScheduler {
       this.#recordFailure('dispatch', 'workflow-events');
     }
 
+    await this.#workflows?.tick().catch(() => this.#recordFailure('workflow', 'owner'));
     const status = this.#lifecycle.status();
     if (!status.enabled || status.paused) return;
 
