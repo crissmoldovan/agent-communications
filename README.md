@@ -457,6 +457,12 @@ whatever the setting, `TAKEN_ELSEWHERE`. Turning it off again is approved, as ev
 says who has each message in closed words, never which session. `agentcomms takes list|release|give|keep` are yours: who
 has each message across every window, and ending, giving or keeping one. [More](packages/core/README.md).
 
+With the take required, the event service offers each message a rule delivers to a lane or a session to that window:
+no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is posted,
+and the window still takes it itself — its pointer or prompt says until when. The event service never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
+reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one handed back as
+needing you at once; the notice never says what they are, and the app lists them under Not taken.
+
 ### Agent sessions, through claude-stream
 
 From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working
