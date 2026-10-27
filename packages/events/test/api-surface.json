@@ -152,6 +152,7 @@
   "eventIdPreimage",
   "eventsFor",
   "expandPattern",
+  "flowOf",
   "foldForComparison",
   "formatPointer",
   "getPointer",

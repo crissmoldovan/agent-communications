@@ -1,5 +1,6 @@
 /** A workflow's flow (workflows design §4.1): its types, `checkFlow`, and the graph its arrows draw. */
 export { checkFlow } from './check.ts';
+export { flowOf } from './flow-of.ts';
 export { connectionAllowed, nextSteps, stepOrder, unreachableAfter } from './graph.ts';
 export {
   type Arrows,
