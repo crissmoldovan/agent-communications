@@ -21,6 +21,11 @@
  * prepares Switch on…, which is then approved in Terminal.
  * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
  * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
+ * `taking` is core's (`TAKING_VERSION`, 0.35.0): who has each message in Messages, the story's Take back, Give to… and
+ * I'll handle it, the Queue's Not taken, and Settings → Taking messages, each loosening approved in the app (in Terminal
+ * where nothing attests the app); an older core shows none of them.
+ * `search` is core's (`SEARCH_VERSION`, 0.35.0): Search on this machine — People, Search, and Settings → Search on this
+ * Mac, whose loosenings are approved in the app.
  * `workflows` is the events service's (`WORKFLOWS_VERSION`, 0.36.0): workflows checked, tried and drawn, their runs,
  * projects, Describe it, the step event catalogue, and subscribers given events and approved in the app.
  */
@@ -42,8 +47,13 @@ export const GATES = {
   bringUpToDate: '0.34.0',
   collectionSwitch: '0.34.0',
   accountAppApproval: '0.34.0',
+  taking: '0.35.0',
+  search: '0.35.0',
   workflows: '0.36.0',
 } as const;
+
+/** The first core that takes messages (`taking.rs`, `TAKING_VERSION`). */
+export const TAKING_VERSION: string = GATES.taking;
 
 export type Feature = keyof typeof GATES;
 

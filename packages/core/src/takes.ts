@@ -13,8 +13,10 @@
  *   `expired` sixty minutes after the holder's last act on the message, unless an approval prepared under the take
  *   still waits. Worked out by whoever meets the record, and written down under the lock by the next writer, at the
  *   time it happened.
- * - **Offers (T4):** a message offered to one window is reserved for it; it must still take it. Phase 1 writes offers
- *   only for the person's **Give to…**; a delivery's offer is the event service's, and comes later.
+ * - **Offers (T4):** a message offered to one window is reserved for it; it must still take it. The person's **Give
+ *   to…** offers one for fifteen minutes; a rule's delivery offers one through the event service (`offer`), while its
+ *   item waits for the window and for fifteen minutes after the window was handed it (`handOffer`). A delivery's offer
+ *   never takes a message from anyone, and the event service never writes `taken`.
  * - **What an agent learns (T7, T8):** closed words — `you`, `another session`, `the person`, `done`, and the closed
  *   hand-back reasons. Never another session's folder, client, key or session id, and never a hand-back's note, which an
  *   agent wrote and may have copied a sender's words into: notes are the person's, shown enveloped.
@@ -98,7 +100,10 @@ export type TakenElsewhereReason = 'HELD' | 'OFFERED' | 'DONE' | 'PERSON';
 
 /** T3: a take lapses this long after the holder's last act on the message (open question 2: sixty minutes). */
 export const TAKE_LEASE_MS: number = 60 * 60 * 1000;
-/** T4: an offer the person makes lasts this long (open question 3: fifteen minutes). */
+/**
+ * T4: an offer lasts this long (open question 3: fifteen minutes) — the person's from when they give it, a delivery's
+ * from when its window was handed the message.
+ */
 export const TAKE_OFFER_MS: number = 15 * 60 * 1000;
 /** §4: a record is deleted this many days after it last changed. */
 export const TAKE_RETENTION_DAYS = 30;
@@ -123,6 +128,8 @@ const PROCESS_ID = /^[0-9a-f]{1,64}$/;
 const APPROVAL_ID = /^ap_[A-Za-z0-9]{1,64}$/;
 const ISO_TIME = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
 const RECORD_FILE = /^[0-9a-f]{64}\.json$/;
+/** A rule's id as an offer records it: the person's own word, with no control character. */
+const OFFER_RULE = /^[^\p{Cc}]{1,100}$/u;
 const MAX_FOLDER = 4096;
 const MAX_WORD = 100;
 const MAX_VERSION = 64;
@@ -207,7 +214,7 @@ export interface TakeWindow {
 
 export interface TakeOffer {
   readonly to: TakeWindow;
-  /** When it lapses; null while the item it came with still waits for the window (a delivery's, later). */
+  /** When it lapses; null while the item a delivery's offer came with still waits for the window. */
   readonly until: string | null;
   readonly by: { readonly rule: string; readonly delivery: string } | TakePerson;
 }
@@ -776,6 +783,37 @@ export function checkedTakeRef(ref: TakeMessageRef): TakeMessageRef {
     });
   }
   return { channel: ref.channel, accountId: ref.accountId, id: ref.id };
+}
+
+/** The window an offer reserves a message for, as a record keeps it: by a session id or a key, or refused as USAGE. */
+function checkedWindow(window: TakeWindow): TakeWindow {
+  const kept = windowOf(window);
+  if (kept === null) {
+    throw new CommsError('USAGE', 'an offer names its window by a Claude Code session id or an activity session key');
+  }
+  return kept;
+}
+
+/** The rule and delivery a delivery's offer came with, as ids, or refused as USAGE. */
+function checkedSource(by: { readonly rule: string; readonly delivery: string }): {
+  readonly rule: string;
+  readonly delivery: string;
+} {
+  if (typeof by?.rule !== 'string' || !OFFER_RULE.test(by.rule)) {
+    throw new CommsError('USAGE', 'an offer names the rule it came with by its id');
+  }
+  if (typeof by.delivery !== 'string' || by.delivery.length > MAX_WORD || !TAKE_ID_PATTERN.test(by.delivery)) {
+    throw new CommsError('USAGE', 'an offer names the delivery it came with by its id');
+  }
+  return { rule: by.rule, delivery: by.delivery };
+}
+
+/** Whether an offer is the waiting one `delivery` made: no time yet, its item still waiting for the window. */
+function waitingOfferOf(record: TakeRecord | null, delivery: string): TakeOffer | null {
+  if (record === null || record.state !== 'offered' || record.offer === null) return null;
+  const offer = record.offer;
+  if ('person' in offer.by || offer.by.delivery !== delivery || offer.until !== null) return null;
+  return offer;
 }
 
 /** A note as a record keeps it: trimmed, at most 200 characters, or refused as USAGE when longer. */
@@ -1358,6 +1396,164 @@ export class TakeStore {
       },
       'replace',
     );
+  }
+
+  // ── A delivery's offers: the event service's (T4, §8) ──────────────────────────────────────────────────────────
+
+  /**
+   * T4: a rule's delivery offers a message to the window it was delivered to — a lane's bound window, or the session its
+   * prompt was posted to. While the offer lasts it is exclusive: any other session's take or act is refused, and the
+   * window must still take the message itself. `until` is null while the item waits for the window; `handOffer` starts
+   * its fifteen minutes when the window is handed it. The event service writes it best-effort, after its delivery
+   * commits.
+   *
+   * It never takes a message from anyone: one a session holds or has done, one the person keeps, one already offered —
+   * by the person or by another delivery — or one whose record cannot be read is left as it is (`changed: false`), and
+   * so is this delivery's own offer, made before. Only an open message — nobody's yet, handed back, released or lapsed —
+   * is offered. A holder whose parent has gone is looked at first, as when another session meets the take (T3).
+   */
+  async offer(
+    message: TakeMessage,
+    window: TakeWindow,
+    by: { readonly rule: string; readonly delivery: string },
+    until: string | null,
+  ): Promise<{ record: TakeRecord | null; changed: boolean }> {
+    const checked: TakeMessage = {
+      ...checkedTakeRef(message),
+      thread: message.thread === null ? null : (idOf(message.thread) ?? null),
+    };
+    const to = checkedWindow(window);
+    const source = checkedSource(by);
+    if (until !== null && timeOf(until) === undefined) {
+      throw new CommsError('USAGE', 'an offer lasts until a time, or while its item waits (null)');
+    }
+    try {
+      return await this.#update<{ record: TakeRecord | null; changed: boolean }>(checked, true, (current, at) => {
+        if (current !== null && current.state !== 'open')
+          return { next: current, result: { record: current, changed: false } };
+        const record = current ?? blank(checked, at);
+        const next: TakeRecord = {
+          ...record,
+          state: 'offered',
+          holder: null,
+          offer: { to, until, by: source },
+          takenAt: null,
+          lastActAt: null,
+          pins: [],
+          history: withLine(record, {
+            at,
+            kind: 'offered',
+            by: 'service',
+            windowKey: to.key,
+            window: { sessionId: to.sessionId, folder: to.folder, client: to.client },
+          }),
+          updatedAt: at,
+        };
+        return { next, result: { record: next, changed: true } };
+      });
+    } catch (error) {
+      // A record that cannot be read counts as held by another session: the offer leaves it as it is.
+      if (error instanceof CommsError && error.code === 'TAKEN_ELSEWHERE') return { record: null, changed: false };
+      throw error;
+    }
+  }
+
+  /**
+   * T4: the window `delivery` offered a message to was handed it — woken for it, or its prompt posted — and the offer
+   * now lasts until `until`, fifteen minutes on. Only that delivery's offer, and only while it still waits: an offer
+   * handed over once is not moved again. Anything else is left as it is, and a message with no record makes none.
+   */
+  async handOffer(
+    ref: TakeMessageRef,
+    delivery: string,
+    until: string,
+  ): Promise<{ record: TakeRecord | null; changed: boolean }> {
+    if (timeOf(until) === undefined) throw new CommsError('USAGE', 'an offer lasts until a time');
+    return this.#onWaitingOffer(ref, delivery, (current, offer, at) => ({
+      ...current,
+      offer: { ...offer, until },
+      updatedAt: at,
+    }));
+  }
+
+  /**
+   * T4: the item `delivery`'s offer waited with no longer waits for its window — it was closed, it is gone, or its lane
+   * is bound to another window now — so the offer lapses at once, and the message is open: the history says `expired`,
+   * by the service. Only that delivery's offer, and only while it still waits; an offer handed over lapses at its time.
+   */
+  async lapseOffer(ref: TakeMessageRef, delivery: string): Promise<{ record: TakeRecord | null; changed: boolean }> {
+    return this.#onWaitingOffer(ref, delivery, (current, offer, at) =>
+      opened(current, { at, kind: 'expired', by: 'service', windowKey: offer.to.key }, at),
+    );
+  }
+
+  async #onWaitingOffer(
+    ref: TakeMessageRef,
+    delivery: string,
+    change: (current: TakeRecord, offer: TakeOffer, at: string) => TakeRecord,
+  ): Promise<{ record: TakeRecord | null; changed: boolean }> {
+    const path = this.#path(ref);
+    // Nothing recorded: nothing was offered, and nothing is made to say so.
+    if ((await this.#readFile(path)) === null) return { record: null, changed: false };
+    try {
+      return await this.#update<{ record: TakeRecord | null; changed: boolean }>(ref, false, (current, at) => {
+        const offer = waitingOfferOf(current, delivery);
+        if (current === null || offer === null) return { next: current, result: { record: current, changed: false } };
+        const next = change(current, offer, at);
+        return { next, result: { record: next, changed: true } };
+      });
+    } catch (error) {
+      if (error instanceof CommsError && error.code === 'TAKEN_ELSEWHERE') return { record: null, changed: false };
+      throw error;
+    }
+  }
+
+  /**
+   * §8, T3: the event service's sweep writes every lapse down, under each record's lock, at the time it happened —
+   * `ended` for a take whose holder's parent has gone, `expired` for one past its lease and for an offer past its time —
+   * so the story, and "nobody took it", count from then rather than from whenever someone next meets the record. A take
+   * still held, an offer still waiting for its window, and the person's keep stand. Returns how many of each it wrote.
+   * Each holder's parent is looked at once per sweep, and a record that cannot be written now is left for the next.
+   */
+  async lapse(): Promise<{ ended: number; expired: number }> {
+    const counted = { ended: 0, expired: 0 };
+    const probing = new Map<string, Promise<'alive' | 'gone' | 'unknown'>>();
+    let accounts: string[];
+    try {
+      accounts = (await readdir(this.directory)).filter((name) => ACCOUNT_ID.test(name));
+    } catch {
+      return counted;
+    }
+    for (const accountId of accounts.sort()) {
+      let files: string[];
+      try {
+        files = (await readdir(join(this.directory, accountId))).filter((name) => RECORD_FILE.test(name));
+      } catch {
+        continue;
+      }
+      for (const file of files.sort()) {
+        const path = join(this.directory, accountId, file);
+        const found = await this.#readFile(path);
+        if (found === null || found === 'unreadable') continue;
+        // Only a session's take, or an offer with a time, can lapse by itself.
+        const may =
+          (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) ||
+          (found.state === 'offered' && found.offer?.until !== null);
+        if (!may) continue;
+        await withFileLock(`${path}.lock`, async () => {
+          const again = await this.#readFile(path);
+          if (again === null || again === 'unreadable') return;
+          const settled = await this.#settle(again, probing);
+          if (!settled.changed) return;
+          await this.#write(path, settled.record);
+          if (again.state === 'open' || settled.record.state !== 'open') return;
+          const kind = settled.record.history.at(-1)?.kind;
+          if (kind === 'ended') counted.ended += 1;
+          else if (kind === 'expired') counted.expired += 1;
+        }).catch(() => undefined);
+      }
+    }
+    return counted;
   }
 
   /**

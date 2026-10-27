@@ -6,6 +6,10 @@ import { ALIAS_PATTERN } from '../../../../packages/core/src/config.ts';
 import { APPROVAL_ID_PATTERN } from '../../../../packages/core/src/ids.ts';
 import { NAME_PATTERN } from '../../../../packages/core/src/name-grammar.ts';
 import * as label from '../../../../packages/core/src/operations/label.ts';
+import { searchQueryText } from '../../../../packages/core/src/operations/search.ts';
+import { SEARCH_HANDLE } from '../../../../packages/core/src/search/capture.ts';
+import { searchEndpoint } from '../../../../packages/core/src/search/endpoint-rule.ts';
+import { PERSON_ID } from '../../../../packages/core/src/search/store.ts';
 import grammar from '../../grammar.json';
 import {
   isAccountName,
@@ -14,11 +18,17 @@ import {
   isConversation,
   isDeliveryId,
   isLaneName,
+  isPersonId,
+  isPersonLabel,
   isPlainValue,
   isQueueItemId,
   isRuleId,
+  isSearchHandle,
+  isSearchModelAddress,
+  isSearchQuery,
   isSessionKey,
   isWindowId,
+  refusedInSearchText,
 } from '../grammar.ts';
 import { formatActs } from '../ipc.ts';
 
@@ -316,6 +326,102 @@ describe('the grammars', () => {
     // The Rust side tries the same words (`grammar.rs`, `delivery_ids_are_a_word_of_letters_digits_underscores_…`).
     const rust = readFileSync(fileURLToPath(new URL('../../src-tauri/src/grammar.rs', import.meta.url)), 'utf8');
     expect(rust).toContain('pub fn delivery_id(value: &str) -> bool');
+  });
+
+  it("Search's ids, handles and model address are core's (0.35.0, design 2026-10-26-local-search §8)", () => {
+    const people = [
+      'p_K19FVJ41QS08HPWN3XC3RQ2K7B',
+      'p_0123456789ABCDEFGHJKMNPQRS',
+      'p_0123456789ABCDEFGHJKMNPQR',
+      'p_0123456789ABCDEFGHJKMNPQRST',
+      'p_0123456789ABCDEFGHIJKMNPQR',
+      'p_0123456789abcdefghjkmnpqrs',
+      'P_0123456789ABCDEFGHJKMNPQRS',
+      'p_',
+      ...CORPUS,
+    ];
+    for (const value of people) expect(isPersonId(value), JSON.stringify(value)).toBe(PERSON_ID.test(value));
+    const handles = [
+      'email:david@example.com',
+      'email:first.last+tag@example.co.uk',
+      'email:dávid@exämple.ro',
+      'slack:T0ACME/U0DAVID',
+      'slack:E0GRID/W0ABC',
+      'email:',
+      'email:david',
+      'email:a@b@c',
+      'email:<david@example.com>',
+      'email:david@example.com ',
+      'email:da vid@example.com',
+      'slack:T0ACME',
+      'slack:t0acme/u0david',
+      'slack:T0ACME/U0DAVID/x',
+      'david@example.com',
+      ...CORPUS,
+    ];
+    for (const value of handles) expect(isSearchHandle(value), JSON.stringify(value)).toBe(SEARCH_HANDLE.test(value));
+    const takes = (value: string): boolean => {
+      try {
+        searchEndpoint(value);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (const value of [
+      'http://127.0.0.1:11434',
+      'http://127.0.0.1:11434/',
+      'http://[::1]:8080',
+      'http://127.0.0.1:65535',
+      'http://127.0.0.1:1',
+      'http://127.0.0.1',
+      'http://127.0.0.1:0',
+      'http://127.0.0.1:65536',
+      'http://127.0.0.1:011434',
+      'http://localhost:11434',
+      'https://127.0.0.1:11434',
+      'http://192.168.1.20:11434',
+      'http://[::2]:11434',
+      'http://127.0.0.1:11434/v1/systemone',
+      'http://127.0.0.1:11434/api/embed',
+      'http://user@127.0.0.1:11434',
+      'http://127.0.0.1:11434?x',
+      'http://127.0.0.1:11434#x',
+      '',
+    ]) {
+      expect(isSearchModelAddress(value), JSON.stringify(value)).toBe(takes(value));
+    }
+  });
+
+  it("a search's words and a person's label refuse exactly the characters core refuses in them, at every code point", () => {
+    // Core refuses a C0 control (a line break and a tab among them) and anything `chars.ts` calls dangerous.
+    const coreTakes = (value: string): boolean => {
+      try {
+        searchQueryText(value);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    for (let code = 0; code <= 0x10ffff; code += 1) {
+      if (code >= 0xd800 && code <= 0xdfff) continue;
+      const char = String.fromCodePoint(code);
+      if (refusedInSearchText(char) === coreTakes(`a${char}b`)) {
+        throw new Error(`U+${code.toString(16)}: the app and core disagree`);
+      }
+    }
+    for (const good of ['invoices', '-draft', '--json', 'factură', ' invoices ', 'é'.repeat(500)]) {
+      expect(isSearchQuery(good), good).toBe(true);
+      expect(coreTakes(good), good).toBe(true);
+    }
+    for (const bad of ['', '   ', 'a\nb', 'a\tb', 'a\u202eb', 'a\u200bb', 'a\u2028b', 'é'.repeat(501)]) {
+      expect(isSearchQuery(bad), JSON.stringify(bad)).toBe(false);
+      expect(coreTakes(bad), JSON.stringify(bad)).toBe(false);
+    }
+    for (const good of ['David', 'David Park', '-dash', 'd'.repeat(80)]) expect(isPersonLabel(good), good).toBe(true);
+    for (const bad of ['', ' David', 'David ', 'Da\nvid', 'Da\u202evid', 'd'.repeat(81)]) {
+      expect(isPersonLabel(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it('the Rust side reads the same file', () => {

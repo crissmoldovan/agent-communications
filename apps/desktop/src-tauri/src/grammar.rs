@@ -6,9 +6,12 @@
 //! lanes' (0.31.0, design 2026-10-25-routing §3.1 and B1): a lane's name, and the id of the agent window bound to one.
 //! One is a delivery's (0.32.0, owner feedback §3.5): its id, as the Deliveries screen opens, retries or drops one.
 //! Two are judge setup's (0.32.0, owner decision 2026-10-26): a local model server's URL on this machine, and its
-//! model's name, as `judge setup local-endpoint` takes them. Five are workflows' (0.36.0, plan 2026-10-27-workflows-0360
-//! I7): a run's id, a project's id, a step's id, an outcome's word, and a catalogue example a workflow is tried on; a
-//! subscriber's id is a rule id's grammar.
+//! model's name, as `judge setup local-endpoint` takes them. Five are Search's (0.35.0, design 2026-10-26-local-search
+//! §8), each core's own: a person's id and a handle (`search/store.ts`, `search/capture.ts`), the local model server's
+//! address (`search/endpoint-rule.ts`), and a search's words and a person's label, free text core refuses only some
+//! characters in (`operations/search.ts`). Five are workflows' (0.36.0, plan 2026-10-27-workflows-0360 I7): a run's
+//! id, a project's id, a step's id, an outcome's word, and a catalogue example a workflow is tried on; a subscriber's
+//! id is a rule id's grammar.
 
 use regex::Regex;
 use serde::Deserialize;
@@ -41,6 +44,19 @@ struct Source {
     step_id: String,
     outcome_word: String,
     catalogue_example: String,
+    person_id: String,
+    search_handle: String,
+    search_model_address: String,
+    search_text: SearchTextSource,
+}
+
+/// A search's words and a person's label, as `grammar.json` gives their rules (0.35.0).
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SearchTextSource {
+    query_limit: usize,
+    label_limit: usize,
+    refused: Vec<[u32; 2]>,
 }
 
 struct Grammar {
@@ -64,6 +80,12 @@ struct Grammar {
     step_id: Regex,
     outcome_word: Regex,
     catalogue_example: Regex,
+    person_id: Regex,
+    search_handle: Regex,
+    search_model_address: Regex,
+    query_limit: usize,
+    label_limit: usize,
+    refused_in_text: Vec<[u32; 2]>,
 }
 
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
@@ -92,6 +114,12 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         step_id: pattern(&source.step_id),
         outcome_word: pattern(&source.outcome_word),
         catalogue_example: pattern(&source.catalogue_example),
+        person_id: pattern(&source.person_id),
+        search_handle: pattern(&source.search_handle),
+        search_model_address: pattern(&source.search_model_address),
+        query_limit: source.search_text.query_limit,
+        label_limit: source.search_text.label_limit,
+        refused_in_text: source.search_text.refused,
     }
 });
 
@@ -243,6 +271,55 @@ pub fn subscriber_id(value: &str) -> bool {
     rule_id(value)
 }
 
+/// A person's id, as core makes one (0.35.0, design 2026-10-26-local-search S5): `p_` and 26 of Crockford's letters.
+pub fn person_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.person_id.is_match(value)
+}
+
+/// A handle, as `search people` lists one and `search unlink` takes it: `email:<address>` or `slack:<team>/<user>`.
+pub fn search_handle(value: &str) -> bool {
+    plain(value) && GRAMMAR.search_handle.is_match(value)
+}
+
+/// Search's local model server (0.35.0, S9), as `search model set` takes it: plain HTTP to the literal `127.0.0.1` or
+/// `[::1]`, a port from 1 to 65535, and no path but `/`. Core checks it again, and calls it only at that address.
+pub fn search_model_address(value: &str) -> bool {
+    plain(value)
+        && GRAMMAR
+            .search_model_address
+            .captures(value)
+            .and_then(|parts| parts.get(1))
+            .and_then(|port| port.as_str().parse::<u32>().ok())
+            .is_some_and(|port| (1..=65_535).contains(&port))
+}
+
+/// Whether core refuses `c` in a search's words or a person's label: a control (a line break and a tab among them),
+/// DEL, a C1 control, or one of the invisible and bidi characters `chars.ts` names.
+fn refused_in_text(c: char) -> bool {
+    let code = u32::from(c);
+    GRAMMAR
+        .refused_in_text
+        .iter()
+        .any(|[from, to]| (*from..=*to).contains(&code))
+}
+
+/// A search's words (0.35.0, §8): 1 to 500 characters, not only spaces, and none core refuses. It may start with `-`:
+/// the call passes it as one word after `--`, which no option is read past.
+pub fn search_query(value: &str) -> bool {
+    !value.trim().is_empty()
+        && value.chars().count() <= GRAMMAR.query_limit
+        && !value.chars().any(refused_in_text)
+}
+
+/// The name a person gives someone (0.35.0, `search label`): 1 to 80 characters, no space at either end, and none core
+/// refuses. Passed after `--`, as a search's words are.
+pub fn person_label(value: &str) -> bool {
+    !value.is_empty()
+        && value.trim() == value
+        && value.chars().count() <= GRAMMAR.label_limit
+        && !value.chars().any(refused_in_text)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -378,6 +455,118 @@ mod tests {
         for bad in ["", "-sub", "--json", "sub 1", "sub/1", "_sub"] {
             assert!(!subscriber_id(bad), "{bad:?}");
         }
+    }
+
+    /// Search's grammars (0.35.0): core's person ids, handles and model address, and its free text's refusals.
+    #[test]
+    fn search_s_words_are_core_s() {
+        for good in [
+            "p_0123456789ABCDEFGHJKMNPQRS",
+            "p_K19FVJ41QS08HPWN3XC3RQ2K7B",
+        ] {
+            assert!(person_id(good), "{good}");
+        }
+        for bad in [
+            "",
+            "p_",
+            "p_0123456789ABCDEFGHJKMNPQR",
+            "p_0123456789ABCDEFGHJKMNPQRST",
+            "p_0123456789ABCDEFGHIJKMNPQR",
+            "p_0123456789abcdefghjkmnpqrs",
+            "P_0123456789ABCDEFGHJKMNPQRS",
+            "-p_0123456789ABCDEFGHJKMNPQR",
+            "p_0123456789ABCDEFGHJKMNPQRS --json",
+        ] {
+            assert!(!person_id(bad), "{bad:?}");
+        }
+        for good in [
+            "email:david@example.com",
+            "email:first.last+tag@example.co.uk",
+            "slack:T0ACME/U0DAVID",
+            "slack:E0GRID/W0ABC",
+        ] {
+            assert!(search_handle(good), "{good}");
+        }
+        for bad in [
+            "",
+            "david@example.com",
+            "email:",
+            "email:david",
+            "email:a@b@c",
+            "email:<david@example.com>",
+            "email:david@example.com\n",
+            "slack:T0ACME",
+            "slack:t0acme/u0david",
+            "slack:T0ACME/U0DAVID/x",
+            "-email:david@example.com",
+            "email:david@example.com --json",
+        ] {
+            assert!(!search_handle(bad), "{bad:?}");
+        }
+        for good in [
+            "http://127.0.0.1:11434",
+            "http://127.0.0.1:11434/",
+            "http://[::1]:8080",
+        ] {
+            assert!(search_model_address(good), "{good}");
+        }
+        for bad in [
+            "",
+            "http://127.0.0.1",
+            "http://127.0.0.1:0",
+            "http://127.0.0.1:65536",
+            "http://localhost:11434",
+            "https://127.0.0.1:11434",
+            "http://192.168.1.20:11434",
+            "http://127.0.0.1:11434/v1/systemone",
+            "http://127.0.0.1:11434/api/embed",
+            "http://user@127.0.0.1:11434",
+            "http://127.0.0.1:11434?x",
+        ] {
+            assert!(!search_model_address(bad), "{bad:?}");
+        }
+        for good in [
+            "invoices",
+            "what did David ask about invoices?",
+            "-draft",
+            "--json",
+            "factură",
+            " invoices ",
+            "x",
+        ] {
+            assert!(search_query(good), "{good:?}");
+        }
+        let longest = "é".repeat(500);
+        assert!(search_query(&longest));
+        for bad in [
+            "",
+            "   ",
+            "invoice\nBcc",
+            "invoice\tx",
+            "invoice\r",
+            "x\u{7f}",
+            "x\u{85}",
+            "x\u{202e}y",
+            "x\u{200b}y",
+            "x\u{2028}y",
+            "x\u{fe0f}",
+            "x\u{feff}",
+            "x\u{ad}y",
+            "x\u{34f}y",
+            "x\u{e0041}",
+            "x\u{1b}[31m",
+        ] {
+            assert!(!search_query(bad), "{bad:?}");
+        }
+        assert!(!search_query(&"é".repeat(501)));
+        for good in ["David", "David Park", "-dash", "Ana-Maria"] {
+            assert!(person_label(good), "{good:?}");
+        }
+        for bad in ["", " David", "David ", "Da\nvid", "Da\u{202e}vid"] {
+            assert!(!person_label(bad), "{bad:?}");
+        }
+        assert!(person_label(&"d".repeat(80)));
+        assert!(!person_label(&"d".repeat(81)));
     }
 
     /// Judge setup's two words (0.32.0): a URL on this machine, and a model's name; nothing else passes.

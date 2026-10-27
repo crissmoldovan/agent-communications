@@ -11,6 +11,7 @@ import type { LaneWindowIdentity } from '../../src/domain/lanes.ts';
 import { createEventsMcpServer } from '../../src/mcp/server.ts';
 import { type EventOwnerOptions, startEventOwner } from '../../src/runtime/owner.ts';
 import { eventPaths } from '../../src/runtime/paths.ts';
+import type { TakeSweepReport } from '../../src/runtime/take-offers.ts';
 import { openEventDatabase } from '../../src/store/database.ts';
 import { selectEventSecretStore } from '../../src/store/event-secrets.ts';
 import { type RawClient, type RawMessage, rawClient, resultText } from './raw-mcp.ts';
@@ -139,6 +140,8 @@ export interface LaneHarness {
   readonly control: EventControlClient;
   readonly mailbox: Mailbox;
   readonly tick: () => Promise<void>;
+  /** Runs the owner's "nobody took it" sweep now (taking messages §8). */
+  readonly sweepTakes: () => Promise<TakeSweepReport>;
   readonly window: (identity: LaneWindowIdentity) => Promise<RawClient>;
   readonly approve: (ruleVersion: number) => Promise<void>;
   readonly openCount: () => Promise<number>;
@@ -246,6 +249,7 @@ export async function withLaneOwner(
     control,
     mailbox,
     tick: () => owner.tick(),
+    sweepTakes: () => owner.sweepTakes(),
     async window(identity) {
       const events = await createEventsMcpServer({ stateDir, window: async () => identity, progressIntervalMs: 50 });
       const [client, server] = InMemoryTransport.createLinkedPair();

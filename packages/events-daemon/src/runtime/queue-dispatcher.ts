@@ -19,6 +19,7 @@ import {
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
 import { EventExpiry } from './expiry.ts';
+import type { SessionOfferPort } from './take-offers.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
@@ -54,6 +55,11 @@ export interface QueueDispatcherOptions {
   readonly newItemId?: ((now: number) => string) | undefined;
   /** Told after an item commits, so a lane's watches and long-polls settle at once (routing §3.4); never throws. */
   readonly onAppended?: (() => void) | undefined;
+  /**
+   * Taking messages T4: after an item commits, and before the lane is told, a lane item's message is offered to the
+   * window bound to that lane. Best-effort: an offer that cannot be written never fails the delivery.
+   */
+  readonly offers?: Pick<SessionOfferPort, 'offerLaneItem'> | undefined;
 }
 
 /**
@@ -75,6 +81,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
   readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
   readonly #newItemId: (now: number) => string;
   readonly #onAppended: (() => void) | undefined;
+  readonly #offers: Pick<SessionOfferPort, 'offerLaneItem'> | undefined;
 
   constructor(options: QueueDispatcherOptions) {
     this.#store = options.store;
@@ -89,6 +96,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
     this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
     this.#newItemId = options.newItemId ?? newQueueItemId;
     this.#onAppended = options.onAppended;
+    this.#offers = options.offers;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
@@ -197,6 +205,8 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
       throw error;
     }
     if (appended?.state === 'delivered') {
+      // The offer is written once the item is committed, and before the lane's window is woken for it (taking §8).
+      await this.#offers?.offerLaneItem(deliveryId).catch(() => undefined);
       try {
         this.#onAppended?.();
       } catch {

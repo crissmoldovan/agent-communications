@@ -9,6 +9,13 @@ import { InMemoryTransport } from '@modelcontextprotocol/server';
 import { asV2, stateOf } from '../src/approval-stored.ts';
 import { gatedChange } from '../src/change-flow.ts';
 import type { InboxConfig } from '../src/config.ts';
+import {
+  type ConnectionRecord,
+  connectionKeyHash,
+  newConnectionId,
+  newConnectionKey,
+  withConnection,
+} from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { DESKTOP_RELEASE_IDENTIFIER } from '../src/desktop-origin.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -756,4 +763,54 @@ test('`update --app-approval` applies the update the app prepared when the app s
     (line) => line.operation === 'change.approve' && line.outcome === 'ok',
   );
   assert.equal(approved?.approvedBy, 'desktop-app');
+});
+
+test('D19: a Gmail reached only through an MCP connection is updated — its launcher switched — and no client config is edited', async () => {
+  const m = machine();
+  makeRuntime(m, OLD);
+  await writeLauncher(m.dataDir, 'gmail', process.execPath);
+  await switchPointer(m.dataDir, 'gmail', managedRuntimeDir(m.dataDir, GMAIL, OLD));
+  // A connection whose gateway starts Gmail, pinned to the mailbox: no app's config has a Gmail entry at all.
+  const record: ConnectionRecord = {
+    id: newConnectionId(),
+    name: 'Work — Claude Code',
+    app: 'claude-code',
+    where: { scope: 'user', folder: null, configDir: null },
+    entry: { name: 'agentcomms', path: join(m.home, '.claude.json') },
+    launcher: 'managed',
+    parts: [{ server: 'gmail', pin: { id: INBOX.id, alias: 'acme/gmail' } }],
+    keyHash: connectionKeyHash(newConnectionKey()),
+    keyIssuedAt: '2026-10-27T09:00:00.000Z',
+    createdAt: '2026-10-27T09:00:00.000Z',
+    revokedAt: null,
+  };
+  await m.core.config.update((config) => ({ ...config, connections: withConnection(config, { put: record }) }), {
+    consent: { kind: 'loosening-consent', paths: ['connections["Work — Claude Code"]'] },
+  });
+  const { launcher } = launcherPaths(m.dataDir, 'gmail');
+  const deps = fakes(m, LATEST);
+  const { ok, close } = await connect(m, deps);
+  try {
+    const check = (await ok('comms_update', { check: true })) as unknown as UpdateReport;
+    assert.deepEqual(
+      check.behind
+        .filter((item) => item.kind === 'registration')
+        .map((item) => [item.client, item.name, item.version, item.launches, item.updatable]),
+      [['claude-code', 'agentcomms', OLD, launcher, true]],
+      'the part counts as a registration of Gmail on its launcher',
+    );
+    const first = await ok('comms_update', {});
+    const done = await ok('comms_update', { approvalId: first.approvalId });
+    const result = done.result as unknown as UpdateResult;
+    assert.equal(result.status, 'updated', JSON.stringify(result.steps));
+    assert.deepEqual(await readPointer(m.dataDir, 'gmail'), {
+      current: managedRuntimeDir(m.dataDir, GMAIL, LATEST),
+      previous: managedRuntimeDir(m.dataDir, GMAIL, OLD),
+    });
+    // Started as the gateway starts it: the launcher, with the part's own pin.
+    assert.deepEqual(startedWith(m, LATEST).at(-1)?.slice(-3), ['mcp', '--inbox', 'acme/gmail']);
+    assert.equal(existsSync(join(m.home, '.claude.json')), false, 'no client configuration was written');
+  } finally {
+    await close();
+  }
 });

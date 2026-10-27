@@ -32,7 +32,8 @@ impl Call {
     /// prepared (0.34.0), `eventsRuleApprove` the rule activation `eventsRuleEnable` came back with, for the same digest
     /// (0.33.0), `eventsCollectionApprove` the switching on `eventsEnableAll` came back with (0.34.0), and
     /// `eventsSubscriberApprove` the subscription `eventsSubscriberEnable` came back with (0.36.0); and a label change
-    /// with `appApproval` the same change without it (0.34.0, `label`). None for every other call.
+    /// with `appApproval` the same change without it (0.34.0, `label`), as a taking change's is (0.35.0, `taking`).
+    /// None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -92,8 +93,12 @@ impl Call {
                     style: *style,
                 },
             )),
-            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
-            _ => self.answers_label_approval(),
+            // A label change (0.34.0, Your agents), a taking change or one of Search's loosenings (0.35.0): the same
+            // change, without the approval the app prepared it for.
+            _ => self
+                .answers_label_approval()
+                .or_else(|| self.answers_taking_approval())
+                .or_else(|| self.answers_search_approval()),
         }
     }
 }

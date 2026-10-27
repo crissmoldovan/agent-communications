@@ -1,6 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { realpath } from 'node:fs/promises';
-import { type ApprovalStore, CommsError, type ConfigStore, newBoundary, wrapUntrusted } from '@agentcomms/core';
+import {
+  type ApprovalStore,
+  CommsError,
+  type ConfigStore,
+  clockTime,
+  newBoundary,
+  wrapUntrusted,
+} from '@agentcomms/core';
 import { buildSessionPrompt, type JsonValue, type ResolvedContextPart } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
 import { newQueueItemId, parseQueueItemContent } from '../domain/queue-target.ts';
@@ -29,6 +36,7 @@ import { isPromptableSession, RelayError } from './relay-client.ts';
 import type { ContextGenerator } from './session-context.ts';
 import { fileStillAllowed, resolveContextParts } from './session-context.ts';
 import { enqueueSessionDeliveryInTransaction, type SessionQueueFollower } from './session-queue.ts';
+import type { PlannedOffer, SessionOfferPort } from './take-offers.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
 
@@ -39,6 +47,11 @@ import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
  * as `startId`, so a retry makes no second run. A busy session (409, or a live run) puts the delivery in the busy
  * queue, or leaves it in the Queue, as the target says; a lane whose window the relay does not run falls back to 0.31's
  * lane wake, the item a lane queue item as today, and the delivery says so (`LEFT_IN_LANE`).
+ *
+ * Taking messages T4: once a delivery commits, the session its prompt was posted to is offered the message, by the
+ * relay's `nativeSessionId` for it (`#offerAfterCommit`), and the prompt's fixed frame said so, with the offer's time; a
+ * lane fallback item is offered to the lane's window. Best-effort: an offer that cannot be written never fails a
+ * delivery, and the event service never takes a message for a session.
  */
 
 /** How a session delivery ended when it did not reach a session: the Queue's words, never an error. */
@@ -103,6 +116,8 @@ export interface SessionDispatcherOptions {
   readonly newItemId?: ((now: number) => string) | undefined;
   /** Told after a fallback item commits, so a lane's watches settle at once; never throws. */
   readonly onAppended?: (() => void) | undefined;
+  /** Taking messages T4: the offers a delivery makes, planned before its prompt and written after it commits. */
+  readonly offers?: SessionOfferPort | undefined;
 }
 
 export class SessionDispatcher implements DeliveryDispatchHandler {
@@ -120,6 +135,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
   readonly #whatsapp: SessionDispatcherOptions['whatsappVisibilityFence'];
   readonly #newItemId: (now: number) => string;
   readonly #onAppended: (() => void) | undefined;
+  readonly #offers: SessionOfferPort | undefined;
 
   constructor(options: SessionDispatcherOptions) {
     this.#store = options.store;
@@ -137,6 +153,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     this.#whatsapp = options.whatsappVisibilityFence;
     this.#newItemId = options.newItemId ?? newQueueItemId;
     this.#onAppended = options.onAppended;
+    this.#offers = options.offers;
   }
 
   async dispatch(deliveryId: string): Promise<DispatchResult> {
@@ -268,7 +285,12 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     const startId = sessionStartId(delivery.claim.id);
     // A start whose answer was lost made its run already: found by its startId, it is never made twice.
     const made = snapshot.runs.find((run) => run.startId === startId);
-    if (made !== undefined) return this.#delivered(delivery, made.id);
+    if (made !== undefined) {
+      // The run an earlier try made: its offer runs from when that run was made, as its prompt said.
+      const madeAt = Date.parse(made.createdAt);
+      const offer = await this.#offerFor(delivery, snapshot.session, Number.isFinite(madeAt) ? madeAt : this.#now());
+      return this.#delivered(delivery, made.id, offer);
+    }
     if (snapshot.session.activeRunId !== undefined) return this.#busy(delivery, sessionId);
     await this.#refence(delivery);
     // The context is resolved once per delivery — its model parts run once, its files are read once — and kept sealed
@@ -276,7 +298,9 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     // A kept file part is sent again only while its folder is still one it may be read from (second look, 2).
     const kept = delivery.record.parts;
     const parts = kept === undefined ? await this.#resolve(delivery, ready) : await this.#stillAllowed(kept, ready);
-    const prompt = await this.#prompt(delivery, parts);
+    // Planned before the prompt is written, so its fixed frame can say until when the session is offered the message.
+    const offer = await this.#offerFor(delivery, snapshot.session, this.#now());
+    const prompt = await this.#prompt(delivery, parts, offer);
     if (prompt === null) return this.#deadLetter(delivery, 'PROMPT_TOO_LARGE');
     if (kept === undefined && !(await this.#keepParts(delivery, parts)))
       return { state: 'terminal', deliveryId: delivery.claim.id };
@@ -287,7 +311,24 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     }
     const result = await ready.client.startRun(sessionId, { prompt, requestedMode: target.mode, startId });
     if (result.kind === 'busy') return this.#busy(delivery, sessionId);
-    return this.#delivered(delivery, result.run.id);
+    return this.#delivered(delivery, result.run.id, offer);
+  }
+
+  /** The offer this delivery makes to the session it posts to, handed it at `handedAt` (taking T4), or null. */
+  async #offerFor(delivery: Delivery, session: RelaySessionV1, handedAt: number): Promise<PlannedOffer | null> {
+    if (this.#offers === undefined) return null;
+    return this.#offers.planSession(delivery.claim.id, session, handedAt).catch(() => null);
+  }
+
+  /**
+   * Taking messages T4, once the delivery has committed as delivered: the session its prompt was posted to is offered the
+   * message, in core's take store, for fifteen minutes from the post. Every delivery to a session that commits here —
+   * a rule's session target's, and a workflow's that goes through this dispatcher — comes through this one path, so
+   * its offer comes with it. Best-effort: an offer that cannot be written never fails or undoes the delivery.
+   */
+  async #offerAfterCommit(offer: PlannedOffer | null): Promise<void> {
+    if (offer === null || this.#offers === undefined) return;
+    await this.#offers.write(offer).catch(() => false);
   }
 
   /**
@@ -315,11 +356,15 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     );
   }
 
-  /** The run is made: the delivery is done, its record purged, and the run it made recorded beside the session. */
-  #delivered(delivery: Delivery, runId: string): DispatchResult {
+  /**
+   * The run is made: the delivery is done, its record purged, and the run it made recorded beside the session — and,
+   * once that has committed, the session is offered the message (`#offerAfterCommit`).
+   */
+  async #delivered(delivery: Delivery, runId: string, offer: PlannedOffer | null): Promise<DispatchResult> {
     const delivered = this.#finish(delivery.claim, { state: 'delivered' }, (database) =>
       database.prepare('UPDATE session_deliveries SET run_id = ? WHERE delivery_id = ?').run(runId, delivery.claim.id),
     );
+    if (delivered) await this.#offerAfterCommit(offer);
     return { state: delivered ? 'delivered' : 'terminal', deliveryId: delivery.claim.id };
   }
 
@@ -436,8 +481,15 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     return checked;
   }
 
-  /** The fixed frame around the resolved parts, with a boundary of its own; null when it is longer than a session takes. */
-  async #prompt(delivery: Delivery, parts: readonly ResolvedContextPart[]): Promise<string | null> {
+  /**
+   * The fixed frame around the resolved parts, with a boundary of its own, and the offer's one line when the delivery
+   * offers the session the message (taking T4); null when it is longer than a session takes.
+   */
+  async #prompt(
+    delivery: Delivery,
+    parts: readonly ResolvedContextPart[],
+    offer: PlannedOffer | null,
+  ): Promise<string | null> {
     const boundary = newBoundary();
     const built = buildSessionPrompt({
       ruleId: delivery.rule.ruleId,
@@ -445,6 +497,7 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       account: await this.#accountName(delivery),
       parts,
       ...(delivery.target.instruction === undefined ? {} : { instruction: delivery.target.instruction }),
+      ...(offer?.until === null || offer?.until === undefined ? {} : { offeredUntil: clockTime(offer.until) }),
       envelope: (text, source) =>
         wrapUntrusted(text, { field: source === 'message' ? 'event' : source, id: delivery.claim.id }, boundary),
     });
@@ -575,6 +628,8 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
               () => this.#refence(delivery),
               append,
             )) ?? false);
+    // A lane's item is offered to the lane's window once it has committed, before the window is woken (taking T4).
+    if (appended && lane !== undefined) await this.#offers?.offerLaneItem(claim.id).catch(() => undefined);
     if (appended)
       try {
         this.#onAppended?.();

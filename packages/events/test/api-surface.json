@@ -177,6 +177,7 @@
   "resendEmailReceivedV1",
   "resendEmailStatusChangedV1",
   "schemaOf",
+  "sessionOfferLine",
   "slackMessagePostedV1",
   "sourceSchema",
   "stepOrder",

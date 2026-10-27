@@ -10,6 +10,8 @@ import {
   homeDirectory,
   homeForDiscovery,
   isCommsError,
+  makeNotifier,
+  type Notifier,
   openCore,
   resolvePaths,
   sha256Hex,
@@ -146,6 +148,7 @@ import { SessionQueue, SessionQueueFollower } from './session-queue.ts';
 import { runSourceOwnerWork, stageWhatsAppBaselineSnapshot } from './source-owner-work.ts';
 import { SseDispatcher } from './sse-dispatcher.ts';
 import type { SseServer } from './sse-server.ts';
+import { TAKE_SWEEP_INTERVAL_MS, TakeOffers, type TakeSweepReport } from './take-offers.ts';
 import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
@@ -178,6 +181,11 @@ export interface EventOwner {
   ): () => void;
   stop(): Promise<void>;
   readonly stopped: Promise<void>;
+  /**
+   * Runs one "nobody took it" sweep now (taking messages §8), as the owner does once a minute; for deterministic local
+   * embedding and tests, as `tick` is.
+   */
+  sweepTakes(): Promise<TakeSweepReport>;
 }
 
 interface StartedOwner extends EventOwner {
@@ -274,6 +282,16 @@ export interface EventOwnerOptions {
         readonly freeBytes?: (() => Promise<number>) | undefined;
         readonly failpoint?: LayaArtifactFailpoint | undefined;
         readonly startWorker?: LayaWorkerStart | undefined;
+      }
+    | undefined;
+  /**
+   * Taking messages (design 2026-10-26, §8), test seams only: how a "nobody took it" notice is raised — `null` raises
+   * none — and how often the sweep runs. Production uses core's notifier for this system, once a minute.
+   */
+  readonly takes?:
+    | {
+        readonly notify?: Notifier | null | undefined;
+        readonly sweepMs?: number | undefined;
       }
     | undefined;
 }
@@ -1163,6 +1181,18 @@ async function startOwnerWithLock(
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
   });
+  // Taking messages (design 2026-10-26, T4 and §8): a delivery's offers, written into core's take store on this same
+  // state folder after the delivery commits, and the once-a-minute "nobody took it" sweep. It only ever offers.
+  const takeOffers = new TakeOffers({
+    store: database,
+    takes: core.takes,
+    config: core.config,
+    notify:
+      options.takes?.notify === null
+        ? undefined
+        : (options.takes?.notify ?? makeNotifier({ platform: process.platform, env: process.env })),
+    now,
+  });
   // The action queue's local adapter and read model: dry-run's fences, with no network path (§2's anti-goals).
   let notifyLaneAppend: () => void = () => undefined;
   const queueDispatcher = new QueueDispatcher({
@@ -1174,6 +1204,7 @@ async function startOwnerWithLock(
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     onAppended: () => notifyLaneAppend(),
+    offers: takeOffers,
   });
   const queue = new QueueStore({
     store: database,
@@ -1190,6 +1221,7 @@ async function startOwnerWithLock(
     queue,
     now,
     ...(options.homeDirectory === undefined ? {} : { home: options.homeDirectory }),
+    offers: takeOffers,
   });
   // 0.32.0 (owner feedback §3.4, §3.5): one delivery as the person reads it, reached only from the CLI and the app;
   // and each rule version with its times, its plain-words summary and its last 7 days.
@@ -1313,6 +1345,7 @@ async function startOwnerWithLock(
     now,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     onAppended: () => notifyLaneAppend(),
+    offers: takeOffers,
   });
   // The Linear target's delivery (0.33.0 design §3.4): the webhook's fences, through the one Linear client.
   const linear = new LinearDispatcher({
@@ -1735,6 +1768,7 @@ async function startOwnerWithLock(
     stopped: stoppedPromise,
     tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),
     registerSseListener: (input) => sseStreams.register(input),
+    sweepTakes: () => takeOffers.sweep(),
     async stop(): Promise<void> {
       if (stopped) return;
       stopped = true;
@@ -1750,6 +1784,8 @@ async function startOwnerWithLock(
         unregisterLayaWorker();
         unregisterLayaInputs();
         unregisterLayaPurge();
+        // A sweep in flight finishes while the database is still open; this never throws.
+        await takeOffers.stop();
         // The last work's outcomes are recorded while the database is still open; this never throws.
         await deliveryActivity.stop();
         database.close();
@@ -1785,6 +1821,8 @@ async function startOwnerWithLock(
     await withEventWriterLease(writerQuiescer, () => recoverActivations(activations));
     // An approved install a restart interrupted resumes; it never waits for the control server.
     void layaArtifacts.resume().catch(() => undefined);
+    // The offers a restart left waiting for their window's wake are known again before anything can wake one (T4).
+    await takeOffers.reconcile().catch(() => 0);
     await writeToken(paths, token);
     control = await (options.startControlServer ?? startControlServer)({
       endpoint: instance.endpoint,
@@ -1818,6 +1856,7 @@ async function startOwnerWithLock(
     await writeInstance(paths, instance);
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
+    takeOffers.start(options.takes?.sweepMs ?? TAKE_SWEEP_INTERVAL_MS);
     // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are
     // followed again.
     tickAfterRelease = () => {

@@ -204,6 +204,50 @@ export type LabelRuleCall<K extends 'labelRuleAdd' | 'labelRuleRemove'> = {
   appApproval?: string;
 };
 
+/** What a take says to the sender (0.35.0, `taking.rs`, `TakingAcknowledge`): a 👀 under a Slack message, or nothing. */
+export type TakingAcknowledge = 'eyes' | 'nothing';
+
+/**
+ * One change to an account's taking settings (0.35.0, `taking.rs`, `TakingSetting`): exactly one setting. `require`
+ * off and `acknowledge` eyes loosen, and are approved first; the rest apply at once. `minutes` is 5 to 240.
+ */
+export type TakingSetting =
+  | { setting: 'require'; on: boolean }
+  | { setting: 'acknowledge'; acknowledge: TakingAcknowledge }
+  | { setting: 'unclaimed'; minutes: number }
+  | { setting: 'notify'; on: boolean };
+
+/** The channels Search on this machine keeps (0.35.0, `search.rs`, `SearchChannel`): Gmail and Slack, never WhatsApp. */
+export const SEARCH_CHANNELS = ['gmail', 'slack'] as const;
+export type SearchChannel = (typeof SEARCH_CHANNELS)[number];
+
+/** What a search looks through (`search.rs`, `SearchDirection`): what people asked, what was sent, or both. */
+export type SearchDirection = 'in' | 'out' | 'any';
+
+/**
+ * The reviewed models Search runs through the person's Ollama (0.35.0, S9; `search.rs`, `SearchModel`), by the name
+ * Ollama lists each under, the default first. A model off this list, or a cloud one, is never named.
+ */
+export const SEARCH_MODELS = ['qwen3-embedding:0.6b', 'embeddinggemma:latest', 'bge-m3:latest'] as const;
+export type SearchModelName = (typeof SEARCH_MODELS)[number];
+
+/**
+ * `search query` (0.35.0, design 2026-10-26-local-search §6): the words, 1 to 500 characters, which Rust passes after
+ * `--`; a person's id; the accounts by name, each once; Gmail or Slack; a window in milliseconds; the direction; and
+ * 1 to 50 hits.
+ */
+export type SearchQueryCall = {
+  kind: 'searchQuery';
+  text: string;
+  person?: string;
+  accounts?: string[];
+  channel?: SearchChannel;
+  since?: number;
+  until?: number;
+  direction?: SearchDirection;
+  limit?: number;
+};
+
 /**
  * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
  * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
@@ -322,6 +366,38 @@ export type Call =
   | { kind: 'labelStyleApproved'; account: string; style: 'labelled'; approvalId: string }
   | { kind: 'behaviourAllowApproved'; account: string; acts: string; conversation?: string; approvalId: string }
   | { kind: 'behaviourClearApproved'; account: string; conversation?: string; approvalId: string }
+  // Taking messages (0.35.0, design 2026-10-26-taking-messages §5, §9): every take, the person's read; Take back, Give
+  // to… and I'll handle it, which move only the person's own coordination, applied at once (DA10); each account's
+  // settings, read; and one change, a loosening prepared, then approved by the person in the app with `appApproval`,
+  // only for the approval the app prepared for that very change. The account is a checked name, the message an id
+  // `activity items` takes, the window a session key or a Claude Code session id, all checked in Rust.
+  | { kind: 'takesList'; since: ActivitySince }
+  | { kind: 'takesRelease'; account: string; message: string }
+  | { kind: 'takesGive'; account: string; message: string; window: string }
+  | { kind: 'takesKeep'; account: string; message: string }
+  | { kind: 'taking' }
+  | { kind: 'takingChange'; account: string; change: TakingSetting; appApproval?: string }
+  // Search on this machine (0.35.0, design 2026-10-26-local-search §8, `search.rs`): core's `search …`, the person's
+  // own, refused to agents and never an MCP tool (S13). Its reads; its upkeep; their own data (people joined, parted and
+  // named); its three loosenings, prepared without `appApproval` and approved by the person's press in the app with it,
+  // only for the approval the app prepared for that same change; and its tightenings, applied at once.
+  | { kind: 'searchStatus' }
+  | SearchQueryCall
+  | { kind: 'searchPeople'; since?: number }
+  | { kind: 'searchPerson'; personId: string; since?: number; limit?: number }
+  | { kind: 'searchShow'; sourceId: string }
+  | { kind: 'searchIndex'; budget?: number }
+  | { kind: 'searchRebuild'; budget?: number }
+  | { kind: 'searchLink'; personId: string; otherId: string }
+  | { kind: 'searchUnlink'; handle: string }
+  | { kind: 'searchLabel'; personId: string; label: string }
+  | { kind: 'searchOn'; appApproval?: string }
+  | { kind: 'searchOff' }
+  | { kind: 'searchAccountsAdd'; account: string; appApproval?: string }
+  | { kind: 'searchAccountsRemove'; account: string }
+  | { kind: 'searchModelSet'; address: string; model: SearchModelName; appApproval?: string }
+  | { kind: 'searchModelNone' }
+  | { kind: 'searchDeleteAll' }
   // Workflows (0.36.0, plan 2026-10-27-workflows-0360 I7): check, one version, and a try with chosen outcomes, each
   // document on stdin. Runs listed, shown and cancelled. Projects, listed, shown, added, changed, removed and found on
   // this Mac. Describe it, written nowhere. The step event catalogue. Subscribers, added and changed on stdin, removed
