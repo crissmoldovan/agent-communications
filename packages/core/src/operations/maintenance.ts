@@ -23,7 +23,7 @@ import {
   remedy,
   requireHandoffs,
 } from '../handoffs.ts';
-import { launcherExists, launcherName, launcherPaths } from '../launcher.ts';
+import { launcherCanStartSync, launcherExists, launcherName, launcherPaths, readPointer } from '../launcher.ts';
 import { inspectManagedShim, managedShimsSupported, managedShimUnsupportedNotice } from '../managed-shims.ts';
 import { managedRuntimeEntry } from '../mcp-install.ts';
 import { findById, resolveName } from '../names.ts';
@@ -59,6 +59,7 @@ import { VERSION } from '../version.ts';
 import { activityDoctorCheck } from './activity.ts';
 import { orphanedBehaviourRules } from './behaviour.ts';
 import { searchDoctorCheck } from './search.ts';
+import { connectionList } from './connections.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
 import { type StandingReport, standingReport } from './standing.ts';
 
@@ -322,6 +323,7 @@ export async function doctor(core: Core, env: NodeJS.ProcessEnv, options: Doctor
   checks.push(await updateCheckLine(core, env, handoffs, (options.now ?? (() => new Date()))()));
   checks.push(...(await updateJobLines(core, env, handoffs, platform, options)));
   checks.push(...(await registrationChecks(core, env, readable ? config : null, handoffs, platform)));
+  if (readable) checks.push(...(await connectionChecks(core, env)));
   return { checks, ok: checks.every((c) => c.ok) };
 }
 
@@ -782,6 +784,75 @@ function silentWhere(platform: NodeJS.Platform): string {
     return 'Check that the agentcomms-update timer is enabled for your user, and that your user’s systemd instance runs.';
   }
   return 'Check the agentcomms-update task in Task Scheduler: that it is enabled, and what its last run result was.';
+}
+
+/**
+ * Each MCP connection (single-server design §9.2): its record can be read; its entry is in its app, carrying its key —
+ * compared by hash, neither ever printed; each part's account is still connected; and each managed part's runtime is
+ * there for its launcher to start. Something to look at rather than a failure: a connection is the person's to change.
+ */
+async function connectionChecks(core: Core, env: NodeJS.ProcessEnv): Promise<DoctorCheck[]> {
+  const checks: DoctorCheck[] = [];
+  const { connections } = await connectionList(core, env).catch(() => ({ connections: [] }));
+  for (const view of connections) {
+    const name = `connection ${view.name === null ? view.id : `"${view.name}"`}`;
+    const look = (detail: string, fix: string): void => {
+      checks.push({ name, ok: true, warn: true, detail, fix: remedy(fix) });
+    };
+    if (!view.readable) {
+      look(
+        `it could not be read, so it serves nothing: ${view.problems.join('; ')}`,
+        'Remove it with the connection command, and add it again.',
+      );
+      continue;
+    }
+    if (view.key.revoked) {
+      checks.push({ name, ok: true, detail: 'cut off: it serves nothing' });
+      continue;
+    }
+    let problems = 0;
+    if (view.entry !== null && view.entry.present === false) {
+      look(
+        `its entry "${view.entry.name}" is not in ${view.appLabel}'s configuration any more, so ${view.appLabel} does not start it`,
+        'Add the connection again, or remove it.',
+      );
+      problems += 1;
+    } else if (view.entry !== null && view.entry.keyMatches === false) {
+      look(
+        `its entry in ${view.appLabel} carries a key that is not the connection's, so it serves nothing there`,
+        'Replace its key with the connection command: the new one is written into the entry.',
+      );
+      problems += 1;
+    }
+    for (const part of view.parts) {
+      if (!part.available) {
+        look(
+          `${part.label} is not started: ${part.why}`,
+          'Change its parts with the connection command, keeping the part to an account that is connected.',
+        );
+        problems += 1;
+        continue;
+      }
+      if (view.launcher !== 'managed') continue;
+      const launcher = launcherName(serverFacts(part.server).packageName);
+      const pointer = await readPointer(core.paths.dataDir, launcher).catch(() => undefined);
+      if (pointer === undefined || !launcherCanStartSync(pointer.current, launcher)) {
+        look(
+          `${part.label}'s runtime is not installed on this machine, so the connection cannot start it`,
+          'Bring everything up to date with the update command, or change the connection’s parts.',
+        );
+        problems += 1;
+      }
+    }
+    if (problems === 0) {
+      checks.push({
+        name,
+        ok: true,
+        detail: `${view.appLabel}: ${view.parts.map((part) => part.text).join('; ') || 'no parts'}`,
+      });
+    }
+  }
+  return checks;
 }
 
 /**

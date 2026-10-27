@@ -1,4 +1,5 @@
 import {
+  activityClient,
   CommsError,
   type CoreHandOff,
   changeToolResult,
@@ -6,8 +7,10 @@ import {
   type GatedChange,
   gatedChange,
   HAND_BACK_REASONS,
+  isGatewayPart,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
+  stdinClosed,
   strictToolArguments,
   TAKE_STEPS,
   toCommsError,
@@ -16,7 +19,7 @@ import {
   waitForApproval,
   warmSessionIdentity,
 } from '@agentcomms/core';
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { CHANGE_POLICIES, MODES, SEND_POLICIES } from '../accounts.ts';
 import { ResendContext, type ResendContextOptions } from '../context.ts';
@@ -77,6 +80,11 @@ export interface ResendMcpOptions extends ResendContextOptions {
 export interface ResendMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 const MAX_LISTED = 8;
@@ -90,6 +98,27 @@ function listOf(names: readonly string[]): string {
  * Under 2 KB, most important first: Claude Code cuts a server's instructions at 2,048 bytes, so what a model must not
  * get wrong comes before what it can look up. `mcp.test.ts` holds it under the limit with many accounts.
  */
+/**
+ * Resend's brief, as a part of an MCP connection (single-server design D14, §5.6): `account` on every call, that mail
+ * goes only after the person's yes, and last its accounts — the first line to go when the gateway's budget is short.
+ */
+export async function gatewayBrief(context: ResendContext, pinned: string | undefined): Promise<string> {
+  let names: string[] = [];
+  try {
+    names = (await listAccounts(context)).accounts.map((view) => view.name);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) names = names.filter((name) => name === pinned);
+  return [
+    pinned
+      ? `This part serves only the account ${pinned}; \`account\` may be left out.`
+      : 'Pass `account` on every call: there is no default.',
+    'An email goes only after the person approves that exact email; never repeat a send whose outcome is unknown.',
+    names.length > 0 ? `Known accounts: ${listOf(names)}.` : 'No account is connected yet.',
+  ].join('\n');
+}
+
 export async function buildInstructions(context: ResendContext, pinned: string | undefined): Promise<string> {
   let accounts: { name: string; canSend: boolean }[] = [];
   try {
@@ -136,12 +165,17 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
 
   const server = new McpServer(
     { name: 'agent-resend', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
-  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
-  context.clientInfo = () => server.server.getClientVersion();
+  // The activity log's session names the client each call came from: its 2026-07-28 envelope's, or the one it named on
+  // connecting (design 2026-10-25-activity, S2; single-server design D7).
+  context.clientInfo = activityClient(() => server.server.getClientVersion());
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text
@@ -702,18 +736,30 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     }),
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    return serveStdio(
+      async () => {
+        const next = unserved ?? (await createResendMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+  };
   return {
     server,
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((settle) => {
-        transport.onclose = () => settle();
-        process.stdin.once('end', settle);
-        process.stdin.once('close', settle);
-      });
-      await server.connect(transport);
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
   };
 }

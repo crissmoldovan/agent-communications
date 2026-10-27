@@ -1043,13 +1043,13 @@ test('a process in /, the home folder or a system folder is never grouped, so on
   const sibling = await identity('/example/home/jo/work/acme', 104);
   assert.equal(project.grouped, true);
   assert.equal(project.key, sibling.key);
-  // A connection's own session id, where the transport has one, is part of the key.
-  const viaA = await identity('/example/home/jo/work/acme', 105, { connection: 'conn-a' });
-  const viaB = await identity('/example/home/jo/work/acme', 106, { connection: 'conn-b' });
+  // A transport's own session id, where it has one, is part of the key.
+  const viaA = await identity('/example/home/jo/work/acme', 105, { transportSession: 'conn-a' });
+  const viaB = await identity('/example/home/jo/work/acme', 106, { transportSession: 'conn-b' });
   assert.equal(viaA.grouped, true);
   assert.notEqual(viaA.key, viaB.key, 'two connections are two sessions');
   assert.notEqual(viaA.key, project.key);
-  assert.equal((await identity('/example/home/jo/work/acme', 107, { connection: 'conn-a' })).key, viaA.key);
+  assert.equal((await identity('/example/home/jo/work/acme', 107, { transportSession: 'conn-a' })).key, viaA.key);
   // On Windows the same folders, by their Windows names, would be refused too.
   const windows = await identity('C:\\Users\\jo', 108, { platform: 'win32' });
   assert.equal(windows.grouped, false);

@@ -1,6 +1,7 @@
 import {
   type ApprovalKind,
   type ApprovalOutcome,
+  activityClient,
   answerDownloadInForm,
   approvalNotFound,
   approveAndWaitSentence,
@@ -16,14 +17,17 @@ import {
   type GatedChange,
   gatedChange,
   handoffSentence,
+  isGatewayPart,
   lookupName,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
   NEVER_NOTICE,
   orgAddChange,
   profileSourcePath,
+  requestClient,
   retiredOutHint,
   shownPath,
   stateOf,
+  stdinClosed,
   stricterPolicy,
   strictToolArguments,
   toCommsError,
@@ -32,7 +36,7 @@ import {
   waitForApproval,
   warmSessionIdentity,
 } from '@agentcomms/core';
-import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
+import { acceptedContent, inputRequired, inputResponse, McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { RegistrationIntent } from '../auth/flows.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -108,6 +112,11 @@ export interface GmailMcpServer {
   /** The alias this server is pinned to, if any. */
   pinned: string | undefined;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
   close(): Promise<void>;
 }
 
@@ -155,6 +164,29 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
       : 'Pass `inbox` on every call — there is no default mailbox.',
     aliases.length > 0 ? `Known mailboxes: ${listed}${more}.` : 'No mailbox is connected yet.',
     'Call gmail_inboxes_list for the current list, what each may do, and how each treats sending.',
+  ].join('\n');
+}
+
+/**
+ * Gmail's brief, as a part of an MCP connection (single-server design D14, §5.6): `inbox` on every call first, and its
+ * mailboxes last, the first line to go when the gateway's budget is short — gmail_inboxes_list gives them.
+ */
+export async function gatewayBrief(context: GmailContext, pinned: string | undefined): Promise<string> {
+  let aliases: string[] = [];
+  try {
+    aliases = Object.keys((await context.config()).inboxes);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) aliases = aliases.filter((alias) => alias === pinned);
+  const shown = aliases.slice(0, 8).join(', ');
+  const more = aliases.length > 8 ? `, and ${aliases.length - 8} more` : '';
+  return [
+    pinned
+      ? `This part serves only the mailbox ${pinned}; \`inbox\` may be left out.`
+      : 'Pass `inbox` on every call: there is no default mailbox.',
+    'A send goes only after the person approves that exact message; if a call says so, show the preview and ask.',
+    aliases.length > 0 ? `Known mailboxes: ${shown}${more}.` : 'No mailbox is connected yet.',
   ].join('\n');
 }
 
@@ -246,12 +278,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
 
   const server = new McpServer(
     { name: 'agent-gmail', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
-  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
-  context.clientInfo = () => server.server.getClientVersion();
+  // The activity log's session names the client each call came from: its 2026-07-28 envelope's, or the one it named on
+  // connecting (design 2026-10-25-activity, S2; single-server design D7).
+  context.clientInfo = activityClient(() => server.server.getClientVersion());
+  /**
+   * The name of the client a request comes from, as it said it is: its envelope's on 2026-07-28, where `serveStdio`
+   * sets no `getClientVersion()`, and its `initialize`'s on 2025-11-25. Read per request, so a form the person chose to
+   * trust a client with is offered to it in either era.
+   */
+  const clientName = (ctx: unknown): string => requestClient(ctx, () => server.server.getClientVersion())?.name ?? '';
 
   /**
    * Every tool answers with the same envelope, and the text block mirrors it for clients that drop structured data.
@@ -1170,7 +1213,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
          * and answered only to it: an answer the form was never raised for is refused, as a send's code is.
          */
         if (typeof choiceId === 'string' && (await downloadNeedsPerson(choiceId, alias))) {
-          const client = server.server.getClientVersion()?.name ?? '';
+          const client = clientName(ctx);
           const answered = inputResponse(ctx.mcpReq.inputResponses, SAVE_KEY);
           if (answered.kind === 'missing' && (await isAllowlisted(client))) {
             const form = await downloadQuestionForm(context.core, choiceId, context.env);
@@ -2782,7 +2825,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           if (outcome !== undefined && needsConfirmation(outcome)) {
             const answered = inputResponse(ctx.mcpReq.inputResponses, APPROVAL_KEY);
             if (answered.kind === 'missing') {
-              const client = server.server.getClientVersion()?.name ?? '';
+              const client = clientName(ctx);
               if (!(await isAllowlisted(client))) {
                 throw new CommsError('APPROVAL_REQUIRED', 'this send needs approval outside the chat', {
                   hint: approveAndWaitSentence(
@@ -2885,7 +2928,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
       async (_args, ctx) => {
         try {
-          const client = server.server.getClientVersion()?.name ?? '';
+          const client = clientName(ctx);
           if (!client) throw new CommsError('USAGE', 'this client did not say what it is called');
           const answered = inputResponse(ctx.mcpReq.inputResponses, PROBE_KEY);
           if (answered.kind === 'missing') {
@@ -3170,27 +3213,39 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const handles: { close(): Promise<void> }[] = [];
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    const handle = serveStdio(
+      async () => {
+        const next = unserved ?? (await createGmailMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+    handles.push(handle);
+    return handle;
+  };
   return {
     server,
     pinned,
-    /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((resolve) => {
-        const previous = transport.onclose;
-        transport.onclose = () => {
-          previous?.();
-          resolve();
-        };
-        // A client that dies without closing the transport simply closes our stdin.
-        process.stdin.once('end', resolve);
-        process.stdin.once('close', resolve);
-      });
-      await server.connect(transport);
+      // A client that dies without closing the transport simply closes our stdin.
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
     async close(): Promise<void> {
+      await Promise.all(handles.map((handle) => handle.close()));
       await server.close();
     },
   };
