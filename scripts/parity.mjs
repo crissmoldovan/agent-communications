@@ -12,6 +12,9 @@
  *                                      # every row's command and tool reach the operation it names
  *   node scripts/parity.mjs --strict   # …and nothing is still pending — what a release has to pass
  *
+ * Every run also starts the gateway an app starts for one MCP connection, with every part, from source, and holds what
+ * it lists to the union of what each part lists on its own (single-server design §8.3, §10: `checkGateway`).
+ *
  * Names alone were not enough: swapping two rows' tools (`gmail.search` with `gmail.trash`) passed, because both
  * sides of each row still existed. That is how the channels' `mcp install` shipped without the approval its paired
  * tool required. Design §7 asks for more — the two sides of a row are the same operation — and `checkOperations` is
@@ -19,13 +22,16 @@
  *
  * `test/parity.test.mjs` runs the same check inside `pnpm test`, and mutation-tests every rule below.
  */
-import { realpathSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { createHash, randomBytes } from 'node:crypto';
+import { existsSync, realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { REGISTRY } from './channels.mjs';
 import { DRIVERS, driveOperations, namedOperations, operationNames, resolveOperation } from './operations.mjs';
-import { deriveRegistries, ROOT, scratchEnv } from './registries.mjs';
+import { deriveRegistries, ROOT, SURFACES, scratchEnv, serverTools } from './registries.mjs';
 
 export const TABLE = join(ROOT, 'capabilities.json');
 
@@ -712,6 +718,283 @@ export function uncheckedRows(table) {
   );
 }
 
+// ── The whole gateway: one connection with every part lists exactly what the parts list ──────────────────────────
+
+/**
+ * Every part a connection can have, as the gateway names and prefixes it (single-server design D5): each declared
+ * channel by its word — `comms` for core's tools — and each service by its server's name, channels first, in the
+ * registry's order; with the surface whose server it is.
+ */
+export function gatewayParts(registry = REGISTRY) {
+  return [
+    ...registry.channels.map(({ directory, manifest }) => ({
+      server: manifest.channel,
+      prefix: directory === 'core' ? 'comms' : manifest.channel,
+      package: directory,
+    })),
+    ...registry.services.map(({ directory, declaration }) => ({
+      server: declaration.server.defaultName,
+      prefix: declaration.server.defaultName,
+      package: directory,
+    })),
+  ];
+}
+
+/** A tool as JSON says it, for comparing byte for byte. */
+const toolText = (tool) => JSON.stringify(tool);
+
+/** Where two tools first differ: the top-level field, in a word. */
+function difference(own, through) {
+  const keys = [...new Set([...Object.keys(own ?? {}), ...Object.keys(through ?? {})])];
+  const field = keys.find((key) => JSON.stringify(own?.[key]) !== JSON.stringify(through?.[key]));
+  return field === undefined ? 'its fields are in another order' : `its ${field} differs`;
+}
+
+/**
+ * Every way a gateway's `tools/list` differs from its parts' own (single-server design §8.3, §10, §12): through one
+ * connection with every part it lists exactly the union of what each part lists on its own — the tools under each
+ * part's prefix (D5), each once, in the connection's order of parts, names and schemas byte for byte (D4) — and
+ * nothing else. A part's tool outside its own prefix is a problem too: the gateway drops it, so it would be missing
+ * through every connection.
+ *
+ * `parts` is `[{ server, prefix, tools }]` in the connection's order, each part's own `tools/list`; `listed` is the
+ * gateway's. Empty when they agree.
+ */
+export function checkGateway(parts, listed) {
+  const problems = [];
+  const expected = [];
+  const owner = new Map();
+  for (const part of parts) {
+    for (const tool of part.tools) {
+      if (typeof tool?.name !== 'string' || !tool.name.startsWith(`${part.prefix}_`)) {
+        problems.push(`${part.server} serves ${tool?.name}, outside its prefix ${part.prefix}_: the gateway drops it`);
+        continue;
+      }
+      if (owner.has(tool.name)) {
+        problems.push(`${tool.name} is served by ${owner.get(tool.name)} and ${part.server}: the gateway lists one`);
+        continue;
+      }
+      owner.set(tool.name, part.server);
+      expected.push(tool);
+    }
+  }
+  const through = new Map();
+  for (const tool of listed) {
+    if (through.has(tool?.name)) problems.push(`the gateway lists ${tool?.name} twice`);
+    through.set(tool?.name, tool);
+    if (!owner.has(tool?.name)) problems.push(`the gateway lists ${tool?.name}, which no part serves`);
+  }
+  for (const tool of expected) {
+    const relayed = through.get(tool.name);
+    if (relayed === undefined) {
+      problems.push(`the gateway does not list ${tool.name}, which ${owner.get(tool.name)} serves`);
+    } else if (toolText(relayed) !== toolText(tool)) {
+      problems.push(
+        `the gateway lists ${tool.name} otherwise than ${owner.get(tool.name)} serves it: ${difference(tool, relayed)}`,
+      );
+    }
+  }
+  if (problems.length === 0) {
+    const order = (tools) => tools.map((tool) => tool.name).join('\n');
+    if (order(listed) !== order(expected))
+      problems.push('the gateway lists the parts’ tools out of the connection’s order');
+  }
+  return problems;
+}
+
+const SEAL = join(ROOT, 'test/helpers/loopback-seal-preload.mjs');
+const STRIP = ['--experimental-strip-types', '--disable-warning=ExperimentalWarning'];
+
+/**
+ * A home of its own for the gateway and every part (`dir`): its folders, the file secret store, no update check — and
+ * the loopback seal in `NODE_OPTIONS`, so the gateway and each part it starts are sealed from the network alike.
+ */
+function gatewayEnv(dir) {
+  const home = join(dir, 'home');
+  const seal = existsSync(SEAL) ? `--import=${pathToFileURL(SEAL).href}` : '';
+  return {
+    PATH: process.env.PATH ?? '',
+    // What Windows and Node's temporary folder need, passed on as they are; nothing else of this process's.
+    ...Object.fromEntries(
+      ['SystemRoot', 'PATHEXT', 'COMSPEC', 'TMPDIR', 'TEMP', 'TMP']
+        .filter((name) => process.env[name] !== undefined)
+        .map((name) => [name, process.env[name]]),
+    ),
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: join(home, 'AppData', 'Roaming'),
+    LOCALAPPDATA: join(home, 'AppData', 'Local'),
+    XDG_CONFIG_HOME: join(home, '.config'),
+    XDG_STATE_HOME: join(home, '.local', 'state'),
+    XDG_DATA_HOME: join(home, '.local', 'share'),
+    XDG_CACHE_HOME: join(home, '.cache'),
+    AGENT_COMMS_CONFIG_DIR: join(dir, 'config'),
+    AGENT_COMMS_STATE_DIR: join(dir, 'state'),
+    AGENT_COMMS_DATA_DIR: join(dir, 'data'),
+    AGENT_COMMS_SECRETS_DIR: join(dir, 'secrets'),
+    AGENT_COMMS_UPDATE_CHECK: 'off',
+    AGENT_COMMS_UPDATES: 'never',
+    NO_COLOR: '1',
+    ...(seal === '' ? {} : { NODE_OPTIONS: seal }),
+  };
+}
+
+/** The ids of a connection: `cn_` and 26 characters of the approval ids' alphabet, as core makes them. */
+function connectionId() {
+  const alphabet = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  return `cn_${[...randomBytes(26)].map((byte) => alphabet[byte & 31]).join('')}`;
+}
+
+/**
+ * Asks a gateway — `agentcomms mcp --connection <id>`, as an app starts it, its key in its environment — for its
+ * tools, until every part has joined (a part slower than the start window joins later, with `tools/list_changed`) or
+ * `timeoutMs` passes. What it listed last.
+ */
+async function gatewayList(env, id, key, expected, timeoutMs) {
+  const child = spawn(process.execPath, [...STRIP, join(ROOT, 'packages/core/src/cli.ts'), 'mcp', '--connection', id], {
+    stdio: ['pipe', 'pipe', 'pipe'],
+    env: { ...env, AGENT_COMMS_CONNECTION_KEY: key },
+  });
+  let buffer = '';
+  let err = '';
+  let exited = false;
+  const answers = new Map();
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk;
+    const lines = buffer.split('\n');
+    buffer = lines.pop() ?? '';
+    for (const line of lines) {
+      try {
+        const message = JSON.parse(line);
+        if (message.id !== undefined) answers.set(message.id, message);
+      } catch {
+        // Not a message: the gateway writes its logs to stderr, and nothing else to stdout.
+      }
+    }
+  });
+  child.stderr.on('data', (chunk) => {
+    err += chunk;
+  });
+  child.on('exit', () => {
+    exited = true;
+  });
+  const send = (message) => child.stdin.write(`${JSON.stringify(message)}\n`);
+  send({
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'parity', version: '0' } },
+  });
+  send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+  const deadline = Date.now() + timeoutMs;
+  let request = 2;
+  let tools = null;
+  try {
+    while (Date.now() < deadline && !exited) {
+      const asked = request;
+      request += 1;
+      send({ jsonrpc: '2.0', id: asked, method: 'tools/list', params: {} });
+      while (!answers.has(asked) && Date.now() < deadline && !exited) await new Promise((r) => setTimeout(r, 100));
+      const listed = answers.get(asked)?.result?.tools;
+      if (Array.isArray(listed)) tools = listed;
+      if (tools !== null && tools.length >= expected) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+  } finally {
+    child.stdin.end();
+    await new Promise((resolve) => {
+      if (exited) return resolve();
+      const kill = setTimeout(() => child.kill(), 5_000);
+      child.once('exit', () => {
+        clearTimeout(kill);
+        resolve();
+      });
+    });
+  }
+  if (tools === null) throw new Error(`the gateway did not answer tools/list${err ? `:\n${err.slice(-4000)}` : ''}`);
+  return tools;
+}
+
+/** The parts core reads the connection `id` to have — `agentcomms connection show <id> --json`, from source. */
+async function connectionParts(env, id) {
+  const child = spawn(
+    process.execPath,
+    [...STRIP, join(ROOT, 'packages/core/src/cli.ts'), 'connection', 'show', id, '--json'],
+    { stdio: ['ignore', 'pipe', 'pipe'], env },
+  );
+  let out = '';
+  let err = '';
+  child.stdout.on('data', (chunk) => {
+    out += chunk;
+  });
+  child.stderr.on('data', (chunk) => {
+    err += chunk;
+  });
+  await new Promise((resolve, reject) => {
+    child.on('error', reject);
+    child.on('close', resolve);
+  });
+  let shown;
+  try {
+    shown = JSON.parse(out);
+  } catch {
+    throw new Error(`connection show did not answer in JSON:\n${out.slice(-2000)}${err.slice(-2000)}`);
+  }
+  if (shown?.ok !== true) throw new Error(`connection show refused: ${JSON.stringify(shown?.error ?? shown)}`);
+  return (shown.data?.parts ?? []).map((part) => part.server);
+}
+
+/**
+ * The whole gateway, from source (single-server design §10): one connection with every part, started from this
+ * checkout's own code (`launcher: local`), in a home of its own with stand-in folders and no account — and each part
+ * asked on its own for what it lists, as `registries.mjs` asks. Nothing talks to any service.
+ */
+export async function gatewayTools({ dir, timeoutMs = 120_000 }) {
+  const env = gatewayEnv(dir);
+  for (const folder of ['config', 'state', 'data', 'secrets', 'home'])
+    await mkdir(join(dir, folder), { recursive: true });
+  const parts = gatewayParts();
+  const id = connectionId();
+  const key = `ack_${randomBytes(32).toString('base64url')}`;
+  const now = new Date().toISOString();
+  const record = {
+    id,
+    name: 'Parity',
+    app: 'claude-code',
+    where: { scope: 'user', folder: null, configDir: null },
+    entry: { name: 'agentcomms', path: null },
+    launcher: 'local',
+    parts: parts.map((part) => ({ server: part.server })),
+    keyHash: `sha256:${createHash('sha256').update(key, 'utf8').digest('hex')}`,
+    keyIssuedAt: now,
+    createdAt: now,
+    revokedAt: null,
+  };
+  await writeFile(
+    join(dir, 'config', 'config.json'),
+    `${JSON.stringify({ version: 2, secrets: { store: 'file' }, connections: { [id]: record } }, null, 2)}\n`,
+  );
+  // Every part core knows: its parts come from its build-time snapshot, and a part it does not know it leaves out of
+  // the connection (§8.3, "First-party only"). A declaration the snapshot lacks is `verify:channels`'s to catch.
+  const known = new Set(await connectionParts(env, id));
+  const own = await Promise.all(
+    parts
+      .filter((part) => known.has(part.server))
+      .map(async (part) => ({
+        ...part,
+        tools: await serverTools(
+          SURFACES.find((surface) => surface.package === part.package),
+          { env },
+        ),
+      })),
+  );
+  const expected = own.reduce(
+    (count, part) => count + part.tools.filter((tool) => tool.name.startsWith(`${part.prefix}_`)).length,
+    0,
+  );
+  return { parts: own, listed: await gatewayList(env, id, key, expected, timeoutMs) };
+}
+
 /** The table as committed. */
 export async function readTable(path = TABLE) {
   return JSON.parse(await readFile(path, 'utf8'));
@@ -727,12 +1010,18 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
   const scratch = await mkdtemp(join(tmpdir(), 'agentcomms-parity-'));
   try {
     const table = await readTable();
-    // Independent, so at the same time: the drive is a process of its own, and so are the servers the registries ask.
-    const [registries, driven] = await Promise.all([
+    // Independent, so at the same time: the drive is a process of its own, and so are the servers the registries ask,
+    // and the gateway in front of every part.
+    const [registries, driven, gateway] = await Promise.all([
       deriveRegistries({ env: scratchEnv(join(scratch, 'registries')) }),
       driveOperations(table, { dir: join(scratch, 'drive') }),
+      gatewayTools({ dir: join(scratch, 'gateway') }),
     ]);
-    const problems = [...checkParity(table, registries, { strict }), ...checkOperations(table, registries, driven)];
+    const problems = [
+      ...checkParity(table, registries, { strict }),
+      ...checkOperations(table, registries, driven),
+      ...checkGateway(gateway.parts, gateway.listed),
+    ];
     if (problems.length > 0) {
       console.error(`capabilities.json and the product disagree${strict ? ' (strict)' : ''}:\n`);
       for (const problem of problems) console.error(`  - ${problem}`);
@@ -740,7 +1029,7 @@ if (invoked === realpathSync(fileURLToPath(import.meta.url))) {
       process.exitCode = 1;
     } else {
       console.log(
-        `capabilities.json matches every command and tool, and each row's command and tool reach its operation${strict ? '; nothing is pending' : ''}.`,
+        `capabilities.json matches every command and tool, and each row's command and tool reach its operation${strict ? '; nothing is pending' : ''}; through one connection with every part, the gateway lists exactly the ${gateway.listed.length} tools its parts list.`,
       );
     }
     const unchecked = uncheckedRows(table);
