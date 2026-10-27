@@ -46,6 +46,7 @@ import { linearChangeTargetDisclosure } from '../domain/linear-change-target.ts'
 import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   CHAIN_DECISION_OUTCOMES,
+  HOLD_ENDED_DECISION_OUTCOMES,
   isEventId,
   isMessagesCursor,
   MESSAGE_DECISION_OUTCOMES,
@@ -1697,6 +1698,7 @@ function assertMessageEntry(value: unknown, name: string): void {
     assertPositiveInteger(decision.ruleVersion, `${name} decision workflow version`);
     if (
       !MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never) &&
+      !HOLD_ENDED_DECISION_OUTCOMES.includes(decision.outcome as never) &&
       !CHAIN_DECISION_OUTCOMES.includes(decision.outcome as never)
     )
       throw new TypeError(`${name} decision has an unknown outcome`);

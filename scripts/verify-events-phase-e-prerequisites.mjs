@@ -66,10 +66,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * always `null` before, may also be `inert` — what `subscribers list` says of a version given events until the person
  * approves its subscription — and the ordinary webhook vector, regenerated from the owner, says so. A version given no
  * events still answers `null`. No existing branch changed.
+ *
+ * 0.36.0's ended holds are another, also only additive: a message's decision outcome, in `messages list` and `message
+ * show`, gains `hold-expired` and `cancelled`, which holds have always written when a hold ends unanswered — its own
+ * bound passed, or it was cancelled — and a story with one could not be read before. `rule-analyse`'s closed outcome
+ * counts keep their five. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'a1f6e4b29667a76a269a19a11b08ea4a44d2b0359903d2057ad5fbead81abfc6',
+    'b4c958721a7918ec04a3811f87c6b498d8488bb90aa430420a0d45f94ef43e78',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':

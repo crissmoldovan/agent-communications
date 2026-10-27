@@ -13,7 +13,11 @@ export const MESSAGES_LIST_MAX_LIMIT = 500;
 /** How far back `messages list` looks when no `since` is given: 30 days. */
 export const MESSAGES_LIST_DEFAULT_SPAN_MS: number = 30 * 86_400_000;
 
-/** A decision's outcome, as the decisions table keeps it. */
+/**
+ * A decision's outcome as it is made, and as Analyse counts it — a closed set its counts keep. The decisions table also
+ * keeps the outcome a hold ends with when it ends unanswered (`HOLD_ENDED_DECISION_OUTCOMES`) and a chained workflow's
+ * (`CHAIN_DECISION_OUTCOMES`), which a message's story names too.
+ */
 export const MESSAGE_DECISION_OUTCOMES: readonly [
   'matched',
   'no-match',
@@ -32,8 +36,20 @@ export const CHAIN_DECISION_OUTCOMES: readonly ['awaiting-chain', 'not-chained']
   'awaiting-chain',
   'not-chained',
 ] as const);
+/**
+ * How a hold ends with no answer, as holds write it: its own bound passed (`hold-expired`; `retention-expired`, which
+ * Analyse counts, when ingest retention bound it), or it was cancelled — its account removed, the person's drop, or a
+ * WhatsApp message no longer visible. A message's story names them; Analyse counts such a decision in its total only.
+ */
+export const HOLD_ENDED_DECISION_OUTCOMES: readonly ['hold-expired', 'cancelled'] = Object.freeze([
+  'hold-expired',
+  'cancelled',
+] as const);
 /** A decision's outcome in a message's story. */
-export type MessageStoryOutcome = MessageDecisionOutcome | (typeof CHAIN_DECISION_OUTCOMES)[number];
+export type MessageStoryOutcome =
+  | MessageDecisionOutcome
+  | (typeof HOLD_ENDED_DECISION_OUTCOMES)[number]
+  | (typeof CHAIN_DECISION_OUTCOMES)[number];
 
 /** A delivery's target kind, as the deliveries table keeps it; `linear-change` is a workflow's only (0.36). */
 export const MESSAGE_TARGET_KINDS: readonly [
