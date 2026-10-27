@@ -160,6 +160,9 @@ export async function takenMessages(
  * - **A take recorded for it:** core's gate — the holder passes, renewing its lease (and, given `approvalId`, pinning
  *   the take while that approval waits); anyone else is refused `TAKEN_ELSEWHERE`, whether or not a take is required;
  *   with a take required, a session that has not taken it is refused `TAKE_REQUIRED`.
+ * - **Several received emails with that Message-ID** — a Message-ID is the sender's word, and a forged copy can carry
+ *   another's — each recorded one is asked by its own id, and the reply passes only where it may act on every one
+ *   (security review of 0.35.0): the session holding one copy cannot answer another session's.
  * - **No take recorded for that Message-ID:** with a take required, `TAKE_REQUIRED`, naming the Message-ID. Resend
  *   cannot be asked which received email has a given Message-ID — its received list has no search — so an In-Reply-To
  *   nobody took cannot be told apart from one naming mail this account sent. Failing closed means a follow-up to the
@@ -183,8 +186,8 @@ export async function replyTake(
   if (caller === null) return null;
   const rfc822Id = rfc822IdOf(inReplyTo);
   const found =
-    rfc822Id === undefined ? null : await context.core.takes.findByRfc822('resend', named.account.id, rfc822Id);
-  if (found === null) {
+    rfc822Id === undefined ? [] : await context.core.takes.findAllByRfc822('resend', named.account.id, rfc822Id);
+  if (found.length === 0) {
     if (!takeRequiredIn(config, named.account.id)) return null;
     const shown = rfc822Id === undefined ? 'the message it answers' : `<${rfc822Id}>`;
     const taking: TakeAct = { account: named.name, shown, act, takeWith: takeWith(context, named.name, null) };
@@ -195,10 +198,15 @@ export async function replyTake(
       details: { ...refused.details, ...(rfc822Id === undefined ? {} : { inReplyTo: rfc822Id }) },
     });
   }
-  return gateTake(context.core.takes, config, {
-    ref: found,
-    caller,
-    act: { account: named.name, shown: found.id, act, takeWith: takeWith(context, named.name, found.id) },
-    ...(options.approvalId === undefined ? {} : { approvalId: options.approvalId }),
-  });
+  let pass: TakeGatePass | null = null;
+  for (const ref of found) {
+    const gated = await gateTake(context.core.takes, config, {
+      ref,
+      caller,
+      act: { account: named.name, shown: ref.id, act, takeWith: takeWith(context, named.name, ref.id) },
+      ...(options.approvalId === undefined ? {} : { approvalId: options.approvalId }),
+    });
+    if (pass === null || (!pass.held && gated.held)) pass = gated;
+  }
+  return pass;
 }

@@ -1432,16 +1432,22 @@ export class TakeStore {
     }
   }
 
-  /** The record a mail's Message-ID was taken under in one account, if any: how a reply by In-Reply-To finds its take. */
-  async findByRfc822(channel: TakeChannel, accountId: string, rfc822Id: string): Promise<TakeMessageRef | null> {
+  /**
+   * Every message in one account a record holds under a mail's Message-ID, each by its own id, in id order: how a reply
+   * by In-Reply-To finds the takes it answers. A Message-ID is the sender's word, so two received emails can carry one —
+   * a forged copy among them — and a reply answers each: its gate asks every one (security review of 0.35.0), never
+   * whichever was found first.
+   */
+  async findAllByRfc822(channel: TakeChannel, accountId: string, rfc822Id: string): Promise<TakeMessage[]> {
     const wanted = rfc822IdOf(rfc822Id);
-    if (wanted === undefined) return null;
-    for (const entry of await this.list({ accountId })) {
-      if ('record' in entry && entry.record.message.channel === channel && entry.record.message.rfc822Id === wanted) {
-        return entry.record.message;
-      }
-    }
-    return null;
+    if (wanted === undefined) return [];
+    return (await this.list({ accountId }))
+      .flatMap((entry) =>
+        'record' in entry && entry.record.message.channel === channel && entry.record.message.rfc822Id === wanted
+          ? [entry.record.message]
+          : [],
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   // ── The person's acts ───────────────────────────────────────────────────────────────────────────────────────
