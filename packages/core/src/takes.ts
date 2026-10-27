@@ -26,7 +26,8 @@
  * - **Nothing a sender wrote is stored (§4):** ids and closed words only, every record rebuilt field by field on read and
  *   on write, so a field this release does not know never survives a write.
  * - **Retention:** a record is deleted thirty days after it last changed, once a day, by the first process that writes
- *   one; an account no longer connected loses its folder then too.
+ *   one; an account no longer connected loses its folder then too. Past it, a record is read as none wherever it is
+ *   met — a done and the person's keep included — whether or not a prune has run since (security review of 0.35.0).
  *
  * Taking guards against two sessions acting on one message, not against what is sent: every act still needs the
  * behaviour rules, the send policy and the person's approval. And it is a speed bump, not a boundary — every process
@@ -1046,10 +1047,20 @@ export class TakeStore {
     }
   }
 
+  /**
+   * §4: whether a record is within its retention, thirty days after it last changed. Past it, it is read as none, as if
+   * the daily prune had deleted it — which runs only after a write, so a done, or the person's keep, would otherwise
+   * hold every session off a message until some process happened to write a take (security review of 0.35.0).
+   */
+  #retained(record: TakeRecord): boolean {
+    return Date.parse(record.updatedAt) + TAKE_RETENTION_DAYS * DAY_MS > this.#now().getTime();
+  }
+
   /** The record as it stands, lapses worked out on the lease alone (no process is looked at), or null. */
   async read(ref: TakeMessageRef): Promise<TakeRecord | null | 'unreadable'> {
     const found = await this.#readFile(this.#path(ref));
     if (found === null || found === 'unreadable') return found;
+    if (!this.#retained(found)) return null;
     return (await this.#settle(found, null)).record;
   }
 
@@ -1155,7 +1166,7 @@ export class TakeStore {
           lastActAt: at,
         };
         settledChanged = true;
-      } else if (found === null) current = null;
+      } else if (found === null || !this.#retained(found)) current = null;
       else {
         const settled = await this.#settle(found, probe ? new Map() : null);
         current = settled.record;
@@ -1357,6 +1368,7 @@ export class TakeStore {
       const found = await this.#readFile(path);
       if (found === null) continue;
       if (found === 'unreadable') throw takenElsewhere('HELD');
+      if (!this.#retained(found)) continue;
       // A quick look first; only a record someone else seems to hold is looked at under its lock, with its holder's parent.
       if (elsewhere((await this.#settle(found, null)).record, caller) === null) continue;
       await this.#update(ref, true, (current) => {
@@ -1661,14 +1673,14 @@ export class TakeStore {
       for (const file of files.sort()) {
         const path = join(this.directory, accountId, file);
         const found = await this.#readFile(path);
-        if (found === null || found === 'unreadable') continue;
+        if (found === null || found === 'unreadable' || !this.#retained(found)) continue;
         // Only a session's take, or an offer — with a time, or waiting past its account's reminder window — lapses by itself.
         const may =
           (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) || found.state === 'offered';
         if (!may) continue;
         await withFileLock(`${path}.lock`, async () => {
           const again = await this.#readFile(path);
-          if (again === null || again === 'unreadable') return;
+          if (again === null || again === 'unreadable' || !this.#retained(again)) return;
           const settled = await this.#settle(again, probing);
           if (!settled.changed) return;
           await this.#write(path, settled.record);
@@ -1684,7 +1696,7 @@ export class TakeStore {
 
   /**
    * Every record held, or one account's, lapses worked out on the lease alone; a file that cannot be read is listed as
-   * such. Nothing is written.
+   * such, and one past its retention is not listed. Nothing is written.
    */
   async list(options: { readonly accountId?: string | undefined } = {}): Promise<ListedTake[]> {
     let accounts: string[];
@@ -1709,7 +1721,7 @@ export class TakeStore {
         const found = await this.#readFile(join(this.directory, accountId, file));
         if (found === null) continue;
         if (found === 'unreadable') listed.push({ unreadable: { accountId, file } });
-        else listed.push({ record: (await this.#settle(found, null)).record });
+        else if (this.#retained(found)) listed.push({ record: (await this.#settle(found, null)).record });
       }
     }
     return listed;

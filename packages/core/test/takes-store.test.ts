@@ -501,6 +501,37 @@ test('pruning deletes records thirty days past their last change, and the folder
   assert.deepEqual(await store.list(), []);
 });
 
+test('a done, and the person’s keep, lapse with the record’s retention: read as none thirty days after they last changed', async () => {
+  // Security review of 0.35.0: a done never lapsed — every other session stayed refused DONE until a daily prune
+  // happened to run in some process after a write, which a refused act never is.
+  const DAY = 24 * 60 * 60_000;
+  const kept: TakeMessage = { ...MESSAGE, id: 'C0123/1729936900.000200' };
+  const { store, advance } = storeAt();
+  await store.take(MESSAGE, ALICE);
+  await store.finish(MESSAGE, ALICE, undefined, ACT);
+  await store.keep(kept, TERMINAL);
+  advance(29 * DAY);
+  assert.equal((await refusal(store.gate(MESSAGE, BOB, ACT, { required: false }))).details?.reason, 'DONE');
+  assert.equal((await refusal(store.take(MESSAGE, BOB))).details?.reason, 'DONE');
+  assert.equal((await refusal(store.take(kept, BOB))).details?.reason, 'PERSON');
+  advance(DAY);
+  // Thirty days on, as if the daily prune had deleted them, whether or not one has run since.
+  assert.equal(await store.read(MESSAGE), null);
+  assert.equal((await store.views([MESSAGE, kept], BOB)).get(MESSAGE.id), null);
+  assert.deepEqual(await store.list(), []);
+  await store.refuseHeldElsewhere([MESSAGE, kept], BOB);
+  assert.deepEqual(await store.gate(MESSAGE, BOB, ACT, { required: false }), { held: false, line: null });
+  assert.deepEqual(await store.lapse(), { ended: 0, expired: 0 });
+  const taken = await store.take(MESSAGE, BOB);
+  assert.equal(taken.view?.by, 'you');
+  assert.deepEqual(
+    taken.record.history.map((line) => line.kind),
+    ['taken'],
+    'a new record: nothing of the old one is carried',
+  );
+  assert.equal((await store.take(kept, BOB)).view?.by, 'you');
+});
+
 // ── Who a caller is (T2) ───────────────────────────────────────────────────────────────────────────────────────
 
 test('takerIdentity: the person at a terminal is nobody; a window, or a Claude Code session, is a holder', async () => {
