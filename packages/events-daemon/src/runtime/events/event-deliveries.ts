@@ -2,6 +2,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { CommsError } from '@agentcomms/core';
 import { canonicalSubscriber } from '../../domain/activation-documents.ts';
 import type { EventSubscriptionV1 } from '../../domain/event-subscription.ts';
+import { webhookSubscriberAddress } from '../../domain/webhook-subscriber.ts';
 import { cancelEventDeliveriesInTransaction, settleFinishedEventsInTransaction } from './event-ledger.ts';
 
 /**
@@ -27,6 +28,11 @@ export interface SubscriberEntryV2 {
   readonly state: 'inert' | 'active' | 'superseded' | null;
   readonly listening: { readonly host: string; readonly port: number } | null;
   readonly listenError: 'PORT_IN_USE' | null;
+  /**
+   * A webhook subscriber's public address (`webhookSubscriberAddress`): never a secret URL's path, never a token. Null
+   * for a live subscriber, which listens on this Mac instead, and for a damaged row.
+   */
+  readonly address: { readonly url: string } | null;
   /** Undelivered events: queued, waiting for a retry, or being sent. */
   readonly backlog: number;
   readonly lastDeliveredAt: number | null;
@@ -91,10 +97,12 @@ export function subscriberEntries(
   return rows.map((row) => {
     let kind: 'sse' | 'webhook' = 'sse';
     let events: EventSubscriptionV1 | null = null;
+    let address: { readonly url: string } | null = null;
     try {
       const document = canonicalSubscriber(JSON.parse(row.document));
       kind = document.kind;
       events = document.events ?? null;
+      if (document.kind === 'webhook') address = { url: webhookSubscriberAddress(document) };
     } catch {
       // A damaged immutable row is listed by its identity alone, never as a permissive document.
     }
@@ -109,6 +117,7 @@ export function subscriberEntries(
       state: row.state,
       listening: status?.listening ?? null,
       listenError: status?.listenError ?? null,
+      address,
       backlog: row.backlog,
       lastDeliveredAt: row.last_delivered_at,
     };

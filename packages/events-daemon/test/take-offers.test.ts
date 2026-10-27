@@ -222,7 +222,7 @@ test('TAKE-O1: a lane delivery offers the message to the bound window — exclus
       assert.ok(said !== undefined, pointer.text);
       assert.match(
         pointer.text,
-        /^1 new item in lane david \(Gmail, rule david-by-mail\): read it with events_lane_item, item qi_[0-9A-HJKMNP-TV-Z]{26}\. It is offered to this session until \d\d:\d\d: take it before acting, or hand it back\. Then call events_watch for lane david again to keep watching\.$/u,
+        /^1 new item in lane david \(Gmail, workflow david-by-mail\): read it with events_lane_item, item qi_[0-9A-HJKMNP-TV-Z]{26}\. It is offered to this session until \d\d:\d\d: take it before acting, or hand it back\. Then call events_watch for lane david again to keep watching\.$/u,
       );
       // The fifteen minutes start at the wake, and the pointer named that time.
       const handed = await eventually(
@@ -349,7 +349,7 @@ test('TAKE-O2: a session target offers the message to the relay session its prom
         const blocks = prompt.split('\n\n');
         assert.match(
           blocks[0] ?? '',
-          /^\[Agent Comms\] The rule david-by-mail passed you a message from gmail\/events\/gmail\.$/u,
+          /^\[Agent Comms\] The workflow david-by-mail passed you a message from gmail\/events\/gmail\.$/u,
         );
         const said = OFFER_LINE.exec(blocks[1] ?? '')?.[1];
         assert.ok(said !== undefined, prompt);

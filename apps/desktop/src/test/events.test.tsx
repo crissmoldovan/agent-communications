@@ -71,7 +71,7 @@ const region = (name: string): HTMLElement => screen.getByRole('region', { name 
 const WATCH = 'Watching your accounts';
 
 /** The Events screen's tabs, by the name each starts with: its badge, when it has one, follows. */
-const TAB_NAMES = ['Service', 'Judges', 'Workflows', 'Deliveries'] as const;
+const TAB_NAMES = ['Service', 'Judges', 'Workflows', 'Deliveries', 'Subscribers'] as const;
 type TabName = (typeof TAB_NAMES)[number];
 
 /** A tab, once the screen shows its tabs. */
@@ -226,7 +226,7 @@ describe('Events', () => {
     expect(deliveryView.querySelector('img')).toBeNull();
   });
 
-  it('Events: four tabs, Service first; each shows its own view, and every view is read when the screen opens', async () => {
+  it('Events: five tabs, Service first; each shows its own view, and every view is read when the screen opens', async () => {
     const bridge = bridgeWith(
       {},
       { version: versions('0.27.0'), eventsRules: rules, eventsDeliveries: deliveries, eventsStatus: running },
@@ -259,6 +259,8 @@ describe('Events', () => {
       Judges: ['Judges'],
       Workflows: ['Workflows'],
       Deliveries: ['Deliveries'],
+      // Subscribers (0.36.0) says only that it needs 0.36.0 here: it has no list to show.
+      Subscribers: [],
     };
     for (const tab of ['Judges', 'Workflows', 'Deliveries', 'Service'] as const) {
       await openTab(tab);
@@ -729,7 +731,7 @@ describe('The event service', () => {
     // Until the first-start question is answered, Start is not offered: the question itself is over the screen.
     const asking = renderApp(serviceBridge(EVENT_SERVICE.firstStart), { screen: 'events' });
     expect(await screen.findByRole('alertdialog', { name: 'Start the event service?' })).toBeTruthy();
-    await waitFor(() => expect(screen.getAllByRole('tab', { hidden: true })).toHaveLength(4));
+    await waitFor(() => expect(screen.getAllByRole('tab', { hidden: true })).toHaveLength(5));
     expect(screen.getByRole('tab', { name: 'Service', hidden: true })).toBeTruthy();
     asking.unmount();
     // It follows the supervisor: a service that gives up while another tab is open says so on its tab.

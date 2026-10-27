@@ -488,6 +488,29 @@ export class RelayClient {
     return body.value.sessions.map(session);
   }
 
+  /**
+   * `GET /v1/events` (one page, not followed): the value a run's result carried under its `outputFormat`, from the
+   * run's `structured.final` record (Claude only), or null when it published none. Only that record type is asked for.
+   */
+  async structuredFinal(sessionId: string, runId: string): Promise<unknown | null> {
+    if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
+    if (!RUN_ID.test(runId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay run id is run_<uuid>');
+    const query = new URLSearchParams({ sessionId, runId, types: 'structured.final', follow: '0', limit: '20' });
+    const body = await this.#json('GET', `/v1/events?${query.toString()}`);
+    if (!isRecord(body.value) || !Array.isArray(body.value.events))
+      throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered its events in a shape this client cannot read');
+    for (const event of [...body.value.events].reverse())
+      if (
+        isRecord(event) &&
+        event.type === 'structured.final' &&
+        event.runId === runId &&
+        isRecord(event.payload) &&
+        Object.hasOwn(event.payload, 'value')
+      )
+        return event.payload.value;
+    return null;
+  }
+
   /** `GET /v1/sessions/:id`: the session, its runs and the journal cursor it reflects; null when there is none. */
   async snapshot(sessionId: string): Promise<RelaySnapshotV1 | null> {
     if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
@@ -516,7 +539,18 @@ export class RelayClient {
    */
   async startRun(
     sessionId: string,
-    input: { readonly prompt: string; readonly requestedMode: string; readonly startId: string },
+    input: {
+      readonly prompt: string;
+      readonly requestedMode: string;
+      readonly startId: string;
+      /**
+       * The shape the turn's result takes (claude-stream's `outputFormat`, Claude only): a workflow's deliver step
+       * that asks for a report sends one, and reads the turn's `structured.final` when it ends (workflows §6.4).
+       */
+      readonly outputFormat?:
+        | { readonly type: 'json_schema'; readonly schema: Readonly<Record<string, unknown>> }
+        | undefined;
+    },
   ): Promise<RelayStartResult> {
     if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
     if (!START_ID.test(input.startId))

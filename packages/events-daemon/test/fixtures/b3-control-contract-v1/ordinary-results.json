@@ -707,6 +707,126 @@
     }
   },
   {
+    "name": "subscriber-add-webhook-result",
+    "request": {
+      "operation": "addSubscriber",
+      "args": {
+        "document": {
+          "subscriberId": "subscriber-hook",
+          "version": 1,
+          "kind": "webhook",
+          "url": {
+            "kind": "plain",
+            "value": "http://127.0.0.1:4802/hooks/events"
+          },
+          "approvedAddressSet": ["127.0.0.1"],
+          "signing": "standard-webhooks",
+          "retryLimit": 3,
+          "events": {
+            "namespaces": ["acme"],
+            "patterns": ["acme.*.*.*"],
+            "content": "none"
+          }
+        }
+      }
+    },
+    "result": {
+      "id": "subscriber-hook@1",
+      "kind": "subscriber",
+      "objectId": "subscriber-hook",
+      "version": 1,
+      "document": {
+        "approvedAddressSet": ["127.0.0.1"],
+        "events": {
+          "content": "none",
+          "namespaces": ["acme"],
+          "patterns": ["acme.*.*.*"]
+        },
+        "kind": "webhook",
+        "retryLimit": 3,
+        "signing": "standard-webhooks",
+        "subscriberId": "subscriber-hook",
+        "url": {
+          "kind": "plain",
+          "value": "http://127.0.0.1:4802/hooks/events"
+        },
+        "version": 1
+      },
+      "digest": "0f8cc27bf2c99159090568e1970c5a7e767506e4d0a9d549c55771783bfdb34a",
+      "state": null
+    }
+  },
+  {
+    "name": "subscribers-list-entries-result",
+    "request": {
+      "operation": "subscribersList",
+      "args": {}
+    },
+    "result": [
+      {
+        "subscriberId": "subscriber-1",
+        "version": 1,
+        "digest": "78f4d06f12b71bed83bb94112434c84969ea2045e7ab01ff4e31affe09547ca3",
+        "revokedAt": null,
+        "kind": "sse",
+        "events": null,
+        "state": null,
+        "listening": null,
+        "listenError": null,
+        "address": null,
+        "backlog": 0,
+        "lastDeliveredAt": null
+      },
+      {
+        "subscriberId": "subscriber-1",
+        "version": 2,
+        "digest": "0a3f2df052624fee233efccd2b2841ae515fbeb9673081e9af54b1f734d8645a",
+        "revokedAt": null,
+        "kind": "sse",
+        "events": null,
+        "state": null,
+        "listening": null,
+        "listenError": null,
+        "address": null,
+        "backlog": 0,
+        "lastDeliveredAt": null
+      },
+      {
+        "subscriberId": "subscriber-hook",
+        "version": 1,
+        "digest": "0f8cc27bf2c99159090568e1970c5a7e767506e4d0a9d549c55771783bfdb34a",
+        "revokedAt": null,
+        "kind": "webhook",
+        "events": {
+          "namespaces": ["acme"],
+          "patterns": ["acme.*.*.*"],
+          "content": "none"
+        },
+        "state": "inert",
+        "listening": null,
+        "listenError": null,
+        "address": {
+          "url": "http://127.0.0.1:4802/hooks/events"
+        },
+        "backlog": 0,
+        "lastDeliveredAt": null
+      }
+    ]
+  },
+  {
+    "name": "subscriber-remove-webhook-result",
+    "request": {
+      "operation": "removeSubscriber",
+      "args": {
+        "subscriberId": "subscriber-hook"
+      }
+    },
+    "result": {
+      "subscriberId": "subscriber-hook",
+      "removed": true
+    }
+  },
+  {
     "name": "subscriber-remove-result",
     "request": {
       "operation": "removeSubscriber",

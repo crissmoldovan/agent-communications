@@ -40,12 +40,14 @@ import {
   type Millis,
   readActivityItems,
   readMessagesPage,
+  readRunsByEvent,
   type TakesRead,
   type TakingRead,
 } from '../messages/read.ts';
 import { cardSteps, type StoryContext, whereWords } from '../messages/story.ts';
 import { readTakes, readTakingSettings } from '../messages/takes.ts';
 import { takeDestination } from '../navigation.tsx';
+import type { RunListEntryV1 } from '../workflows/types.ts';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
 import { MessageByEvent, MessageStory } from './MessageStory.tsx';
 import { MessagesTabs } from './search/parts.tsx';
@@ -77,6 +79,7 @@ export const MESSAGES_COPY = {
   unreadable: 'The messages could not be read.',
   activityUnreadable: 'What agents did could not be read.',
   takesUnreadable: 'Who has each message could not be read, so the list shows without it.',
+  runsUnreadable: 'The workflows’ runs could not be read.',
   noEventService:
     "The event service isn't installed, so only the messages an agent read through Agent Comms are shown.",
   olderEventService:
@@ -176,6 +179,8 @@ export interface MessagesReads {
   /** Core's takes and each account's taking settings (0.35.0); `off` before core takes messages. */
   takes: Loadable<TakesRead> | 'off';
   taking: Loadable<TakingRead> | 'off';
+  /** The workflow runs about each message, by event id (0.36.0); `off` before the event service has workflows. */
+  runs: Loadable<ReadonlyMap<string, readonly RunListEntryV1[]>> | 'off';
 }
 
 /**
@@ -184,9 +189,26 @@ export interface MessagesReads {
  */
 export function joinOptionsOf(reads: MessagesReads): JoinOptions {
   const { takes, taking } = reads;
-  if (takes === 'off' || takes.state !== 'ready') return { aliases: reads.accounts.aliases };
+  const runs = reads.runs !== 'off' && reads.runs.state === 'ready' ? { runs: reads.runs.value } : {};
+  if (takes === 'off' || takes.state !== 'ready') return { aliases: reads.accounts.aliases, ...runs };
   const settings = taking !== 'off' && taking.state === 'ready' ? taking.value.accounts : [];
-  return { aliases: reads.accounts.aliases, takes: takeContext(takes.value.takes, settings, reads.readAt) };
+  return { aliases: reads.accounts.aliases, takes: takeContext(takes.value.takes, settings, reads.readAt), ...runs };
+}
+
+/** `runs list` (0.36.0): every workflow's newest runs, joined by the event each is about. */
+async function readRuns(bridge: Bridge): Promise<Loadable<ReadonlyMap<string, readonly RunListEntryV1[]>>> {
+  try {
+    const result = await bridge.cli({ kind: 'eventsRunsList' });
+    if (result.status === 'ok') {
+      const runs = readRunsByEvent(result.data);
+      return runs === null
+        ? { state: 'error', message: MESSAGES_COPY.runsUnreadable }
+        : { state: 'ready', value: runs };
+    }
+    return { state: 'error', message: result.status === 'failed' ? result.message : MESSAGES_COPY.runsUnreadable };
+  } catch (error) {
+    return { state: 'error', message: errorMessage(error) };
+  }
 }
 
 /**
@@ -195,7 +217,7 @@ export function joinOptionsOf(reads: MessagesReads): JoinOptions {
  * again on `reload`, keeping only the answers of the read asked last. `older` reads the next page of events and adds
  * it.
  */
-function useMessagesReads(eventsOn: boolean, takingOn: boolean) {
+function useMessagesReads(eventsOn: boolean, takingOn: boolean, runsOn = false) {
   const bridge = useBridge();
   const { installation } = useAppData();
   const present = installation.state === 'ready' ? installation.value.present : [];
@@ -210,6 +232,7 @@ function useMessagesReads(eventsOn: boolean, takingOn: boolean) {
       accounts: NO_ACCOUNTS,
       takes: takingOn ? { state: 'loading' } : 'off',
       taking: takingOn ? { state: 'loading' } : 'off',
+      runs: runsOn ? { state: 'loading' } : 'off',
     };
   });
   const [olderBusy, setOlderBusy] = useState(false);
@@ -220,7 +243,7 @@ function useMessagesReads(eventsOn: boolean, takingOn: boolean) {
     const readAt = Date.now();
     const since = readAt - MESSAGES_WINDOW_MS;
     const products = presentKey === '' ? [] : (presentKey.split(',') as Product[]);
-    const [events, activity, accounts, takes, taking] = await Promise.all([
+    const [events, activity, accounts, takes, taking, runs] = await Promise.all([
       eventsOn
         ? readPage(bridge, { kind: 'eventsMessagesList', since, limit: MESSAGES_LIMIT })
         : Promise.resolve('off' as const),
@@ -228,11 +251,12 @@ function useMessagesReads(eventsOn: boolean, takingOn: boolean) {
       readAccounts(bridge, products, { resend: takingOn }),
       takingOn ? readTakes(bridge) : Promise.resolve('off' as const),
       takingOn ? readTakingSettings(bridge) : Promise.resolve('off' as const),
+      runsOn ? readRuns(bridge) : Promise.resolve('off' as const),
     ]);
     if (ask !== asked.current) return;
     setOlderProblem(null);
-    setReads({ since, readAt, events, activity, accounts, takes, taking });
-  }, [bridge, eventsOn, takingOn, presentKey]);
+    setReads({ since, readAt, events, activity, accounts, takes, taking, runs });
+  }, [bridge, eventsOn, takingOn, runsOn, presentKey]);
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -299,9 +323,12 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
     const eventId = takeDestination('messages')?.eventId ?? null;
     return eventId !== null && isEventId(eventId) ? eventId : null;
   });
-  const { installation } = useAppData();
+  const { installation, eventsVersion } = useAppData();
   const core = installation.state === 'ready' ? installation.value.version : null;
   const mode = useEventsMode();
+  // The workflows' runs about each message (0.36.0), from the event service's own version.
+  const runsOn =
+    eventsVersion !== 'absent' && eventsVersion.state === 'ready' && supports(eventsVersion.value, 'workflows');
   if (!supports(core, 'messages')) {
     return (
       <Frame onScreen={onScreen}>
@@ -321,6 +348,7 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
       key={mode === 'on' ? 'on' : 'off'}
       mode={mode}
       takingOn={supports(core, 'taking')}
+      runsOn={mode === 'on' && runsOn}
       onScreen={onScreen}
       requested={mode === 'on' ? requested : null}
     />
@@ -344,19 +372,22 @@ const ALL = 'all';
 function MessagesView({
   mode,
   takingOn = false,
+  runsOn = false,
   onScreen,
   requested = null,
 }: {
   mode: Exclude<EventsMode, 'loading'>;
   /** Core takes messages (0.35.0): who has each is read, and its two filters are offered. */
   takingOn?: boolean;
+  /** The event service has workflows (0.36.0): each message's runs are read and joined. */
+  runsOn?: boolean;
   onScreen?: ((screen: Screen) => void) | undefined;
   /** An event whose story opens first, as another screen asked. */
   requested?: string | null;
 }) {
   const { installation } = useAppData();
   const home = installation.state === 'ready' ? (installation.value.home ?? null) : null;
-  const { reads, reload, older, olderBusy, olderProblem } = useMessagesReads(mode === 'on', takingOn);
+  const { reads, reload, older, olderBusy, olderProblem } = useMessagesReads(mode === 'on', takingOn, runsOn);
   const [show, setShow] = useState<Show>('all');
   const [account, setAccount] = useState<string | null>(null);
   // The message whose story is open, by its key; the list keeps its filters while it is.

@@ -299,7 +299,70 @@ function sourceScope(row: StoredReservation): SourceJudgeWork | null {
   };
 }
 
-function ruleAuthority(database: DatabaseSync, scope: SourceJudgeWork, judge: CanonicalJudgeDocument): JudgeWorkLimits {
+/**
+ * A workflow step's judging work (workflows plan B3): `flow-judge:<run>:<step>:<attempt>:<call>`. It is source-owned
+ * work like the gate's — the same account, event, rule version, budget and ledger — but its authority is the live run
+ * and the judge its step asks, since the message's projection was purged when its decision made the run.
+ */
+export const FLOW_JUDGE_WORK_PREFIX = 'flow-judge:';
+
+/** A live run of this exact source work, and the limits of the judge its step asks, or a refusal. */
+function flowJudgeAuthority(
+  database: DatabaseSync,
+  scope: SourceJudgeWork,
+  judge: CanonicalJudgeDocument,
+  workId: string,
+): JudgeWorkLimits {
+  const [runId, stepId] = workId.slice(FLOW_JUDGE_WORK_PREFIX.length).split(':');
+  const run = database
+    .prepare('SELECT state, account_id, event_id, rule_id, rule_version FROM workflow_runs WHERE id = ?')
+    .get(runId ?? '') as
+    | { state: string; account_id: string; event_id: string; rule_id: string; rule_version: number }
+    | undefined;
+  if (
+    run === undefined ||
+    (run.state !== 'running' && run.state !== 'waiting') ||
+    run.account_id !== scope.accountId ||
+    run.event_id !== scope.eventId ||
+    run.rule_id !== scope.ruleId ||
+    run.rule_version !== scope.ruleVersion
+  )
+    refusal('JUDGE_AUTHORITY_CHANGED', 'the workflow run that asks this judge is no longer live');
+  const row = database
+    .prepare('SELECT document, state FROM rule_versions WHERE rule_id = ? AND version = ?')
+    .get(scope.ruleId, scope.ruleVersion) as { document: string; state: string | null } | undefined;
+  if (row === undefined || row.state === 'revoked')
+    refusal('JUDGE_AUTHORITY_CHANGED', "the workflow run's immutable version is unavailable");
+  let rule: CanonicalFullRuleDocument;
+  try {
+    rule = canonicalFullRuleDocument(JSON.parse(row.document));
+  } catch {
+    return refusal('JUDGE_AUTHORITY_CHANGED', "the workflow run's immutable version is invalid");
+  }
+  const step = rule.flow?.steps[stepId ?? ''];
+  const asked = step?.kind === 'judge' ? step.ask : step?.kind === 'route' ? step.judge : undefined;
+  if (
+    asked === undefined ||
+    rule.source.channel !== scope.source ||
+    !rule.source.accountIds.includes(scope.accountId) ||
+    !sameCanonical(asked.judge, judge)
+  )
+    refusal('JUDGE_AUTHORITY_CHANGED', "the workflow's step no longer asks this judge");
+  return {
+    callsPerRollingHour: asked.callsPerRollingHour,
+    inputTokensPerRolling30Days: asked.inputTokensPerRolling30Days,
+    concurrency: asked.concurrency,
+    maxInputTokens: asked.maxInputTokens,
+  };
+}
+
+function ruleAuthority(
+  database: DatabaseSync,
+  scope: SourceJudgeWork,
+  judge: CanonicalJudgeDocument,
+  workId?: string,
+): JudgeWorkLimits {
+  if (workId?.startsWith(FLOW_JUDGE_WORK_PREFIX) === true) return flowJudgeAuthority(database, scope, judge, workId);
   const projection = database
     .prepare(
       `SELECT 1 AS present FROM ingest_rules p
@@ -583,7 +646,7 @@ function assertReservationAuthority(
     assertSyntheticTestAuthority(database, row, judge, now);
     return { budget, judge };
   }
-  return { budget, judge, limits: ruleAuthority(database, scope, judge) };
+  return { budget, judge, limits: ruleAuthority(database, scope, judge, row.work_id) };
 }
 
 /** The durable test binding is a real transport authority, not merely admission bookkeeping. */
@@ -670,7 +733,7 @@ export function reserveJudgeWork(input: ReserveJudgeWorkInput): JudgeReservation
     if (!sameCanonical(judge, input.judge))
       refusal('JUDGE_AUTHORITY_CHANGED', 'the supplied judge differs from its immutable stored authority');
     activeKind(input.store.database, judge.kind);
-    const limits = ruleAuthority(input.store.database, input.scope, judge);
+    const limits = ruleAuthority(input.store.database, input.scope, judge, input.workId);
     if (!sameCanonical(limits, input.limits))
       refusal('JUDGE_AUTHORITY_CHANGED', 'the supplied limits differ from the immutable rule authority');
     const prior = readReservationForSourceWork(input.store.database, input.workId, input.scope);

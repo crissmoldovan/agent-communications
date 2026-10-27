@@ -47,11 +47,33 @@ export interface ProjectDocument {
 }
 
 /** One project, as `project show` gives it and `projects list` lists it (plan I6). */
+/**
+ * A relay session working in one of a project's folders, or in a worktree a run made of it, as `project show` and
+ * `projects list` give it: ids, a closed state and times. Never its title, which another client may have written.
+ */
+export interface ProjectSessionV1 {
+  /** The relay session's id, `sess_<uuid>`. */
+  readonly session: string;
+  readonly provider: string;
+  /** `busy` while a turn runs; `watched` for a window the relay only watches; else `idle`. */
+  readonly state: 'idle' | 'busy' | 'watched';
+  /** When it last started or ended a turn, or was made; null when the relay says neither. */
+  readonly lastActiveAt: number | null;
+  /** Its folder: one of the project's, or a run-made worktree's. */
+  readonly folder: string;
+}
+
 export interface ProjectV1 extends ProjectDocument {
   readonly profileBy: 'person' | null;
   readonly profileAt: number | null;
   readonly createdAt: number;
   readonly updatedAt: number;
+  /**
+   * The relay sessions working in it (`project show`, `projects list`); null when the relay could not be asked, with
+   * the closed reason in `sessionsReason`. Absent from what `project add` and `project update` answer.
+   */
+  readonly sessions?: readonly ProjectSessionV1[] | null;
+  readonly sessionsReason?: string | null;
 }
 
 export interface ProjectsListResultV1 {
@@ -114,7 +136,14 @@ const LINE_CONTROL = /[\u0000-\u001f\u007f-\u009f‪-‮⁦-⁩]/u;
 // biome-ignore lint/suspicious/noControlCharactersInRegex: the controls are what the check refuses.
 const TEXT_CONTROL = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f‪-‮⁦-⁩]/u;
 /** Fields the server sets: a document copied from `project show` may carry them, and they are not read. */
-const SERVER_FIELDS: readonly string[] = ['profileBy', 'profileAt', 'createdAt', 'updatedAt'];
+const SERVER_FIELDS: readonly string[] = [
+  'profileBy',
+  'profileAt',
+  'createdAt',
+  'updatedAt',
+  'sessions',
+  'sessionsReason',
+];
 const DOCUMENT_FIELDS: readonly string[] = ['projectId', 'name', 'repo', 'profile', 'hints', 'folders'];
 
 function invalid(message: string): never {

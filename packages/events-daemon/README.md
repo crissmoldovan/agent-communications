@@ -177,7 +177,7 @@ agent-events lane unbind david       # at once; the window's watches end
   folder). One window per lane, and one lane per window. The app's Lanes panel opens your terminal with the command.
 - **What the window gets.** `events_watch({ lane })` answers with an MCP task (protocol 2026-07-28, the tasks
   extension) that completes on the lane's next new item: Claude Code wakes an idle window for it. The wake is a
-  pointer the event service writes — "1 new item in lane david (Slack, rule david-on-slack): read it with
+  pointer the event service writes — "1 new item in lane david (Slack, workflow david-on-slack): read it with
   events_lane_item, item qi_…" — never a sender, subject or text. The window reads the item with
   `events_lane_item({ item })`, every field its sender wrote inside an untrusted-content envelope, then watches again.
   A client without the tasks extension waits with `events_wait({ lane, seconds })`, up to 50 seconds at a time.
@@ -222,7 +222,7 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   addresses and issue ids, and reads the description as Markdown. So in the description every slot's value is a block
   quote, its text inside a code block, where Linear makes no link, mention or formatting: a value from the message is
   labelled "From outside: written by the sender, not checked", and a constant the workflow's mapping sets "From the
-  rule's mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain
+  workflow's mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain
   text, each is one line. The templates' own words are written as they are, as you approved them, and the description
   ends with the workflow and delivery that added the issue.
 - **Checked against Linear.** When you enable a workflow and a Linear key is kept, the event service asks Linear (as
@@ -236,6 +236,14 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   code (`LINEAR_INVALID_INPUT`, `LINEAR_AUTHENTICATION_ERROR`, …). The issue's id is chosen from the delivery's, and each
   try first looks for it, so a retry after a lost answer never adds a second issue. With no key, a delivery waits
   (`LINEAR_KEY_MISSING`) and sends nothing.
+- **A change, in a workflow.** A workflow's `linear-change` target comments on, moves, labels or assigns the issue an
+  earlier step of the same run created (its deliver step's `to.issue`), and no other: the issue comes from that step's
+  own output, never from a message, and it must still be in the target's team. It goes through the same address, key
+  and checks as an issue. The comment's id is chosen from the delivery's, so a retry after a lost answer finds it
+  instead of adding a second; a state, labels and an assignee are one `issueUpdate`, which a retry repeats harmlessly.
+  Each slot in the comment is quoted as an issue's are, and a session's summary (`{{steps.<wait>.summary}}`, a
+  comment's slot only) is labelled "Written by an agent, not checked". Each change counts the workflow's
+  `linearWritesPerHour`, as an issue does.
 - **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
   added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
   is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the

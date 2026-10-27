@@ -45,6 +45,7 @@ import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecy
 import { linearChangeTargetDisclosure } from '../domain/linear-change-target.ts';
 import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
+  CHAIN_DECISION_OUTCOMES,
   isEventId,
   isMessagesCursor,
   MESSAGE_DECISION_OUTCOMES,
@@ -1137,7 +1138,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session', 'linear-change'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -1152,10 +1153,14 @@ function assertEventSource(value: unknown, name: string): void {
   for (const key of keys) assertText(value[key], `${name} ${key}`);
 }
 
-/** A Linear delivery's issue (0.33.0 design §3.4): its identifier and its linear.app address, and only on one. */
+/**
+ * A Linear delivery's issue (0.33.0 design §3.4), or the one a workflow's Linear change changed (0.36): its identifier
+ * and its linear.app address, and only on one of those.
+ */
 function assertDeliveryRowLinear(row: unknown): void {
   if (!isRecord(row) || !Object.hasOwn(row, 'linear')) return;
-  if (row.targetKind !== 'linear') throw new TypeError('only a Linear delivery shows a Linear issue');
+  if (row.targetKind !== 'linear' && row.targetKind !== 'linear-change')
+    throw new TypeError('only a Linear delivery shows a Linear issue');
   assertClosedRecord(row.linear, ['identifier', 'url'], 'a delivery’s Linear issue');
   if (typeof row.linear.identifier !== 'string' || !/^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u.test(row.linear.identifier))
     throw new TypeError('a Linear issue identifier is a team key and a number');
@@ -1351,7 +1356,13 @@ const PROJECT_RESULT_FIELDS: readonly string[] = Object.freeze([
 
 /** One project (0.36.0 §8.1), as `project show` gives it: closed, its folders absolute. */
 function assertProject(value: unknown): void {
-  assertClosedRecord(value, PROJECT_RESULT_FIELDS, 'a project');
+  const withSessions = isRecord(value) && (Object.hasOwn(value, 'sessions') || Object.hasOwn(value, 'sessionsReason'));
+  assertClosedRecord(
+    value,
+    withSessions ? [...PROJECT_RESULT_FIELDS, 'sessions', 'sessionsReason'] : PROJECT_RESULT_FIELDS,
+    'a project',
+  );
+  if (withSessions) assertProjectSessions(value.sessions, value.sessionsReason);
   for (const field of ['projectId', 'name', 'repo']) assertText(value[field], `a project's ${field}`);
   if (typeof value.profile !== 'string') throw new TypeError("a project's profile is text");
   if (value.profileBy !== null && value.profileBy !== 'person')
@@ -1372,6 +1383,28 @@ function assertProject(value: unknown): void {
     assertNullable(folder.worktreeRoot, assertText, "a checkout's worktree root");
   }
   for (const field of ['createdAt', 'updatedAt']) assertNonNegativeInteger(value[field], `a project's ${field}`);
+}
+
+/** The relay sessions working in a project: closed, with no title; or null, with the relay's closed reason. */
+function assertProjectSessions(sessions: unknown, reason: unknown): void {
+  if (sessions === null) {
+    if (typeof reason !== 'string' || !/^[A-Z][A-Z0-9_]{0,39}$/u.test(reason))
+      throw new TypeError("a project's unread sessions say why, in a closed word");
+    return;
+  }
+  if (reason !== null) throw new TypeError("a project's sessions, read, have no reason");
+  if (!Array.isArray(sessions)) throw new TypeError("a project's sessions are a list");
+  for (const session of sessions) {
+    assertClosedRecord(session, ['session', 'provider', 'state', 'lastActiveAt', 'folder'], "a project's session");
+    if (typeof session.session !== 'string' || !/^sess_[0-9a-f-]{36}$/u.test(session.session))
+      throw new TypeError("a project's session is a relay session id");
+    assertText(session.provider, "a project's session's provider");
+    if (!['idle', 'busy', 'watched'].includes(session.state as string))
+      throw new TypeError("a project's session is idle, busy or watched");
+    assertNullable(session.lastActiveAt, assertNonNegativeInteger, "when a project's session was last active");
+    if (typeof session.folder !== 'string' || !session.folder.startsWith('/'))
+      throw new TypeError("a project's session's folder is absolute");
+  }
 }
 
 /** `project scan`'s result: the roots, the repositories found by origin, and the folders passed over. */
@@ -1659,7 +1692,10 @@ function assertMessageEntry(value: unknown, name: string): void {
     assertClosedRecord(decision, ['ruleId', 'ruleVersion', 'outcome', 'judge'], `${name} decision`);
     assertText(decision.ruleId, `${name} decision rule id`);
     assertPositiveInteger(decision.ruleVersion, `${name} decision rule version`);
-    if (!MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never))
+    if (
+      !MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never) &&
+      !CHAIN_DECISION_OUTCOMES.includes(decision.outcome as never)
+    )
       throw new TypeError(`${name} decision has an unknown outcome`);
     if (decision.judge !== null) {
       assertClosedRecord(decision.judge, ['kind', 'answer', 'confidence', 'calibrated'], `${name} judge`);
@@ -2012,6 +2048,11 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     assertB3OrdinaryControlResultV1(operation, version);
     return;
   }
+  // A project shown or listed carries the sessions working in it, which add and update do not: its own closed check.
+  if (operation === 'project-show' || operation === 'project-add' || operation === 'project-update') {
+    assertProject(value);
+    return;
+  }
   if (operation === 'integration-show' && isRecord(value)) {
     if (value.integration === 'agent-sessions') assertAgentSessionsIntegration(value);
     else assertIntegrationShow(value);
@@ -2294,11 +2335,6 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'projects-list':
       if (!Array.isArray(value.projects)) throw new TypeError('a project list needs its projects');
       for (const project of value.projects) assertProject(project);
-      return;
-    case 'project-show':
-    case 'project-add':
-    case 'project-update':
-      assertProject(value);
       return;
     case 'project-remove':
       assertText(value.projectId, 'a removed project');

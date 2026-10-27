@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { DatabaseSync } from 'node:sqlite';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -10,9 +11,11 @@ import { catalogueEntry, describeFlow, type FlowDocumentV1, type StepKind } from
 import { readB3GuardManifests, verifyB3GuardCoverage } from '../../../scripts/verify-b3-guard-coverage.mjs';
 import { assertLoopbackSeal } from '../../../test/helpers/loopback-seal-preload.mjs';
 import { type EventsCliStreams, run } from '../src/cli/program.ts';
+import { EventControlClient } from '../src/control/client.ts';
 import { canonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
 import { renderB3ApprovalPreviewV1 } from '../src/operations/b3-contract.ts';
 import { createRetainedRuleTestControl } from '../src/runtime/b3-retained-control.ts';
+import { eventPaths } from '../src/runtime/paths.ts';
 import { EventProjectionStore } from '../src/runtime/projections.ts';
 import { RelayClient, readRelayToken } from '../src/runtime/relay-client.ts';
 import { composeWorkflows } from '../src/runtime/workflow/compose.ts';
@@ -80,7 +83,12 @@ async function enable(harness: LaneHarness, document: Record<string, unknown>): 
 
 /** The owner example (spec §4.4) on the fake mailbox: its targets and flow, its message's text its subject. */
 function ownerExample(): Record<string, unknown> & { flow: FlowDocumentV1 } {
-  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown>;
+  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown> & {
+    flow: { steps: Record<string, Record<string, unknown>> };
+  };
+  // Which project? chooses by hints alone here, so its judge version need not be stored.
+  const { judge: _judge, ...route } = example.flow.steps.route as Record<string, unknown>;
+  example.flow.steps.route = { ...route, by: ['hints'] };
   return {
     ...rule(1, example.targets as Record<string, unknown>[]),
     mapping: {
@@ -90,7 +98,7 @@ function ownerExample(): Record<string, unknown> & { flow: FlowDocumentV1 } {
       author: { name: { $path: '/from/name' } },
     },
     retention: example.retention,
-    flow: example.flow as FlowDocumentV1,
+    flow: example.flow as unknown as FlowDocumentV1,
   };
 }
 
@@ -106,6 +114,23 @@ function written(harness: LaneHarness): Record<string, number> {
       ),
     ),
   );
+}
+
+/** The route step's candidates are the person's projects (W12): the example's two, folders and all, as C's check reads. */
+function seedProjects(harness: LaneHarness): void {
+  const database = new DatabaseSync(eventPaths(harness.stateDir).database);
+  try {
+    for (const name of ['acme-site', 'billing']) {
+      database
+        .prepare('INSERT INTO projects (id, name, repo, created_at, updated_at) VALUES (?, ?, ?, 1, 1)')
+        .run(name, name, `github.com/acme/${name}`);
+      database
+        .prepare("INSERT INTO project_folders (folder, project_id, kind) VALUES (?, ?, 'checkout')")
+        .run(`/example/home/work/${name}`, name);
+    }
+  } finally {
+    database.close();
+  }
 }
 
 const ATTESTED = async (): Promise<DesktopOrigin> => ({
@@ -414,6 +439,9 @@ test('B7: a shadow version records a dry run for each effect and raise, and its 
     standIn(kind, () => {
       throw new Error(`a shadow never runs a ${kind} step`);
     });
+  // A start step's folder is checked at activation (C5): inside a folder the person allowed.
+  const allowed = await realpath(await shortTempDir('aev-try-shadow-'));
+  const folder = join(allowed, 'x');
   const document = {
     ...rule(1, [dryRun]),
     flow: {
@@ -434,7 +462,7 @@ test('B7: a shadow version records a dry run for each effect and raise, and its 
         pause: { kind: 'wait', for: { time: { afterMs: HOUR } }, timeoutMs: 2 * HOUR, next: { 'timed-out': 'begin' } },
         begin: {
           kind: 'start-session',
-          in: { folder: '/example/home/work/x' },
+          in: { folder },
           provider: 'claude',
           mode: 'manual',
           next: { started: 'out' },
@@ -443,63 +471,69 @@ test('B7: a shadow version records a dry run for each effect and raise, and its 
       },
     },
   };
-  await withLaneOwner(
-    async (harness) => {
-      await enable(harness, document);
-      harness.mailbox.send('A shadow run');
-      await harness.tick();
-      await harness.tick();
-      const [run] = readDatabase(harness.stateDir, (database) =>
-        database.prepare('SELECT id, state FROM workflow_runs').all(),
-      ) as Array<{ id: string; state: string }>;
-      assert.equal(run?.state, 'done');
-      const outcomes = Object.fromEntries(
-        (
-          readDatabase(harness.stateDir, (database) =>
-            database.prepare('SELECT step_id, outcome FROM workflow_steps WHERE run_id = ?').all(run?.id as string),
-          ) as Array<{ step_id: string; outcome: string }>
-        ).map((row) => [row.step_id, row.outcome]),
-      );
-      assert.deepEqual(outcomes, {
-        look: 'none',
-        tell: 'sent',
-        found: 'raised',
-        pause: 'timed-out',
-        begin: 'started',
-        out: 'done',
-      });
-      assert.deepEqual(notices, [], 'no notice is raised');
-      const kept = written(harness);
-      assert.equal(kept.workflow_events, 0, 'no event is raised');
-      const records = readDatabase(harness.stateDir, (database) =>
-        database
-          .prepare(
-            `SELECT d.id, d.step_id, d.state, d.target_kind, l.expires_at - l.delivered_at AS kept
+  try {
+    await withLaneOwner(
+      async (harness) => {
+        const person = new EventControlClient({ stateDir: harness.stateDir, clientName: 'person-setup:terminal' });
+        await person.request('integration-set', { integration: 'agent-sessions', allowFolders: [allowed] });
+        await enable(harness, document);
+        harness.mailbox.send('A shadow run');
+        await harness.tick();
+        await harness.tick();
+        const [run] = readDatabase(harness.stateDir, (database) =>
+          database.prepare('SELECT id, state FROM workflow_runs').all(),
+        ) as Array<{ id: string; state: string }>;
+        assert.equal(run?.state, 'done');
+        const outcomes = Object.fromEntries(
+          (
+            readDatabase(harness.stateDir, (database) =>
+              database.prepare('SELECT step_id, outcome FROM workflow_steps WHERE run_id = ?').all(run?.id as string),
+            ) as Array<{ step_id: string; outcome: string }>
+          ).map((row) => [row.step_id, row.outcome]),
+        );
+        assert.deepEqual(outcomes, {
+          look: 'none',
+          tell: 'sent',
+          found: 'raised',
+          pause: 'timed-out',
+          begin: 'started',
+          out: 'done',
+        });
+        assert.deepEqual(notices, [], 'no notice is raised');
+        const kept = written(harness);
+        assert.equal(kept.workflow_events, 0, 'no event is raised');
+        const records = readDatabase(harness.stateDir, (database) =>
+          database
+            .prepare(
+              `SELECT d.id, d.step_id, d.state, d.target_kind, l.expires_at - l.delivered_at AS kept
                FROM deliveries AS d JOIN dryrun_log AS l ON l.delivery_id = d.id WHERE d.run_id = ? ORDER BY d.step_id`,
-          )
-          .all(run?.id as string),
-      ) as Array<{ id: string; step_id: string; state: string; target_kind: string; kept: number }>;
-      assert.deepEqual(
-        records.map((record) => [record.step_id, record.state, record.target_kind, record.kept]),
-        [
-          ['begin', 'delivered', 'dry-run', 86_400_000],
-          ['found', 'delivered', 'dry-run', 86_400_000],
-          ['out', 'delivered', 'dry-run', 86_400_000],
-          ['tell', 'delivered', 'dry-run', 86_400_000],
-        ],
-        'a dry-run record for each effect and the raise, kept 24 hours, and none for the wait',
-      );
-      assert.equal(kept.deliveries, 4, 'nothing was delivered to the dry-run target itself');
-      const shown = await json<{ record: { would: { text: string }[]; stepId: string } }>(harness.stateDir, [
-        'dryrun',
-        'show',
-        records.find((record) => record.step_id === 'tell')?.id as string,
-      ]);
-      assert.equal(shown.record.stepId, 'tell');
-      assert.match(texts(shown.record.would), /^Would have shown the notice a shadow saw a mail$/u);
-    },
-    { workflows: { notifier, parts: [{ executors: [look, never('start-session')] }] } },
-  );
+            )
+            .all(run?.id as string),
+        ) as Array<{ id: string; step_id: string; state: string; target_kind: string; kept: number }>;
+        assert.deepEqual(
+          records.map((record) => [record.step_id, record.state, record.target_kind, record.kept]),
+          [
+            ['begin', 'delivered', 'dry-run', 86_400_000],
+            ['found', 'delivered', 'dry-run', 86_400_000],
+            ['out', 'delivered', 'dry-run', 86_400_000],
+            ['tell', 'delivered', 'dry-run', 86_400_000],
+          ],
+          'a dry-run record for each effect and the raise, kept 24 hours, and none for the wait',
+        );
+        assert.equal(kept.deliveries, 4, 'nothing was delivered to the dry-run target itself');
+        const shown = await json<{ record: { would: { text: string }[]; stepId: string } }>(harness.stateDir, [
+          'dryrun',
+          'show',
+          records.find((record) => record.step_id === 'tell')?.id as string,
+        ]);
+        assert.equal(shown.record.stepId, 'tell');
+        assert.match(texts(shown.record.would), /^Would have shown the notice a shadow saw a mail$/u);
+      },
+      { workflows: { notifier, parts: [{ executors: [look, never('start-session')] }] } },
+    );
+  } finally {
+    await rm(allowed, { recursive: true, force: true });
+  }
 });
 
 test('B7: workflow show --version 2 returns that version alone', { skip: WINDOWS_SKIP }, async () => {
@@ -539,6 +573,7 @@ test('B7: workflow show --version 2 returns that version alone', { skip: WINDOWS
 test('B7: the approval preview of a flow lists describeFlow’s numbered lines', { skip: WINDOWS_SKIP }, async () => {
   await withLaneOwner(async (harness) => {
     const example = ownerExample();
+    seedProjects(harness);
     for (const target of example.targets as Record<string, unknown>[])
       await harness.control.request('target-add', { document: target });
     await harness.control.request('rule-create', { document: example });

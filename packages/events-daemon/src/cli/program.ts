@@ -1292,7 +1292,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .command('projects')
     .description('the GitHub repositories on this Mac a workflow can route to (a person only)')
     .command('list')
-    .description('list every project, with its folders, profile and hints (a person only)')
+    .description(
+      'list every project, with its folders, profile and hints, and the relay sessions working in it, busy or idle (a person only)',
+    )
     .action(async () => {
       ran = true;
       const origin = await asPerson('list your projects');
@@ -1305,7 +1307,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     );
   project
     .command('show <project-id>')
-    .description('show one project (a person only)')
+    .description('show one project, with the relay sessions working in it, busy or idle (a person only)')
     .action(async (projectId: string) => {
       ran = true;
       const origin = await asPerson('see a project');

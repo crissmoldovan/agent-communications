@@ -316,6 +316,9 @@ test('B1: activation refuses a second active workflow raising acme.client-asks (
     const unjudged = (): Mutable => {
       const document = owner();
       delete (document as Record<string, unknown>).agentic;
+      // The route chooses by hints alone, so no judge version needs storing first.
+      const { judge: _judge, ...route } = document.flow.steps.route as Record<string, unknown>;
+      document.flow.steps.route = { ...route, by: ['hints'] };
       return document;
     };
     versions.createRule(unjudged());
@@ -362,18 +365,15 @@ test('B1: a FlowActivationCheck handed in runs after these checks and can refuse
     refusedWith('FLOW_TO_KIND'),
   );
   assert.equal(seen.includes('never'), false);
-  // A chained start is refused before any composition's check, while chains are not available.
+  // Chains are available (0.36 D6): a chained start goes on to the compositions' checks like any other workflow.
   const chained = owner();
   chained.flow.on = { raised: ['other.asks.issue.created'], withinMs: 86_400_000 };
-  await assert.rejects(
-    assertFlowActivation(canonicalFullRuleDocument(chained), database, [
-      () => {
-        seen.push('after-chain');
-      },
-    ]),
-    refusedWith('CHAIN_NOT_AVAILABLE'),
-  );
-  assert.equal(seen.includes('after-chain'), false);
+  await assertFlowActivation(canonicalFullRuleDocument(chained), database, [
+    () => {
+      seen.push('after-chain');
+    },
+  ]);
+  assert.equal(seen.includes('after-chain'), true);
   // A workflow without a flow runs no flow check.
   await assertFlowActivation(canonicalFullRuleDocument(rule(1, [dryRun()])), database, [
     () => {

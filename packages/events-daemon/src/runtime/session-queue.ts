@@ -5,6 +5,7 @@ import type { EventDatabase } from '../store/database.ts';
 import type { AgentSessionService } from './agent-sessions.ts';
 import { RELAY_RUN_END_TYPES, RelayError } from './relay-client.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
+import type { RelayWaits } from './workflow/relay-waits.ts';
 
 /**
  * The busy queue (0.33.0 design §3.5): a session delivery that met a busy session — the relay answered 409, or said the
@@ -218,6 +219,11 @@ export interface SessionQueueFollowerOptions {
   readonly onReleased?: (() => void) | undefined;
   readonly reconcileMs?: number | undefined;
   readonly retryMs?: number | undefined;
+  /**
+   * A workflow's waits on the relay (0.36 §6.5, §7.3): the sessions they watch are followed too, each run-end record is
+   * told them, and each watched session's snapshot reconciles them on every (re)connect.
+   */
+  readonly relayWaits?: RelayWaits | undefined;
 }
 
 /**
@@ -230,6 +236,7 @@ export class SessionQueueFollower {
   readonly #queue: SessionQueue;
   readonly #sessions: AgentSessionService;
   readonly #onReleased: (() => void) | undefined;
+  readonly #relayWaits: RelayWaits | undefined;
   readonly #reconcileMs: number;
   readonly #retryMs: number;
   readonly #seen = new Set<string>();
@@ -244,18 +251,26 @@ export class SessionQueueFollower {
     this.#queue = options.queue;
     this.#sessions = options.sessions;
     this.#onReleased = options.onReleased;
+    this.#relayWaits = options.relayWaits;
     this.#reconcileMs = options.reconcileMs ?? 30_000;
     this.#retryMs = options.retryMs ?? 5_000;
+  }
+
+  /** The relay sessions anything waits on: the busy queue's, and those a workflow's waits watch. */
+  #watched(): readonly string[] {
+    const queued = this.#queue.waitingSessions();
+    const waits = this.#relayWaits?.watchedSessions() ?? [];
+    return waits.length === 0 ? queued : [...new Set([...queued, ...waits])];
   }
 
   /** Starts following if anything waits and it is not already; never throws. */
   notify(): void {
     if (this.#stopped || this.#running !== undefined) return;
-    if (this.#queue.waitingSessions().length === 0) return;
+    if (this.#watched().length === 0) return;
     this.#running = this.#loop().finally(() => {
       this.#running = undefined;
       // Something may have been queued while the loop was ending.
-      if (!this.#stopped && this.#queue.waitingSessions().length > 0) this.notify();
+      if (!this.#stopped && this.#watched().length > 0) this.notify();
     });
   }
 
@@ -266,11 +281,16 @@ export class SessionQueueFollower {
   async reconcile(timed = false): Promise<number> {
     const ready = await this.#sessions.relay();
     let cursor = 0;
-    for (const sessionId of this.#queue.waitingSessions()) {
+    const queued = new Set(this.#queue.waitingSessions());
+    for (const sessionId of this.#watched()) {
       const snapshot = await ready.client.snapshot(sessionId);
       if (snapshot !== null) cursor = Math.max(cursor, snapshot.cursor);
       // A session that is gone lets its item go too: the dispatcher finds, or starts, another.
-      if (snapshot === null || snapshot.session.activeRunId === undefined) this.#release(sessionId, timed);
+      if (queued.has(sessionId) && (snapshot === null || snapshot.session.activeRunId === undefined))
+        this.#release(sessionId, timed);
+      // A workflow's wait on it: a turn that ended while nobody followed, or a session now free, ends that wait.
+      if (snapshot === null) this.#relayWaits?.gone(sessionId);
+      else this.#relayWaits?.reconcile(snapshot);
     }
     return cursor;
   }
@@ -302,7 +322,7 @@ export class SessionQueueFollower {
   }
 
   async #loop(): Promise<void> {
-    while (!this.#stopped && this.#queue.waitingSessions().length > 0) {
+    while (!this.#stopped && this.#watched().length > 0) {
       const abort = new AbortController();
       this.#abort = abort;
       const timer = setInterval(() => {
@@ -327,8 +347,9 @@ export class SessionQueueFollower {
             },
             onEvent: (event) => {
               if ((RELAY_RUN_END_TYPES as readonly string[]).includes(event.type)) this.#release(event.sessionId);
+              this.#relayWaits?.onRelayEvent(event);
               // Nothing waits any more: the stream has done its work.
-              if (this.#queue.waitingSessions().length === 0) abort.abort();
+              if (this.#watched().length === 0) abort.abort();
             },
           },
         });

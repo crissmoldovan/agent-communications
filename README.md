@@ -506,7 +506,7 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
       instruction "Reply to the sender with what you found."
   ```
 
-  The prompt is a fixed frame — "[Agent Comms] The rule acme passed you a message from gmail/cue/gmail." — with each
+  The prompt is a fixed frame — "[Agent Comms] The workflow acme passed you a message from gmail/cue/gmail." — with each
   part labelled, and every field the sender wrote, every model's words and every file's text inside the
   untrusted-content envelope. Only fields the rule's mapping keeps are sent. A model writes its part on your own
   OpenRouter or Anthropic key, at most 400 tokens, once for each match. A file is read only under the relay's allowed

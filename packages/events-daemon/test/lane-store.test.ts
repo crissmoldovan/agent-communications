@@ -484,7 +484,7 @@ test('LANE-B: a watch is a task that completes on the next new item with a conte
       channel: 'slack',
       rule: { id: 'david-on-slack' },
       waiting: 1,
-      text: `1 new item in lane david (Slack, rule david-on-slack): read it with events_lane_item, item ${item}. Then call events_watch for lane david again to keep watching.`,
+      text: `1 new item in lane david (Slack, workflow david-on-slack): read it with events_lane_item, item ${item}. Then call events_watch for lane david again to keep watching.`,
     });
     assert.doesNotMatch(JSON.stringify(done), new RegExp(`${SECRET_TEXT}|${SECRET_NAME}`, 'u'), 'no sender text');
     assert.deepEqual(lanes.taskGet(task.taskId, DAVID), done, 'a completed task stays as it was');

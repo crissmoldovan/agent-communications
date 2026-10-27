@@ -84,6 +84,21 @@ export function canonicalWebhookSubscriber(value: unknown): WebhookSubscriberDoc
   };
 }
 
+/**
+ * The public address a webhook subscriber posts to, as `subscribers list` shows it: a plain URL's scheme, host, port
+ * and path (a plain URL has no query and no userinfo), or a secret URL's scheme, host and port alone — never its path,
+ * its query or anything else the secret store holds.
+ */
+export function webhookSubscriberAddress(document: WebhookSubscriberDocument): string {
+  if (document.url.kind === 'plain') {
+    const parsed = new URL(document.url.value);
+    const port = parsed.port.length === 0 ? (parsed.protocol === 'https:' ? 443 : 80) : Number(parsed.port);
+    return `${parsed.protocol}//${parsed.hostname}:${port}${parsed.pathname}`;
+  }
+  const host = document.url.host.includes(':') ? `[${document.url.host}]` : document.url.host;
+  return `${document.url.scheme}://${host}:${document.url.port}`;
+}
+
 /** The public authority a webhook subscriber posts to, as its preview names it: never a secret URL's path or query. */
 export function webhookSubscriberAuthority(document: WebhookSubscriberDocument): string {
   if (document.url.kind === 'plain') {

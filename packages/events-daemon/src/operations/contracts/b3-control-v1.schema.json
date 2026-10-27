@@ -2018,7 +2018,24 @@
           }
         },
         "createdAt": { "$ref": "#/$defs/milliseconds" },
-        "updatedAt": { "$ref": "#/$defs/milliseconds" }
+        "updatedAt": { "$ref": "#/$defs/milliseconds" },
+        "sessions": {
+          "oneOf": [{ "type": "null" }, { "type": "array", "items": { "$ref": "#/$defs/projectSession" } }]
+        },
+        "sessionsReason": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,39}$" }] }
+      },
+      "dependentRequired": { "sessions": ["sessionsReason"], "sessionsReason": ["sessions"] }
+    },
+    "projectSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "provider", "state", "lastActiveAt", "folder"],
+      "properties": {
+        "session": { "type": "string", "pattern": "^sess_[0-9a-f-]{36}$" },
+        "provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "state": { "enum": ["idle", "busy", "watched"] },
+        "lastActiveAt": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/milliseconds" }] },
+        "folder": { "$ref": "#/$defs/absoluteFolder" }
       }
     },
     "projectScanResult": {
@@ -2395,7 +2412,7 @@
     },
     "nullableCount": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
     "nullableId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
-    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session"] },
+    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session", "linear-change"] },
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
     "eventId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
     "messagesCursor": { "type": "string", "pattern": "^[0-9]{1,16}:[0-9a-f]{32}$" },
@@ -2494,7 +2511,17 @@
             "properties": {
               "ruleId": { "$ref": "#/$defs/id" },
               "ruleVersion": { "$ref": "#/$defs/positive" },
-              "outcome": { "enum": ["matched", "no-match", "mapping-rejected", "retention-expired", "hold"] },
+              "outcome": {
+                "enum": [
+                  "matched",
+                  "no-match",
+                  "mapping-rejected",
+                  "retention-expired",
+                  "hold",
+                  "awaiting-chain",
+                  "not-chained"
+                ]
+              },
               "judge": {
                 "anyOf": [
                   {
@@ -2522,7 +2549,7 @@
             "required": ["deliveryId", "targetKind", "targetId", "lane", "state"],
             "properties": {
               "deliveryId": { "$ref": "#/$defs/id" },
-              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session"] },
+              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session", "linear-change"] },
               "targetId": { "$ref": "#/$defs/id" },
               "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] },
               "state": {

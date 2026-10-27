@@ -909,7 +909,7 @@ agent-events projects [options] [command]
 
 ### `agent-events projects list`
 
-list every project, with its folders, profile and hints (a person only)
+list every project, with its folders, profile and hints, and the relay sessions working in it, busy or idle (a person only)
 
 ```
 agent-events projects list [options]
@@ -925,7 +925,7 @@ agent-events project [options] [command]
 
 ### `agent-events project show`
 
-show one project (a person only)
+show one project, with the relay sessions working in it, busy or idle (a person only)
 
 ```
 agent-events project show [options] <project-id>

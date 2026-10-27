@@ -118,6 +118,20 @@ function writeDatabase(stateDir: string, write: (database: DatabaseSync) => void
   }
 }
 
+/** The route step's candidates are the person's projects (W12): the example's two, folders and all, as C's check reads. */
+function seedProjects(harness: LaneHarness): void {
+  writeDatabase(harness.stateDir, (database) => {
+    for (const name of ['acme-site', 'billing']) {
+      database
+        .prepare('INSERT INTO projects (id, name, repo, created_at, updated_at) VALUES (?, ?, ?, 1, 1)')
+        .run(name, name, `github.com/acme/${name}`);
+      database
+        .prepare("INSERT INTO project_folders (folder, project_id, kind) VALUES (?, ?, 'checkout')")
+        .run(`/example/home/work/${name}`, name);
+    }
+  });
+}
+
 /** The release app, attested as the process that started the CLI (core's `desktopAppOrigin`, injected). */
 const ATTESTED = async (): Promise<DesktopOrigin> => ({
   ok: true,
@@ -277,7 +291,12 @@ test('B6: runs list is newest first, at most 200, filtered by --workflow and --s
 
 /** The owner example (spec §4.4) on the fake mailbox, its other kinds stood in for. */
 function ownerExample(): Record<string, unknown> {
-  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown>;
+  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown> & {
+    flow: { steps: Record<string, Record<string, unknown>> };
+  };
+  // The route step is stood in for; it chooses by hints alone here, so its judge version need not be stored.
+  const { judge: _judge, ...route } = example.flow.steps.route as Record<string, unknown>;
+  example.flow.steps.route = { ...route, by: ['hints'] };
   return {
     ...rule(1, example.targets as Record<string, unknown>[]),
     mapping: {
@@ -340,6 +359,7 @@ test('B6: runs show names its version and that version’s steps, with paths for
   await withLaneOwner(
     async (harness) => {
       const example = ownerExample();
+      seedProjects(harness);
       await enable(harness, example);
       await send(harness, 'Please change the banner');
       await harness.tick();
@@ -389,7 +409,19 @@ test('B6: runs show names its version and that version’s steps, with paths for
         'a busy session’s wait is past reach once find said none; the rest can still be reached',
       );
       assert.equal(shown.notRaised, 0);
-      assert.deepEqual(shown.events, []);
+      // The events it raised (D's sink, composed by the owner), each with whom it was delivered to: no one subscribes.
+      const raised = shown.events.map((event) => event.type);
+      for (const type of [
+        'acme.client-asks.route.matched',
+        'acme.client-asks.issue.created',
+        'acme.client-asks.give.given',
+      ])
+        assert.ok(raised.includes(type), `${type} in ${JSON.stringify(raised)}`);
+      assert.ok(
+        shown.events.every(
+          (event) => event.deliveries.length === 0 && /^wfe_[0-9a-hjkmnp-tv-z]{26}$/u.test(event.eventId),
+        ),
+      );
       // The story line a list card shows, from the settled steps' closed outputs: no folder, no sender's text.
       const summary = { project: 'acme-site', issue: 'ACME-1', session: 'started', turn: null };
       assert.deepEqual(shown.summary, summary);

@@ -33,7 +33,10 @@ export type DeliveryTarget =
   // bytes; the prompt is written at dispatch, when its model and file parts are read.
   | (BaseDeliveryTarget & { readonly kind: 'session'; readonly document: SessionTargetDocument })
   // A Linear issue (0.33.0 design §3.4): its title and description, rendered once from the mapped data.
-  | (BaseDeliveryTarget & { readonly kind: 'linear' });
+  | (BaseDeliveryTarget & { readonly kind: 'linear' })
+  // A Linear change (workflows §6.7): a comment on and an update of the issue a create step of the same run made,
+  // its comment rendered once from the run's fields, closed outputs and sealed summary. Only a flow delivers one.
+  | (BaseDeliveryTarget & { readonly kind: 'linear-change' });
 
 export interface ConstructedTargetDelivery {
   readonly target: DeliveryTarget;
@@ -73,6 +76,8 @@ export function targetDeliveryKey(target: DeliveryTarget): string {
       return `session:${target.targetId}:${target.targetVersion}`;
     case 'linear':
       return `linear:${target.targetId}:${target.targetVersion}`;
+    case 'linear-change':
+      return `linear-change:${target.targetId}:${target.targetVersion}`;
   }
 }
 
