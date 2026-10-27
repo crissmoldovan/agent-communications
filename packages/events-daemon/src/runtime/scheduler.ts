@@ -84,6 +84,11 @@ export interface EventSchedulerOptions {
    * and not paused — starts held runs and runs every step whose time has come, before deliveries go out.
    */
   readonly workflows?: { tick(): Promise<number> } | undefined;
+  /**
+   * The event dispatcher's second pump of the tick (0.36.0, W33), right after the engine's turn: an event a step raised
+   * in that turn starts out at once, apart, rather than waiting a whole tick for the next pass's `workflowWork`.
+   */
+  readonly afterWorkflows?: (() => void) | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly deliveryBatchSize?: number | undefined;
@@ -110,6 +115,7 @@ export class EventScheduler {
   readonly #writerQuiescer: WriterQuiescer;
   readonly #workflowWork: (() => Promise<void>) | undefined;
   readonly #workflows: EventSchedulerOptions['workflows'];
+  readonly #afterWorkflows: (() => void) | undefined;
   readonly #tickMs: number;
   readonly #pollIntervalMs: number;
   readonly #deliveryBatchSize: number;
@@ -141,6 +147,7 @@ export class EventScheduler {
     this.#writerQuiescer = options.writerQuiescer;
     this.#workflowWork = options.workflowWork;
     this.#workflows = options.workflows;
+    this.#afterWorkflows = options.afterWorkflows;
     if ('writerQuiescer' in options.cipher && this.#writerQuiescer !== options.cipher.writerQuiescer)
       throw new Error('the scheduler and record cipher must use the same owner writer quiescer');
     this.#tickMs = positiveInterval(options.tickMs ?? DEFAULT_TICK_MS, 'tick interval');
@@ -193,6 +200,12 @@ export class EventScheduler {
     }
 
     await this.#workflows?.tick().catch(() => this.#recordFailure('workflow', 'owner'));
+    // Before the chains, whose gate may wait on a judge: what the engine just raised is not held behind it.
+    try {
+      this.#afterWorkflows?.();
+    } catch {
+      this.#recordFailure('dispatch', 'workflow-events');
+    }
     await this.#chains().catch(() => this.#recordFailure('workflow', 'chains'));
     const status = this.#lifecycle.status();
     if (!status.enabled || status.paused) return;

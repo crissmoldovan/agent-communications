@@ -1183,22 +1183,27 @@ for (const point of ['after-claim', 'after-effect', 'before-settle-commit'] as c
     }
   });
 
+/** The owner example's first steps — Which project?, then its project-found event — and a short pause; no target. */
+function routeFoundPause(harness: Harness): Doc {
+  const document = ownerExample(harness) as Doc & { flow: { steps: Record<string, Doc> }; retention: Doc };
+  const { route, found } = document.flow.steps as { route: Doc; found: Doc };
+  document.flow.steps = {
+    route: { ...route, next: { otherwise: 'found' } },
+    found: { ...found, next: { otherwise: 'pause' } },
+    pause: { kind: 'wait', for: { time: { afterMs: 250 } }, timeoutMs: HOUR, next: {} },
+  };
+  document.targets = [];
+  delete document.retention.queueMs;
+  return document;
+}
+
 test("a webhook subscriber that hangs leaves the run's timing unchanged", { skip: WINDOWS_SKIP }, async () => {
   const hook = await webhookReceiver('hang');
   try {
     await withOwner(async (harness) => {
       await connect(harness);
       // The owner example's first steps, then a short pause, so the run spans ticks a hanging delivery could hold.
-      const document = ownerExample(harness) as Doc & { flow: { steps: Record<string, Doc> }; retention: Doc };
-      const { route, found } = document.flow.steps as { route: Doc; found: Doc };
-      document.flow.steps = {
-        route: { ...route, next: { otherwise: 'found' } },
-        found: { ...found, next: { otherwise: 'pause' } },
-        pause: { kind: 'wait', for: { time: { afterMs: 250 } }, timeoutMs: HOUR, next: {} },
-      };
-      document.targets = [];
-      delete document.retention.queueMs;
-      await approveWorkflows(harness, [document]);
+      await approveWorkflows(harness, [routeFoundPause(harness)]);
       const subscribed = await subscribe(harness, hook);
       subscribed.live.close();
       // From here the owner runs on its own quick timer, as on the person's Mac: the test ticks nothing.
@@ -1241,6 +1246,70 @@ test("a webhook subscriber that hangs leaves the run's timing unchanged", { skip
       } finally {
         live.close();
         hook.release();
+      }
+    });
+  } finally {
+    await hook.server.close();
+  }
+});
+
+test('the first event of a run goes out in the tick that raised it, well within a tick', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // A tick as long as the person's Mac's, near enough: an event left for the next tick would wait all of it.
+  const tickMs = 3_000;
+  const hook = await webhookReceiver();
+  try {
+    await withOwner(async (harness) => {
+      await connect(harness);
+      await approveWorkflows(harness, [routeFoundPause(harness)]);
+      const subscribed = await subscribe(harness, hook);
+      subscribed.live.close();
+      // The owner runs on its own timer from here, as on the person's Mac: the test ticks nothing.
+      await harness.restart({ tickMs });
+      const live = await subscribed.reconnect();
+      try {
+        harness.slack.post({ text: `${SENTINEL} the pricing page is out of date` });
+        interface FirstDelivery {
+          readonly type: string;
+          readonly raised_at: number;
+          readonly kind: string;
+          readonly state: string;
+          readonly delivered_at: number | null;
+        }
+        const first = (): FirstDelivery[] =>
+          harness.database
+            .prepare(
+              `SELECT e.type, e.raised_at, d.kind, d.state, d.delivered_at
+                 FROM workflow_events e JOIN event_deliveries d ON d.event_id = e.id
+                WHERE e.sequence = 1 ORDER BY d.kind`,
+            )
+            .all()
+            .map((row) => ({ ...(row as unknown as FirstDelivery) }));
+        const delivered = await until(
+          harness,
+          first,
+          (rows) => rows.length === 2 && rows.every((row) => row.state === 'delivered'),
+          'the first event to reach both subscribers',
+          { ownTicks: true },
+        );
+        assert.deepEqual(
+          delivered.map((row) => [row.type, row.kind]),
+          [
+            ['acme.client-asks.route.matched', 'sse'],
+            ['acme.client-asks.route.matched', 'webhook'],
+          ],
+        );
+        // Raised in the engine's turn, and out in the same tick: not left for the next one, a whole tick later.
+        for (const row of delivered) {
+          const after = (row.delivered_at ?? Number.POSITIVE_INFINITY) - row.raised_at;
+          assert.ok(after < tickMs / 3, `the ${row.kind} subscriber had it ${after} ms after it was raised`);
+        }
+        const request = hook.requests[0] as Received;
+        assert.equal((JSON.parse(request.body) as { type: string }).type, 'acme.client-asks.route.matched');
+        assert.ok(request.at - (delivered[0]?.raised_at ?? 0) < tickMs / 3, 'the webhook was asked at once');
+      } finally {
+        live.close();
       }
     });
   } finally {

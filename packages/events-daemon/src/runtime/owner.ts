@@ -1838,6 +1838,10 @@ async function startOwnerWithLock(
       eventDispatcher.pump();
     },
     workflows,
+    // Again after the engine's turn: the first event of a burst a step raised in it goes out in this tick, not the next.
+    afterWorkflows: () => {
+      eventDispatcher.pump();
+    },
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
