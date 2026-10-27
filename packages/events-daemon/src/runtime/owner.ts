@@ -165,7 +165,7 @@ import { checkRuleDocument, runRuleTest } from './workflow/flow-test.ts';
 import { flowJudge } from './workflow/judge-call.ts';
 import { RelayWaits } from './workflow/relay-waits.ts';
 import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
-import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
+import { WriterQuiescer, withEventWriterLease, withOwnEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
 
@@ -180,7 +180,10 @@ export interface EventOwnerStatus extends EventLifecycleStatus {
 
 export interface EventOwner {
   status(): EventOwnerStatus;
-  /** Runs one serial owner tick; intended for deterministic local embedding and tests. */
+  /**
+   * Runs one serial owner tick, and waits for the raised events' deliveries it started; intended for deterministic
+   * local embedding and tests. The owner's own ticks never wait for those (W33).
+   */
   tick(): Promise<void>;
   /**
    * Registers a live listener the owner started for one exact immutable subscriber version. The returned cleanup
@@ -1382,6 +1385,8 @@ async function startOwnerWithLock(
           cipher,
         })
       ).map(({ generation, lifecycle, secretDigest, material }) => ({ generation, lifecycle, secretDigest, material })),
+    // Each attempt runs apart from the tick that started it, under a writer lease of its own (W33).
+    apart: (work) => withOwnEventWriterLease(writerQuiescer, work),
   });
   // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
@@ -1810,7 +1815,9 @@ async function startOwnerWithLock(
     writerQuiescer,
     workflowWork: async () => {
       await listeners.reconcile();
-      await eventDispatcher.tick();
+      // A raised event's delivery never touches the run (W33), so never the tick that runs it either: a subscriber that
+      // hangs would otherwise hold the engine, the sources and every other subscriber for its whole attempt.
+      eventDispatcher.pump();
     },
     workflows,
     now,
@@ -1939,7 +1946,11 @@ async function startOwnerWithLock(
       activationIntents: replacementIntentSummary(database.database),
     }),
     stopped: stoppedPromise,
-    tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),
+    tick: async () => {
+      await withEventWriterLease(writerQuiescer, () => scheduler.tick());
+      // Outside the lease: each delivery holds one of its own, which a waiting rekey must be able to come before.
+      await eventDispatcher.idle();
+    },
     registerSseListener: (input) => sseStreams.register(input),
     sweepTakes: () => takeOffers.sweep(),
     async stop(): Promise<void> {
@@ -1950,6 +1961,8 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
+        // An event delivery a tick started finishes here, while the database and the listeners are still open.
+        await eventDispatcher.idle();
         // A workflow pass a wake started finishes here, before the database closes; none starts after.
         await workflows.stop();
         await control?.close();

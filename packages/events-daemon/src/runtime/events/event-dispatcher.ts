@@ -68,6 +68,11 @@ export interface EventDispatcherOptions {
   readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
   /** Test seam only: runs at a point inside an attempt, after which the attempt's own gates decide. */
   readonly testPoint?: ((point: EventDispatchPoint, claim: EventDeliveryClaim) => void | Promise<void>) | undefined;
+  /**
+   * How an attempt `pump` starts runs apart from its caller: the owner gives each a writer lease of its own. Without
+   * one, the attempt runs as it is.
+   */
+  readonly apart?: (<T>(work: () => Promise<T>) => Promise<T>) | undefined;
 }
 
 /** One claimed attempt of one event's delivery to one subscriber version. */
@@ -109,6 +114,8 @@ function reasonOf(error: unknown): string {
 export class EventDispatcher {
   readonly #options: EventDispatcherOptions;
   readonly #now: () => number;
+  /** The attempts `pump` started that are still going, one at most per subscriber version. */
+  readonly #inFlight = new Map<string, Promise<void>>();
 
   constructor(options: EventDispatcherOptions) {
     this.#options = options;
@@ -120,6 +127,52 @@ export class EventDispatcher {
    * version that is due. Returns how many attempts it made.
    */
   async tick(): Promise<number> {
+    this.#recover();
+    const due = this.#due();
+    let attempted = 0;
+    for (const row of due) {
+      try {
+        if (await this.#attempt(row)) attempted += 1;
+      } catch {
+        // One delivery's failure is its own: it is retried, or settled, by its next claim; the others go on.
+      }
+    }
+    return attempted;
+  }
+
+  /**
+   * The owner's pass (W33: delivery never touches the run): `tick`'s, except that each due head's attempt is started
+   * apart and never waited for here, at most one at a time per subscriber version. A subscriber that hangs holds back
+   * neither the owner's tick — the engine, the sources, the targets — nor another subscriber; its own later events wait
+   * behind it, in order. Returns how many attempts it started.
+   */
+  pump(): number {
+    this.#recover();
+    const apart = this.#options.apart ?? ((work) => work());
+    let started = 0;
+    for (const row of this.#due()) {
+      const key = JSON.stringify([row.subscriber_id, row.subscriber_version]);
+      if (this.#inFlight.has(key)) continue;
+      const attempt = apart(() => this.#attempt(row))
+        // One delivery's failure is its own: it is retried, or settled, by its next claim.
+        .then(
+          () => undefined,
+          () => undefined,
+        )
+        .finally(() => this.#inFlight.delete(key));
+      this.#inFlight.set(key, attempt);
+      started += 1;
+    }
+    return started;
+  }
+
+  /** Resolves once no attempt `pump` started is still going: the owner's stop, and its tick seam, wait for this. */
+  async idle(): Promise<void> {
+    while (this.#inFlight.size > 0) await Promise.all(this.#inFlight.values());
+  }
+
+  /** Settles what time ended, and gives back the leases that lapsed: at least once, so a lapsed attempt goes again. */
+  #recover(): void {
     const store = this.#options.store;
     store.immediate(() => {
       const now = this.#now();
@@ -134,16 +187,6 @@ export class EventDispatcher {
         )
         .run(now, now);
     });
-    const due = this.#due();
-    let attempted = 0;
-    for (const row of due) {
-      try {
-        if (await this.#attempt(row)) attempted += 1;
-      } catch {
-        // One delivery's failure is its own: it is retried, or settled, by its next claim; the others go on.
-      }
-    }
-    return attempted;
   }
 
   /** The head of each subscriber version's queue, when it is due: strict order, a later one waits for the first. */
