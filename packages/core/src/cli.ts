@@ -23,6 +23,7 @@ import {
   writeError,
   writeResult,
 } from './cli-runtime.ts';
+import { connectionCommand } from './connection-command.ts';
 import { openCore } from './core.ts';
 import { CommsError, EXIT_CODES } from './errors.ts';
 import {
@@ -217,6 +218,21 @@ Usage — run these with this CLI, each as the words after its program:
   attach deny remove <path> [--approval <id>]
                                 take one of your own deny entries away: approved first
   channels                      which declared servers exist, which are installed, and where they are registered
+  connection list               every MCP connection: each place an app uses Agent Comms, its parts and accounts,
+                                where its entry is and whether its key matches, and when it was last used
+  connection show [<id>]        one connection, and the Agent Comms running for it now, part by part
+  connection add --app <app> --name <name> [--parts <part,…>] [--folder <dir>] [--profile <dir>]
+                                [--launcher managed|npx|local] [--approval <id>]
+                                add a connection, with its own key, and register its one entry with the app:
+                                approved first. --app is claude-code, claude-desktop, codex, cursor, gemini,
+                                vscode or manual; a part is a server, then its account and read-only, as
+                                gmail:cue/gmail:read-only; --folder is one project, for Claude Code only
+  connection change <id> --parts <part,…> [--approval <id>]
+                                every part it has from now on: taking away applies at once, giving more is
+                                approved first
+  connection rename <id> <name> rename it: applies at once
+  connection key replace <id>   a new key, written into its entry, the old one stopping at once: applies at once
+  connection remove <id>        remove it and its entry: its key stops working at once
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -410,6 +426,11 @@ function parse(argv: string[]) {
       server: { type: 'string' },
       // `mcp --connection <id>`: the gateway an app starts for one MCP connection (single-server design D2).
       connection: { type: 'string' },
+      // `connection add|change`; refused on every other command (`refuseConnectionOptionsElsewhere`).
+      app: { type: 'string' },
+      parts: { type: 'string' },
+      folder: { type: 'string' },
+      profile: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -507,9 +528,33 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return sub !== undefined;
     case 'activity':
       return sub === 'record' || sub === 'retention';
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate';
     default:
       return false;
   }
+}
+
+/** `connection add|change`'s own options, as typed. */
+const CONNECTION_OPTIONS = ['app', 'parts', 'folder', 'profile'] as const;
+
+/**
+ * Refuses `connection`'s own options on any other command, as USAGE, before anything runs — as `label`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseConnectionOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof CONNECTION_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'connection') return;
+  const given = CONNECTION_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the connection command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
 }
 
 /**
@@ -540,6 +585,8 @@ function takesAppApproval(command: string | undefined, sub: string | undefined):
   switch (command) {
     case 'mcp':
       return sub === 'install';
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate';
     case 'label':
     case 'behaviour':
       return sub !== undefined;
@@ -771,10 +818,11 @@ export async function main(
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
+    refuseConnectionOptionsElsewhere(command, values, help);
     if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
       throw new CommsError(
         'USAGE',
-        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update and mcp install only',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update, mcp install and connection add, change and migrate only',
         { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
       );
     }
@@ -1427,6 +1475,17 @@ export async function main(
           conversations: conversations.length === 0 ? undefined : conversations,
         });
         writeResult(view, output, (shown) => renderProfile(shown, handoffs, account));
+        return;
+      }
+      case 'connection': {
+        await connectionCommand(core, parsed.positionals, values, {
+          env,
+          output,
+          approval,
+          appApproval,
+          installDeps: installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+          usage,
+        });
         return;
       }
       case 'channels': {

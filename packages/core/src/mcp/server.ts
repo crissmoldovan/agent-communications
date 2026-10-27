@@ -8,7 +8,7 @@ import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApprova
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
 import { UPDATE_LEVELS } from '../config.ts';
-import { isGatewayPart } from '../connections.ts';
+import { CONNECTION_APPS, CONNECTION_LAUNCHERS, isGatewayPart, PART_FACTS } from '../connections.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
@@ -35,6 +35,15 @@ import {
   changePolicyReport,
   refuseApprovalWithoutChange,
 } from '../operations/change-policy.ts';
+import {
+  connectionAddChange,
+  connectionChangeChange,
+  connectionKeyReplaceChange,
+  connectionList,
+  connectionRemoveChange,
+  connectionRenameChange,
+  connectionShow,
+} from '../operations/connections.ts';
 import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport } from '../operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
@@ -1191,6 +1200,152 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           ),
         undefined,
       ),
+  );
+
+  /*
+   * MCP connections (single-server design §10; the 0.35 prototype's MCP connections): what the person sees and changes
+   * of each place an app uses Agent Comms. Never a key, nor its hash, in any result: a Manual connection — whose snippet
+   * shows its key — is added and re-keyed only by the person, at their terminal or in the app.
+   */
+  const partArg = z
+    .array(
+      z.strictObject({
+        server: z.string().describe(`the part: ${PART_FACTS.map((facts) => facts.server).join(', ')}`),
+        account: z
+          .string()
+          .optional()
+          .describe('the one account it is kept to, `organisation/platform`; left out, every account'),
+        readOnly: z.boolean().optional().describe('Gmail only: keep it to reading'),
+      }),
+    )
+    .describe('every part, each server once');
+  const connectionId = z.string().describe('the connection, by its id: cn_ and 26 letters and digits');
+  server.registerTool(
+    'comms_connections_list',
+    {
+      title: 'List MCP connections',
+      description:
+        'Every MCP connection on this machine — each place an app uses Agent Comms: its id, name, app and where its entry is; its parts, each with the account it is kept to, read-only, and whether it can start; whether its entry is in its app and carries its key; when its key was issued; and when it was last used. Never a key. Reads only.',
+      inputSchema: {},
+      annotations: readsLocal,
+    },
+    async () => read(() => connectionList(core, env)),
+  );
+  server.registerTool(
+    'comms_connection_show',
+    {
+      title: 'Show an MCP connection',
+      description:
+        'One MCP connection, as comms_connections_list gives it, and the Agent Comms running for it now, part by part. With no `id`, inside a connection, it is the one this server is a part of: which connection this is. Reads only.',
+      inputSchema: { id: connectionId.optional() },
+      annotations: readsLocal,
+    },
+    async (args) => read(() => connectionShow(core, env, { id: args.id })),
+  );
+  server.registerTool(
+    'comms_connection_add',
+    {
+      title: 'Add an MCP connection',
+      description:
+        'Add a connection for an app — its own key, and one entry in that app that starts Agent Comms with its parts — and register it. A loosening: the first call returns `approvalRequired` with a preview naming every part and account it reaches, where its entry goes and anything it installs, and an approvalId; call again with the approvalId once the person agrees. `parts` left out are Agent Comms itself, each channel with an account here, and Events where it is installed. `folder` is one project, for Claude Code only. A Manual connection is not added here: its snippet carries its key, which would stay in this chat — the person adds it themselves. The app sees it once restarted: tell the person.',
+      inputSchema: {
+        app: z
+          .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
+          .describe('the app it is for'),
+        name: z.string().describe('what the person calls it: shown in previews and in Activity, 1 to 64 characters'),
+        parts: partArg.optional(),
+        folder: z.string().optional().describe('Claude Code only: the one project folder it is for'),
+        profile: z.string().optional().describe('another Claude profile’s folder, or another Codex home'),
+        launcher: z.enum(CONNECTION_LAUNCHERS).optional().describe('how its parts are started: managed, the default'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          connectionAddChange(
+            core,
+            env,
+            {
+              app: args.app as (typeof CONNECTION_APPS)[number],
+              name: args.name,
+              ...(args.parts === undefined ? {} : { parts: args.parts }),
+              ...(args.folder === undefined ? {} : { folder: args.folder }),
+              ...(args.profile === undefined ? {} : { profile: args.profile }),
+              ...(args.launcher === undefined ? {} : { launcher: args.launcher }),
+            },
+            'mcp',
+            installVerification(updateDeps, npmRegistry(env)),
+          ),
+        args.approvalId,
+      ),
+  );
+  server.registerTool(
+    'comms_connection_change',
+    {
+      title: 'Change an MCP connection’s parts',
+      description:
+        'Every part a connection has from now on. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits. Giving more — a part added, an account let go or moved, read-only off — returns `approvalRequired` with a preview and an approvalId: call again with it once the person agrees. A running app sees the change through tools/list_changed where it supports it.',
+      inputSchema: { id: connectionId, parts: partArg, ...approvalArg },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          connectionChangeChange(
+            core,
+            env,
+            { id: args.id, parts: args.parts },
+            'mcp',
+            installVerification(updateDeps, npmRegistry(env)),
+          ),
+        args.approvalId,
+      ),
+  );
+  server.registerTool(
+    'comms_connection_rename',
+    {
+      title: 'Rename an MCP connection',
+      description:
+        'Rename a connection. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
+      inputSchema: { id: connectionId, name: z.string().describe('its new name, 1 to 64 characters') },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => change(() => connectionRenameChange(core, env, { id: args.id, name: args.name }, 'mcp'), undefined),
+  );
+  server.registerTool(
+    'comms_connection_key_replace',
+    {
+      title: 'Replace an MCP connection’s key',
+      description:
+        'Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.',
+      inputSchema: { id: connectionId },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          connectionKeyReplaceChange(
+            core,
+            env,
+            { id: args.id },
+            'mcp',
+            installVerification(updateDeps, npmRegistry(env)),
+          ),
+        undefined,
+      ),
+  );
+  server.registerTool(
+    'comms_connection_remove',
+    {
+      title: 'Remove an MCP connection',
+      description:
+        'Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.',
+      inputSchema: { id: connectionId },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), undefined),
   );
 
   server.registerTool(

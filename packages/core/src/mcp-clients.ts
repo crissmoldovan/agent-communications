@@ -60,6 +60,16 @@ export interface RegisteredServer {
    * stale one still in force for that project.
    */
   scope?: 'user' | 'project' | undefined;
+  /**
+   * For an entry Claude Code keeps under `projects` in its own file — local scope — the project folder it is under.
+   * Absent for every other entry, a project's `.mcp.json` included (its folder is the file's).
+   */
+  folder?: string | undefined;
+  /**
+   * For a part an MCP connection's gateway starts, which no app's config holds (`registeredOrConnected`): the
+   * connection, by id and name. Absent for every entry read from a file.
+   */
+  connection?: { readonly id: string; readonly name: string } | undefined;
 }
 
 /**
@@ -201,7 +211,7 @@ function collectFromJson(
   topScope: 'user' | 'project' = 'user',
 ): RegisteredServer[] {
   const found: RegisteredServer[] = [];
-  const visit = (node: unknown, scope: 'user' | 'project'): void => {
+  const visit = (node: unknown, scope: 'user' | 'project', folder?: string): void => {
     if (!node || typeof node !== 'object') return;
     const record = node as Record<string, unknown>;
     for (const key of ['mcpServers', 'servers']) {
@@ -214,6 +224,7 @@ function collectFromJson(
             path,
             name,
             scope,
+            ...(folder === undefined ? {} : { folder }),
             command: typeof entry.command === 'string' ? entry.command : '',
             args: Array.isArray(entry.args) ? entry.args.map(String) : [],
             ...(urlOf(entry) ? { url: urlOf(entry) } : {}),
@@ -232,7 +243,13 @@ function collectFromJson(
     // Claude Code keeps per-project server lists under `projects`; the same shape, one level down.
     for (const [key, value] of Object.entries(record)) {
       if (value && typeof value === 'object' && !Array.isArray(value)) {
-        visit(value, key === 'projects' ? 'project' : scope);
+        if (key === 'projects') {
+          for (const [project, held] of Object.entries(value as Record<string, unknown>)) {
+            if (held && typeof held === 'object' && !Array.isArray(held)) visit(held, 'project', project);
+          }
+        } else {
+          visit(value, scope, folder);
+        }
       }
     }
   };
@@ -318,7 +335,7 @@ function dedupe(servers: RegisteredServer[]): RegisteredServer[] {
   const seen = new Map<string, RegisteredServer>();
   for (const server of servers) {
     seen.set(
-      `${server.path}::${server.scope ?? ''}::${server.name}::${server.command}::${server.args.join(' ')}::${server.url ?? ''}`,
+      `${server.path}::${server.scope ?? ''}::${server.folder ?? ''}::${server.name}::${server.command}::${server.args.join(' ')}::${server.url ?? ''}`,
       server,
     );
   }

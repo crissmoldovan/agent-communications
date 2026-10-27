@@ -32,6 +32,11 @@ export interface AuditRecord {
   /** The requesting client surface; autonomous work is `daemon`/`daemon`. */
   origin?: 'cli' | 'mcp' | 'app' | 'daemon';
   /**
+   * The MCP connection a line is about, or the one the call came through (single-server design D11, §7): its id, never
+   * its key or the key's hash.
+   */
+  connection?: string;
+  /**
    * Who approved a change, when it was the person in the desktop app (0.32.0): the approval answered through the app
    * channel, as judge setup's disclosures are (`approvedVia: 'app'` on the record). `desktop-app` when the release app
    * started the command (`desktopAppOrigin`, macOS); `desktop-app (test build)` for the local test build, which speaks

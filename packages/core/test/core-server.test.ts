@@ -247,6 +247,8 @@ const READING = [
   'comms_org_show',
   'comms_profile',
   'comms_activity',
+  'comms_connections_list',
+  'comms_connection_show',
 ];
 const CHANGING = [
   'comms_attach',
@@ -262,13 +264,20 @@ const CHANGING = [
   'comms_names_migrate',
   'comms_secrets_migrate',
   'comms_update',
+  'comms_connection_add',
+  'comms_connection_change',
 ];
 /**
  * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, narrowing or
  * ending standing approvals (design 2026-10-19-standing-approvals, S8), and taking a server out of a client (design
  * 2026-10-26-owner-feedback-0320 §3.3).
  */
-const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall'];
+const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall', 'comms_connection_remove'];
+/**
+ * Tools whose change gives an agent nothing more, so it applies at once and is audited, taking no approval: renaming an
+ * MCP connection, and replacing its key (single-server design §6.2).
+ */
+const NEUTRAL = ['comms_connection_rename', 'comms_connection_key_replace'];
 
 test('the server offers the core tools, and no tool that approves or claims a change it did not plan', async () => {
   /*
@@ -281,7 +290,7 @@ test('the server offers the core tools, and no tool that approves or claims a ch
   try {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
-    assert.deepEqual(names, [...READING, ...CHANGING, ...TAKING_AWAY].sort());
+    assert.deepEqual(names, [...READING, ...CHANGING, ...TAKING_AWAY, ...NEUTRAL].sort());
     for (const name of names) {
       assert.doesNotMatch(name, /claim|prepare|approve(?!d)|apply/, `${name} reads as a generic approval tool`);
     }
@@ -2586,6 +2595,8 @@ test('comms_channels_available says what is installed and where each server is r
         missing: gmailEntry,
         // Older than this core: seen without asking the registry.
         behindCore: true,
+        // An entry of the server's own, not one of an MCP connection's (single-server design §9.2).
+        connection: null,
       },
     ]);
     if (process.platform !== 'win32') {
@@ -2605,6 +2616,8 @@ test('comms_channels_available says what is installed and where each server is r
         pathPins: {},
         missing: null,
         behindCore: true,
+        // An entry of the server's own, not one of an MCP connection's (single-server design §9.2).
+        connection: null,
       },
     ]);
     assert.ok(!JSON.stringify(report).includes('fake-token-2'));
