@@ -182,6 +182,15 @@ export interface ProjectHintsV1 {
   people: string[];
 }
 
+/** A relay session working in a project's folder, or a run-made worktree of it (0.36): ids, a closed state, times. */
+export interface ProjectSessionV1 {
+  session: string;
+  provider: string;
+  state: 'idle' | 'busy' | 'watched';
+  lastActiveAt: number | null;
+  folder: string;
+}
+
 /** One project (spec §8.1), as `project show` and `projects list` give it. */
 export interface ProjectV1 {
   projectId: string;
@@ -194,6 +203,12 @@ export interface ProjectV1 {
   folders: ProjectFolderV1[];
   createdAt: number;
   updatedAt: number;
+  /**
+   * The relay sessions working in it, busy or idle; null when the relay could not be asked, with why in
+   * `sessionsReason`; absent from an older event service, and from what add and update answer.
+   */
+  sessions?: ProjectSessionV1[] | null;
+  sessionsReason?: string | null;
 }
 
 /** `projects list --json`. */
@@ -437,6 +452,7 @@ export function readCheck(data: unknown): RuleCheckResultV1 {
 }
 
 const FOLDER_KINDS = ['checkout', 'worktree'] as const;
+const SESSION_STATES = ['idle', 'busy', 'watched'] as const;
 
 /** One project, as `project show --json` gives it and `projects list` lists it. */
 export function readProject(data: unknown, what = 'project'): ProjectV1 {
@@ -465,6 +481,25 @@ export function readProject(data: unknown, what = 'project'): ProjectV1 {
     }),
     createdAt: whole(fields.createdAt, `${what}.createdAt`),
     updatedAt: whole(fields.updatedAt, `${what}.updatedAt`),
+    ...(fields.sessions === undefined
+      ? {}
+      : {
+          sessions:
+            fields.sessions === null
+              ? null
+              : list(fields.sessions, `${what}.sessions`, (item, at) => {
+                  const session = object(item, at);
+                  return {
+                    session: text(session.session, `${at}.session`),
+                    provider: text(session.provider, `${at}.provider`),
+                    state: word(session.state, SESSION_STATES, `${at}.state`),
+                    lastActiveAt: wholeOrNull(session.lastActiveAt, `${at}.lastActiveAt`),
+                    folder: text(session.folder, `${at}.folder`),
+                  };
+                }),
+          sessionsReason:
+            fields.sessionsReason === undefined ? null : textOrNull(fields.sessionsReason, `${what}.sessionsReason`),
+        }),
   };
 }
 

@@ -23,7 +23,24 @@
         }
       ],
       "createdAt": 1792828800000,
-      "updatedAt": 1792828800000
+      "updatedAt": 1792828800000,
+      "sessions": [
+        {
+          "session": "sess_7c9e6679-7425-40de-944b-e07fc1f90ae7",
+          "provider": "claude",
+          "state": "busy",
+          "lastActiveAt": 1792829100000,
+          "folder": "/example/home/work/acme-site-wt/ac-acme-123"
+        },
+        {
+          "session": "sess_0f8fad5b-d9cb-469f-a165-70867728950e",
+          "provider": "claude",
+          "state": "idle",
+          "lastActiveAt": 1792828900000,
+          "folder": "/example/home/work/acme-site"
+        }
+      ],
+      "sessionsReason": null
     }
   ]
 }

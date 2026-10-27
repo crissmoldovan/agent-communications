@@ -3,7 +3,8 @@
  * — its id as its name, where it stands, its sentence in plain words, and a line of facts — filtered by All, On, Not
  * switched on and Off. Every rule there is is a workflow here, a straight line, unchanged. A card opens the workflow's
  * page (`RuleDetail`), and its Edit… the designer once the event service has workflows (0.36.0), or the rule editor on
- * an older one. Everything shown is read: nothing here changes a workflow.
+ * an older one. From 0.36.0 a card also says its runs this week and when its last run started, and a run's page opens
+ * here (`RunView`). Everything shown is read: nothing here changes a workflow.
  */
 import {
   Button,
@@ -40,6 +41,7 @@ import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import type { Call } from '../../ipc.ts';
 import { EDITOR_COPY } from '../../rule-editor/copy.ts';
+import { runFacts, thisWeekWords } from '../../workflows/runs.ts';
 import { NewWorkflow } from '../workflows/NewWorkflow.tsx';
 import { type EventsLists, type EventsNav, readVersions } from './lists.ts';
 import { Day, DRY_RUN, FactsLine, Problem, Sentence, Short, STATUS_WORDS, StatusChip, statusOf } from './parts.tsx';
@@ -55,6 +57,9 @@ const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 const WorkflowEditor = lazy(() =>
   import('../workflows/WorkflowEditor.tsx').then((module) => ({ default: module.WorkflowEditor })),
 );
+
+/** A run's page (0.36.0), loaded only when one is opened: it draws the run on React Flow, as the designer does. */
+const RunView = lazy(() => import('../workflows/RunView.tsx').then((module) => ({ default: module.RunView })));
 
 /** Which editor this machine's event service has: none, the rule editor (0.33.0), or the designer (0.36.0). */
 function useEditor(): 'none' | 'rules' | 'workflows' {
@@ -131,6 +136,9 @@ export const RULES_COPY = {
   noneHere: 'No workflows here.',
   approvalWaits: 'Its approval is in Approvals, if an agent asked for it',
   turnedOff: 'Turned off',
+  lastRun: 'last run',
+  allWorkflows: 'All workflows',
+  toDeliveries: 'Deliveries',
 } as const;
 
 type Filter = 'all' | RuleStatus;
@@ -148,6 +156,19 @@ function lastPassedOn(lists: EventsLists, ruleId: string, versions: readonly Rul
       return at === null ? [] : [at];
     });
   return times.length === 0 ? null : Math.max(...times);
+}
+
+/** A card's runs (0.36.0): how many this week, and when the newest started; nothing for a workflow with none listed. */
+function runsFacts(lists: EventsLists, ruleId: string): ReactNode[] {
+  if (lists.runs === 'off' || lists.runs.state !== 'ready') return [];
+  const { thisWeek, last, capped } = runFacts(lists.runs.value, ruleId, Date.now());
+  if (last === null) return [];
+  return [
+    thisWeekWords(thisWeek, capped),
+    <>
+      {RULES_COPY.lastRun} <Short at={last} />
+    </>,
+  ];
 }
 
 /** A card's facts: its last 7 days, its problems and its last delivery while on; how to switch it on; when it went off. */
@@ -225,7 +246,9 @@ function RuleCard({ rule, lists, onOpen }: { rule: RuleRow; lists: EventsLists; 
         </span>
       ) : null}
       <span data-slot="rule-facts" className="block">
-        <FactsLine facts={facts(status, versions, lastPassedOn(lists, rule.id, versions))} />
+        <FactsLine
+          facts={[...facts(status, versions, lastPassedOn(lists, rule.id, versions)), ...runsFacts(lists, rule.id)]}
+        />
       </span>
     </>
   );
@@ -261,6 +284,17 @@ export function RulesTab({
   const editor = useEditor();
   const canEdit = editor !== 'none';
   const editing = nav.editing;
+  if (nav.run !== null && editing === null)
+    return (
+      <Suspense fallback={<Spinner label={COPY.loading} />}>
+        <RunView
+          key={nav.run}
+          runId={nav.run}
+          backLabel={nav.runFrom === 'deliveries' ? RULES_COPY.toDeliveries : (nav.rule ?? RULES_COPY.allWorkflows)}
+          onBack={() => nav.openRun(null)}
+        />
+      </Suspense>
+    );
   if (editing !== null && editor === 'workflows')
     return (
       <Suspense fallback={<Spinner label={COPY.loading} />}>

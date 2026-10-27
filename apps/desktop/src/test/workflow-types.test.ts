@@ -136,6 +136,31 @@ describe("workflows' results, read (0.36.0, plan I8)", () => {
     expect(() => readProject({ projectId: 'acme-site' })).toThrow(UnknownShapeError);
   });
 
+  test('readProject reads the relay sessions working in a project, busy or idle, and refuses an unknown state', () => {
+    expect(
+      readProject(projectsFixture.projects[0]).sessions?.map((session) => [session.state, session.folder]),
+    ).toEqual([
+      ['busy', '/example/home/work/acme-site-wt/ac-acme-123'],
+      ['idle', '/example/home/work/acme-site'],
+    ]);
+    const down = readProject({ ...projectsFixture.projects[0], sessions: null, sessionsReason: 'RELAY_NOT_FOUND' });
+    expect([down.sessions, down.sessionsReason]).toEqual([null, 'RELAY_NOT_FOUND']);
+    // An event service before the sessions were added answers without them.
+    const {
+      sessions: _sessions,
+      sessionsReason: _reason,
+      ...older
+    } = projectsFixture.projects[0] as Record<string, unknown>;
+    expect(readProject(older).sessions).toBeUndefined();
+    expect(() =>
+      readProjects(
+        changed(projectsFixture, (list) => {
+          Object.assign(list.projects[0]?.sessions?.[0] ?? {}, { state: 'thinking' });
+        }),
+      ),
+    ).toThrow(UnknownShapeError);
+  });
+
   test('readScan reads the repositories found and the folders passed over, and refuses an unknown reason', () => {
     const scan = readScan(projectScanFixture);
     expect(scan.roots).toEqual(['/example/home/work', '/example/home/code']);

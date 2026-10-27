@@ -15,6 +15,7 @@ import {
   disclosureBindingFor,
   normaliseActivationDocument,
 } from '../domain/activation-documents.ts';
+import { flowJudgeDocuments } from '../domain/flow.ts';
 import { classifySourceOptionChange } from '../domain/source-options.ts';
 import { assertLiveEventAccount } from './account-fence.ts';
 
@@ -200,6 +201,14 @@ function verifyRuleVersions(database: DatabaseSync, rule: CanonicalFullRuleDocum
       .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
       .get(rule.agentic.judge.kind) as { version: number } | undefined;
     if (active === undefined) refuse('JUDGE_KIND_DISABLED', 'the exact judge kind is disabled before disclosure');
+  }
+  // A workflow's flow judges are bound as the gate's is: each stored, unrevoked, and of an enabled kind (plan B3).
+  for (const judge of flowJudgeDocuments(rule)) {
+    storedDocument(database, 'judge_versions', 'judge_id', judge.judgeId, judge.version, judge, true);
+    const kind = database
+      .prepare("SELECT version FROM active_versions WHERE kind = 'judge-kind' AND object_id = ?")
+      .get(judge.kind) as { version: number } | undefined;
+    if (kind === undefined) refuse('JUDGE_KIND_DISABLED', "a workflow step's judge kind is disabled before disclosure");
   }
 }
 

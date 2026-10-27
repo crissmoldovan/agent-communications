@@ -5,7 +5,8 @@ import type { LinearClientOptions } from '../../src/runtime/linear-client.ts';
 
 /*
  * A loopback fake of Linear's GraphQL API, for the Linear target's tests (0.33.0 design §3.4). It answers the few
- * operations the event service sends — the workspace, a team's labels and states, an issue lookup and `issueCreate` — on
+ * operations the event service sends — the workspace, a team's labels and states, an issue lookup and `issueCreate`, and
+ * for a workflow's Linear change (0.36 §6.7) its lookup, `commentCreate` and `issueUpdate` — on
  * 127.0.0.1, and records each request. The client reaches it through its own seams: the resolver gives a global
  * address (never contacted), the TCP connect goes to the fake's port instead, and TLS is the plain socket, so the client
  * still prepares exactly `https://api.linear.app/graphql` with its pinned, global-only checks. Never the real Linear,
@@ -27,6 +28,19 @@ export interface FakeLinearIssue {
 }
 
 /** A scripted answer: an HTTP status and a JSON body, or a dropped connection after the request was handled. */
+/** A comment `commentCreate` made, as it was asked for. */
+export interface FakeLinearComment {
+  readonly id: string;
+  readonly issueId: string;
+  readonly body: string;
+}
+
+/** An `issueUpdate`, as it was asked for: the issue, and the input. */
+export interface FakeLinearUpdate {
+  readonly id: string;
+  readonly input: Record<string, unknown>;
+}
+
 export type FakeLinearScript =
   | { readonly status: number; readonly body: unknown }
   | { readonly drop: true; readonly after?: 'handled' | 'unhandled' };
@@ -34,6 +48,8 @@ export type FakeLinearScript =
 export interface FakeLinear {
   readonly requests: FakeLinearRequest[];
   readonly issues: FakeLinearIssue[];
+  readonly comments: FakeLinearComment[];
+  readonly updates: FakeLinearUpdate[];
   /** Hosts the client resolved, TCP peers it asked for, and the names it verified TLS as. */
   readonly lookups: string[];
   readonly peers: string[];
@@ -66,6 +82,8 @@ function operationOf(query: unknown): string {
 export async function startFakeLinear(): Promise<FakeLinear> {
   const requests: FakeLinearRequest[] = [];
   const issues: FakeLinearIssue[] = [];
+  const comments: FakeLinearComment[] = [];
+  const updates: FakeLinearUpdate[] = [];
   const scripts = new Map<string, FakeLinearScript[]>();
   const lookups: string[] = [];
   const peers: string[] = [];
@@ -139,6 +157,47 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           },
         };
       }
+      case 'AgentCommsLinearChangeLookup': {
+        // Every issue is the fake team's.
+        const found = issues.filter((issue) => issue.id === variables.issue);
+        return {
+          status: 200,
+          body: {
+            data: {
+              viewer: { id: FAKE_VIEWER_ID },
+              issues: { nodes: found.map(({ id }) => ({ id, team: { id: FAKE_TEAM.id } })) },
+              comments: {
+                nodes: comments.filter((comment) => comment.id === variables.comment).map(({ id }) => ({ id })),
+              },
+            },
+          },
+        };
+      }
+      case 'AgentCommsLinearCommentCreate': {
+        const input = variables.input as Record<string, unknown>;
+        if (comments.some((comment) => comment.id === input.id))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity already exists', extensions: { code: 'INVALID_INPUT' } }] },
+          };
+        if (!issues.some((issue) => issue.id === input.issueId))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity not found', extensions: { code: 'ENTITY_NOT_FOUND' } }] },
+          };
+        const comment = { id: String(input.id), issueId: String(input.issueId), body: String(input.body) };
+        comments.push(comment);
+        return { status: 200, body: { data: { commentCreate: { success: true, comment: { id: comment.id } } } } };
+      }
+      case 'AgentCommsLinearIssueUpdate': {
+        if (!issues.some((issue) => issue.id === variables.id))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity not found', extensions: { code: 'ENTITY_NOT_FOUND' } }] },
+          };
+        updates.push({ id: String(variables.id), input: variables.input as Record<string, unknown> });
+        return { status: 200, body: { data: { issueUpdate: { success: true } } } };
+      }
       default:
         return {
           status: 400,
@@ -193,6 +252,8 @@ export async function startFakeLinear(): Promise<FakeLinear> {
   return {
     requests,
     issues,
+    comments,
+    updates,
     lookups,
     peers,
     tlsNames,

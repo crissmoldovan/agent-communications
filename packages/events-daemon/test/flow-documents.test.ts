@@ -316,6 +316,9 @@ test('B1: activation refuses a second active workflow raising acme.client-asks (
     const unjudged = (): Mutable => {
       const document = owner();
       delete (document as Record<string, unknown>).agentic;
+      // The route chooses by hints alone, so no judge version needs storing first.
+      const { judge: _judge, ...route } = document.flow.steps.route as Record<string, unknown>;
+      document.flow.steps.route = { ...route, by: ['hints'] };
       return document;
     };
     versions.createRule(unjudged());

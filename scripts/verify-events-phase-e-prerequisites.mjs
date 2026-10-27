@@ -52,10 +52,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `enable-all-approve` owner wire, which approves switching the event service on — the activation `enable-all` prepared —
  * from the app after its preview, its arguments (the approval and the digest the preview showed) and its result, whose
  * `approvedBy` names `desktop-app` or `desktop-app (test build)`. No existing branch changed.
+ *
+ * 0.36.0 (workflows, design §6.7) is another, also only additive: a delivery's target kind, in `deliveries list`,
+ * `delivery show` and a message's deliveries, gains the value `linear-change` — a workflow's change of the Linear issue
+ * its run made — and such a row may carry the optional `linear: { identifier, url }` of that issue. No existing branch
+ * changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '08f8414257643bf45f12490b5c6507eeaa0b51e8d9cd2eed3d5e9f3c2271b562',
+    '3af7c0b5011ea932f4a08f0c3cbb6061ebe52402d584acf2a1b9613274f35919',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -85,7 +90,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    'ecf294a45cef399f3101154614103991330caef68ee71925d42dd9bda74f506f',
+    '1396119022a0c0882c501411198d251fda5489be621ae7adf4fdd5e2e21526bc',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

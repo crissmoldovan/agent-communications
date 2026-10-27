@@ -22,6 +22,7 @@ import {
 import {
   assertFlowDocumentSize,
   assertNoFlowOnlyTargets,
+  boundFlowJudges,
   canonicalFlowInRule,
   isClosedSlot,
   type RuleWithoutFlow,
@@ -613,6 +614,12 @@ function derivedVersions(document: ActivationDocumentV1): DisclosureVersion[] {
                 version: document.rule.agentic.judge.version,
               },
             ]),
+        // A workflow's flow binds each judge its steps ask, once, beside the gate's (workflows plan B3).
+        ...boundFlowJudges(document.rule).map((judge) => ({
+          kind: 'judge' as const,
+          id: judge.judgeId,
+          version: judge.version,
+        })),
       ];
     case 'judge-budget':
       return [{ kind: 'judge-budget', id: document.budget.budgetId, version: document.budget.version }];

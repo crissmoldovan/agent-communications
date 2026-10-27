@@ -19,6 +19,8 @@ const LABELS: Record<Screen, string | RegExp> = {
   // People (0.35.0), with its "New" tag, whose space is a screen reader's; Search has no row of its own: it is
   // Messages' second part.
   people: /^People ?New$/,
+  // Projects (0.36.0), with its "New" tag.
+  projects: /^Projects ?New$/,
   search: /^Messages ?New$/,
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).

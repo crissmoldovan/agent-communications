@@ -6,7 +6,7 @@
  * Turn off and Remove… are tightenings the app applies itself (DA10), Remove… once its dialog is answered. Switching
  * a rule on is the person's approval, never the app's: a rule not switched on points at Approvals. Edit… (0.33.0) opens
  * the rule editor on its next version, which the person approves in the app; trying a rule on a recent message comes in
- * a later release.
+ * a later release. From 0.36.0 its Runs follow its last 7 days: each run opens its page.
  */
 import { AlertDialog, Button, Chip, Collapsible, Panel, Spinner } from '@cueplusplus/ui';
 import { ChevronRight } from 'lucide-react';
@@ -31,6 +31,7 @@ import {
   whichMessages,
 } from '../../events-rules.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
+import { Runs } from '../workflows/Runs.tsx';
 import type { EventsLists, EventsNav } from './lists.ts';
 import { BackTo, DRY_RUN, Problem, Sentence, Short, StatusChip, statusOf } from './parts.tsx';
 
@@ -438,6 +439,7 @@ export function RuleDetail({
           {status === 'not-switched-on' ? null : (
             <Week versions={versions} onDeliveries={() => nav.showDeliveriesOf(id)} />
           )}
+          {lists.runs === 'off' ? null : <Runs ruleId={id} onOpen={(runId) => nav.openRun(runId)} />}
           <Versions
             versions={versions}
             on={status === 'on'}

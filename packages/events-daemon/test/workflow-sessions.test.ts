@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
 import { mkdir, realpath, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
 import type { FlowDocumentV1, FlowStep } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../src/domain/activation-documents.ts';
+import { EventDomainError } from '../src/domain/lifecycle.ts';
 import { RelayClient, RelayError, readRelayToken } from '../src/runtime/relay-client.ts';
+import { startFolderCheck } from '../src/runtime/workflow/session-activation.ts';
 import { createFindSessionExecutor, type SessionStepDeps } from '../src/runtime/workflow/steps/find-session.ts';
 import { createStartSessionExecutor, sessionTitle } from '../src/runtime/workflow/steps/start-session.ts';
 import { FakeRelay } from './support/fake-relay.ts';
@@ -375,4 +378,36 @@ test('a folder outside the allowed roots is refused, not started', { skip: WINDO
     assert.equal(relayNo.kind === 'settled' && relayNo.output.refusal, 'RELAY_REFUSED');
     assert.equal(relay.sessions.length, 0, 'nothing was started');
   });
+});
+
+test("activation checks a start step's folder: inside the allowed roots, outside Agent Comms' folders", async () => {
+  const { flow } = OWNER_EXAMPLE;
+  const startStep = flow.steps.start as Extract<FlowStep, { kind: 'start-session' }>;
+  const withFolder = (folder: string) =>
+    ({
+      ...OWNER_EXAMPLE,
+      flow: { ...flow, steps: { ...flow.steps, start: { ...startStep, in: { folder } } } },
+    }) as CanonicalFullRuleDocument;
+  const check = startFolderCheck({
+    sessionRoots: async () => ['/example/home/work'],
+    deniedFolders: () => ['/example/home/work/agentcomms'],
+  });
+  const refused = (pattern: RegExp) => (error: unknown) =>
+    error instanceof EventDomainError && error.code === 'VERSION_DOCUMENT_INVALID' && pattern.test(error.message);
+  await assert.doesNotReject(async () => check(withFolder('/example/home/work/acme-site'), {} as DatabaseSync));
+  await assert.rejects(
+    async () => check(withFolder('/example/home/elsewhere'), {} as DatabaseSync),
+    refused(/not inside the relay's allowed roots/u),
+  );
+  await assert.rejects(
+    async () => check(withFolder('/example/home/work/agentcomms/state'), {} as DatabaseSync),
+    refused(/one of Agent Comms' own folders/u),
+  );
+  const unknown = startFolderCheck({ sessionRoots: async () => [], deniedFolders: () => [] });
+  await assert.rejects(
+    async () => unknown(withFolder('/example/home/work/acme-site'), {} as DatabaseSync),
+    refused(/cannot be checked/u),
+  );
+  // A start in a worktree or a project is checked when the step runs; with no folder place there is nothing to ask.
+  await assert.doesNotReject(async () => unknown(OWNER_EXAMPLE, {} as DatabaseSync));
 });

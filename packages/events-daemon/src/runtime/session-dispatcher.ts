@@ -10,6 +10,7 @@ import {
 } from '@agentcomms/core';
 import { buildSessionPrompt, type JsonValue, type ResolvedContextPart } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
+import { closedSlotValue } from '../domain/flow.ts';
 import { newQueueItemId, parseQueueItemContent } from '../domain/queue-target.ts';
 import type { SessionTargetDocument } from '../domain/session-target.ts';
 import { PackedRecordError } from '../store/crypto.ts';
@@ -88,6 +89,9 @@ interface DeliveryRow {
   readonly event_id: string;
   readonly occurred_at: number;
   readonly whatsapp_message_id: string | null;
+  /** A workflow's delivery (0.36): the run and the deliver step it is for; null outside a flow. */
+  readonly run_id: string | null;
+  readonly step_id: string | null;
 }
 
 interface Delivery {
@@ -261,6 +265,9 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
     // A delivery starts at most one session. The one it started takes no prompt now — fenced, moved, watched or gone —
     // so it fails, saying why, rather than starting another (security review of 0.33.0, second look, 1).
     if (chosen.kind === 'lost') return this.#deadLetter(delivery, chosen.code);
+    // The session a workflow's flow chose (0.36 §6.4) is the one it gives the turn to: it is never looked for, or
+    // started, here. One that takes no prompt now ends the delivery, and the flow's own branches go on from there.
+    if ('flow' in target.find && chosen.kind === 'none') return this.#deadLetter(delivery, 'SESSION_GONE');
     let snapshot = chosen.kind === 'usable' ? chosen.snapshot : null;
     let started = false;
     if (snapshot === null) {
@@ -309,9 +316,39 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
       this.#finish(delivery.claim, { state: 'cancelled' });
       return { state: 'terminal', deliveryId: delivery.claim.id };
     }
-    const result = await ready.client.startRun(sessionId, { prompt, requestedMode: target.mode, startId });
+    const outputFormat = this.#outputFormat(delivery);
+    const result = await ready.client.startRun(sessionId, {
+      prompt,
+      requestedMode: target.mode,
+      startId,
+      ...(outputFormat === undefined ? {} : { outputFormat }),
+    });
     if (result.kind === 'busy') return this.#busy(delivery, sessionId);
     return this.#delivered(delivery, result.run.id, offer);
+  }
+
+  /**
+   * A workflow's deliver step that asks how the turn ended (`report`, 0.36 §6.4): the turn's result is to be one of its
+   * words, and a summary of at most 2,000 characters. Claude only: activation refuses `report` for Codex.
+   */
+  #outputFormat(
+    delivery: Delivery,
+  ): { readonly type: 'json_schema'; readonly schema: Readonly<Record<string, unknown>> } | undefined {
+    const stepId = delivery.row.step_id;
+    const step = stepId === null ? undefined : delivery.rule.flow?.steps[stepId];
+    if (step?.kind !== 'deliver' || step.report === undefined) return undefined;
+    return {
+      type: 'json_schema',
+      schema: {
+        type: 'object',
+        properties: {
+          outcome: { type: 'string', enum: [...step.report] },
+          summary: { type: 'string', maxLength: 2000 },
+        },
+        required: ['outcome', 'summary'],
+        additionalProperties: false,
+      },
+    };
   }
 
   /** The offer this delivery makes to the session it posts to, handed it at `handedAt` (taking T4), or null. */
@@ -451,12 +488,26 @@ export class SessionDispatcher implements DeliveryDispatchHandler {
 
   /** The parts this delivery's target lists, resolved: each model's words, each file's text, or the note for each. */
   async #resolve(delivery: Delivery, ready: ReadyRelay): Promise<readonly ResolvedContextPart[]> {
+    const runId = delivery.row.run_id;
+    const flow = delivery.rule.flow;
     return resolveContextParts({
       parts: delivery.target.context,
       values: delivery.record.values,
       fileRoots: await this.#sessions.fileRoots(ready),
       deniedFolders: this.#sessions.deniedFolders(),
       generate: this.#generate,
+      // A `{ step, field }` part reads its run's settled step's closed output, through the one slot resolver (0.36).
+      ...(runId === null || flow === undefined
+        ? {}
+        : {
+            stepOutput: (step: string, field: string) =>
+              closedSlotValue(`steps.${step}.${field}`, {
+                runId,
+                flow,
+                output: (id) => settledStepOutput(this.#store, runId, id),
+                trigger: null,
+              }),
+          }),
     });
   }
 
@@ -807,13 +858,27 @@ function deliveryRow(store: EventDatabase, id: string): DeliveryRow | undefined 
   return store.database
     .prepare(
       `SELECT d.id, d.account_id, d.rule_id, d.rule_version, d.expires_at, d.switch_generation, d.attempts,
-              d.decision_id, decision.event_id, ingest.occurred_at, d.whatsapp_message_id
+              d.decision_id, decision.event_id, ingest.occurred_at, d.whatsapp_message_id, d.run_id, d.step_id
          FROM deliveries d
          JOIN decisions decision ON decision.id = d.decision_id
          JOIN ingest ON ingest.event_id = decision.event_id
         WHERE d.id = ?`,
     )
     .get(id) as DeliveryRow | undefined;
+}
+
+/** A settled step's closed output in a run, as the step wrote it; null when it has none. */
+function settledStepOutput(
+  store: EventDatabase,
+  runId: string,
+  stepId: string,
+): Readonly<Record<string, JsonValue>> | null {
+  const row = store.database
+    .prepare("SELECT output FROM workflow_steps WHERE run_id = ? AND step_id = ? AND state = 'done'")
+    .get(runId, stepId) as { output: string | null } | undefined;
+  return row?.output === null || row?.output === undefined
+    ? null
+    : (JSON.parse(row.output) as Readonly<Record<string, JsonValue>>);
 }
 
 function deliveryLocation(id: string) {
@@ -854,7 +919,10 @@ function keptParts(value: unknown): readonly ResolvedContextPart[] | null {
                 GENERATE_FAILURES.has(entry.reason as string)
               : entry.kind === 'file'
                 ? text(entry.path) && text(entry.text)
-                : entry.kind === 'file-missing' && text(entry.path) && FILE_FAILURES.has(entry.reason as string);
+                : entry.kind === 'step'
+                  ? // A workflow step's closed output (0.36 §6.4): its step and field, and its value when it had one.
+                    text(entry.step) && text(entry.field)
+                  : entry.kind === 'file-missing' && text(entry.path) && FILE_FAILURES.has(entry.reason as string);
     if (!ok) return null;
   }
   return value as readonly ResolvedContextPart[];

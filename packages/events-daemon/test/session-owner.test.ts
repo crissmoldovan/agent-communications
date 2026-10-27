@@ -199,7 +199,7 @@ test('SESSION-O1: with none in the folder, one is started there, and the fixed f
     const prompt = run?.prompt ?? '';
     assert.equal(
       prompt.split('\n')[0],
-      `[Agent Comms] The rule ${RULE} passed you a message from gmail/events/gmail.`,
+      `[Agent Comms] The workflow ${RULE} passed you a message from gmail/events/gmail.`,
       'the fixed frame’s first line',
     );
     // Sender material only inside the envelope; the rule author's text and the person's file outside it.
@@ -210,7 +210,7 @@ test('SESSION-O1: with none in the folder, one is started there, and the fixed f
     }
     assert.match(prompt, new RegExp(`field="event" id="${delivery?.id}">`, 'u'));
     assert.match(prompt, /field="model" id="[^"]+">\nSummary of /u, 'a model’s words are enveloped too');
-    assert.match(prompt, /From the rule:\nCheck the invoice against Stripe before replying\./u);
+    assert.match(prompt, /From the workflow:\nCheck the invoice against Stripe before replying\./u);
     assert.match(prompt, /left out, because the model took too long\./u);
     assert.match(
       prompt,
@@ -223,7 +223,7 @@ test('SESSION-O1: with none in the folder, one is started there, and the fixed f
     assert.equal(boundaries.size, 1, 'one boundary for the whole prompt');
     assert.match(prompt, /GONE\.md: left out, because it is not there\./u);
     assert.match(prompt, /big\.md: left out, because it is larger than 64 KB\./u);
-    assert.ok(prompt.endsWith('The rule’s instruction:\nReply to the sender with what you found.'));
+    assert.ok(prompt.endsWith('The workflow’s instruction:\nReply to the sender with what you found.'));
     assert.doesNotMatch(prompt, /snippet of/u, 'a mapped field the context does not name is not sent');
     const chosen = readDatabase(harness.stateDir, (database) =>
       database.prepare('SELECT relay_session_id, started, run_id FROM session_deliveries').get(),

@@ -503,17 +503,23 @@ export function purgeRevokedRuleWork(
   }
 }
 
-/** Kind disable keeps immutable rule authority but applies the same content/work closure as revoking each bound rule. */
+/**
+ * Kind disable keeps immutable rule authority but applies the same content/work closure as revoking each bound rule —
+ * one whose gate judges with the kind, or whose workflow's flow asks a judge of it (0.36 plan B3).
+ */
 export function purgeJudgeKindRuleWork(database: DatabaseSync, judgeKind: string, now: number = Date.now()): void {
   const rows = database
     .prepare(
       `SELECT rule_id, version
          FROM rule_versions
         WHERE state IN ('active', 'superseded')
-          AND json_extract(document, '$.agentic.judge.kind') = ?
+          AND (json_extract(document, '$.agentic.judge.kind') = ?
+               OR EXISTS (SELECT 1 FROM json_each(document, '$.flow.steps') AS step
+                           WHERE json_extract(step.value, '$.ask.judge.kind') = ?
+                              OR json_extract(step.value, '$.judge.judge.kind') = ?))
         ORDER BY rule_id, version`,
     )
-    .all(judgeKind) as Array<{ rule_id: string; version: number }>;
+    .all(judgeKind, judgeKind, judgeKind) as Array<{ rule_id: string; version: number }>;
   for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now, { keepAuthority: true });
 }
 

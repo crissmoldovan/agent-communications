@@ -62,6 +62,25 @@ export function askFor(to: Destination): void {
   pending = to;
 }
 
+/** A run's id another screen asked Events → Workflows to open (0.36.0), until Events reads it. */
+let pendingRun: string | null = null;
+
+/**
+ * Opens one run's view (0.36.0, workflows design §11.2) from another screen — a message's story — through `navigate`:
+ * Events opens on its Workflows tab, and its tab reads the run once, as it mounts.
+ */
+export function openRunVia(navigate: (to: Destination) => void, runId: string): void {
+  pendingRun = runId;
+  navigate({ screen: 'events', tab: 'rules' });
+}
+
+/** The run another screen asked for, once: a second read finds none. */
+export function runToOpen(): string | null {
+  const run = pendingRun;
+  pendingRun = null;
+  return run;
+}
+
 /** Opens a destination; `null` where the screen was shown without the shell (Settings before an install). */
 export function useNavigate(): ((to: Destination) => void) | null {
   return useContext(NavigateContext);

@@ -54,10 +54,9 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/events/sink.ts',
   // The event dispatcher opens a raised event, and seals each live subscriber's frame of it, through the same cipher.
   'packages/events-daemon/src/runtime/events/event-dispatcher.ts',
-  // Chains (0.36.0, W34): a chained run's `/trigger` is opened from the raised event's record, and a Raise step's
-  // declared fields from the run's record, both through the same centrally leased cipher.
+  // Chains (0.36.0, W34): a chained run's `/trigger` is opened from the raised event's record through the same
+  // centrally leased cipher.
   'packages/events-daemon/src/runtime/events/chains.ts',
-  'packages/events-daemon/src/runtime/workflow/compose-events.ts',
   'packages/events-daemon/src/sources/source-worker.ts',
   'packages/events-daemon/src/sources/gmail.ts',
   'packages/events-daemon/src/sources/materialise.ts',

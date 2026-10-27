@@ -126,6 +126,32 @@ export function parseHttpResponse(bytes: Buffer): { readonly status: number; rea
   return { status: Number(status[1]), body };
 }
 
+/** A request that did not give data, as a delivery reads it: try again later, or a failure that will not succeed. */
+export type LinearFailure =
+  | { readonly kind: 'retry'; readonly code: string; readonly status: number | null }
+  | { readonly kind: 'failed'; readonly code: string; readonly status: number | null };
+
+/**
+ * Linear's answer as a delivery's code: a rate limit, a 5xx or no usable answer retries, as a webhook's failure does;
+ * Linear refusing the request (a 4xx, or a GraphQL error) fails at once with `LINEAR_` and Linear's code.
+ */
+export function linearFailure(outcome: Exclude<LinearOutcome, { kind: 'data' }>): LinearFailure {
+  switch (outcome.kind) {
+    case 'rate-limited':
+      return { kind: 'retry', code: 'LINEAR_RATELIMITED', status: outcome.status };
+    case 'server':
+      return { kind: 'retry', code: `LINEAR_HTTP_${outcome.status}`, status: outcome.status };
+    case 'network':
+      return { kind: 'retry', code: 'LINEAR_NETWORK', status: null };
+    case 'refused':
+      return {
+        kind: 'failed',
+        code: (outcome.code.startsWith('LINEAR_') ? outcome.code : `LINEAR_${outcome.code}`).slice(0, 48),
+        status: outcome.status === 0 ? null : outcome.status,
+      };
+  }
+}
+
 /** One answer, classified. Only a 2xx answer with data and no error gives `data`. */
 export function classifyLinearResponse(status: number, body: Buffer): LinearOutcome {
   let parsed: unknown;
