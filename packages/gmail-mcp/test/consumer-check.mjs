@@ -135,6 +135,8 @@ assert.deepEqual(names, [
   'gmail_send_wait',
   'gmail_sendas_list',
   'gmail_setup',
+  'gmail_take',
+  'gmail_taken',
   'gmail_thread_get',
   'gmail_thread_timeline',
   'gmail_trash',

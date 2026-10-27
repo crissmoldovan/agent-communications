@@ -158,6 +158,8 @@ try {
     // Where an approval stands, now or once it changes: it only looks.
     'resend_send_wait',
     'resend_suppressions',
+    'resend_take',
+    'resend_taken',
   ]);
   assert.ok(
     names.every((name) => !/approv/.test(name)),

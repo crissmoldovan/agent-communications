@@ -181,6 +181,8 @@ try {
     'slack_search',
     // Prepares a standing approval for a person to approve at their terminal with its code: it approves nothing.
     'slack_standing_add',
+    'slack_take',
+    'slack_taken',
     'slack_thread',
     // Connecting and changing a workspace: whatever loosens it or removes it waits for a change approval.
     'slack_workspace_add',
