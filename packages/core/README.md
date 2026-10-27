@@ -113,8 +113,9 @@ command or the labelled PowerShell `&` line the result provides.
 Core keeps a private log of what each agent window read, did and sent: `<state>/activity/`, a file a day, kept 30
 days. It holds ids, subjects, senders and file names, and never a message body, an attachment or a secret.
 
-- `agentcomms activity sessions` lists the agent windows, newest first; `agentcomms activity show <session>` lists
-  what one did.
+- `agentcomms activity sessions` lists the agent windows, newest first — each with the MCP connection it was last
+  used through (`connection`, by id and name, from 0.35.0) — and `agentcomms activity show <session>` lists what one
+  did.
 - `agentcomms activity items [--since <ms>] [--ids <id,…>] --json` lists every call that names an item, grouped by
   the item: a Gmail message by its id, a Slack message as `<channelId>/<ts>`. Each line names the window (its key,
   folder and client), the operation, when, and how it ended. A reply also links to what it answers: a Gmail reply
