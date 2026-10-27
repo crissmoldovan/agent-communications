@@ -236,7 +236,7 @@ Usage — run these with this CLI, each as the words after its program:
   connection migrate [--client <client>] [--approval <id>]
                                 move each app's separate Agent Comms entries into one connection that
                                 reaches exactly what they reached, each removed entry saved first: approved
-                                first. The tools then appear under agentcomms, so allow them again
+                                first. The tools then appear under that one entry: allow them again
   connection migrate --undo <id> [--approval <id>]
                                 its parts as entries of their own again, and the connection taken out
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]

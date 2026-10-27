@@ -251,11 +251,11 @@ class Part {
       partial += chunk.toString('utf8');
       const lines = partial.split('\n');
       partial = lines.pop() ?? '';
-      for (const line of lines) this.router.log(`[agentcomms:${this.server}] ${line.slice(0, STDERR_LINE_LIMIT)}`);
+      for (const line of lines) this.router.log(`[gateway:${this.server}] ${line.slice(0, STDERR_LINE_LIMIT)}`);
     });
     transport.onmessage = (message) => this.onmessage(message as unknown as Message);
     transport.onclose = () => this.onclose();
-    transport.onerror = (error) => this.router.log(`[agentcomms:${this.server}] transport: ${error.message}`);
+    transport.onerror = (error) => this.router.log(`[gateway:${this.server}] transport: ${error.message}`);
     this.move('starting');
     this.spawned = transport.start().then(
       () => {
@@ -263,7 +263,7 @@ class Part {
         this.router.statusChanged();
       },
       (error: unknown) => {
-        this.router.log(`[agentcomms:${this.server}] did not start: ${(error as Error).message}`);
+        this.router.log(`[gateway:${this.server}] did not start: ${(error as Error).message}`);
         this.onclose();
         throw error;
       },
@@ -463,7 +463,7 @@ export class Router {
     const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
     this.handle = serveStdio((ctx) => this.factory(ctx), {
       transport: wire,
-      onerror: (error) => this.log(`[agentcomms] ${error.message}`),
+      onerror: (error) => this.log(`[gateway] ${error.message}`),
     });
     return { close: () => this.close() };
   }
@@ -575,7 +575,7 @@ export class Router {
       if (this.server !== undefined) await this.listChanged();
     } catch (error) {
       if (part.state === 'stopped' || part.state === 'restarting') return;
-      this.log(`[agentcomms:${part.server}] stopped: ${(error as Error).message}`);
+      this.log(`[gateway:${part.server}] stopped: ${(error as Error).message}`);
       part.givenUp = true;
       await part.close(`${part.label} did not start`);
       if (this.server !== undefined) await this.listChanged();
@@ -628,7 +628,7 @@ export class Router {
       const owned = typeof tool.name === 'string' && tool.name.startsWith(`${part.spec.prefix}_`);
       if (!owned) {
         this.dropped.push({ server: part.server, tool: tool.name, why: 'outside its prefix' });
-        this.log(`[agentcomms:${part.server}] dropped a tool outside its prefix ${part.spec.prefix}_`);
+        this.log(`[gateway:${part.server}] dropped a tool outside its prefix ${part.spec.prefix}_`);
       }
       return owned;
     });
@@ -691,7 +691,7 @@ export class Router {
   async refuse(why: string): Promise<void> {
     if (this.refusal !== null) return;
     this.refusal = why;
-    this.log(`[agentcomms] ${why}`);
+    this.log(`[gateway] ${why}`);
     for (const timer of this.restartTimers) clearTimeout(timer);
     this.restartTimers.clear();
     await Promise.all(
@@ -768,7 +768,7 @@ export class Router {
     try {
       await this.server?.sendToolListChanged();
     } catch (error) {
-      this.log(`[agentcomms] list_changed: ${(error as Error).message}`);
+      this.log(`[gateway] list_changed: ${(error as Error).message}`);
     }
   }
 
@@ -828,7 +828,7 @@ export class Router {
       case 'notifications/tools/list_changed':
         void this.list(part).then(
           () => this.listChanged(),
-          (error: unknown) => this.log(`[agentcomms:${part.server}] relist: ${(error as Error).message}`),
+          (error: unknown) => this.log(`[gateway:${part.server}] relist: ${(error as Error).message}`),
         );
         return;
       case 'notifications/subscriptions/acknowledged':
@@ -846,7 +846,7 @@ export class Router {
             ...(message.params === undefined ? {} : { params: message.params }),
           } as never)
           .catch((error: unknown) => {
-            this.log(`[agentcomms:${part.server}] ${String(message.method)} not relayed: ${(error as Error).message}`);
+            this.log(`[gateway:${part.server}] ${String(message.method)} not relayed: ${(error as Error).message}`);
           });
     }
   }
@@ -874,7 +874,7 @@ export class Router {
     recent.push(now);
     this.crashes.set(part.server, recent);
     const exit = part.exit === null ? '' : ` (exit ${part.exit.code ?? part.exit.signal ?? 'unknown'})`;
-    this.log(`[agentcomms:${part.server}] its process ended${exit}`);
+    this.log(`[gateway:${part.server}] its process ended${exit}`);
     if (this.closed || this.refusal !== null || part.givenUp || this.parts.get(part.server) !== part) {
       part.move('stopped', `${part.label} stopped`);
       return;

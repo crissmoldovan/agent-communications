@@ -150,7 +150,7 @@ test(
     assert.match(effects, /leaves "gmail-acme" .*one project’s own entry/);
     assert.doesNotMatch(effects, /notes/, 'somebody else’s entry is not ours to name');
     // §9.4, in the preview.
-    assert.match(effects, /the tools appear under agentcomms in the app/);
+    assert.match(effects, /the tools appear under the one Agent Comms entry: mcp__agentcomms__/);
     assert.match(effects, /need allowing again as mcp__agentcomms__/);
     assert.match(effects, /restart the app once/);
     const applied = (await gatedChange(

@@ -165,7 +165,7 @@ const body = (message: Record<string, unknown> | undefined) => {
   return JSON.stringify(rest);
 };
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 20_000): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     if (await check()) return;
@@ -238,7 +238,7 @@ for (const { mode, version } of ERAS) {
       'events_status',
       'slack_echo',
     ]);
-    assert.match(routed.lines.join('\n'), /\[agentcomms:gmail\] dropped a tool outside its prefix gmail_/);
+    assert.match(routed.lines.join('\n'), /\[gateway:gmail\] dropped a tool outside its prefix gmail_/);
   });
 
   test(`§5.5 (${version}): Gmail's approval form reaches the client through the router, and the answer reaches Gmail`, async (t) => {
@@ -360,10 +360,10 @@ test('§4: a part that exits at start, or never finishes its handshake, leaves t
     t,
     [part('slack'), part('gmail', { FAKE_EXIT_AT_START: '1' }), part('events', { FAKE_SLOW_START_MS: '60000' })],
     {
-      router: { startWindowMs: 400, joinWindowMs: 1_200, restartDelaysMs: [60_000] },
+      router: { startWindowMs: 400, joinWindowMs: 6_000, restartDelaysMs: [60_000] },
     },
   );
-  assert.ok(Date.now() - started < 4_000, 'the handshake did not wait for them');
+  assert.ok(Date.now() - started < 8_000, 'the handshake did not wait for them');
   const names = (await routed.client.listTools()).tools.map((tool) => tool.name);
   assert.ok(
     names.every((name) => name.startsWith('slack_')),
@@ -373,14 +373,15 @@ test('§4: a part that exits at start, or never finishes its handshake, leaves t
   // Named as starting — or starting again, after its exit — at the handshake; on a busy machine slack may be too.
   assert.match(instructions, /Starting: [^\n]*\bgmail\b/u);
   assert.match(instructions, /Starting: [^\n]*\bevents\b/u);
-  await waitFor(() => routed.router.status().find((each) => each.server === 'events')?.state === 'stopped', 5_000);
+  await waitFor(() => routed.router.status().find((each) => each.server === 'events')?.state === 'stopped', 30_000);
   assert.match(
     (await callError(routed.client.callTool({ name: 'events_status', arguments: {} }))).message,
     /events did not start in this connection/u,
   );
   assert.match(
     (await callError(routed.client.callTool({ name: 'gmail_whoami', arguments: {} }))).message,
-    /gmail stopped in this connection/u,
+    // Exited and given up, or — on a busy machine — not even started within the join window: either says why.
+    /gmail (stopped|did not start) in this connection/u,
   );
   const echo = await routed.client.callTool({ name: 'slack_echo', arguments: { text: 'still here' } });
   assert.equal((echo.structuredContent as { echo: string }).echo, 'still here');

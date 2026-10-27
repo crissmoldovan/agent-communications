@@ -446,7 +446,9 @@ async function entryName(
         (scope === 'local' ? server.scope === 'project' && server.folder === folder : server.scope !== 'project') &&
         connectionOfEntry(server.args) !== own,
     );
-  if (!taken('agentcomms')) return 'agentcomms';
+  // Core's own server name, from its manifest: what an entry of Agent Comms is called unless it is taken.
+  const base = serverFacts('core').defaultServerName;
+  if (!taken(base)) return base;
   const slug =
     connectionName
       .toLowerCase()
@@ -455,7 +457,7 @@ async function entryName(
       .replace(/^-+|-+$/g, '')
       .slice(0, 40) || 'connection';
   for (let index = 1; index < 100; index += 1) {
-    const name = index === 1 ? `agentcomms-${slug}` : `agentcomms-${slug}-${index}`;
+    const name = index === 1 ? `${base}-${slug}` : `${base}-${slug}-${index}`;
     if (!taken(name)) return name;
   }
   throw new CommsError('CONFIG', `${client} has every name this would give the entry already`);
@@ -554,7 +556,10 @@ export function connectionAddChange(
         app: request.app,
         where: { scope, folder: folder ?? null, configDir: request.profile ?? null },
       });
-      const name = client === null ? 'agentcomms' : await entryName(appEnv, client, request.name, scope, folder);
+      const name =
+        client === null
+          ? serverFacts('core').defaultServerName
+          : await entryName(appEnv, client, request.name, scope, folder);
       const record: ConnectionRecord = {
         id,
         name: request.name,
@@ -631,7 +636,10 @@ export function connectionAddChange(
             return {
               ...config,
               connections: withConnection(config, {
-                put: { ...read.record, entry: { name: installed?.name ?? record.entry?.name ?? 'agentcomms', path } },
+                put: {
+                  ...read.record,
+                  entry: { name: installed?.name ?? record.entry?.name ?? serverFacts('core').defaultServerName, path },
+                },
               }),
             } as Config;
           });
@@ -981,7 +989,7 @@ export function connectionKeyReplaceChange(
         {
           channel: 'core',
           client,
-          name: record.entry?.name ?? 'agentcomms',
+          name: record.entry?.name ?? serverFacts('core').defaultServerName,
           launcher: record.launcher,
           noVerify: true,
           connection: {

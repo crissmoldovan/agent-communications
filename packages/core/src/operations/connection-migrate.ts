@@ -221,8 +221,9 @@ export async function migrationPlan(
         .filter((entry) => entry.client === group.client && entry.path === group.path && entry.scope !== 'project')
         .map((entry) => entry.name),
     );
-    let entryName = core?.entry.name ?? 'agentcomms';
-    for (let index = 2; core === undefined && used.has(entryName); index += 1) entryName = `agentcomms-${index}`;
+    const base = serverFacts('core').defaultServerName;
+    let entryName = core?.entry.name ?? base;
+    for (let index = 2; core === undefined && used.has(entryName); index += 1) entryName = `${base}-${index}`;
     planned.push({
       app,
       client: group.client as SupportedClient,
@@ -238,7 +239,7 @@ export async function migrationPlan(
 }
 
 const NEXT = [
-  'The tools appear under agentcomms in the app: mcp__agentcomms__… in Claude Code.',
+  'The tools appear under the one Agent Comms entry: mcp__agentcomms__… in Claude Code.',
   'Permission rules that allowed mcp__gmail__… and the like need allowing again as mcp__agentcomms__….',
   'Restart the app once to use the connection.',
 ];

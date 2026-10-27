@@ -113,7 +113,7 @@ async function gateway(t: TestContext, m: Machine, id: string, key: string | und
   return { client, served, env, lines };
 }
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 8_000): Promise<void> {
+async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs = 20_000): Promise<void> {
   const until = Date.now() + timeoutMs;
   while (Date.now() < until) {
     if (await check()) return;

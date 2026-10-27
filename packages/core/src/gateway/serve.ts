@@ -126,7 +126,7 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
 
   if (refused !== null || record() === undefined) {
     const why = refused ?? 'this connection’s record in Agent Comms could not be read';
-    log(`[agentcomms] serving nothing: ${why}`);
+    log(`[gateway] serving nothing: ${why}`);
     // Serves no tools, with instructions that say why: an app that started it shows them, not "failed to start".
     const handle = serveStdio(
       () => {

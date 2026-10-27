@@ -98,7 +98,7 @@ export function connectionRegistrations(
       servers.push({
         client: record.app,
         path: record.entry?.path ?? 'a snippet pasted by hand',
-        name: record.entry?.name ?? 'agentcomms',
+        name: record.entry?.name ?? serverFacts('core').defaultServerName,
         scope: record.where.scope === 'local' ? 'project' : 'user',
         command,
         args,
