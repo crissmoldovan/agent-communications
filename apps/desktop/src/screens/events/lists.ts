@@ -3,16 +3,23 @@
  * `rule show` for each rule the allow-list can name, `deliveries list`, and the account lists that turn ids into
  * aliases. Each is read when the screen opens and again when the event service starts or stops running; the rules
  * again after Turn off or Remove, the deliveries after Try now or Stop trying. Also where each tab's page is open.
+ *
+ * From 0.36.0 `runs list` too, once (workflows design §11.2): the newest runs of every workflow, for each card's runs
+ * this week and last run, and for a delivery's run. A run's page opens on the Workflows tab, from a workflow's Runs,
+ * from a delivery, or from a message's story (`runToOpen`).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type AccountNames, useAccountNames } from '../../account-aliases.ts';
 import { useBridge } from '../../bridge-context.tsx';
-import type { Loadable } from '../../data.tsx';
+import { type Loadable, useAppData } from '../../data.tsx';
 import { type DeliveryRow, readDeliveries } from '../../events-deliveries.ts';
 import { type RuleRow, type RuleVersionView, readRuleShow, readRulesList } from '../../events-rules.ts';
+import { supports } from '../../gates.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import { useReloadOnServiceTurn } from '../../hooks/use-reload-on-return.ts';
 import { type Call, type CliResult, errorMessage } from '../../ipc.ts';
+import { runToOpen } from '../../navigation.tsx';
+import { type RunListEntryV1, readRunsList } from '../../workflows/types.ts';
 import type { EditTarget } from './RuleEditor.tsx';
 
 /** What a list says when its answer is not one the app can read. */
@@ -22,6 +29,7 @@ export const UNREADABLE_RULE = "This workflow's details could not be read.";
 
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };
+const RUNS: Call = { kind: 'eventsRunsList' };
 
 /** How many `rule show` reads run at once: each starts the events CLI, so a long list is read a few at a time. */
 const AT_ONCE = 4;
@@ -31,6 +39,8 @@ export interface EventsLists {
   /** Each openable rule's versions, by id, as `rule show` read them; a rule not read yet is loading. */
   versions: ReadonlyMap<string, Loadable<RuleVersionView[]>>;
   deliveries: Loadable<DeliveryRow[]>;
+  /** The newest runs of every workflow (0.36.0), or `off` where the event service has no workflows. */
+  runs: Loadable<RunListEntryV1[]> | 'off';
   names: AccountNames;
   reloadRules(): Promise<void>;
   reloadDeliveries(): Promise<void>;
@@ -56,7 +66,21 @@ export function useEventsLists(): EventsLists {
   useReloadOnServiceTurn(rulesCall.reload);
   const deliveriesCall = useCall<unknown>(DELIVERIES);
   useReloadOnServiceTurn(deliveriesCall.reload);
+  const { eventsVersion } = useAppData();
+  const withRuns =
+    eventsVersion !== 'absent' && eventsVersion.state === 'ready' && supports(eventsVersion.value, 'workflows');
+  const runsCall = useCall<unknown>(withRuns ? RUNS : null);
+  useReloadOnServiceTurn(runsCall.reload);
   const names = useAccountNames();
+  const runs = useMemo((): Loadable<RunListEntryV1[]> | 'off' => {
+    if (!withRuns) return 'off';
+    if (runsCall.result.state !== 'ready') return runsCall.result;
+    try {
+      return { state: 'ready', value: readRunsList(runsCall.result.value).runs };
+    } catch {
+      return { state: 'error', message: UNREADABLE_LIST };
+    }
+  }, [withRuns, runsCall.result]);
   const rules = useMemo(() => shaped(rulesCall.result, readRulesList, UNREADABLE_LIST), [rulesCall.result]);
   const deliveries = useMemo(
     () => shaped(deliveriesCall.result, readDeliveries, UNREADABLE_LIST),
@@ -91,6 +115,7 @@ export function useEventsLists(): EventsLists {
     rules,
     versions,
     deliveries,
+    runs,
     names,
     reloadRules: rulesCall.reload,
     reloadDeliveries: deliveriesCall.reload,
@@ -111,6 +136,10 @@ export interface EventsNav {
   /** The rule the deliveries are narrowed to, or null for every rule's. */
   deliveriesOf: string | null;
   showDeliveriesOf(ruleId: string | null): void;
+  /** The run whose page is open (0.36.0), on the Workflows tab, or null; and the tab it was opened from. */
+  run: string | null;
+  runFrom: 'rules' | 'deliveries';
+  openRun(id: string | null, from?: 'rules' | 'deliveries'): void;
 }
 
 /** Where each tab stands; moving to another tab's page selects that tab. */
@@ -126,6 +155,9 @@ export function useEventsNav(selectTab: (tab: 'rules' | 'deliveries') => void): 
   );
   const [delivery, setDelivery] = useState<string | null>(null);
   const [deliveriesOf, setDeliveriesOf] = useState<string | null>(null);
+  // A run another screen asked for (a message's story), read once as the screen opens.
+  const [run, setRun] = useState<string | null>(() => runToOpen());
+  const [runFrom, setRunFrom] = useState<'rules' | 'deliveries'>('rules');
   const openRule = useCallback(
     (id: string | null) => {
       setRule(id);
@@ -148,7 +180,29 @@ export function useEventsNav(selectTab: (tab: 'rules' | 'deliveries') => void): 
     },
     [selectTab],
   );
-  return { rule, openRule, editing, edit, delivery, openDelivery, deliveriesOf, showDeliveriesOf };
+  const openRun = useCallback(
+    (id: string | null, from: 'rules' | 'deliveries' = 'rules') => {
+      setRun(id);
+      if (id !== null) {
+        setRunFrom(from);
+        selectTab('rules');
+      } else selectTab(runFrom);
+    },
+    [selectTab, runFrom],
+  );
+  return {
+    rule,
+    openRule,
+    editing,
+    edit,
+    delivery,
+    openDelivery,
+    deliveriesOf,
+    showDeliveriesOf,
+    run,
+    runFrom,
+    openRun,
+  };
 }
 
 /** A rule's versions, once read; null while they are not. */
