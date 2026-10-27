@@ -1781,19 +1781,22 @@ export function refuseStandaloneOptions(given: {
   readonly defaultName: string;
   readonly force?: boolean | undefined;
   readonly print?: boolean | undefined;
+  /** Gmail's `setup --replace-server`: an entry of its own replaced, which `--force` is to `mcp install`. */
+  readonly replaceServer?: boolean | undefined;
 }): void {
   const flags = [
     ...(given.client === 'json' ? ['--client json'] : []),
     ...(given.name !== undefined && given.name !== given.defaultName ? ['--name'] : []),
     ...(given.force === true ? ['--force'] : []),
     ...(given.print === true ? ['--print'] : []),
+    ...(given.replaceServer === true ? ['--replace-server'] : []),
   ];
   if (flags.length === 0) return;
   throw new CommsError(
     'USAGE',
     `${flags.join(', ')} ${flags.length === 1 ? 'is' : 'are'} for an entry of its own: add --standalone, or leave ${flags.length === 1 ? 'it' : 'them'} out`,
     {
-      hint: "mcp install puts this server into the app's MCP connection, whose one entry is Agent Comms' own: there is no entry of this server's to name, replace or print. --standalone registers it as an entry of its own, as before 0.35.0. For a snippet to paste, make a Manual connection with Agent Comms' connection add --app manual.",
+      hint: "Without --standalone this puts the server into the app's MCP connection, whose one entry is Agent Comms' own: there is no entry of this server's to name, replace or print. --standalone registers it as an entry of its own, as before 0.35.0. For a snippet to paste, make a Manual connection with Agent Comms' connection add --app manual.",
     },
   );
 }

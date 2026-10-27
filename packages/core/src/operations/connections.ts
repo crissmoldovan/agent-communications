@@ -1053,6 +1053,26 @@ function appConnections(config: Config, env: NodeJS.ProcessEnv, app: ConnectionA
   });
 }
 
+/**
+ * The app's connection a channel's own `mcp install --client <app>` puts its part into (`appConnections`), with that
+ * part, when the connection has it: what a finish checks before it puts the part in again — Gmail's `setup` hands its
+ * registration to the finish of a sign-in. Null when the app has no such connection, has several (`mcp install` then
+ * names none), or the connection has no part of `server`.
+ */
+export function appConnectionPart(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  app: string,
+  server: string,
+): { readonly connection: ConnectionRecord; readonly part: ConnectionPart } | null {
+  if (app === 'manual' || !(CONNECTION_APPS as readonly unknown[]).includes(app)) return null;
+  const mine = appConnections(config, env, app as ConnectionApp);
+  if (mine.length !== 1) return null;
+  const connection = mine[0] as ConnectionRecord;
+  const part = connection.parts.find((each) => each.server === server);
+  return part === undefined ? null : { connection, part };
+}
+
 /** A name no connection here has, ignoring case: `Claude Code`, then `Claude Code 2`, and so on. */
 function freeConnectionName(config: Config, base: string): string {
   const taken = new Set(

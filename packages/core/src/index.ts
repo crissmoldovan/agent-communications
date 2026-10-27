@@ -156,6 +156,7 @@ export {
  * connection made for it — the change comms_connection_change makes with `add`.
  */
 export {
+  appConnectionPart,
   type ConnectionPartRequest,
   type ConnectionPartResult,
   connectionPartChange,

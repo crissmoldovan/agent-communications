@@ -270,8 +270,9 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 ```
 
 The one step it cannot finish is the grant itself: it hands back the sign-in link and the command that
-completes it, which goes on to register the MCP server when `--mcp-client` came with the mailbox. Registering the
-OAuth client and registering the MCP server are each a change you approve: at a terminal you read what it will do
+completes it, which goes on to put Gmail into that app's MCP connection when `--mcp-client` came with the mailbox
+(`--standalone` registers an entry of Gmail's own instead, as before 0.35.0). Registering the OAuth client and
+connecting the MCP server are each a change you approve: at a terminal you read what it will do
 and type `yes`; run by an agent, it stops at that step with the preview and an approval id, and runs again with
 `--approval <id>` (the OAuth client) or `--mcp-approval <id>` (the MCP server) once you have agreed. The individual commands it wraps — `client add`, `inbox add`, `mcp install` — are all still there if
 you would rather drive them yourself.

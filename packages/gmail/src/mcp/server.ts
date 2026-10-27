@@ -91,7 +91,7 @@ import {
 } from '../operations/signin.ts';
 import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
-import { clientServesInbox, mailboxServedElsewhere } from './install.ts';
+import { clientServesInbox, connectionServesInbox, mailboxServedElsewhere } from './install.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
 export interface GmailMcpOptions extends GmailContextOptions {
@@ -198,7 +198,7 @@ export async function gatewayBrief(context: GmailContext, pinned: string | undef
  * `setup --replace-server`, which travels as `force` — then serves this mailbox rather than keeping the other's pin;
  * and without replacing, the way to reach both is a second entry under a name of its own, which the text names.
  */
-async function pendingRegistrationOf(
+async function standalonePendingOf(
   env: NodeJS.ProcessEnv,
   intent: RegistrationIntent,
   alias: string,
@@ -249,6 +249,39 @@ async function pendingRegistrationOf(
             command,
             (line) => `Without the core server, the person runs ${line} at a terminal.`,
           )}`,
+  };
+}
+
+/**
+ * The registration a finished sign-in hands back, from 0.35.0 (single-server design D17): Gmail put into the app's MCP
+ * connection, the change comms_connection_change makes with `add` — what `inbox add --finish` makes through
+ * `mcp install`'s change. A sign-in `setup --standalone` handed off, or one with `--replace-server`, hands back the
+ * entry of Gmail's own instead (`standalonePendingOf`).
+ */
+async function pendingRegistrationOf(
+  env: NodeJS.ProcessEnv,
+  intent: RegistrationIntent,
+  alias: string,
+  replace: boolean,
+  handoffs: CliHandoffs,
+) {
+  if (intent.standalone === true || replace) return standalonePendingOf(env, intent, alias, replace, handoffs);
+  // This installation's own `mcp install`, located: the change comms_connection_change makes with `add`, at a terminal.
+  const command = handoffs.own([
+    'mcp',
+    'install',
+    '--client',
+    intent.client,
+    ...(intent.launcher ? ['--launcher', intent.launcher] : []),
+  ]);
+  return {
+    client: intent.client,
+    tool: 'comms_connection_change' as const,
+    arguments: { app: intent.client, add: { server: 'gmail' as const } },
+    next: `The mailbox is connected; Gmail is not in ${intent.client}'s MCP connection, or does not reach this mailbox there, yet. Call comms_connection_change on the core server with these arguments, show the person its preview, and call it again with the approvalId once they say yes. ${handoffSentence(
+      command,
+      (line) => `Without the core server, the person runs ${line} at a terminal.`,
+    )}`,
   };
 }
 
@@ -1632,7 +1665,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     {
       title: 'What setup still needs',
       description:
-        'Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_server_install with channel "gmail" (the agent connection).',
+        'Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_connection_change with `add` {server: "gmail"} and the client as `app` (the agent connection; comms_server_install with channel "gmail" registers an entry of Gmail’s own instead).',
       inputSchema: z.object({
         inbox: z.string().min(1).optional().describe('the mailbox name setup is preparing, e.g. acme/gmail'),
         email: z.string().min(1).optional().describe('the address that mailbox must turn out to be'),
@@ -1923,7 +1956,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Finish connecting a mailbox',
           description:
-            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and registering the server is a change of its own that this tool does not make — call the core server’s comms_server_install with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).',
+            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and putting Gmail into the client’s MCP connection is a change of its own that this tool does not make — call the core server’s tool it names (comms_connection_change; comms_server_install after `setup --standalone`) with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).',
           inputSchema: z.object({
             flowId: z.string().min(1),
             url: z
@@ -1956,22 +1989,30 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               .looseObject({ id: z.string(), email: z.string(), client: z.string(), tier: z.string() })
               .describe('the mailbox as it was saved, as `--finish --json` prints it, without where its token is kept'),
             pendingRegistration: z
-              .object({
-                client: z.string(),
-                tool: z.literal('comms_server_install'),
-                arguments: z.object({
-                  channel: z.literal('gmail'),
+              .union([
+                z.object({
                   client: z.string(),
-                  launcher: z.string().optional(),
-                  inbox: z.string().optional(),
-                  name: z.string().optional(),
-                  force: z.literal(true).optional(),
+                  tool: z.literal('comms_connection_change'),
+                  arguments: z.object({ app: z.string(), add: z.object({ server: z.literal('gmail') }) }),
+                  next: z.string(),
                 }),
-                next: z.string(),
-              })
+                z.object({
+                  client: z.string(),
+                  tool: z.literal('comms_server_install'),
+                  arguments: z.object({
+                    channel: z.literal('gmail'),
+                    client: z.string(),
+                    launcher: z.string().optional(),
+                    inbox: z.string().optional(),
+                    name: z.string().optional(),
+                    force: z.literal(true).optional(),
+                  }),
+                  next: z.string(),
+                }),
+              ])
               .optional()
               .describe(
-                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and no entry of this server in that client serves this mailbox yet — or `setup` was given `--replace-server`, which `force` carries: nothing was registered — call comms_server_install with `arguments`, show its preview, and claim it after the user says yes. `inbox` pins it to this mailbox, where the entry under that name serves another; `name` names a second entry when that one is not being replaced',
+                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and that client’s MCP connection does not reach this mailbox yet: nothing was registered — call the tool it names, comms_connection_change, with `arguments`, show its preview, and claim it after the user says yes. A sign-in `setup --standalone` handed off names comms_server_install instead, for an entry of Gmail’s own, when no entry of this server in that client serves this mailbox — or `setup` was given `--replace-server`, which `force` carries; there `inbox` pins it to this mailbox, where the entry under that name serves another, and `name` names a second entry when that one is not being replaced',
               ),
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
@@ -2000,17 +2041,27 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             /*
              * The registration `setup --mcp-client` asked for, handed back rather than made. `inbox add --finish`
              * makes it, through `mcp install`'s change; this server has no tool that registers anything, and
-             * growing one here would be a second way in for what the core server's comms_server_install already is
-             * — the same change, approved the same way. So an agent is told what to call, and nothing is claimed
-             * that did not happen. Decided as `inbox add --finish` decides it: a client whose entry of ours already
-             * serves this mailbox has nothing pending (`clientServesInbox`), unless `setup` was given
-             * `--replace-server`, which asked for that entry to be replaced and travels as `force`.
+             * growing one here would be a second way in for what the core server's comms_connection_change (and,
+             * for an entry of Gmail's own, comms_server_install) already is — the same change, approved the same way.
+             * So an agent is told what to call, and nothing is claimed that did not happen. Decided as
+             * `inbox add --finish` decides it: a client whose MCP connection's Gmail part reaches this mailbox has
+             * nothing pending (`connectionServesInbox`); after `setup --standalone`, a client whose entry of ours
+             * serves it (`clientServesInbox`), unless `setup` was given `--replace-server`, which asked for that entry
+             * to be replaced and travels as `force`.
              */
             const intent = result.registerWith;
             const replace = intent?.replace === true;
+            const served =
+              intent === undefined || replace
+                ? false
+                : intent.standalone === true
+                  ? await clientServesInbox(context.env, { client: intent.client, inbox: result.alias })
+                  : connectionServesInbox(await context.core.config.load(), context.env, {
+                      client: intent.client,
+                      inbox: result.alias,
+                    }) !== null;
             const pending =
-              intent &&
-              (replace || !(await clientServesInbox(context.env, { client: intent.client, inbox: result.alias })))
+              intent && !served
                 ? await pendingRegistrationOf(context.env, intent, result.alias, replace, context.handoffs)
                 : undefined;
             return reply({

@@ -1,5 +1,8 @@
 import {
+  appConnectionPart,
   CHANNEL_SERVERS,
+  type Config,
+  findById,
   type InstallOptions,
   type InstallResult,
   mcpInstall as install,
@@ -11,6 +14,7 @@ import {
   type PruneResult,
   pruneManagedRuntimes,
   type RegisteredServer,
+  readConnections,
   type ServerEntry,
   type SupportedClient,
   verifyEntry as verify,
@@ -49,13 +53,44 @@ export const GMAIL_MCP: McpProduct = {
  * that is whether the entry serves the mailbox it has just connected, `clientServesInbox`. A config that cannot be
  * read is left out rather than failing: for "which clients have it" the answer is the ones that could be read.
  */
-export async function clientsRegisteredWith(env: NodeJS.ProcessEnv): Promise<string[]> {
+export async function clientsRegisteredWith(env: NodeJS.ProcessEnv, config?: Config): Promise<string[]> {
+  let clients: string[] = [];
   try {
     const servers = await listRegisteredServers(env);
-    return [...new Set(servers.filter((server) => isProductServer(server, GMAIL_MCP)).map((server) => server.client))];
+    clients = servers.filter((server) => isProductServer(server, GMAIL_MCP)).map((server) => server.client);
   } catch {
-    return [];
+    // The ones that could be read: none.
   }
+  /*
+   * And every app whose MCP connection has Gmail as a part (single-server design D17, D19): what `setup` and
+   * `mcp install` register from 0.35.0, and which no app's config holds an entry of Gmail's own for. Left out, a
+   * setup that had just put Gmail into the app's connection would say the agent step was still to do.
+   */
+  if (config !== undefined) {
+    for (const read of readConnections(config).connections) {
+      if (!read.readable || read.record.revokedAt !== null || read.record.app === 'manual') continue;
+      if (read.record.parts.some((part) => part.server === 'gmail')) clients.push(read.record.app);
+    }
+  }
+  return [...new Set(clients)];
+}
+
+/**
+ * The app's MCP connection — the one `mcp install --client <app>` puts Gmail into (`appConnectionPart`) — when its
+ * Gmail part reaches `inbox`: every mailbox, or kept to exactly this one. What a finish checks before it puts Gmail
+ * into the connection, as `clientServesInbox` is for an entry of Gmail's own. Null otherwise, and for an app with
+ * several connections for every folder, where `mcp install` names none.
+ */
+export function connectionServesInbox(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  request: { client: string; inbox: string },
+): { id: string; name: string } | null {
+  const found = appConnectionPart(config, env, request.client, 'gmail');
+  if (found === null) return null;
+  const { pin } = found.part;
+  if (pin !== undefined && findById(config, 'inbox', pin.id)?.alias !== request.inbox) return null;
+  return { id: found.connection.id, name: found.connection.name };
 }
 
 /**
