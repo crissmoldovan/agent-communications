@@ -10,7 +10,7 @@ import {
   isDangerous,
   resolvePaths,
 } from '@agentcomms/core';
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
   changeAtTerminal,
@@ -478,25 +478,28 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await sourceShow(source, controlOptions(program)));
     });
 
-  const rules = program.command('rules').description('inspect immutable local event rule versions');
+  // One word (workflows design 2026-10-27, W22): a workflow is what the event service stores as a rule version, and the
+  // command line says so. `rules` and `rule` stay as aliases, so scripts and the desktop app keep working; the variable
+  // names, like every identifier inside, keep saying rule.
+  const rules = program.command('workflows').alias('rules').description('inspect immutable local workflow versions');
   rules.command('list').action(async () => {
     ran = true;
     print(await rulesList(controlOptions(program)));
   });
-  const rule = program.command('rule').description('create, inspect and control immutable event rules');
-  rule.command('show <rule-id>').action(async (ruleId: string) => {
+  const rule = program.command('workflow').alias('rule').description('create, inspect and control immutable workflows');
+  rule.command('show <workflow-id>').action(async (ruleId: string) => {
     ran = true;
     print(await ruleShow(ruleId, controlOptions(program)));
   });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
-    print(await createRule(await documentArgument(document, 'rule document'), controlOptions(program)));
+    print(await createRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
   });
   rule.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateRule(await documentArgument(document, 'rule document'), controlOptions(program)));
+    print(await updateRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
   });
-  rule.command('enable <rule-id> <version>').action(async (ruleId: string, version: string) => {
+  rule.command('enable <workflow-id> <version>').action(async (ruleId: string, version: string) => {
     ran = true;
     print(await enableRule(ruleId, parseVersion(version), controlOptions(program)));
   });
@@ -504,7 +507,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ['disable', disableRule],
     ['remove', removeRule],
   ] as const) {
-    rule.command(`${name} <rule-id>`).action(async (ruleId: string) => {
+    rule.command(`${name} <workflow-id>`).action(async (ruleId: string) => {
       ran = true;
       print(await operation(ruleId, controlOptions(program)));
     });
@@ -513,7 +516,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ran = true;
     print(
       await ruleTest(
-        jsonArgument(document, 'rule document'),
+        jsonArgument(document, 'workflow document'),
         catalogueArgument(catalogueExample),
         controlOptions(program),
       ),
@@ -521,12 +524,15 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   });
   rule
     .command('test-retained <event-id>')
-    .requiredOption('--rule <rule-id>')
+    .addOption(new Option('--workflow <workflow-id>'))
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .requiredOption('--version <version>')
-    .action(async (eventId: string, options) => {
+    .action(async (eventId: string, options, command: Command) => {
       ran = true;
+      // `--workflow` is required, and the hidden `--rule` it replaced still names the same workflow (W22). Checked
+      // before the terminal is, as Commander checks a required option.
+      const ruleId = workflowOption(options, command, true) as string;
       assertHuman();
-      const ruleId = options.rule as string;
       const ruleVersion = parseVersion(options.version as string);
       printHumanResult(
         await humanB3('ruleTestRetained', { eventId, ruleId, ruleVersion }, () =>
@@ -536,11 +542,14 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     });
 
   rule
-    .command('analyse <rule-id>')
+    .command('analyse <workflow-id>')
     .description(
-      "suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
+      "suggest improvements to a workflow, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
     )
-    .option('--draft <source>', 'analyse a draft rule document instead of the stored version: - reads it from stdin')
+    .option(
+      '--draft <source>',
+      'analyse a draft workflow document instead of the stored version: - reads it from stdin',
+    )
     .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
     .action(async (ruleId: string, options: Record<string, unknown>) => {
       ran = true;
@@ -973,7 +982,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // setup is, from the same origins. At a terminal the person approves with `approve`, which asks for the challenge.
   rule
     .command('approve <approval-id>')
-    .description("approve a rule's activation from the Agent Comms app, after its preview, as the person")
+    .description("approve a workflow's activation from the Agent Comms app, after its preview, as the person")
     .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
     .action(async (approvalId: string, options: { readonly digest: string }) => {
       ran = true;
@@ -1019,7 +1028,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const integration = program
     .command('integration')
     .description(
-      'the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
+      'the services a workflow can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
     );
   integration
     .command('show <integration>')
@@ -1192,11 +1201,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // app (which runs them with --json); they refuse inside an MCP server's process (Q1). The rest are content-free.
   const queue = program
     .command('queue')
-    .description('work through the action queue: what matched your queue rules, and what you have done with it');
-  const queueFilters = (options: Record<string, unknown>, withSince: boolean) => {
+    .description('work through the action queue: what your workflows sent to it, and what you have done with it');
+  const queueFilters = (options: Record<string, unknown>, withSince: boolean, command: Command) => {
+    // The filter keeps its identifier, `rule`; the person names the workflow with `--workflow` (W22).
+    const workflow = workflowOption(options, command, false);
     const filters = {
       ...(options.state === undefined ? {} : { state: options.state as string }),
-      ...(options.rule === undefined ? {} : { rule: options.rule as string }),
+      ...(workflow === undefined ? {} : { rule: workflow }),
       ...(options.channel === undefined ? {} : { channel: options.channel as string }),
       ...(withSince && options.since !== undefined ? { since: options.since as string } : {}),
       ...(options.limit === undefined ? {} : { limit: parseLimit(options.limit as string) }),
@@ -1213,14 +1224,15 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .command('list')
     .description('list queue items with what they say, newest first (a person at a terminal or in the app)')
     .option('--state <state>', 'open (the default), done, dismissed or all')
-    .option('--rule <rule-id>', 'only this rule')
+    .option('--workflow <workflow-id>', "only this workflow's items")
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
     .option('--since <when>', 'an ISO time, or a span back from now such as 7d or 12h')
     .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
-    .action(async (options: Record<string, unknown>) => {
+    .action(async (options: Record<string, unknown>, command: Command) => {
       ran = true;
       assertNotMcpServer(env);
-      const result = await queueList(queueFilters(options, true), controlOptions(program));
+      const result = await queueList(queueFilters(options, true, command), controlOptions(program));
       printQueue(result, () => renderQueueList(result));
     });
   queue
@@ -1234,18 +1246,19 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     });
   queue
     .command('items')
-    .description('list queue items without what they say: ids, rules, channels, accounts, states and times')
+    .description('list queue items without what they say: ids, workflows, channels, accounts, states and times')
     .option('--state <state>', 'open (the default), done, dismissed or all')
-    .option('--rule <rule-id>', 'only this rule')
+    .option('--workflow <workflow-id>', "only this workflow's items")
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
     .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
-    .action(async (options: Record<string, unknown>) => {
+    .action(async (options: Record<string, unknown>, command: Command) => {
       ran = true;
-      print(await queueItems(queueFilters(options, false), controlOptions(program)));
+      print(await queueItems(queueFilters(options, false, command), controlOptions(program)));
     });
   queue
     .command('counts')
-    .description('count open, done and dismissed queue items, and each rule’s open items')
+    .description('count open, done and dismissed queue items, and each workflow’s open items')
     .action(async () => {
       ran = true;
       print(await queueCounts(controlOptions(program)));
@@ -1278,11 +1291,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const lane = program
     .command('lane')
     .description(
-      'bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it',
+      'bind a lane — a queue your workflows send to — to the one agent window woken for its items, and unbind it',
     );
   lane
     .command('list')
-    .description('list every lane, its rules, channels and open items, and the agent window bound to it')
+    .description('list every lane, its workflows, channels and open items, and the agent window bound to it')
     .action(async () => {
       ran = true;
       print(await laneList(controlOptions(program)));
@@ -1472,8 +1485,25 @@ function parseBefore(value: string): number | string {
 function parseVersion(value: string): number {
   const version = Number(value);
   if (!Number.isSafeInteger(version) || version < 1)
-    throw new CommsError('USAGE', 'rule version must be a positive integer');
+    throw new CommsError('USAGE', 'a version must be a positive integer');
   return version;
+}
+
+/**
+ * The workflow a command names (W22): `--workflow`, or the hidden `--rule` it replaced, which scripts and the desktop
+ * app still pass. Both naming different workflows is a usage error. A required one that is missing is refused in
+ * Commander's own words for a missing required option, which name `--workflow`.
+ */
+function workflowOption(options: Record<string, unknown>, command: Command, required: boolean): string | undefined {
+  const { workflow, rule } = options as { readonly workflow?: string; readonly rule?: string };
+  if (workflow !== undefined && rule !== undefined && workflow !== rule)
+    throw new CommsError('USAGE', 'name the workflow once, with --workflow <workflow-id>');
+  const named = workflow ?? rule;
+  if (named === undefined && required)
+    command.error("error: required option '--workflow <workflow-id>' not specified", {
+      code: 'commander.missingMandatoryOptionValue',
+    });
+  return named;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1552,10 +1582,10 @@ async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<st
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   } catch {
-    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON workflow document');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON workflow document');
   return parsed as Readonly<Record<string, unknown>>;
 }
 

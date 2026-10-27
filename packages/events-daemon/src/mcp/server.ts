@@ -362,7 +362,7 @@ function buildEventsMcpServer(
   );
   strictControlTool(
     'events_rule_test',
-    'Test a rule with a catalogue example',
+    'Test a workflow with a catalogue example',
     'Locally evaluates one selectable catalogue example without provider or judge I/O.',
     {
       document: z.unknown(),
@@ -422,7 +422,7 @@ function buildEventsMcpServer(
   strictControlTool(
     'events_judge_show',
     'Show judge',
-    "Shows one judge version's exact canonical document — kind, provider, model, endpoint, prompt template, protocol — with its digest and state, to embed in a rule. Never a key: a judge's key is not part of its document.",
+    "Shows one judge version's exact canonical document — kind, provider, model, endpoint, prompt template, protocol — with its digest and state, to embed in a workflow. Never a key: a judge's key is not part of its document.",
     { judgeId: z.string().min(1), version: z.number().int().positive().optional() },
     (args) =>
       judgeShow(args.judgeId as string, {
@@ -581,15 +581,17 @@ function buildEventsMcpServer(
     { source: z.string() },
     (args) => sourceShow(args.source as string, options),
   );
-  controlTool('events_rules_list', 'List event rules', 'Lists immutable local event rule versions.', {}, () =>
+  // One word (workflows design 2026-10-27, W22): the tools keep their names, which are identifiers in people's client
+  // permission lists, and their titles and descriptions say workflow.
+  controlTool('events_rules_list', 'List workflows', 'Lists immutable local workflow versions.', {}, () =>
     rulesList(options),
   );
   // Review of 0.32.0, finding 8: the window is named, so a lane it is not bound to keeps its counts to itself.
   server.registerTool(
     'events_rule_show',
     {
-      title: 'Show event rule',
-      description: 'Shows immutable versions of one event rule.',
+      title: 'Show workflow',
+      description: 'Shows immutable versions of one workflow.',
       inputSchema: { ruleId: z.string() },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -597,40 +599,40 @@ function buildEventsMcpServer(
   );
   controlTool(
     'events_rule_create',
-    'Create inert event rule',
-    'Creates an inert immutable event rule version.',
+    'Create inert workflow',
+    'Creates an inert immutable workflow version.',
     { document: z.unknown() },
     (args) => createRule(args.document, options),
     true,
   );
   controlTool(
     'events_rule_update',
-    'Update event rule',
-    'Creates another inert immutable event rule version.',
+    'Update workflow',
+    'Creates another inert immutable workflow version.',
     { document: z.unknown() },
     (args) => updateRule(args.document, options),
     true,
   );
   controlTool(
     'events_rule_enable',
-    'Prepare event rule enablement',
-    'Prepares the standing disclosure for a rule version.',
+    'Prepare workflow enablement',
+    'Prepares the standing disclosure for a workflow version.',
     { ruleId: z.string(), version: z.number().int().positive() },
     (args) => enableRule(args.ruleId as string, args.version as number, options),
     true,
   );
   controlTool(
     'events_rule_disable',
-    'Disable event rule',
-    'Immediately disables the active event rule.',
+    'Disable workflow',
+    'Immediately disables the active workflow.',
     { ruleId: z.string() },
     (args) => disableRule(args.ruleId as string, options),
     true,
   );
   controlTool(
     'events_rule_remove',
-    'Remove event rule',
-    'Immediately removes the active event rule.',
+    'Remove workflow',
+    'Immediately removes the active workflow.',
     { ruleId: z.string() },
     (args) => removeRule(args.ruleId as string, options),
     true,
@@ -668,7 +670,7 @@ function buildEventsMcpServer(
   // Nor can an agent clear the queue: `queue clear` would make the person's done and dismissed items disappear.
   const queueFilters = {
     state: z.enum(['open', 'done', 'dismissed', 'all']).optional().describe('Which items: open (the default) or all.'),
-    rule: z.string().min(1).max(256).optional().describe("Only this rule's items, by rule id."),
+    rule: z.string().min(1).max(256).optional().describe("Only this workflow's items, by its id."),
     channel: z.enum(['gmail', 'slack', 'resend', 'whatsapp']).optional().describe("Only this channel's items."),
     limit: z.number().int().min(1).max(500).optional().describe('At most this many items, newest first (default 50).'),
   };
@@ -684,7 +686,7 @@ function buildEventsMcpServer(
     {
       title: 'List queue items',
       description:
-        "Lists the action queue's items without what they say: id, rule, channel, account, state and times. A lane's items appear only to the window bound to it.",
+        "Lists the action queue's items without what they say: id, workflow, channel, account, state and times. A lane's items appear only to the window bound to it.",
       inputSchema: z.strictObject(queueFilters),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -705,7 +707,7 @@ function buildEventsMcpServer(
     'events_queue_counts',
     {
       title: 'Count queue items',
-      description: 'Counts open, done and dismissed queue items, and each rule’s open items.',
+      description: 'Counts open, done and dismissed queue items, and each workflow’s open items.',
       inputSchema: z.strictObject({}),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -783,7 +785,7 @@ function registerLaneTools(
     {
       title: 'List lanes',
       description:
-        'Lists the lanes your rules send to, and whether each is bound to this window. It names no other window.',
+        'Lists the lanes your workflows send to, and whether each is bound to this window. It names no other window.',
       inputSchema: z.strictObject({}),
       annotations: readOnly,
     },
@@ -805,7 +807,7 @@ function registerLaneTools(
     {
       title: 'Watch this window’s lane',
       description:
-        'Watches the lane bound to this window for its next new item, as an MCP task that completes on it: you are woken with a pointer — the item’s id, channel and rule, never what it says. Read the item with events_lane_item, mark it done with events_queue_done when it is handled, then call events_watch again to keep watching. Needs a client that declares the MCP tasks extension; otherwise use events_wait.',
+        'Watches the lane bound to this window for its next new item, as an MCP task that completes on it: you are woken with a pointer — the item’s id, channel and workflow, never what it says. Read the item with events_lane_item, mark it done with events_queue_done when it is handled, then call events_watch again to keep watching. Needs a client that declares the MCP tasks extension; otherwise use events_wait.',
       inputSchema: z.strictObject({ lane }),
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
@@ -833,7 +835,7 @@ function registerLaneTools(
     {
       title: 'Wait for this window’s lane',
       description:
-        'Waits up to the given seconds (1 to 50) for the next new item in the lane bound to this window, with a progress heartbeat every 10 seconds. Returns a pointer — the item’s id, channel and rule, never what it says — or waiting: true when the time is up. Read the item with events_lane_item, then call events_wait again. For clients without the MCP tasks extension; events_watch wakes an idle window instead.',
+        'Waits up to the given seconds (1 to 50) for the next new item in the lane bound to this window, with a progress heartbeat every 10 seconds. Returns a pointer — the item’s id, channel and workflow, never what it says — or waiting: true when the time is up. Read the item with events_lane_item, then call events_wait again. For clients without the MCP tasks extension; events_watch wakes an idle window instead.',
       inputSchema: z.strictObject({
         lane,
         seconds: z.number().int().min(1).max(50).describe('How long to wait, 1 to 50.'),

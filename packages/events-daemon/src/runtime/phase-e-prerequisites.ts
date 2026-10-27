@@ -37,7 +37,7 @@ export const PHASE_E_B3_CAPABILITY_INVENTORY: readonly PhaseEB3CapabilityInvento
   },
   {
     id: 'events-daemon.rule.test',
-    cli: 'rule test <document> <catalogue-example>',
+    cli: 'workflow test <document> <catalogue-example>',
     mcp: 'events_rule_test',
     operation: 'ruleTest',
     status: 'both',
@@ -46,7 +46,7 @@ export const PHASE_E_B3_CAPABILITY_INVENTORY: readonly PhaseEB3CapabilityInvento
   },
   {
     id: 'events-daemon.rule.test-retained',
-    cli: 'rule test-retained <event-id> --rule <rule-id> --version <n>',
+    cli: 'workflow test-retained <event-id> --workflow <workflow-id> --version <n>',
     mcp: null,
     operation: 'ruleTestRetained',
     status: 'exception',

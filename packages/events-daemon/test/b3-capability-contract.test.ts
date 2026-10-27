@@ -30,8 +30,17 @@ async function plannedRows(): Promise<
     .map((cells) => {
       const [_, id, cli, mcp, operation] = cells;
       if (!id || !cli || !mcp || !operation) throw new Error(`the B3-2 row is malformed: ${cells.join(' | ')}`);
-      return { id, cli, mcp: mcp === '—' ? null : mcp, operation };
+      return { id, cli: workflowWord(cli), mcp: mcp === '—' ? null : mcp, operation };
     });
+}
+
+/**
+ * The plan's commands as 0.36.0 names them (workflows design 2026-10-27, W22): `rule` became `workflow`, kept as its
+ * alias, and test-retained's `--rule` became `--workflow`, kept hidden. Ids, tools and operations are identifiers and
+ * stay. Only these two rewrites are made, so any other drift from the plan still fails.
+ */
+function workflowWord(cli: string): string {
+  return cli.replace(/^rule /u, 'workflow ').replace(' --rule <rule-id> ', ' --workflow <workflow-id> ');
 }
 
 async function plannedExceptionReasons(): Promise<ReadonlyMap<string, string>> {

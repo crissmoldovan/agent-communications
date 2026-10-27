@@ -2536,7 +2536,7 @@
     {
       "id": "events-daemon.rules.list",
       "package": "events-daemon",
-      "cli": "rules list",
+      "cli": "workflows list",
       "mcp": "events_rules_list",
       "status": "both",
       "operation": "rulesList"
@@ -2544,7 +2544,7 @@
     {
       "id": "events-daemon.rule.show",
       "package": "events-daemon",
-      "cli": "rule show",
+      "cli": "workflow show",
       "mcp": "events_rule_show",
       "status": "both",
       "operation": "ruleShow",
@@ -2554,7 +2554,7 @@
     {
       "id": "events-daemon.rule.create",
       "package": "events-daemon",
-      "cli": "rule create",
+      "cli": "workflow create",
       "mcp": "events_rule_create",
       "status": "both",
       "operation": "createRule",
@@ -2564,7 +2564,7 @@
     {
       "id": "events-daemon.rule.update",
       "package": "events-daemon",
-      "cli": "rule update",
+      "cli": "workflow update",
       "mcp": "events_rule_update",
       "status": "both",
       "operation": "updateRule",
@@ -2574,7 +2574,7 @@
     {
       "id": "events-daemon.rule.enable",
       "package": "events-daemon",
-      "cli": "rule enable",
+      "cli": "workflow enable",
       "mcp": "events_rule_enable",
       "status": "both",
       "operation": "enableRule",
@@ -2584,7 +2584,7 @@
     {
       "id": "events-daemon.rule.disable",
       "package": "events-daemon",
-      "cli": "rule disable",
+      "cli": "workflow disable",
       "mcp": "events_rule_disable",
       "status": "both",
       "operation": "disableRule",
@@ -2594,7 +2594,7 @@
     {
       "id": "events-daemon.rule.remove",
       "package": "events-daemon",
-      "cli": "rule remove",
+      "cli": "workflow remove",
       "mcp": "events_rule_remove",
       "status": "both",
       "operation": "removeRule",
@@ -2662,7 +2662,7 @@
     {
       "id": "events-daemon.rule.test",
       "package": "events-daemon",
-      "cli": "rule test",
+      "cli": "workflow test",
       "mcp": "events_rule_test",
       "status": "both",
       "operation": "ruleTest",
@@ -2673,11 +2673,11 @@
     {
       "id": "events-daemon.rule.test-retained",
       "package": "events-daemon",
-      "cli": "rule test-retained",
+      "cli": "workflow test-retained",
       "mcp": null,
       "status": "exception",
       "operation": "ruleTestRetained",
-      "argv": ["event-1", "--rule", "rule-1", "--version", "1"],
+      "argv": ["event-1", "--workflow", "rule-1", "--version", "1"],
       "expect": { "eventId": "event-1", "ruleId": "rule-1", "ruleVersion": 1 },
       "reason": "Retained sender content may be selected only by a person outside model context."
     },
@@ -3270,7 +3270,7 @@
     {
       "id": "events-daemon.rule.approve",
       "package": "events-daemon",
-      "cli": "rule approve",
+      "cli": "workflow approve",
       "mcp": null,
       "status": "exception",
       "operation": "approveRuleFromApp",
@@ -3280,7 +3280,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
-      "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+      "reason": "A workflow's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.collection.approve",
@@ -3295,18 +3295,18 @@
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
-      "reason": "Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a rule's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+      "reason": "Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a workflow's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.rule.analyse",
       "package": "events-daemon",
-      "cli": "rule analyse",
+      "cli": "workflow analyse",
       "mcp": null,
       "status": "exception",
       "operation": "ruleAnalyse",
       "argv": ["parity"],
       "expect": { "ruleId": "parity" },
-      "reason": "Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
+      "reason": "Analyse is the person's view of one workflow and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
     },
     {
       "id": "events-daemon.integration.show",
@@ -3339,7 +3339,7 @@
       "operation": "integrationSet",
       "argv": ["agent-sessions", "--relay-port", "4318"],
       "expect": { "integration": "agent-sessions" },
-      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a rule can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
+      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a workflow can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
     },
     {
       "id": "events-daemon.session-queue.list",
