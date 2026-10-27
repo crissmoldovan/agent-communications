@@ -250,7 +250,7 @@ test('ANALYSE: a rule with no match in 30 days gets a general note, and none whe
       part: 'general',
       before: null,
       after: null,
-      why: 'No message reached this rule in the last 30 days. Check that it watches the account and the messages you mean.',
+      why: 'No message reached this workflow in the last 30 days. Check that it watches the account and the messages you mean.',
       evidence: { by: 'counts', windowDays: 30, decisions: 0, matched: 0 },
     },
   ]);

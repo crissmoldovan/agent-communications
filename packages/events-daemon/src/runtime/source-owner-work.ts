@@ -1340,7 +1340,7 @@ async function sourceRulesForWhatsAppAccount(
         baselineIdentities: new Set(position.baselineIdentities),
       });
     }
-    if (malformed) throw new CommsError('BAD_DATA', 'a WhatsApp rule activation point is malformed');
+    if (malformed) throw new CommsError('BAD_DATA', 'a WhatsApp workflow activation point is malformed');
     found.set(`${rule.ruleId}@${rule.version}`, {
       ruleId: rule.ruleId,
       ruleVersion: rule.version,

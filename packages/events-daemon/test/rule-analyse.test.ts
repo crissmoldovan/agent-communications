@@ -344,7 +344,7 @@ test('ANALYSE-E: the counts and the suggestions made without a model, from a see
       ran: false,
       reason: 'NO_KEY',
       noKey: ['openrouter', 'anthropic'],
-      sent: "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
+      sent: "The workflow's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
       parts: [
         { part: 'judge.question', at: {}, outcome: 'not-run' },
         { part: 'session.context', at: { targetId: 'billing-session', contextIndex: 0 }, outcome: 'not-run' },
@@ -621,12 +621,17 @@ test('ANALYSE-CLI: rule analyse refuses inside the event service’s MCP server 
       env: { AGENTCOMMS_MCP_SERVER: 'events' },
     });
     assert.equal(refused.code, 10, refused.stderr);
-    assert.match(refused.stderr, /analysing a rule is for a person, at a terminal or in the app/u);
+    assert.match(refused.stderr, /analysing a workflow is for a person, at a terminal or in the app/u);
+    assert.match(refused.stderr, /press Analyse on the workflow in the app: Events → Workflows\./u);
     // It runs on the person's own key when they press it: an agent's shell is refused too, before anything is read.
     for (const marker of ['CLAUDECODE', 'CODEX_SANDBOX', 'CURSOR_AGENT']) {
       const agent = await cli(['--state-dir', stateDir, 'rule', 'analyse', RULE, '--json'], { env: { [marker]: '1' } });
       assert.equal(agent.code, 10, `${marker}: ${agent.stderr}`);
-      assert.match(agent.stderr, /only a person can analyse a rule/u);
+      assert.match(
+        agent.stderr,
+        /only a person can analyse a workflow, in the app or at their terminal, not an agent/u,
+      );
+      assert.match(agent.stderr, /Ask the person to do it in the app: Events → Workflows, Analyse\./u);
     }
     for (const [args, stdin] of [
       [['rule', 'analyse', RULE, '--provider', 'typesafe'], ''],

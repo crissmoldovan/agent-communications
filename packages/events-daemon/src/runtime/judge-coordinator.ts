@@ -98,7 +98,7 @@ export function buildJudgeInput(rule: CanonicalFullRuleDocument, event: Record<s
   const agentic = rule.agentic;
   if (agentic === undefined) return null;
   const found = catalogueEntry(rule.event.type, rule.event.version);
-  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored rule event definition is unavailable');
+  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored workflow event definition is unavailable');
   const compiled = compileMapping(found.value as never, inputTemplate(agentic.inputs));
   if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored judge input mapping is unavailable');
   const sanitised = sanitiseSenderFields(found.value, event);

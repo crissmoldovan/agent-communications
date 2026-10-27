@@ -123,7 +123,7 @@ export function ruleApprovalWords(approvalId: unknown): string {
 
 /** `rule approve`'s refusal of an unattested origin, as the owner gives it. */
 export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
-  return changeAtTerminal('approve a rule', ruleApprovalWords(approvalId), {
+  return changeAtTerminal('approve a workflow', ruleApprovalWords(approvalId), {
     approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
   });
 }

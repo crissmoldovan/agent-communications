@@ -9,7 +9,7 @@ import type { PauseResult } from './pause.ts';
  * is left as it was.
  */
 export const DISABLE_ALL_SAID: string =
-  "Switched off: the event service is still running but no longer watches your accounts, so no rule does anything. Your rules are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
+  "Switched off: the event service is still running but no longer watches your accounts, so no workflow does anything. Your workflows are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
 
 export interface DisableAllResult extends PauseResult {
   /** What it did, in plain words. */

@@ -468,7 +468,7 @@ test('QUEUE-A: a tightening’s preview names the count of open queue items its 
       editKind: 'shorten-retention',
       appliesWhen: 'rule enable',
       openQueueItemsRemoved: 2,
-      notice: '2 open queue items under this rule will be removed',
+      notice: '2 open queue items under this workflow will be removed',
     });
     const looser = versions.createRule(rule({ ruleId: 'rule-preview', version: 3, queueMs: 25 * DAY }));
     assert.equal(tighteningPreviewFor(store.database, looser.document), undefined, 'a loosening waits for approval');

@@ -226,6 +226,7 @@ test('workflow and rule name one command; help lists workflow|rule', async () =>
 test('test-retained takes --workflow and still takes a hidden --rule', async () => {
   const help = await cliHelp(['workflow', 'test-retained']);
   assert.match(help, /^ {2}--workflow <workflow-id>(?: |$)/mu);
+  assert.match(help, /^ {2}--workflow <workflow-id> +\S/mu, '--workflow says what it names');
   assert.doesNotMatch(help, /--rule\b/u, '--rule is hidden');
 
   const workflow = await reachedOperation('workflowRetained');

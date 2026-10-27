@@ -24,7 +24,7 @@ export interface RejectedProjection {
 /** The mandatory deterministic gate, deliberately usable without constructing a mapping or judge envelope. */
 export function matchesRuleCondition(rule: CanonicalFullRuleDocument, event: Record<string, unknown>): boolean {
   const found = catalogueEntry(rule.event.type, rule.event.version);
-  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored rule event definition is unavailable');
+  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored workflow event definition is unavailable');
   return evaluateCondition(found.value as never, rule.condition, event as never);
 }
 
@@ -45,11 +45,11 @@ export function evaluateRuleProjection(
   event: Record<string, unknown>,
 ): EvaluatedProjection | RejectedProjection | null {
   const found = catalogueEntry(rule.event.type, rule.event.version);
-  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored rule event definition is unavailable');
+  if (!found.ok) throw new Error(found.issues[0]?.message ?? 'the stored workflow event definition is unavailable');
   const definition = found.value;
   if (!matchesRuleCondition(rule, event)) return null;
   const compiled = compileMapping(definition as never, rule.mapping);
-  if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored rule mapping is unavailable');
+  if (!compiled.ok) throw new Error(compiled.issues[0]?.message ?? 'the stored workflow mapping is unavailable');
   let mapped: MappedValue;
   try {
     mapped = evaluateMapping(compiled.value, event);

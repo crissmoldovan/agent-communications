@@ -318,7 +318,7 @@ test('E3: the approval preview names the team, the labels, the assignee, and whi
   ).terminal.split('\n');
   assert.equal(
     unchecked[unchecked.findIndex((entry) => entry.startsWith('Linear issue ')) + 1],
-    'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the rule again.',
+    'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the workflow again.',
   );
   assert.equal(view.terminal.includes('Linear is not connected'), false, 'said only when it is not');
   assert.match(view.terminal, /^In plain words .*add an issue to Linear, team CUE\./mu);

@@ -17,7 +17,7 @@ export async function disableRule(
   database.immediate(() => {
     const revokedAt = Date.now();
     const active = new ImmutableVersions(database.database).activeVersion('rule', ruleId);
-    if (!active) throw new CommsError('NOT_FOUND', 'the rule has no active version to disable');
+    if (!active) throw new CommsError('NOT_FOUND', 'the workflow has no active version to disable');
     // D2: disabling a rule revokes its standing authorisation, so a superseded version still holding retained work is
     // revoked with the active one; neither may cross another disclosure boundary.
     const live = (

@@ -52,7 +52,7 @@ function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): Can
   const row = store.database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(ruleId, ruleVersion) as RuleRow | undefined;
-  if (!row) throw new CommsError('NOT_FOUND', 'the exact rule version is unavailable for evaluation');
+  if (!row) throw new CommsError('NOT_FOUND', 'the exact workflow version is unavailable for evaluation');
   return JSON.parse(row.document) as CanonicalFullRuleDocument;
 }
 

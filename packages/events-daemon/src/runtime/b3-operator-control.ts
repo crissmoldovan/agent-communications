@@ -674,7 +674,7 @@ function sourceFromRule(document: string): SourceOptions['channel'] {
     if (source === undefined) throw new Error('source is absent');
     return normaliseSourceOptions(source.options).channel;
   } catch {
-    throw voided('the delivery rule has no recognised source scope');
+    throw voided('the workflow of this delivery has no recognised source scope');
   }
 }
 

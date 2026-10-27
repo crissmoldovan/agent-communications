@@ -295,7 +295,7 @@ test('QUEUE-A: a real owner puts a matched mail in the queue; the CLI reads it, 
       editKind: 'shorten-retention',
       appliesWhen: 'rule enable',
       openQueueItemsRemoved: 1,
-      notice: '1 open queue item under this rule will be removed',
+      notice: '1 open queue item under this workflow will be removed',
     });
     await control.request('rule-enable', { ruleId: RULE, version: 2 });
     assert.equal(((await tool('events_queue_counts')) as { open: number }).open, 0, 'enabling it removed the item');

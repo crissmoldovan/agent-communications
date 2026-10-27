@@ -387,8 +387,8 @@ export class LaneService {
     const lane = requireLaneName(laneValue);
     requireLaneWindowId(windowId);
     if (!this.#carried().has(lane))
-      throw new CommsError('NOT_FOUND', `no active rule's queue target carries lane ${lane}`, {
-        hint: 'A lane is a queue target with lane: { name }, sent to by a rule you approve.',
+      throw new CommsError('NOT_FOUND', `no active workflow's queue target carries lane ${lane}`, {
+        hint: 'A lane is a queue target with lane: { name }, sent to by a workflow you approve.',
       });
     const window = this.#reportedWindow(windowId as string);
     if (window === undefined)
@@ -462,7 +462,7 @@ export class LaneService {
     } else if (binding === undefined && !this.#carried().has(lane)) {
       throw new CommsError(
         'NOT_FOUND',
-        `no active rule's queue target carries lane ${lane}, and nothing is bound to it`,
+        `no active workflow's queue target carries lane ${lane}, and nothing is bound to it`,
       );
     }
     if (binding !== undefined) {

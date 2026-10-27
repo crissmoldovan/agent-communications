@@ -232,8 +232,8 @@ export function assertLinearSlotsMapped(
       if (slotOrigin(fields, slot) !== undefined || isClosed?.(slot) === true) continue;
       const known = [...fields.keys()];
       fail(
-        `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the rule does not keep; ${
-          known.length === 0 ? 'the rule keeps no field' : `it keeps ${known.join(', ')}`
+        `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the workflow does not keep; ${
+          known.length === 0 ? 'the workflow keeps no field' : `it keeps ${known.join(', ')}`
         }`,
         'TEMPLATE_FIELD_NOT_MAPPED',
       );

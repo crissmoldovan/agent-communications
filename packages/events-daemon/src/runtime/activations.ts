@@ -323,7 +323,7 @@ export class ActivationRuntime {
       const parentRow = this.#store.database
         .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
         .get(input.ruleId, active.version) as { document: string } | undefined;
-      if (!parentRow) throw new CommsError('BAD_DATA', 'the active rule version is missing its immutable document');
+      if (!parentRow) throw new CommsError('BAD_DATA', 'the active workflow version is missing its immutable document');
       const parent = canonicalFullRuleDocument(JSON.parse(parentRow.document));
       if (tighteningKind(parent, document.rule) !== null) {
         const derived = await applyDerivedTightening({
@@ -388,7 +388,7 @@ export class ActivationRuntime {
         )
         .get(oldId) as { present: number } | undefined;
       if (pending !== undefined) {
-        throw new CommsError('TRANSIENT', 'this rule already has a replacement completing', {
+        throw new CommsError('TRANSIENT', 'this workflow already has a replacement completing', {
           details: { reason: 'REPLACEMENT_PENDING' },
         });
       }
@@ -1298,7 +1298,7 @@ export class ActivationRuntime {
           this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
           settled = new CommsError(
             'APPROVAL_VOID',
-            'an enabled rule pointer changed before global activation completed',
+            'an enabled workflow pointer changed before global activation completed',
           );
           return;
         }
@@ -1306,7 +1306,7 @@ export class ActivationRuntime {
       if (document.kind === 'rule') {
         const active = this.#versions().activeVersion('rule', document.rule.ruleId);
         if (latest.replacement_of_version === null && active !== null)
-          throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
+          throw new CommsError('TRANSIENT', 'the active workflow pointer changed during activation', {
             details: { reason: 'ACTIVATION_COMPLETING' },
           });
         if (
@@ -1314,7 +1314,7 @@ export class ActivationRuntime {
           (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
         ) {
           this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
-          settled = new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
+          settled = new CommsError('APPROVAL_VOID', 'the old workflow pointer changed before replacement finalisation');
           return;
         }
       } else if (document.kind === 'enable-all') {
@@ -1512,7 +1512,7 @@ export class ActivationRuntime {
         (intent.replacement_of_version === null ||
           `${document.rule.ruleId}@${active.version}` !== intent.replacement_of_version)
       )
-        throw new CommsError('APPROVAL_VOID', 'the rule gained an active pointer after preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow gained an active pointer after preparation');
     } else if (document.kind === 'enable-all') {
       const current = this.#switch();
       const live = this.#store.database
@@ -1607,7 +1607,7 @@ export class ActivationRuntime {
     if (document.kind === 'rule') {
       const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
       if (canonicalJson(live) !== canonicalJson(document))
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow changed after preparation');
       return;
     }
     for (const entry of document.ruleVersions) versions.prepareRule(entry.ruleId, entry.ruleVersion);
@@ -1623,7 +1623,7 @@ export class ActivationRuntime {
       const active = this.#versions().activeVersion('rule', document.rule.ruleId);
       const current = active === null ? null : `${document.rule.ruleId}@${active.version}`;
       if (current !== (replacementOfVersion ?? null) || this.#switch().generation !== effect.switchGeneration)
-        throw new CommsError('APPROVAL_VOID', 'the rule activation pointer plan changed during preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow activation pointer plan changed during preparation');
       return;
     }
     if (document.kind === 'subscription') {
@@ -1700,7 +1700,7 @@ export class ActivationRuntime {
     const live = await liveEventAccountIds(this.#config, source);
     const missing = accountIds.find((accountId) => !live.has(accountId));
     if (missing !== undefined) {
-      throw new CommsError('NOT_FOUND', 'the rule names an account that is not connected for its source', {
+      throw new CommsError('NOT_FOUND', 'the workflow names an account that is not connected for its source', {
         details: { reason: 'ACCOUNT_REMOVED', accountId: missing },
       });
     }

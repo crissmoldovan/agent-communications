@@ -238,7 +238,7 @@ export class ImmutableVersions {
       .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
       .get(ruleId, version) as { document: string } | undefined;
     if (row === undefined)
-      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested rule version does not exist');
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested workflow version does not exist');
     const rule = canonicalFullRuleDocument(JSON.parse(row.document));
     this.assertEmbeddedVersions(rule);
     if (rule.agentic !== undefined) {
@@ -292,7 +292,7 @@ export class ImmutableVersions {
       if (mine !== undefined && mine !== other.target_id)
         throw new EventDomainError(
           'LANE_NAME_IN_USE',
-          `lane ${other.lane} is already carried by another active rule's target; a lane is its name, so one target carries it`,
+          `lane ${other.lane} is already carried by another active workflow's target; a lane is its name, so one target carries it`,
         );
     }
   }
@@ -356,19 +356,19 @@ export class ImmutableVersions {
       if (row === undefined) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule names ${entry.id} version ${entry.version}, which is not a stored version`,
+          `the workflow names ${entry.id} version ${entry.version}, which is not a stored version`,
         );
       }
       if (row.document !== canonicalJson(entry.document)) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule carries a copy of ${entry.id} version ${entry.version} that differs from the stored version`,
+          `the workflow carries a copy of ${entry.id} version ${entry.version} that differs from the stored version`,
         );
       }
       if (entry.kind === 'judge' && this.#embeddedJudgeIsRevoked(entry.id, entry.version)) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule names revoked judge ${entry.id} version ${entry.version}`,
+          `the workflow names revoked judge ${entry.id} version ${entry.version}`,
         );
       }
     }

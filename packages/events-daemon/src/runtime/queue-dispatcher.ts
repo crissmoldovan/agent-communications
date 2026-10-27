@@ -286,7 +286,7 @@ export class QueueDispatcher implements DeliveryDispatchHandler {
       }
       const queueMs = rule.retention.queueMs;
       if (queueMs === undefined)
-        throw new CommsError('APPROVAL_VOID', 'the queue rule has no approved queue retention');
+        throw new CommsError('APPROVAL_VOID', 'the workflow of this queue delivery has no approved queue retention');
       const deadlines = queueDeadlines(now, queueMs, target.retentionMs);
       this.#beforeCommit?.();
       // D8: the append transaction charges the cap if the claim has not already, so the charge, the item and the
@@ -409,7 +409,7 @@ function sourceOf(
   ruleVersion: number | undefined,
 ): CanonicalFullRuleDocument['source']['channel'] {
   if (ruleId === undefined || ruleVersion === undefined)
-    throw new CommsError('APPROVAL_VOID', 'the exact rule for this queue delivery is missing');
+    throw new CommsError('APPROVAL_VOID', 'the exact workflow for this queue delivery is missing');
   return ruleFor(store, ruleId, ruleVersion).source.channel;
 }
 
@@ -417,11 +417,11 @@ export function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: numbe
   const row = store.database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(ruleId, ruleVersion) as { document: string } | undefined;
-  if (!row) throw new CommsError('APPROVAL_VOID', 'the exact rule for this queue item is missing');
+  if (!row) throw new CommsError('APPROVAL_VOID', 'the exact workflow for this queue item is missing');
   try {
     return JSON.parse(row.document) as CanonicalFullRuleDocument;
   } catch {
-    throw new CommsError('APPROVAL_VOID', 'the exact rule for this queue item is invalid');
+    throw new CommsError('APPROVAL_VOID', 'the exact workflow for this queue item is invalid');
   }
 }
 

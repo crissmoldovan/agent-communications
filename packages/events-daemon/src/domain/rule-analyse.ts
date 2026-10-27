@@ -365,7 +365,7 @@ function quietSuggestion(facts: RuleAnalyseFacts, hasHistory: boolean): RuleSugg
       part: 'general',
       before: null,
       after: null,
-      why: 'This rule has no history on this Mac yet, so there is nothing to count: the suggestions come from its text alone.',
+      why: 'This workflow has no history on this Mac yet, so there is nothing to count: the suggestions come from its text alone.',
       evidence,
     };
   if (facts.decisions === 0)
@@ -373,14 +373,14 @@ function quietSuggestion(facts: RuleAnalyseFacts, hasHistory: boolean): RuleSugg
       part: 'general',
       before: null,
       after: null,
-      why: `No message reached this rule in the last ${ANALYSE_WINDOW_DAYS} days. Check that it watches the account and the messages you mean.`,
+      why: `No message reached this workflow in the last ${ANALYSE_WINDOW_DAYS} days. Check that it watches the account and the messages you mean.`,
       evidence,
     };
   return {
     part: 'general',
     before: null,
     after: null,
-    why: `Nothing passed this rule in the last ${ANALYSE_WINDOW_DAYS} days: ${plural(
+    why: `Nothing passed this workflow in the last ${ANALYSE_WINDOW_DAYS} days: ${plural(
       facts.decisions,
       'message',
       'messages',
@@ -671,4 +671,4 @@ export interface RuleAnalyseResultV1 {
 
 /** The plain words for what a model is sent, as the result and the screen give them. */
 export const ANALYSE_SENT =
-  "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.";
+  "The workflow's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.";

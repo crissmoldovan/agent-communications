@@ -135,8 +135,8 @@ export interface JudgeSetupResultV1 {
 export function judgeDestination(kind: SetupJudgeKind, provider: string): string {
   if (kind !== JUDGE_KIND_TYPESAFE) return 'A model server on this machine. Nothing leaves it.';
   return provider === 'openrouter'
-    ? "Messages your rules choose are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev to be judged."
-    : 'Messages your rules choose are sent to TypeSafe (api.typesafe.ai) to be judged by Jev.';
+    ? "Messages your workflows choose are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev to be judged."
+    : 'Messages your workflows choose are sent to TypeSafe (api.typesafe.ai) to be judged by Jev.';
 }
 
 function provider(value: unknown): EventSecretProvider {
@@ -313,7 +313,7 @@ export class JudgeSetupService {
       if (approver === null || approver === 'terminal')
         throw new CommsError(
           'APPROVAL_REQUIRED',
-          'at your terminal, approve a rule with approve <approval-id>, which asks for its challenge',
+          'at your terminal, approve a workflow with approve <approval-id>, which asks for its challenge',
         );
       const row = this.#store.database
         .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
@@ -325,7 +325,7 @@ export class JudgeSetupService {
           { details: { reason: 'APPROVAL_NOT_WAITING' } },
         );
       if (row.digest !== digest)
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after you saw its preview: review it again', {
+        throw new CommsError('APPROVAL_VOID', 'the workflow changed after you saw its preview: review it again', {
           details: { reason: 'DIGEST_MISMATCH' },
         });
       const document = JSON.parse(row.document) as { kind?: unknown; rule?: { ruleId?: unknown; version?: unknown } };
@@ -334,7 +334,7 @@ export class JudgeSetupService {
       if (typeof ruleId !== 'string' || typeof version !== 'number')
         throw new CommsError(
           'APPROVAL_REQUIRED',
-          "only a rule's activation is approved here; approve anything else at your terminal",
+          "only a workflow's activation is approved here; approve anything else at your terminal",
         );
       ids.ruleId = ruleId;
       ids.ruleVersion = String(version);
@@ -409,7 +409,7 @@ export class JudgeSetupService {
       if (ruleVersions === undefined)
         throw new CommsError(
           'APPROVAL_REQUIRED',
-          'this approval does not switch the event service on: approve a rule with rule approve, and anything else at your terminal',
+          'this approval does not switch the event service on: approve a workflow with workflow approve, and anything else at your terminal',
           { details: { reason: 'NOT_ENABLE_ALL' } },
         );
       ids.ruleVersions = ruleVersions.map((entry) => `${entry.ruleId}@${entry.ruleVersion}`);

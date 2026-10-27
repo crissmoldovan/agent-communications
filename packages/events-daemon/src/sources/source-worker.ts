@@ -921,7 +921,7 @@ export class GmailSourceWorker {
     const bodyRules = selected.filter((rule) => this.#needsLazyField(rule, 'body'));
     if (bodyRules.length === 0) return 'terminal';
     if (!this.#materialise)
-      throw new CommsError('CONFIG', 'the Gmail source worker needs a materialiser for a body-dependent rule');
+      throw new CommsError('CONFIG', 'the Gmail source worker needs a materialiser for a body-dependent workflow');
     const stageExpiresAt = this.#stageExpiry(stage.id);
     if (stageExpiresAt === null) return 'pending';
     const requiredFields = [...new Set(bodyRules.flatMap((rule) => rule.lazyFields ?? []))].sort();

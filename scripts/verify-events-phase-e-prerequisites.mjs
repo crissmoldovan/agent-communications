@@ -57,6 +57,10 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `delivery show` and a message's deliveries, gains the value `linear-change` — a workflow's change of the Linear issue
  * its run made — and such a row may carry the optional `linear: { identifier, url }` of that issue. No existing branch
  * changed.
+ *
+ * 0.36.0's one word (design W22) changes no branch, only two example values the seeded vectors carry, as the event
+ * service now writes them: `judge-setup`'s `destination` ("Messages your workflows choose …") and `rule-analyse`'s
+ * `sent` ("The workflow's own text …"). Both stay plain strings in the schema.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
@@ -90,7 +94,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '6d460f12e9f30ed35cd406093c3ee36ab9da8585b334f67b067fff981031fa4e',
+    '81cb85e8dc1e4d0f7dce11d36c82dd3567f46563b5498ab2cbc2c99fad56a84d',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

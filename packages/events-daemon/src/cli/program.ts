@@ -275,7 +275,7 @@ export async function runTerminalApprovalFlow(input: {
     const selector = start.pendingRuleJudgeTestSelectors[index];
     if (selector === undefined) continue;
     const answer = await input.terminal.question(
-      `Test pending rule judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
+      `Test pending workflow judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
     const testPendingRuleJudge = input.testPendingRuleJudge;
     if (/^\s*(?:y|yes)\s*$/iu.test(answer) && testPendingRuleJudge !== undefined)
@@ -566,7 +566,12 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     );
   rule
     .command('test-retained <event-id>')
-    .addOption(new Option('--workflow <workflow-id>'))
+    .addOption(
+      new Option(
+        '--workflow <workflow-id>',
+        'the workflow to try on the retained event, at the version --version names (required)',
+      ),
+    )
     .addOption(new Option('--rule <workflow-id>').hideHelp())
     .requiredOption('--version <version>')
     .action(async (eventId: string, options, command: Command) => {
@@ -663,8 +668,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // is, it is taken only from the Agent Comms app (attested on macOS) or an interactive terminal — one whose output
       // the person reads, since a draft may come on stdin — and an agent's shell and the MCP server are refused before
       // anything is read or sent (security review of 0.33.0, finding 10).
-      await personSetupOrigin('analyse a rule', {
-        where: 'Events → Rules, Analyse',
+      await personSetupOrigin('analyse a workflow', {
+        where: 'Events → Workflows, Analyse',
         action: 'analyse',
         terminal: 'output',
         // It changes nothing: Windows and Linux keep `provider key set`'s former rule for it (second look of 0.33.0).
@@ -1176,8 +1181,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       ran = true;
       // Windows and Linux attest nothing: a standing disclosure is approved there at the terminal, never on a missing
       // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
-      const origin = await personSetupOrigin('approve a rule', {
-        where: 'Events → Rules, Review and approve',
+      const origin = await personSetupOrigin('approve a workflow', {
+        where: 'Events → Workflows, Review and approve',
         action: 'approve',
         unattested: { words: ruleApprovalWords(approvalId) },
       });

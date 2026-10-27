@@ -109,11 +109,11 @@ function pendingAuthority(
     row.approval_id !== selector.approvalId ||
     row.digest !== selector.digest
   )
-    return voidApproval('the approval no longer names this pending rule activation');
+    return voidApproval('the approval no longer names this pending workflow activation');
   try {
     const document = normaliseActivationDocument(JSON.parse(row.document));
     if (document.kind !== 'rule' || activationDocumentDigest(document) !== row.digest)
-      return voidApproval('the pending rule activation document digest is invalid');
+      return voidApproval('the pending workflow activation document digest is invalid');
     const agentic = document.rule.agentic;
     if (
       agentic === undefined ||
@@ -134,7 +134,7 @@ function pendingAuthority(
     };
   } catch (error) {
     if (error instanceof CommsError) throw error;
-    return voidApproval('the pending rule activation document is not valid');
+    return voidApproval('the pending workflow activation document is not valid');
   }
 }
 
@@ -151,7 +151,7 @@ export function assertPendingRuleJudgeTestAuthority(input: {
     .prepare('SELECT kind, document, digest, status, approval_id FROM activation_intents WHERE id = ?')
     .get(input.activationId) as PendingRow | undefined;
   if (row === undefined || row.status !== 'pending' || row.kind !== 'rule' || row.approval_id === null)
-    return voidApproval('the pending rule authority is no longer live');
+    return voidApproval('the pending workflow authority is no longer live');
   return pendingAuthority(input.database, {
     ...input,
     approvalId: row.approval_id,
@@ -172,10 +172,10 @@ export async function verifyPendingRuleJudgeTestContext(input: {
 }): Promise<PendingRuleJudgeTestAuthority> {
   if (!validOrigin(input.origin))
     return voidApproval(
-      'a pending rule judge test is available only from the terminal approval flow or app approval screen',
+      'a pending workflow judge test is available only from the terminal approval flow or app approval screen',
     );
   if (!isPendingRuleJudgeTestSelector(input.selector))
-    return voidApproval('the pending rule judge test selector is invalid');
+    return voidApproval('the pending workflow judge test selector is invalid');
   const challenge = await input.approvalView();
   if (
     challenge.expiresAt <= input.now() ||
@@ -183,7 +183,7 @@ export async function verifyPendingRuleJudgeTestContext(input: {
     challenge.digest !== input.selector.digest ||
     challenge.challenge !== input.selector.challenge
   )
-    return voidApproval('the approval challenge is stale or does not bind this pending rule activation');
+    return voidApproval('the approval challenge is stale or does not bind this pending workflow activation');
   const authority = pendingAuthority(input.database, input.selector);
   return {
     ...authority,
