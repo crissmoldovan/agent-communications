@@ -14,6 +14,7 @@ import { pruneSearchIndex, runSearchIndex } from '../src/search/indexer.ts';
 import { isCloudModelName, searchModelName } from '../src/search/models.ts';
 import { OllamaClient } from '../src/search/ollama.ts';
 import { loadSearchSqlite } from '../src/search/sqlite.ts';
+import { WordHasher } from '../src/search/words.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import {
   MAIL,
@@ -622,6 +623,58 @@ test('GUARD: what is past Activity’s days is deleted — rows, words and vecto
   } finally {
     await ollama.close();
   }
+});
+
+test('GUARD: a pruned or removed message leaves no word in the file: the words index is optimised after each prune, and what it freed zeroed (review 2026-10-27, M3)', async () => {
+  const machine = searchMachine(on());
+  const now = Date.now();
+  await capture(
+    machine,
+    MAIL,
+    [mail({ sourceId: '18c00000000000p1', text: 'the vault word is quokkazebrine' })],
+    now - 10 * DAY,
+  );
+  await capture(machine, MAIL, [mail({ sourceId: '18c00000000000p2', text: 'fresh invoice' })], now - DAY);
+  await capture(machine, SLACK, [
+    {
+      channel: 'slack',
+      direction: 'in',
+      sourceId: 'C0GENERAL/1700000009.000100',
+      from: { userId: 'U0DAVID' },
+      text: 'the other vault word is slothmeridian',
+      at: now - DAY,
+      partial: false,
+    },
+  ]);
+  await index(machine);
+  const master = await readSearchKey(machine.secrets);
+  assert.ok(master);
+  const hasher = new WordHasher(master);
+  // A token as the file holds it: FTS5 keeps a term's start shared with the term before it, so its end is looked for.
+  const inFile = (token: string) =>
+    filesBelow(searchPaths(machine.stateDir).dir).some((file) =>
+      readFileSync(file).includes(Buffer.from(token.slice(8))),
+    );
+  for (const token of [hasher.word('quokkazebrine'), hasher.prefix('quokkazeb'), hasher.word('slothmeridian')]) {
+    assert.equal(inFile(token), true, 'the token is in the file while its message is kept');
+  }
+  // Fewer days: the ten-day-old message is pruned at once, and its words leave the bytes with it.
+  await gatedChange(machine.core, activitySettingsChange(machine.core, { retentionDays: 7 }, 'cli'), {
+    surface: 'cli',
+    channel: 'core',
+  });
+  assert.equal(inFile(hasher.word('quokkazebrine')), false, 'a pruned message’s word is gone from the file');
+  assert.equal(inFile(hasher.prefix('quokkazeb')), false, 'and its prefixes');
+  assert.equal(inFile(hasher.word('slothmeridian')), true);
+  // An account taken out of Search: its messages go, and their words with them.
+  const removed = searchSettingsChange(machine.core, { account: SLACK.alias, include: false }, 'cli', { env: {} });
+  await gatedChange(machine.core, removed, { surface: 'cli', channel: 'core' });
+  assert.equal(inFile(hasher.word('slothmeridian')), false, 'a removed account’s word is gone from the file');
+  const found = await searchQuery(machine.core, { text: 'invoice' }, { env: {}, deps: machine.deps });
+  assert.deepEqual(
+    found.hits.map((hit) => hit.sourceId),
+    ['18c00000000000p2'],
+  );
 });
 
 test('GUARD: an account taken out of Search loses its rows at once', async () => {

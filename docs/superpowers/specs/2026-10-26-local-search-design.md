@@ -319,6 +319,14 @@ CREATE TABLE handles (
   would add is noise.
 - **A full read replaces a partial row,** never the reverse.
 - **A deleted row leaves nothing behind:** its words row goes too (contentless delete), and its vector by cascade.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, finding M3; L).** It did leave something: a contentless
+  > delete only marks a row's tokens deleted, and they stay in the file until FTS5 merges the segments holding them.
+  > So every prune that deletes a row also optimises the words index (`'optimize'`: one segment, without them).
+  > Prunes are retention, an account taken out of Search, and the day's first command. `secure_delete` zeroes the
+  > pages that frees, and the WAL is checkpointed after. Measured on this Mac, under load: about 1 s for 5,000
+  > synthetic messages of 150 words. It runs only when a row went, and an edit that replaces a row's words leaves
+  > the old ones to FTS5's own merging, since that message is still kept.
 - A person with no messages left is deleted, unless the person linked or labelled them.
 
 ## 5. Indexing: what, when, how

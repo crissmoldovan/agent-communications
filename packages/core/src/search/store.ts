@@ -432,6 +432,11 @@ export class SearchStore {
   /**
    * Deletes every row first in hand before `keptFrom`, and every row of an account not in `accounts`; then every
    * person left with no message, unless the person linked or labelled them. Returns how many rows went.
+   *
+   * When any went, the words index is optimised too (the review of 2026-10-27, M3): a contentless table's delete only
+   * marks a row's tokens deleted, and they stay in the file until FTS5 merges the segments that hold them — days of
+   * Activity's retention later, or never. Optimising merges every segment into one now, without them; `secure_delete`
+   * zeroes the pages that frees, and every caller checkpoints the WAL after.
    */
   prune(keptFrom: number, accounts: readonly string[]): number {
     const old = this.db
@@ -441,7 +446,13 @@ export class SearchStore {
       .all(keptFrom, ...accounts) as { id: number }[];
     const deleted = this.deleteRows(old.map((row) => Number(row.id)));
     this.pruneEmptyPeople();
+    if (deleted > 0) this.optimizeWords();
     return deleted;
+  }
+
+  /** Merges the words index into one segment, leaving out every token of a deleted row. */
+  optimizeWords(): void {
+    this.db.exec("INSERT INTO words(words) VALUES ('optimize')");
   }
 
   /** People no message names any more, neither linked nor labelled by the person: deleted, with their handles. */
