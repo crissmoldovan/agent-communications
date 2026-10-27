@@ -12,12 +12,20 @@ import {
   canonicaliseCondition,
   catalogueEntry,
   compileMapping,
+  type FlowDocumentV1,
   isJsonValue,
   type JsonValue,
   TEST_CLOUD_EVENT,
   targetQueues,
   validateCloudEventType,
 } from '@agentcomms/events';
+import {
+  assertFlowDocumentSize,
+  assertNoFlowOnlyTargets,
+  canonicalFlowInRule,
+  isClosedSlot,
+  type RuleWithoutFlow,
+} from './flow.ts';
 import {
   type CanonicalJudgeBudgetDocument,
   type CanonicalJudgeDocument,
@@ -28,7 +36,18 @@ import {
   type LayaEnablementInputs,
 } from './judges.ts';
 import { EventDomainError } from './lifecycle.ts';
-import { assertLinearSlotsMapped, canonicalLinearTarget, type LinearTargetDocument } from './linear-target.ts';
+import {
+  canonicalLinearChangeTarget,
+  type LinearChangeTargetDocument,
+  linearChangeSlots,
+} from './linear-change-target.ts';
+import {
+  assertLinearSlotsMapped,
+  canonicalLinearTarget,
+  type LinearTargetDocument,
+  mappedFields,
+  slotOrigin,
+} from './linear-target.ts';
 import {
   assertQueueMapping,
   canonicalQueueTarget,
@@ -63,8 +82,10 @@ export type TargetDocument =
   | SseTargetDocument
   | QueueTargetDocument
   | SessionTargetDocument
-  | LinearTargetDocument;
+  | LinearTargetDocument
+  | LinearChangeTargetDocument;
 
+export type { LinearChangeTargetDocument } from './linear-change-target.ts';
 export type { LinearTargetDocument } from './linear-target.ts';
 export type { QueueTargetDocument } from './queue-target.ts';
 export type { SessionTargetDocument } from './session-target.ts';
@@ -140,7 +161,30 @@ export interface CanonicalFullRuleDocument {
   readonly judges: readonly JudgeDocument[];
   readonly deliveryRateCap: number;
   readonly retention: RuleRetentionDocument;
+  /**
+   * A workflow's graph (workflows design W1, §4.1): present, its steps replace the straight fan-out to every target;
+   * absent, the workflow is today's straight line, and every document stored before it keeps its bytes and its digest.
+   */
+  readonly flow?: FlowDocumentV1;
 }
+
+/** The fields a workflow document may hold, and no other (workflows design W19's hardening). */
+const RULE_DOCUMENT_KEYS: readonly string[] = [
+  'ruleId',
+  'version',
+  'source',
+  'event',
+  'condition',
+  'agentic',
+  'mapping',
+  'cloudEventType',
+  'targets',
+  'subscribers',
+  'judges',
+  'deliveryRateCap',
+  'retention',
+  'flow',
+];
 
 export type JudgeBudgetDocument = CanonicalJudgeBudgetDocument;
 
@@ -232,6 +276,8 @@ export function canonicalTarget(value: unknown): TargetDocument {
       return canonicalSessionTarget(target);
     case 'linear':
       return canonicalLinearTarget(target);
+    case 'linear-change':
+      return canonicalLinearChangeTarget(target);
     default:
       return fail('a target document has a known kind');
   }
@@ -303,6 +349,9 @@ function assertOneTargetPerLane(targets: readonly TargetDocument[]): void {
 /** Validates a Phase-D full rule shape and returns its canonical data-only form. */
 export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocument {
   const rule = cloneJsonRecord(value, 'a rule document');
+  for (const key of Object.keys(rule))
+    if (!RULE_DOCUMENT_KEYS.includes(key)) return fail(`a workflow document has no field ${key}`);
+  const inFlow = rule.flow !== undefined;
   const source = canonicalRuleSource(rule.source);
   const event = cloneJsonRecord(rule.event, 'rule event');
   const eventType = requiredText(event.type, 'an event type');
@@ -334,7 +383,8 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   if (!compiledMapping.ok) return fail(compiledMapping.issues[0]?.message ?? 'the rule mapping is not valid');
 
   const targets = Array.isArray(rule.targets) ? rule.targets.map(canonicalTarget) : fail('rule targets are an array');
-  if (targets.length === 0) return fail('a B1 rule has at least one dry-run target');
+  // A workflow with a flow names the targets its steps deliver to, which may be none (a flow that only notifies).
+  if (targets.length === 0 && !inFlow) return fail('a B1 rule has at least one dry-run target');
   assertOneTargetPerLane(targets);
   const subscribers = Array.isArray(rule.subscribers)
     ? rule.subscribers.map(canonicalSubscriber)
@@ -357,20 +407,27 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   // §2's anti-goal: a session receives no field the approved rule does not map.
   for (const target of targets) if (target.kind === 'session') assertSessionMapping(target, mapping);
   // A `{ step, field }` context part reads a flow step's closed output: no step exists outside a flow (0.36 §6.4).
-  for (const target of targets) if (target.kind === 'session') assertSessionStepParts(target, false);
+  for (const target of targets) if (target.kind === 'session') assertSessionStepParts(target, inFlow);
+  // The session the flow chose, and a Linear change, exist only inside a flow (W5).
+  if (!inFlow) assertNoFlowOnlyTargets(targets);
   if (queued && retention.queueMs === undefined) return fail('a rule with a queue target sets retention.queueMs');
   if (!queued && retention.queueMs !== undefined)
     return fail('retention.queueMs applies only to a rule with a queue target');
   if (queued) assertQueueMapping(eventType, mapping);
-  // A Linear target's slots name the rule's mapped fields only (0.33.0 design §3.4): nothing else reaches Linear.
-  for (const target of targets) if (target.kind === 'linear') assertLinearSlotsMapped(target, compiledMapping.value);
+  // A Linear target's slots name the rule's mapped fields only (0.33.0 design §3.4): nothing else reaches Linear. In a
+  // flow a slot may also name the run's own values — its id, a step's closed output — which the flow's checks hold.
+  for (const target of targets)
+    if (target.kind === 'linear')
+      assertLinearSlotsMapped(target, compiledMapping.value, inFlow ? isClosedSlot : undefined);
+  for (const target of targets)
+    if (target.kind === 'linear-change') assertLinearChangeSlotsMapped(target, compiledMapping.value);
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);
     if (!chosen.ok) return fail(chosen.issues[0]?.message ?? 'the rule cloudEventType is not valid');
     cloudEventType = chosen.value;
   }
-  return {
+  const canonical: RuleWithoutFlow = {
     ruleId: requiredText(rule.ruleId, 'a rule id'),
     version: positiveInteger(rule.version, 'a rule version'),
     source,
@@ -385,6 +442,32 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     deliveryRateCap: positiveInteger(rule.deliveryRateCap, 'rule delivery rate cap'),
     retention,
   };
+  // W1, W2: `flow` only when the workflow has one, so every document stored before 0.36 keeps its bytes.
+  if (!inFlow) return canonical;
+  const withFlow: CanonicalFullRuleDocument = { ...canonical, flow: canonicalFlowInRule(canonical, rule.flow) };
+  assertFlowDocumentSize(withFlow);
+  return withFlow;
+}
+
+/**
+ * A Linear change's comment names the run's own values or the rule's mapped fields, as a Linear target's description
+ * does: a slot naming a field the rule does not keep is refused.
+ */
+function assertLinearChangeSlotsMapped(
+  target: LinearChangeTargetDocument,
+  mapping: Parameters<typeof mappedFields>[0],
+): void {
+  const fields = mappedFields(mapping);
+  for (const slot of linearChangeSlots(target)) {
+    if (isClosedSlot(slot) || slotOrigin(fields, slot) !== undefined) continue;
+    const known = [...fields.keys()];
+    fail(
+      `Linear change ${target.targetId}'s comment names {{${slot}}}, which the workflow does not keep; ${
+        known.length === 0 ? 'it keeps no field' : `it keeps ${known.join(', ')}`
+      }`,
+      'TEMPLATE_FIELD_NOT_MAPPED',
+    );
+  }
 }
 
 function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kind: 'enable-all' }> {

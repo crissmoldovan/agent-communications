@@ -2249,9 +2249,14 @@ function domain<T>(work: () => T): T {
     return work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
+}
+
+/** A refusal's fixed reason, and the closed detail some carry beside it (a workflow's `FLOW_INVALID` problems). */
+function domainRefusalDetails(error: EventDomainError): Record<string, unknown> {
+  return { ...error.details, reason: error.code };
 }
 
 /** `domain` for an operation that awaits: a refusal is the caller's input, with the same fixed reason. */
@@ -2260,7 +2265,7 @@ async function domainAwaited<T>(work: () => Promise<T>): Promise<T> {
     return await work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
 }

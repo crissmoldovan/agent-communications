@@ -294,5 +294,8 @@ function documentDeliveryTarget(rule: CanonicalFullRuleDocument, target: TargetD
       };
     case 'linear':
       return { kind: 'linear', targetId: target.targetId, targetVersion: target.version, representation: 'plain' };
+    case 'linear-change':
+      // Only a workflow's flow delivers a Linear change, through its own step (workflows design W5): never a fan-out.
+      throw new Error('a Linear change is delivered only by its workflow step');
   }
 }

@@ -5,7 +5,7 @@ import type { LinearClientOptions } from '../../src/runtime/linear-client.ts';
 
 /*
  * A loopback fake of Linear's GraphQL API, for the Linear target's tests (0.33.0 design §3.4). It answers the few
- * operations the event service sends — the workspace, a team's labels, an issue lookup and `issueCreate` — on
+ * operations the event service sends — the workspace, a team's labels and states, an issue lookup and `issueCreate` — on
  * 127.0.0.1, and records each request. The client reaches it through its own seams: the resolver gives a global
  * address (never contacted), the TCP connect goes to the fake's port instead, and TLS is the plain socket, so the client
  * still prepares exactly `https://api.linear.app/graphql` with its pinned, global-only checks. Never the real Linear,
@@ -52,6 +52,13 @@ export const FAKE_LABELS = [
   { id: '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d', name: 'Urgent' },
 ] as const;
 
+/** The fake team's workflow states, as Linear's `team.states` gives them (workflows design §4.2). */
+export const FAKE_STATES = [
+  { id: '7d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', name: 'In Progress', type: 'started' },
+  { id: '8e2d3c4b-5f6a-4b7c-9d8e-0f1a2b3c4d5e', name: 'Done', type: 'completed' },
+  { id: '9f3e4d5c-6a7b-4c8d-8e9f-1a2b3c4d5e6f', name: 'Canceled', type: 'canceled' },
+] as const;
+
 function operationOf(query: unknown): string {
   return typeof query === 'string' ? (/^\s*(?:query|mutation)\s+([A-Za-z0-9_]+)/u.exec(query)?.[1] ?? '') : '';
 }
@@ -83,6 +90,15 @@ export async function startFakeLinear(): Promise<FakeLinear> {
             data: {
               team: variables.team === FAKE_TEAM.id ? { labels: { nodes: [FAKE_LABELS[0]] } } : null,
               issueLabels: { nodes: [FAKE_LABELS[1], FAKE_LABELS[0]] },
+            },
+          },
+        };
+      case 'AgentCommsLinearStates':
+        return {
+          status: 200,
+          body: {
+            data: {
+              team: variables.team === FAKE_TEAM.id ? { states: { nodes: [...FAKE_STATES] } } : null,
             },
           },
         };

@@ -215,12 +215,21 @@ export function slotOrigin(
   return undefined;
 }
 
-/** At activation: every slot of a Linear target names one of the rule's mapped fields, or the rule is refused. */
-export function assertLinearSlotsMapped(target: LinearTargetDocument, mapping: CompiledMapping): void {
+/**
+ * At activation: every slot of a Linear target names one of the rule's mapped fields, or the rule is refused. In a
+ * workflow's flow a slot may instead name the run's own values (`isClosed`), which the flow's checks hold.
+ */
+export function assertLinearSlotsMapped(
+  target: Pick<LinearTargetDocument, 'targetId'> & Partial<Pick<LinearTargetDocument, 'title' | 'description'>>,
+  mapping: CompiledMapping,
+  isClosed?: (slot: string) => boolean,
+): void {
   const fields = mappedFields(mapping);
   for (const part of ['title', 'description'] as const) {
-    for (const slot of linearTemplateSlots(target[part])) {
-      if (slotOrigin(fields, slot) !== undefined) continue;
+    const template = target[part];
+    if (template === undefined) continue;
+    for (const slot of linearTemplateSlots(template)) {
+      if (slotOrigin(fields, slot) !== undefined || isClosed?.(slot) === true) continue;
       const known = [...fields.keys()];
       fail(
         `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the rule does not keep; ${
