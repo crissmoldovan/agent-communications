@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-workflow-positions"
+description = "Enables the set_workflow_positions command without any pre-configured scope."
+commands.allow = ["set_workflow_positions"]
+
+[[permission]]
+identifier = "deny-set-workflow-positions"
+description = "Denies the set_workflow_positions command without any pre-configured scope."
+commands.deny = ["set_workflow_positions"]

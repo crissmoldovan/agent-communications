@@ -9,9 +9,10 @@ const APP = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string): string => readFileSync(`${APP}${path}`, 'utf8');
 
 /**
- * The twenty-three commands the app's Rust side answers, each granted as `allow-<name>`: Phase C's fourteen, the event
+ * The twenty-five commands the app's Rust side answers, each granted as `allow-<name>`: Phase C's fourteen, the event
  * service's seven (desktop 0.27.0), `provider_key_set` (0.32.0), which hands an AI provider's key to the CLI on stdin,
- * and `app_build` (0.32.0), which build this is.
+ * `app_build` (0.32.0), which build this is, and `workflow_positions` and `set_workflow_positions` (0.36.0), where the
+ * designer keeps a workflow's boxes.
  */
 const COMMANDS = [
   'installation',
@@ -37,6 +38,8 @@ const COMMANDS = [
   'answer_quit',
   'provider_key_set',
   'app_build',
+  'workflow_positions',
+  'set_workflow_positions',
 ];
 
 /** Phase C's no-egress policy, with the one inline script — the pre-paint script — pinned by its hash (DA7, DA14). */
@@ -108,7 +111,7 @@ describe('the content policy', () => {
     expect(html).not.toMatch(/https?:\/\//);
   });
 
-  it('capabilities grant only events, dragging and the twenty-three commands', () => {
+  it('capabilities grant only events, dragging and the twenty-five commands', () => {
     const capability = JSON.parse(read('src-tauri/capabilities/default.json'));
     expect(capability.windows).toEqual(['main']);
     expect([...capability.permissions].sort()).toEqual(

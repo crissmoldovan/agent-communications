@@ -595,7 +595,10 @@ export interface AppEvents {
   'quit-requested': null;
 }
 
-/** The twenty-three commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** A workflow's kept box positions, by box id (0.36.0, `positions.rs`): a step's id, or the gate's (`gate:keep` …). */
+export type WorkflowPositions = Record<string, { x: number; y: number }>;
+
+/** The twenty-five commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -638,6 +641,13 @@ export interface Bridge {
   providerKeySet(provider: KeyProvider, key: string): Promise<CliResult>;
   /** Which build this is: a release, or the local test build (0.32.0). */
   appBuild(): Promise<AppBuild>;
+  /**
+   * Where the designer kept a workflow's boxes (0.36.0, workflows design W20): the app's own, in its settings folder,
+   * never part of what is approved and never sent to the event service. None kept is `{}`.
+   */
+  workflowPositions(ruleId: string): Promise<WorkflowPositions>;
+  /** Keeps where a workflow's boxes are; `{}` forgets them. A box's place changes no workflow's bytes. */
+  setWorkflowPositions(ruleId: string, positions: WorkflowPositions): Promise<void>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -668,6 +678,8 @@ export const tauriBridge: Bridge = {
   answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
   providerKeySet: (provider, key) => invoke('provider_key_set', { provider, key }),
   appBuild: () => invoke('app_build'),
+  workflowPositions: (ruleId) => invoke('workflow_positions', { ruleId }),
+  setWorkflowPositions: (ruleId, positions) => invoke('set_workflow_positions', { ruleId, positions }),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 
