@@ -2,7 +2,7 @@
 
 import type { Scalar } from '../conditions/types.ts';
 import type { JsonValue } from '../json.ts';
-import type { RuleTextError } from './types.ts';
+import type { RuleTextError, RuleTextRawSite } from './types.ts';
 
 /** One non-blank line, with the lines indented under it. */
 export interface TextLine {
@@ -15,6 +15,28 @@ export interface TextLine {
   /** The line without its indentation and trailing spaces. */
   readonly text: string;
   readonly children: TextLine[];
+}
+
+/**
+ * The `raw` sites a parse read, while `collectingRawSites` runs it (security review of 0.36.0, L6): every `raw` the
+ * parser takes goes through `Cursor.takeRaw`, so whoever must refuse JSON written for itself asks the parser where it
+ * was, rather than guessing from the text. A parse is synchronous, so one list at a time is enough.
+ */
+let rawSites: RuleTextRawSite[] | null = null;
+
+/** Runs `read`, a parse, and returns what it read with every `raw` site it took, in the order taken. */
+export function collectingRawSites<T>(read: () => T): {
+  readonly value: T;
+  readonly sites: readonly RuleTextRawSite[];
+} {
+  const previous = rawSites;
+  const sites: RuleTextRawSite[] = [];
+  rawSites = sites;
+  try {
+    return { value: read(), sites };
+  } finally {
+    rawSites = previous;
+  }
 }
 
 /** A refusal at one place in the text; the parser turns it into a `RuleTextError`. */
@@ -178,6 +200,14 @@ export class Cursor {
     const found = this.take(...tokens);
     this.#at = at;
     return found;
+  }
+
+  /** Reads `raw` if it comes next, noting where for `collectingRawSites`: every `raw` site the parser reads uses it. */
+  takeRaw(): boolean {
+    const at = this.mark();
+    if (!this.take('raw')) return false;
+    rawSites?.push({ line: this.line.number, column: this.column(at) });
+    return true;
   }
 
   /** Reads the tokens if they come next, all of them; otherwise reads nothing. */

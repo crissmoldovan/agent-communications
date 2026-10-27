@@ -2,9 +2,9 @@
 import type { JsonObject, JsonValue } from '../json.ts';
 import { setOwn } from '../own-property.ts';
 import { type FlowParseHelpers, type FlowSection, parseFlowSection, type StepClauses } from './flow-parse.ts';
-import { Cursor, lineTree, RuleTextFailure, type TextLine } from './lines.ts';
+import { Cursor, collectingRawSites, lineTree, RuleTextFailure, type TextLine } from './lines.ts';
 import { parseSessionTarget, type SessionParseHelpers } from './session.ts';
-import type { RuleTextError, RuleTextParseResult } from './types.ts';
+import type { RuleTextError, RuleTextParseResult, RuleTextRawSite } from './types.ts';
 import {
   CHANNELS,
   DEFAULT_QUEUE_RETENTION,
@@ -81,6 +81,15 @@ export function parseRuleText(text: string): RuleTextParseResult {
     return { ok: false, errors };
   }
   return { ok: true, doc };
+}
+
+/**
+ * Every place `text` writes JSON for itself with `raw` — a top-level `raw /field`, a condition (`match raw`, `match not
+ * raw`, a member, a step's `if raw`), a target, a step or a session's context part, however it is spaced — as the
+ * parser reads them, whether or not the whole text parses (security review of 0.36.0, L6).
+ */
+export function ruleTextRawSites(text: string): readonly RuleTextRawSite[] {
+  return collectingRawSites(() => parseRuleText(text)).sites;
 }
 
 /** Runs `read`, recording a refusal instead of stopping, so one mistake does not hide the next. */
@@ -379,7 +388,7 @@ function textValue(cursor: Cursor, what: string): string {
 /** One condition from the rest of `line`; `any` and `all` take their members from the lines indented under it. */
 function condition(cursor: Cursor, line: TextLine): JsonValue {
   if (cursor.take('not')) return { not: condition(cursor, line) };
-  if (cursor.take('raw')) {
+  if (cursor.takeRaw()) {
     const value = cursor.json('the raw condition');
     cursor.expectEnd('the raw condition');
     noChildren(line, 'a raw condition');
@@ -542,7 +551,7 @@ function flowSection(cursor: Cursor, line: TextLine, state: State): void {
 function target(line: TextLine, step?: StepClauses): JsonValue {
   const cursor = new Cursor(line);
   const at = cursor.mark();
-  if (cursor.take('raw')) {
+  if (cursor.takeRaw()) {
     const value = cursor.json('the raw target');
     cursor.expectEnd('the raw target');
     noChildren(line, 'a raw target');
@@ -911,7 +920,7 @@ function subscriber(cursor: Cursor, line: TextLine): JsonValue {
 }
 
 function rawLine(cursor: Cursor, line: TextLine, state: State): void {
-  cursor.take('raw');
+  cursor.takeRaw();
   const at = cursor.mark();
   const pointer = cursor.isString() ? cursor.string('the field') : cursor.word();
   if (pointer === undefined || !pointer.startsWith('/') || pointer.slice(1).includes('/') || /~[^01]|~$/.test(pointer))
