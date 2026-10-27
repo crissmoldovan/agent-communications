@@ -477,7 +477,12 @@ class LoopbackSseServer implements SseServer {
     if (request.headers.cookie !== undefined) return refuseWebSocket(socket, 403);
     if (corsHeaders(request.headers.origin, subscriber) === null) return refuseWebSocket(socket, 403);
     if (!isWebSocketHandshake(request)) return refuseWebSocket(socket, 400);
-    const token = bearer(request.headers.authorization) ?? subprotocolValue(request, 'agentcomms.bearer.');
+    const header = bearer(request.headers.authorization);
+    const offered = header === null ? subprotocolValue(request, 'agentcomms.bearer.') : null;
+    // A bearer offered as a subprotocol is a browser's, so it is accepted only from an Origin the subscriber lists
+    // (design §14); a program sends it in Authorization.
+    if (offered !== null && request.headers.origin === undefined) return refuseWebSocket(socket, 403);
+    const token = header ?? offered;
     if (token === null) return refuseWebSocket(socket, 403);
     let admission: SubscriberStreamAdmission | null;
     try {
@@ -551,8 +556,8 @@ class LoopbackSseServer implements SseServer {
       closed = true;
       forget();
     });
-    const header = request.headers['last-event-id'];
-    const afterId = typeof header === 'string' ? header : subprotocolValue(request, 'agentcomms.after.');
+    const lastEventId = request.headers['last-event-id'];
+    const afterId = typeof lastEventId === 'string' ? lastEventId : subprotocolValue(request, 'agentcomms.after.');
     await this.#replay.replay({
       subscriberId: subscriber.subscriberId,
       subscriberVersion: subscriber.version,

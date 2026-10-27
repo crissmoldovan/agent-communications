@@ -283,8 +283,18 @@ export class EventDispatcher {
     }
   }
 
-  /** The fence's refusal settles the attempt: nothing was sent, and nothing will be (W35). */
+  /**
+   * The fence's refusal settles the attempt: nothing was sent, and nothing will be (W35). Anything that is not a
+   * refusal — a store that could not be read just now — lets the claim go, to be tried again.
+   */
   #refuse(claim: EventDeliveryClaim, error: unknown): void {
+    if (error instanceof CommsError && (error.code === 'TRANSIENT' || error.code === 'UNEXPECTED')) {
+      this.#settle(claim, 'retryable', {
+        code: reasonOf(error),
+        nextAt: this.#now() + webhookRetryBackoffMs(claim.attempts, claim.eventId),
+      });
+      return;
+    }
     const store = this.#options.store;
     if (isRemovedAccountError(error)) {
       const account = store.database

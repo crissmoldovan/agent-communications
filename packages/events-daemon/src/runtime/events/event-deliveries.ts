@@ -279,3 +279,28 @@ export function dropEventDeliveryInTransaction(
   settleFinishedEventsInTransaction(database, [row.event_id], now);
   return { kind: 'delivery-dropped', deliveryId };
 }
+
+/**
+ * An agent may not stop an event delivery that will be tried again (as a target delivery's stop is the person's,
+ * review of 0.32.0, finding 4): the person drops it in the app or at their terminal. A finished one stays finished, so
+ * its drop — a dead letter's kept event — goes on to the operation. Not an event delivery's key: nothing to say here.
+ */
+export function assertAgentMayStopEventDelivery(database: DatabaseSync, deliveryId: unknown): void {
+  const key = parseEventDeliveryKey(deliveryId);
+  if (key === null) return;
+  const open = database
+    .prepare(
+      `SELECT 1 AS present FROM event_deliveries
+        WHERE event_id = ? AND subscriber_id = ? AND state IN ('queued', 'retryable', 'disclosing')`,
+    )
+    .get(key.eventId, key.subscriberId);
+  if (open === undefined) return;
+  throw new CommsError(
+    'APPROVAL_REQUIRED',
+    'stopping an event delivery that will be tried again is for a person, at a terminal or in the app',
+    {
+      hint: 'The person stops it in the app (Events → Deliveries) or at their terminal.',
+      details: { reason: 'PERSON_ONLY_STOP' },
+    },
+  );
+}

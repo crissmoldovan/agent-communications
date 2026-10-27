@@ -1,5 +1,4 @@
 import { createHash } from 'node:crypto';
-import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { installErrorSink } from '../network/error-sink.ts';
 
@@ -13,6 +12,15 @@ import { installErrorSink } from '../network/error-sink.ts';
  * - the server pings every 30 seconds and closes with 4408 when no pong comes within 60;
  * - no extension is ever negotiated, so no `permessage-deflate`.
  */
+
+/**
+ * The handshake's request as the listener received it: its method and headers. Structural, so only the listener
+ * (`sse-server.ts`) imports Node's HTTP module.
+ */
+export interface UpgradeRequest {
+  readonly method?: string | undefined;
+  readonly headers: Readonly<Record<string, string | string[] | undefined>>;
+}
 
 const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11';
 const OPCODE_TEXT = 0x1;
@@ -54,7 +62,7 @@ export function websocketAccept(key: string): string {
 }
 
 /** The subprotocols a client offered, in order. */
-export function offeredProtocols(request: IncomingMessage): readonly string[] {
+export function offeredProtocols(request: UpgradeRequest): readonly string[] {
   const header = request.headers['sec-websocket-protocol'];
   const value = Array.isArray(header) ? header.join(',') : (header ?? '');
   return value
@@ -87,9 +95,10 @@ function closePayload(code: number): Buffer {
 }
 
 /** Whether a request is a WebSocket handshake this endpoint can answer: version 13, a 16-byte key, an Upgrade. */
-export function isWebSocketHandshake(request: IncomingMessage): boolean {
+export function isWebSocketHandshake(request: UpgradeRequest): boolean {
   const upgrade = request.headers.upgrade;
-  const connection = request.headers.connection ?? '';
+  const header = request.headers.connection;
+  const connection = typeof header === 'string' ? header : '';
   const key = request.headers['sec-websocket-key'];
   return (
     request.method === 'GET' &&
@@ -122,7 +131,7 @@ export function refuseWebSocket(socket: Duplex, status: 400 | 403 | 404): void {
  * a request that is not a valid version-13 handshake.
  */
 export function acceptWebSocket(
-  request: IncomingMessage,
+  request: UpgradeRequest,
   socket: Duplex,
   head: Buffer,
   timing: WebSocketTiming = {},

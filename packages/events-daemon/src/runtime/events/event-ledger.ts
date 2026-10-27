@@ -20,13 +20,15 @@ const OPEN_SQL = "('queued', 'retryable', 'disclosing')";
 
 /** Which deliveries a cancellation reaches: a subscriber's, a workflow's, an account's, a run's, or one. */
 export type EventDeliveryScope =
+  | { readonly all: true }
   | { readonly subscriberId: string; readonly subscriberVersion?: number | undefined }
   | { readonly ruleId: string; readonly ruleVersions?: readonly number[] | undefined }
-  | { readonly accountId: string }
+  | { readonly accountId: string; readonly source?: string | undefined }
   | { readonly runId: string }
   | { readonly eventId: string; readonly subscriberId: string; readonly subscriberVersion: number };
 
 function scopeWhere(scope: EventDeliveryScope): { readonly sql: string; readonly args: readonly (string | number)[] } {
+  if ('all' in scope) return { sql: '1 = 1', args: [] };
   if ('eventId' in scope)
     return {
       sql: 'delivery.event_id = ? AND delivery.subscriber_id = ? AND delivery.subscriber_version = ?',
@@ -51,10 +53,16 @@ function scopeWhere(scope: EventDeliveryScope): { readonly sql: string; readonly
     };
   }
   if ('accountId' in scope)
-    return {
-      sql: 'delivery.event_id IN (SELECT id FROM workflow_events WHERE account_id = ?)',
-      args: [scope.accountId],
-    };
+    return scope.source === undefined
+      ? { sql: 'delivery.event_id IN (SELECT id FROM workflow_events WHERE account_id = ?)', args: [scope.accountId] }
+      : {
+          // An account is removed from one source: its events are those of workflows reading that source.
+          sql: `delivery.event_id IN (SELECT event.id FROM workflow_events AS event
+                 WHERE event.account_id = ?
+                   AND COALESCE((SELECT json_extract(rule.document, '$.source.channel') FROM rule_versions AS rule
+                                  WHERE rule.rule_id = event.rule_id AND rule.version = event.rule_version), 'gmail') = ?)`,
+          args: [scope.accountId, scope.source],
+        };
   return { sql: 'delivery.event_id IN (SELECT id FROM workflow_events WHERE run_id = ?)', args: [scope.runId] };
 }
 
@@ -117,7 +125,7 @@ export function cancelEventDeliveriesInTransaction(
   );
   const streamWhere = where.sql.replaceAll('delivery.', 'event_stream_log.');
   database.prepare(`DELETE FROM event_stream_log WHERE ${streamWhere}`).run(...where.args);
-  if ('ruleId' in scope || 'accountId' in scope || 'runId' in scope) {
+  if ('all' in scope || 'ruleId' in scope || 'accountId' in scope || 'runId' in scope) {
     database
       .prepare(
         `UPDATE event_deliveries AS delivery SET dead_letter_expires_at = ?
@@ -140,8 +148,12 @@ export function cancelEventDeliveriesInTransaction(
 /** A workflow's, account's or run's open events that no subscriber was given are cancelled too. */
 function cancelEventsWithoutDeliveriesInTransaction(
   database: DatabaseSync,
-  scope: Extract<EventDeliveryScope, { ruleId: string } | { accountId: string } | { runId: string }>,
+  scope: Extract<EventDeliveryScope, { all: true } | { ruleId: string } | { accountId: string } | { runId: string }>,
 ): void {
+  if ('all' in scope) {
+    database.exec("UPDATE workflow_events SET state = 'cancelled', encrypted_record = NULL WHERE state = 'open'");
+    return;
+  }
   if ('ruleId' in scope) {
     const versions = scope.ruleVersions;
     database

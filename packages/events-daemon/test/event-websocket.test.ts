@@ -193,6 +193,7 @@ test('D4: a WebSocket with Authorization receives each event as one text message
     // `agentcomms.after.<id>` replays after that event.
     const after = await client(port, {
       protocols: ['agentcomms.events.v1', `agentcomms.bearer.${token}`, `agentcomms.after.${ids[0]}`],
+      headers: { origin: 'http://localhost:3000' },
     });
     await after.waitFor(1);
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -219,10 +220,14 @@ test('D4: a browser subprotocol bearer is accepted; the answer names agentcomms.
   const port = await freePort();
   await withLiveEvents([{ document: sseSubscriber({ port }) }], async (harness) => {
     const token = harness.tokens.get('events-dashboard') ?? '';
-    const node = await client(port, { protocols: ['agentcomms.events.v1', `agentcomms.bearer.${token}`] });
+    const node = await client(port, {
+      protocols: ['agentcomms.events.v1', `agentcomms.bearer.${token}`],
+      headers: { origin: 'http://localhost:3000' },
+    });
     assert.equal(node.socket.protocol, 'agentcomms.events.v1');
     node.socket.close();
     const handshake = await raw(port, {
+      Origin: 'http://localhost:3000',
       'Sec-WebSocket-Protocol': `agentcomms.events.v1, agentcomms.bearer.${token}`,
       'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
     });
@@ -233,7 +238,9 @@ test('D4: a browser subprotocol bearer is accepted; the answer names agentcomms.
     handshake.socket.destroy();
     // A wrong bearer, either way, is refused before the handshake.
     for (const headers of [
-      { 'Sec-WebSocket-Protocol': 'agentcomms.events.v1, agentcomms.bearer.wrong' },
+      { Origin: 'http://localhost:3000', 'Sec-WebSocket-Protocol': 'agentcomms.events.v1, agentcomms.bearer.wrong' },
+      // The right bearer as a subprotocol, but from no page: a browser's way, without a browser's Origin.
+      { 'Sec-WebSocket-Protocol': `agentcomms.events.v1, agentcomms.bearer.${token}` },
       { Authorization: 'Bearer wrong' },
       {},
     ]) {

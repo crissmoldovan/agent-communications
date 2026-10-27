@@ -107,6 +107,7 @@ import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { workflowEventsListResult, workflowEventsShowResult } from './events/catalogue.ts';
+import { assertAgentMayStopEventDelivery } from './events/event-deliveries.ts';
 import { EventDispatcher, type EventDispatcherOptions } from './events/event-dispatcher.ts';
 import { SubscriberListeners } from './events/listeners.ts';
 import { subscriptionPreviewFor } from './events/subscriptions.ts';
@@ -2003,6 +2004,8 @@ async function handleControl(
       assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
     if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
       lanes.assertAgentMayStop(args.deliveryId, caller);
+    if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
+      assertAgentMayStopEventDelivery(database.database, args.deliveryId);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
