@@ -780,44 +780,62 @@ export class ActivationRuntime {
    * A live owner retries only work that core has already marked used. Unlike startup recovery this never claims an
    * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path. After
    * that claimed work, it settles every unclaimed intent whose approval lapsed unused, as startup recovery does.
+   *
+   * The tick calls this while the person may be approving: an intent an approval is completing is that approval's
+   * (0.36.0's end to end). Each is resumed under its approval's serialisation, from its row as it is then, and one an
+   * approval is answering now is left to the next tick — never completed a second time beside the approval, nor
+   * settled from a row read before the approval's completion committed (its own new pointer would read as drift).
    */
   async resumeClaimedCompletions(): Promise<void> {
-    const rows = this.#store.database
-      .prepare(
-        "SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status = 'pending-completion' ORDER BY id",
-      )
-      .all() as unknown as IntentRow[];
-    for (const intent of rows) {
-      if (!intent.approval_id) {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+    const listed = this.#store.database
+      .prepare("SELECT id, approval_id FROM activation_intents WHERE status = 'pending-completion' ORDER BY id")
+      .all() as Array<{ id: string; approval_id: string | null }>;
+    for (const { id, approval_id: approvalId } of listed) {
+      if (!approvalId) {
+        this.#cancel(id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
-      const record = await this.#approvals.get(intent.approval_id);
-      if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
-        continue;
-      }
-      const binding = this.#settleOnDrift(intent);
-      if (binding === null) continue;
-      if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
-        continue;
-      }
-      const completion = this.#usedApprovalCompletion(intent.approval_id, record.record.usedAt);
-      if (completion === undefined) continue;
-      try {
-        await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
-      } catch (error) {
-        // One intent still draining, or settled as void, never holds back the others in this pass.
-        if (
-          error instanceof CommsError &&
-          (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
-        )
-          continue;
-        throw error;
-      }
+      // Not waited for: a tick never holds the owner's other work behind a person's approval.
+      if (this.#approvalOperations.has(approvalId)) continue;
+      await this.#withApprovalOperation(approvalId, () => this.#resumeClaimedCompletion(id, approvalId));
     }
     await this.#settleLapsedApprovals();
+  }
+
+  /** One claimed intent, resumed under its approval's serialisation. */
+  async #resumeClaimedCompletion(id: string, approvalId: string): Promise<void> {
+    // The list was read before earlier intents' awaits, in which an approval may have completed or settled this one:
+    // only the row as it is now, still claimed under the same approval, is resumed.
+    const intent = this.#store.database
+      .prepare(
+        'SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE id = ?',
+      )
+      .get(id) as IntentRow | undefined;
+    if (intent?.status !== 'pending-completion' || intent.approval_id !== approvalId) return;
+    const record = await this.#approvals.get(approvalId);
+    if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
+      this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+      return;
+    }
+    const binding = this.#settleOnDrift(intent);
+    if (binding === null) return;
+    if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
+      this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
+      return;
+    }
+    const completion = this.#usedApprovalCompletion(approvalId, record.record.usedAt);
+    if (completion === undefined) return;
+    try {
+      await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
+    } catch (error) {
+      // One intent still draining, or settled as void, never holds back the others in this pass.
+      if (
+        error instanceof CommsError &&
+        (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
+      )
+        return;
+      throw error;
+    }
   }
 
   /** Settles the unclaimed pending intents — of one replacement slot, or every one — whose approval lapsed unused. */
