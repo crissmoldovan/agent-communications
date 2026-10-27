@@ -206,7 +206,7 @@ Report or change which acts an agent may start at all — post, reply, reaction,
 
 ### `comms_taking`
 
-Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true` and `acknowledge: "nothing"` apply at once, and so do `afterMinutes` and `notify`. `required: false` and `acknowledge: "eyes"` (Slack only) are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.
+Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true`, `acknowledge: "nothing"`, a shorter `afterMinutes` and `notify: true` apply at once. `required: false`, `acknowledge: "eyes"` (Slack only), a longer `afterMinutes` and `notify: false` are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.
 
 *writes*
 

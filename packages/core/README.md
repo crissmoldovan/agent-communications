@@ -167,7 +167,11 @@ npx @agentcomms/core taking                                  # every account: re
 npx @agentcomms/core taking acme/slack --require on          # a session must take a message first (applies at once)
 npx @agentcomms/core taking acme/slack --require off         # sessions may act without taking (you approve it)
 npx @agentcomms/core taking acme/slack --unclaimed 30        # a message nobody takes in 30 minutes counts as not taken
+npx @agentcomms/core taking acme/slack --notify off          # no reminder: it waits under Not taken (you approve it)
 ```
+
+A shorter wait and a reminder apply at once; a longer wait, like no reminder, lets a message nobody took go unnoticed
+for longer, so you approve it, as every loosening.
 
 With it on, an act that answers a message — a reply, a reaction, an acknowledgement — is refused without the take,
 `TAKE_REQUIRED` (exit `10`), before any preview or approval and again just before it is sent. A message another session

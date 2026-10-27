@@ -10,7 +10,8 @@ import { tempDir } from './helpers/temp.ts';
 /*
  * Taking messages, the settings (design 2026-10-26-taking-messages §4, §5): `config.json` keeps `taking` beside
  * `behaviour`, every write keeps it, it is read failing closed, and `classifyChange` judges it — a take no longer
- * required and a 👀 on taking are loosenings; the rest applies at once.
+ * required, a 👀 on taking, a longer wait before a message nobody took counts, and no reminder of one are loosenings;
+ * the rest applies at once.
  */
 
 const CREATED = '2026-09-20T00:00:00.000Z';
@@ -175,25 +176,38 @@ test('a take no longer required is a loosening, bound to the account by id; requ
   assert.deepEqual(classifyChange(off, on).changes, []);
   // Removing the entry is the same loosening: the default is off.
   assert.deepEqual(classifyChange(on, withTaking(on, undefined)).loosened, ['taking.acme/slack.required']);
-  // Fixing an unreadable block to off is one too: it was read as on.
+  // Fixing an unreadable block to the defaults is one too: it was read as on, with the soonest reminder.
   assert.deepEqual(classifyChange(config('broken'), config()).loosened.sort(), [
     'taking.acme/gmail.required',
+    'taking.acme/gmail.unclaimed.afterMinutes',
     'taking.acme/resend.required',
+    'taking.acme/resend.unclaimed.afterMinutes',
     'taking.acme/slack.required',
+    'taking.acme/slack.unclaimed.afterMinutes',
   ]);
 });
 
-test('a 👀 on taking is a loosening; saying nothing, and any reminder change, apply at once', () => {
+test('a 👀 on taking, a longer wait and no reminder are loosenings; saying nothing, sooner and a reminder apply at once', () => {
   const quiet = config();
   const eyes = withTaking(quiet, { accounts: [entry(SLACK_ID, 'acme/slack', { acknowledge: 'eyes' })] });
   assert.deepEqual(classifyChange(quiet, eyes).changes, [
     { path: 'taking.acme/slack.acknowledge', before: 'nothing', after: 'eyes', id: SLACK_ID },
   ]);
   assert.deepEqual(classifyChange(eyes, quiet).changes, []);
+  // Security review of 0.35.0 (LOW): hearing later, or not at all, of a message nobody took loosens the person's
+  // oversight, so the person agrees to it; hearing sooner applies at once.
   const later = withTaking(quiet, {
     accounts: [entry(SLACK_ID, 'acme/slack', { unclaimed: { afterMinutes: 240, notify: false } })],
   });
-  assert.deepEqual(classifyChange(quiet, later).changes, []);
+  assert.deepEqual(classifyChange(quiet, later).changes, [
+    { path: 'taking.acme/slack.unclaimed.afterMinutes', before: 15, after: 240, id: SLACK_ID },
+    { path: 'taking.acme/slack.unclaimed.notify', before: true, after: false, id: SLACK_ID },
+  ]);
+  assert.deepEqual(classifyChange(later, quiet).changes, []);
+  const sooner = withTaking(quiet, {
+    accounts: [entry(SLACK_ID, 'acme/slack', { unclaimed: { afterMinutes: 5, notify: true } })],
+  });
+  assert.deepEqual(classifyChange(quiet, sooner).changes, []);
 });
 
 test('changedSettings records the block, so an approval binds the whole change', () => {
