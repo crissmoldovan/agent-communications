@@ -274,6 +274,78 @@ test('TAKE-O1: a lane delivery offers the message to the bound window — exclus
   );
 });
 
+test('TAKE-L1: events_lane_item says who has the message in closed words — you, another session, the person, or none — and never names the other session', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLaneOwner(
+    async (harness) => {
+      await setUp(harness, [lane(1)]);
+      const david = await harness.window(DAVID);
+      await bindDavid(harness, david);
+      const read = async (id: string) =>
+        (
+          structured(await tool(david, 'events_lane_item', { item: itemOf(harness, id) })) as {
+            item: { id: string; taken: unknown };
+          }
+        ).item;
+
+      // Nobody has it: null, and the item is as `queue show` gives it, enveloped.
+      const nobody = await deliver(harness, 'Nobody has this one');
+      const plain = await read(nobody);
+      assert.equal(plain.taken, null);
+      assert.equal(plain.id, itemOf(harness, nobody));
+
+      // Another session took it: "another session", since when, and nothing that names it.
+      const theirs = await deliver(harness, 'Another session has this one');
+      const taken = await takesOf(harness).take(gmailMessage(theirs), holderOf(OTHER, 'c3c3c3c3c3c3'));
+      const seen = await read(theirs);
+      assert.deepEqual(seen.taken, { state: 'taken', by: 'another session', since: taken.record.takenAt });
+      const said = JSON.stringify(seen);
+      for (const named of [OTHER.folder, OTHER.activityKey, OTHER.sessionId, 'c3c3c3c3c3c3', 'other-project']) {
+        assert.equal(said.includes(String(named)), false, `the item names the other session: ${named}`);
+      }
+
+      // This window took it: "you", with when its own take lapses.
+      const mine = await deliver(harness, 'David has this one');
+      const held = await takesOf(harness).take(gmailMessage(mine), holderOf(DAVID, 'd4d4d4d4d4d4'));
+      const own = (await read(mine)).taken as { state: string; by: string; since: string; leaseUntil: string };
+      assert.deepEqual(own, {
+        state: 'taken',
+        by: 'you',
+        since: held.record.takenAt,
+        leaseUntil: held.view?.leaseUntil,
+      });
+      // Handed back: open again, with the closed reason and never the note.
+      await takesOf(harness).handBack(
+        gmailMessage(mine),
+        holderOf(DAVID, 'd4d4d4d4d4d4'),
+        'not-mine',
+        'Sender text here',
+        {
+          account: ALIAS,
+          shown: mine,
+          act: 'gmail.take.hand-back',
+          takeWith: 'gmail_take (step "take")',
+        },
+      );
+      const back = await read(mine);
+      assert.deepEqual(back.taken, { state: 'open', handedBack: ['not-mine'] });
+      assert.equal(JSON.stringify(back).includes('Sender text here'), false, 'a hand-back’s note is the person’s only');
+
+      // The person said they will handle it: "the person".
+      const person = await deliver(harness, 'The person has this one');
+      await takesOf(harness).keep(gmailMessage(person), { folder: null, ancestors: [] });
+      assert.deepEqual(((await read(person)).taken as { by: string; state: string }).by, 'the person');
+
+      // Offered by a delivery: to this window, while the item waits for it.
+      await setTaking(harness, { required: true });
+      const offered = await deliver(harness, 'Offered to David');
+      assert.deepEqual((await read(offered)).taken, { state: 'offered', offered: { to: 'you', until: null } });
+    },
+    { takes: { notify: null } } satisfies Partial<EventOwnerOptions>,
+  );
+});
+
 // ── A session target ──────────────────────────────────────────────────────────────────────────────────────────
 
 const SESSION_RETENTION = {
