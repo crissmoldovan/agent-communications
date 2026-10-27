@@ -159,6 +159,12 @@ export interface SearchStatus {
     readonly pull: string;
     /** Whether Ollama's local-only mode is set where this can see it: `OLLAMA_NO_CLOUD`, or `disable_ollama_cloud`. */
     readonly localOnly: boolean;
+    /**
+     * The digest of the weights the vectors in use were made with, when they were made by this model; null before
+     * any are. Unlike `digest` — what the server runs now — a new `ollama pull` leaves it as it was until every kept
+     * message is made again with the new weights, which the indexer does without asking (§5): the notes say so.
+     */
+    readonly vectorsDigest: string | null;
   } | null;
   /** The reviewed models, the default first. */
   readonly models: readonly { readonly name: string; readonly download: string; readonly licence: string }[];
@@ -215,10 +221,18 @@ async function waitingLines(paths: SearchPaths): Promise<number> {
   return lines;
 }
 
-/** Counts kept, read without opening any record: the database's own numbers. Null when there is none. */
-async function heldCounts(
-  paths: SearchPaths,
-): Promise<{ messages: number; in: number; out: number; people: number; oldestSeenAt: number | null } | null> {
+/**
+ * Counts kept, read without opening any record: the database's own numbers, and the model and digest the vectors in
+ * use were made with. Null when there is none.
+ */
+async function heldCounts(paths: SearchPaths): Promise<{
+  messages: number;
+  in: number;
+  out: number;
+  people: number;
+  oldestSeenAt: number | null;
+  serving: { name: string; digest: string } | null;
+} | null> {
   try {
     await stat(paths.database);
   } catch {
@@ -245,12 +259,31 @@ async function heldCounts(
       out: Number(row.outbound ?? 0),
       people: Number(row.people),
       oldestSeenAt: row.oldest === null ? null : Number(row.oldest),
+      serving: servingOf(db.prepare("SELECT value FROM meta WHERE key = 'serving'").get() as { value?: unknown }),
     };
   } catch {
     return null;
   } finally {
     db.close();
   }
+}
+
+/** The model and digest of the complete set of vectors in use, as the index notes them; null when there is none. */
+function servingOf(row: { value?: unknown } | undefined): { name: string; digest: string } | null {
+  if (typeof row?.value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(row.value) as { name?: unknown; digest?: unknown };
+    return typeof parsed.name === 'string' && typeof parsed.digest === 'string'
+      ? { name: parsed.name, digest: parsed.digest }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A digest as a sentence shows it: its first 12 hex digits. */
+function shortDigest(digest: string): string {
+  return digest.replace(/^sha256:/u, '').slice(0, 12);
 }
 
 async function localOnlyMode(env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -325,8 +358,18 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
       detail: check.detail,
       pull: `ollama pull ${settings.model.name}`,
       localOnly: await localOnlyMode(env),
+      vectorsDigest: held?.serving?.name === settings.model.name ? held.serving.digest : null,
     };
   }
+  // A model's new weights under the same name (a new `ollama pull`) are used at once: every kept message is made again
+  // with them, without asking (§5; S9 said it would ask for Rebuild). Said here, while it is so (the review of
+  // 2026-10-27).
+  const newWeights =
+    model !== null &&
+    model.state === 'running' &&
+    model.digest !== null &&
+    model.vectorsDigest !== null &&
+    model.digest !== model.vectorsDigest;
   let lastCaptureFailure: SearchStatus['lastCaptureFailure'] = null;
   try {
     const failure = JSON.parse(await readFile(join(paths.dir, CAPTURE_FAILURE_FILE), 'utf8')) as {
@@ -351,6 +394,11 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
       : []),
     ...(system.platform === 'darwin' ? [] : ['Backups and disk encryption are not checked on this platform.']),
     ...(diskEncryption === 'off' ? ['FileVault is off: the disk itself is not encrypted.'] : []),
+    ...(newWeights && model !== null
+      ? [
+          `The model ${model.name} has new weights (digest ${shortDigest(model.digest ?? '')}; the vectors in use were made with ${shortDigest(model.vectorsDigest ?? '')}): Search makes every kept message's vectors again with them, sending each message's words to it once more, and the vectors made before serve until that is done.`,
+        ]
+      : []),
   ];
   return {
     on: settings.enabled === 'on',

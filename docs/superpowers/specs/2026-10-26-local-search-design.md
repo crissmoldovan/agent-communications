@@ -178,6 +178,15 @@ open question 4).**
   - before each run, `/api/tags` must list the model **without** `remote_model`/`remote_host`, and a name ending in
     `cloud` is refused;
   - the model's `digest` is recorded, and a new digest asks for Rebuild;
+
+    > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding).** This line and §5 disagree: §5 (and §9's
+    > test) say a model change, a new digest among them, starts generation n+1 at once. 0.35 does what §5 says, so a
+    > new `ollama pull` under the approved name sends every kept message's words to the new weights again without
+    > asking. The narrow change, for now: `search status` gives `model.vectorsDigest`, the digest the vectors in use
+    > were made with, beside `model.digest`, and while the two differ a note says the new weights are making every
+    > vector again. The app's Settings shows that note. Whether a new digest should instead wait for the person's
+    > Rebuild, as this line says, is open for the owner. The server is the same loopback one the person approved,
+    > and the not-remote checks still run each time.
   - doctor recommends Ollama's local-only mode (`OLLAMA_NO_CLOUD=1`, or `disable_ollama_cloud` in
     `~/.ollama/server.json`) and says whether it is set.
 - **No model:** search works by words only, and says so.
