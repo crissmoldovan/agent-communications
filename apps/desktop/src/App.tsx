@@ -14,6 +14,7 @@ import { Events } from './screens/Events.tsx';
 import { Messages } from './screens/Messages.tsx';
 import { NotInstalled } from './screens/NotInstalled.tsx';
 import { Overview } from './screens/Overview.tsx';
+import { Projects } from './screens/Projects.tsx';
 import { Queue } from './screens/Queue.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { People } from './screens/search/People.tsx';
@@ -29,6 +30,7 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
   queue: Queue,
   messages: Messages,
   people: People,
+  projects: Projects,
   search: Search,
   accounts: Accounts,
   connections: Connections,
