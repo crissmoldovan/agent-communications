@@ -23,6 +23,8 @@ const DELIVERY_ID = new RegExp(grammar.deliveryId, 'u');
 const LOOPBACK_URL = new RegExp(grammar.loopbackUrl, 'u');
 const LOCAL_MODEL = new RegExp(grammar.localModel, 'u');
 const PERSON_ID = new RegExp(grammar.personId, 'u');
+const RUN_ID = new RegExp(grammar.runId, 'u');
+const PROJECT_ID = new RegExp(grammar.projectId, 'u');
 const SEARCH_HANDLE = new RegExp(grammar.searchHandle, 'u');
 const SEARCH_MODEL_ADDRESS = new RegExp(grammar.searchModelAddress, 'u');
 const REFUSED_IN_TEXT: readonly (readonly number[])[] = grammar.searchText.refused;
@@ -85,6 +87,21 @@ export function isQueueItemId(value: string): boolean {
  */
 export function isRuleId(value: string): boolean {
   return isPlainValue(value) && RULE_ID.test(value);
+}
+
+/** A workflow run's id (0.36.0, `allowlist.rs`, `RunId`): `wfr_` and 26 of Crockford's lowercase letters. */
+export function isRunId(value: string): boolean {
+  return isPlainValue(value) && RUN_ID.test(value);
+}
+
+/** A project's id (0.36.0, `allowlist.rs`, `ProjectId`): 1 to 64 lowercase letters, digits and `-`. */
+export function isProjectId(value: string): boolean {
+  return isPlainValue(value) && PROJECT_ID.test(value);
+}
+
+/** A subscriber's id (0.36.0, `allowlist.rs`, `SubscriberId`): as a workflow's id is. */
+export function isSubscriberId(value: string): boolean {
+  return isRuleId(value);
 }
 
 /**

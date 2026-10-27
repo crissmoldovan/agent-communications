@@ -9,7 +9,7 @@
  * sender wrote.
  */
 import { splitEnvelopes } from './envelope.ts';
-import { isDeliveryId } from './grammar.ts';
+import { isDeliveryId, isRunId } from './grammar.ts';
 import { openableLink } from './queue.ts';
 
 type Json = Record<string, unknown>;
@@ -51,6 +51,11 @@ export interface DeliveryRow {
    * the person's browser (`isLinearIssueLink`, as `links.rs` checks it); null for any other delivery.
    */
   linear: { identifier: string; url: string | null } | null;
+  /**
+   * The workflow run a subscriber's event delivery came from (0.36.0, a `kind: 'event'` row): its id, when it is one the
+   * allow-list takes; null for every other delivery, whose run is found by its event and workflow (`runOfDelivery`).
+   */
+  runId: string | null;
 }
 
 /** A Linear issue's address as a delivery keeps it: `https://linear.app/[<workspace>/]issue/<TEAM-n>`, nothing else. */
@@ -94,7 +99,27 @@ function rowOf(value: unknown): DeliveryRow | null {
     deliveredAt: moment(value.deliveredAt),
     deadLetteredAt: moment(value.deadLetteredAt),
     linear: linearOf(value.linear),
+    runId: typeof value.runId === 'string' && isRunId(value.runId) ? value.runId : null,
   };
+}
+
+/**
+ * The run a delivery came from (0.36.0): its own `runId`, or the run of its workflow about the same message — a run is
+ * one workflow version's, about one event. Null for a delivery no run listed made.
+ */
+export function runOfDelivery(
+  row: Pick<DeliveryRow, 'runId' | 'eventId' | 'ruleId' | 'ruleVersion'>,
+  runs: readonly { runId: string; eventId: string; ruleId: string; ruleVersion: number }[],
+): string | null {
+  if (row.runId !== null) return row.runId;
+  if (row.eventId === null) return null;
+  const run = runs.find(
+    (each) =>
+      each.eventId === row.eventId &&
+      each.ruleId === row.ruleId &&
+      (row.ruleVersion === null || each.ruleVersion === row.ruleVersion),
+  );
+  return run !== undefined && isRunId(run.runId) ? run.runId : null;
 }
 
 /** `deliveries list --json`, read: every row with an id. Null when it is not that answer at all. */
