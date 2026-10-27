@@ -6,7 +6,9 @@
 //! lanes' (0.31.0, design 2026-10-25-routing §3.1 and B1): a lane's name, and the id of the agent window bound to one.
 //! One is a delivery's (0.32.0, owner feedback §3.5): its id, as the Deliveries screen opens, retries or drops one.
 //! Two are judge setup's (0.32.0, owner decision 2026-10-26): a local model server's URL on this machine, and its
-//! model's name, as `judge setup local-endpoint` takes them.
+//! model's name, as `judge setup local-endpoint` takes them. Five are workflows' (0.36.0, plan 2026-10-27-workflows-0360
+//! I7): a run's id, a project's id, a step's id, an outcome's word, and a catalogue example a workflow is tried on; a
+//! subscriber's id is a rule id's grammar.
 
 use regex::Regex;
 use serde::Deserialize;
@@ -34,6 +36,11 @@ struct Source {
     delivery_id: String,
     loopback_url: String,
     local_model: String,
+    run_id: String,
+    project_id: String,
+    step_id: String,
+    outcome_word: String,
+    catalogue_example: String,
 }
 
 struct Grammar {
@@ -52,6 +59,11 @@ struct Grammar {
     delivery_id: Regex,
     loopback_url: Regex,
     local_model: Regex,
+    run_id: Regex,
+    project_id: Regex,
+    step_id: Regex,
+    outcome_word: Regex,
+    catalogue_example: Regex,
 }
 
 static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
@@ -75,6 +87,11 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
         delivery_id: pattern(&source.delivery_id),
         loopback_url: pattern(&source.loopback_url),
         local_model: pattern(&source.local_model),
+        run_id: pattern(&source.run_id),
+        project_id: pattern(&source.project_id),
+        step_id: pattern(&source.step_id),
+        outcome_word: pattern(&source.outcome_word),
+        catalogue_example: pattern(&source.catalogue_example),
     }
 });
 
@@ -190,9 +207,178 @@ pub fn local_model(value: &str) -> bool {
     plain(value) && GRAMMAR.local_model.is_match(value)
 }
 
+/// A workflow run's id, as the event service makes it (0.36.0, spec §4.3): `wfr_` and 26 lowercase letters of
+/// Crockford's base 32, `0123456789abcdefghjkmnpqrstvwxyz`. A relay turn's `run_` id is never one.
+pub fn run_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.run_id.is_match(value)
+}
+
+/// A project's id, as `project show|remove` names one (0.36.0): 1 to 64 lowercase letters, digits and `-`, never
+/// starting with `-`.
+pub fn project_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.project_id.is_match(value)
+}
+
+/// A step's id in a workflow's flow (0.36.0, spec §4.1): a lowercase letter, then up to 31 lowercase letters, digits
+/// and `-`.
+pub fn step_id(value: &str) -> bool {
+    plain(value) && GRAMMAR.step_id.is_match(value)
+}
+
+/// An outcome's word, as `workflow test --outcome <step>=<word>` takes it (0.36.0): a lowercase letter, then up to 31
+/// lowercase letters and `-`.
+pub fn outcome_word(value: &str) -> bool {
+    plain(value) && GRAMMAR.outcome_word.is_match(value)
+}
+
+/// A catalogue example a workflow is tried on, as `workflow test` takes it: `type@version:index`, the type an event
+/// type's dotted words, the version a whole number from 1 and the index one from 0, each at most nine digits.
+pub fn catalogue_example(value: &str) -> bool {
+    plain(value) && GRAMMAR.catalogue_example.is_match(value)
+}
+
+/// A subscriber's id (0.36.0, plan I7): a rule id's grammar, a letter or digit, then up to 127 letters, digits and
+/// `._:@-`.
+pub fn subscriber_id(value: &str) -> bool {
+    rule_id(value)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Workflows' words (0.36.0, plan I7): a run, a project, a step, an outcome, a catalogue example and a subscriber;
+    /// each refuses an option, a second word, a capital where none is taken, and anything past its length.
+    #[test]
+    fn workflow_ids_and_words_are_the_plans_grammars() {
+        let run = "wfr_0123456789abcdefghjkmnpqrs";
+        for good in [
+            run,
+            "wfr_zzzzzzzzzzzzzzzzzzzzzzzzzz",
+            "wfr_00000000000000000000000000",
+        ] {
+            assert!(run_id(good), "{good}");
+        }
+        for bad in [
+            "",
+            "wfr_",
+            "wfr_0123456789abcdefghjkmnpqr",
+            "wfr_0123456789abcdefghjkmnpqrst",
+            "WFR_0123456789abcdefghjkmnpqrs",
+            "wfr_0123456789ABCDEFGHJKMNPQRS",
+            "wfr_0123456789abcdefghijkmnpqr",
+            "wfr_0123456789abcdefghjklmnpqr",
+            "wfr_0123456789abcdefghjkmnopqr",
+            "wfr_0123456789abcdefghjkmnpqru",
+            "run_0123456789abcdefghjkmnpqrs",
+            "-wfr_0123456789abcdefghjkmnpqr",
+            "wfr_0123456789abcdefghjkmnpqrs\n",
+            "wfr_0123456789abcdefghjkmnpqrs --interrupt",
+        ] {
+            assert!(!run_id(bad), "{bad:?}");
+        }
+        let longest_project = "p".repeat(64);
+        for good in [
+            "acme-site",
+            "a",
+            "0",
+            "billing-tool-2",
+            longest_project.as_str(),
+        ] {
+            assert!(project_id(good), "{good}");
+        }
+        let too_long_project = "p".repeat(65);
+        for bad in [
+            "",
+            "-acme",
+            "--json",
+            "Acme",
+            "acme_site",
+            "acme.site",
+            "acme/site",
+            "../acme",
+            "acme site",
+            "acme\n",
+            "acme\u{202e}",
+            too_long_project.as_str(),
+        ] {
+            assert!(!project_id(bad), "{bad:?}");
+        }
+        let longest_step = format!("s{}", "x".repeat(31));
+        for good in [
+            "route",
+            "find-session",
+            "issue",
+            "s2",
+            longest_step.as_str(),
+        ] {
+            assert!(step_id(good), "{good}");
+        }
+        let too_long_step = format!("s{}", "x".repeat(32));
+        for bad in [
+            "",
+            "Run",
+            "2route",
+            "-route",
+            "route_1",
+            "route.1",
+            "route=busy",
+            "route busy",
+            "route\n",
+            too_long_step.as_str(),
+        ] {
+            assert!(!step_id(bad), "{bad:?}");
+        }
+        for good in [
+            "busy",
+            "left-in-queue",
+            "needs-the-person",
+            "timed-out",
+            "yes",
+        ] {
+            assert!(outcome_word(good), "{good}");
+        }
+        for bad in [
+            "",
+            "Busy",
+            "busy2",
+            "-busy",
+            "busy=idle",
+            "busy idle",
+            "busy\n",
+            "b".repeat(33).as_str(),
+        ] {
+            assert!(!outcome_word(bad), "{bad:?}");
+        }
+        for good in [
+            "gmail.message.received@1:0",
+            "slack.message.posted@2:3",
+            "whatsapp.message.received@1:12",
+        ] {
+            assert!(catalogue_example(good), "{good}");
+        }
+        for bad in [
+            "",
+            "gmail@1:0",
+            "gmail.message.received",
+            "gmail.message.received@0:0",
+            "gmail.message.received@1:-1",
+            "gmail.message.received@1:01",
+            "gmail.message.received@1",
+            "Gmail.message.received@1:0",
+            "-gmail.message.received@1:0",
+            "gmail.message.received@1:0 --json",
+            "gmail.message.received@1234567890:0",
+        ] {
+            assert!(!catalogue_example(bad), "{bad:?}");
+        }
+        for good in ["events-dashboard", "crm_hook", "team:sub@1", "s"] {
+            assert!(subscriber_id(good), "{good}");
+        }
+        for bad in ["", "-sub", "--json", "sub 1", "sub/1", "_sub"] {
+            assert!(!subscriber_id(bad), "{bad:?}");
+        }
+    }
 
     /// Judge setup's two words (0.32.0): a URL on this machine, and a model's name; nothing else passes.
     #[test]

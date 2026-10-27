@@ -1,0 +1,98 @@
+{
+  "runId": "wfr_0123456789abcdefghjkmnpqrs",
+  "ruleId": "client-asks",
+  "ruleVersion": 4,
+  "state": "waiting",
+  "startedAt": 1792915200000,
+  "updatedAt": 1792915262000,
+  "endCode": null,
+  "eventId": "0123456789abcdef0123456789abcdef",
+  "parentRunId": null,
+  "depth": 0,
+  "shadow": false,
+  "waiting": {
+    "stepId": "queue",
+    "kind": "session-idle",
+    "since": 1792915262000,
+    "ahead": 1,
+    "needsYouInClaudeStream": false
+  },
+  "path": ["route", "issue", "find", "queue"],
+  "notRaised": 0,
+  "steps": [
+    {
+      "stepId": "route",
+      "kind": "route",
+      "state": "done",
+      "outcome": "chosen",
+      "attempts": 1,
+      "startedAt": 1792915200100,
+      "settledAt": 1792915200300,
+      "output": {
+        "project": "acme-site",
+        "projectName": "acme-site",
+        "reason": "hint:sender-domain",
+        "score": null,
+        "profileHash": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0"
+      },
+      "lastErrorCode": null,
+      "deliveryId": null,
+      "wait": null
+    },
+    {
+      "stepId": "issue",
+      "kind": "deliver",
+      "state": "done",
+      "outcome": "done",
+      "attempts": 1,
+      "startedAt": 1792915200400,
+      "settledAt": 1792915201900,
+      "output": {
+        "delivery": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70",
+        "issue": {
+          "id": "0b1c2d3e-0000-4000-8000-00000000a123",
+          "identifier": "ACME-123",
+          "url": "https://linear.example/acme/issue/ACME-123"
+        }
+      },
+      "lastErrorCode": null,
+      "deliveryId": "0f8b6c2e-4d1a-4b7e-9c3f-2a5d8e1f6b70",
+      "wait": null
+    },
+    {
+      "stepId": "find",
+      "kind": "find-session",
+      "state": "done",
+      "outcome": "busy",
+      "attempts": 1,
+      "startedAt": 1792915202000,
+      "settledAt": 1792915202100,
+      "output": { "session": "sess_3c5a7e91-2b4d-4f60-8a1c-9e0d7b6f5a42", "provider": "claude" },
+      "lastErrorCode": null,
+      "deliveryId": null,
+      "wait": null
+    },
+    {
+      "stepId": "queue",
+      "kind": "wait",
+      "state": "waiting",
+      "outcome": null,
+      "attempts": 1,
+      "startedAt": 1792915262000,
+      "settledAt": null,
+      "output": null,
+      "lastErrorCode": null,
+      "deliveryId": null,
+      "wait": { "kind": "session-idle", "since": 1792915262000, "wakeAt": 1793001662000 }
+    }
+  ],
+  "events": [
+    {
+      "eventId": "wfe_0123456789abcdefghjkmnpqrs",
+      "type": "acme.client-asks.issue.created",
+      "raisedAt": 1792915201900,
+      "state": "done",
+      "deliveries": [{ "subscriberId": "events-dashboard", "subscriberVersion": 2, "state": "delivered" }]
+    }
+  ]
+}

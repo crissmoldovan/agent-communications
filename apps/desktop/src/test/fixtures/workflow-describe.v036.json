@@ -1,0 +1,9 @@
+{
+  "text": "workflow client-asks\n  when a message comes in on acme/gmail\n  route to acme-site\n",
+  "notes": [{ "step": "route", "words": "find their project" }],
+  "unnoted": ["issue"],
+  "questions": [{ "step": "issue", "question": "Which Linear team gets the issue?", "choices": ["CUE", "ACME"] }],
+  "parse": { "ok": true, "errors": [] },
+  "check": { "ok": true, "problems": [] },
+  "model": { "provider": "claude-cli", "model": null }
+}

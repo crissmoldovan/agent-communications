@@ -55,7 +55,14 @@ describe('what each CLI version supports', () => {
       bringUpToDate: '0.34.0',
       collectionSwitch: '0.34.0',
       accountAppApproval: '0.34.0',
+      workflows: '0.36.0',
     });
+    // Workflows — their checks and tries, runs, projects, Describe it and subscribers given events — are the event
+    // service's from 0.36.0, a pull request's build of it included.
+    expect(supports('0.35.0', 'workflows')).toBe(false);
+    expect(supports('0.35.9', 'workflows')).toBe(false);
+    expect(supports('0.36.0', 'workflows')).toBe(true);
+    expect(supports('0.36.0-feat-0.36-workflows', 'workflows')).toBe(true);
     // Events → Service's Switch on… approved in the app, and Switch off, are the event service's from 0.34.0.
     expect(supports('0.33.0', 'collectionSwitch')).toBe(false);
     expect(supports('0.34.0', 'collectionSwitch')).toBe(true);
