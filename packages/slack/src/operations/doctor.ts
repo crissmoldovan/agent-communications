@@ -1034,13 +1034,14 @@ function repairCommand(server: RegisteredServer, handoffs: CliHandoffs): Remedy 
     const byHand = `remove "${server.name}" from the project entry in ${server.path} by hand`;
     return remedy(
       handoffSentence(
-        handoffs.own(['mcp', 'install', '--client', server.client]),
+        handoffs.own(['mcp', 'install', '--client', server.client, '--standalone']),
         (command) => `${byHand}, then re-run ${command}`,
         { instead: `${byHand}, then register it again.` },
       ),
     );
   }
-  const words = ['mcp', 'install', '--client', server.client];
+  // An entry of its own, repaired as one: `mcp install` alone puts Slack into the app's connection (D17).
+  const words = ['mcp', 'install', '--client', server.client, '--standalone'];
   if (server.name !== SLACK_MCP.defaultServerName) words.push('--name', server.name);
   const pinned = server.args[server.args.indexOf('--workspace') + 1];
   if (server.args.includes('--workspace') && pinned) words.push('--workspace', pinned);

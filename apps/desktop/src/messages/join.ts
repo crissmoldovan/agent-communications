@@ -17,15 +17,28 @@
  *
  * A message only an agent read, with no event, is included: an item an ok read names that is none of an agent's own
  * drafts, sends, posts or acknowledgement replies.
+ *
+ * **Takes (0.35.0, design 2026-10-26-taking-messages §9):** core's `takes list` names each record by
+ * `<channel>:<accountId>:<id>`, the ids the event service and `activity items` already use, so a message finds its take
+ * without a mapping. Each line of a take's history is a step of its own, and the record says who has it now. A message
+ * only a take names — no event saw it, and no activity line read it — is included too. With taking required for its
+ * account (`taking`), a message a rule delivered to a lane, a session or the Queue that nobody took within the
+ * account's window counts as not taken, as the event service's sweep counts it (§8).
  */
 import type {
   ActivityItems,
+  HandBackReason,
   HistoryLine,
   ItemLine,
   MessageEvent,
   Millis,
   QueueItemView,
   SenderView,
+  TakeLineKind,
+  TakeLineView,
+  TakeView,
+  TakeWindowView,
+  TakingSettingView,
   WindowRef,
 } from './read.ts';
 import { slackParts } from './read.ts';
@@ -40,19 +53,45 @@ export type TouchKind =
   | 'acknowledged'
   | 'done'
   | 'dismissed'
-  | 'reopened';
+  | 'reopened'
+  // A take's steps (0.35.0): offered to a window, taken, handed back, marked done by its holder, lapsed (its lease ran
+  // out, or its window ended), and the person's Take back, Give to… and I'll handle it.
+  | 'offered'
+  | 'taken'
+  | 'handed-back'
+  | 'take-done'
+  | 'expired'
+  | 'ended'
+  | 'released'
+  | 'given'
+  | 'kept';
+
+/** What a take's step says beyond who and when (0.35.0). */
+export interface TakeStep {
+  /** The window it is about as the take names it: its folder and client too, the person's view (T7). */
+  window: TakeWindowView | null;
+  /** Why a session handed it back, in core's closed words. */
+  reason: HandBackReason | null;
+  /** The note a session left, enveloped: the person's alone, shown only through `UntrustedText`. */
+  note: string | null;
+  /** A person's act: from this app, or from a terminal (in a folder, when it was read). */
+  from: 'app' | { terminal: string | null } | null;
+  /** For a take: whether a 👀 went under the message with it. */
+  eyes: boolean;
+}
 
 /** One step after a message arrived: who took it, and when. */
 export interface Touch {
   kind: TouchKind;
   at: Millis;
-  actor: 'person' | 'window';
+  /** The person, an agent window, or — for a take that lapsed, or an offer a rule made — the service. */
+  actor: 'person' | 'window' | 'service';
   /** The agent window, when an activity line names it, or a queue line's key is one an activity line names. */
   window: WindowRef | null;
   /** The window's activity session key, for a window's step. */
   windowKey: string | null;
-  /** Where the step was recorded: core's activity log, or the queue's history. */
-  via: 'activity' | 'queue';
+  /** Where the step was recorded: core's activity log, the queue's history, or the message's take (0.35.0). */
+  via: 'activity' | 'queue' | 'take';
   /** The activity operation, for an activity step. */
   operation: string | null;
   /** The draft a reply step concerns. */
@@ -61,6 +100,8 @@ export interface Touch {
   channel: string | null;
   /** For an acknowledgement: whether it replied, rather than reacted. */
   replied: boolean;
+  /** For a take's step: what its line says (0.35.0). */
+  take?: TakeStep | undefined;
 }
 
 /** The furthest step a message reached (§3.6's order). */
@@ -68,22 +109,44 @@ export type Status =
   | { kind: 'replied'; at: Millis; via: 'gmail' | 'slack-thread' | 'slack-ack' }
   | { kind: 'acknowledged'; at: Millis }
   | { kind: 'done' | 'dismissed'; at: Millis | null; actor: 'person' | 'window' | null }
+  // Taken (0.35.0): who has it — the person, or an agent window, as the take names it — and since when.
+  | { kind: 'taken'; at: Millis | null; by: 'person' | 'window'; window: TakeWindowView | null }
+  // Handed back, and nobody has it now: the last reason, and how many sessions handed it back.
+  | { kind: 'handed-back'; at: Millis; reason: HandBackReason | null; sessions: number }
   | { kind: 'read'; at: Millis }
   | { kind: 'waiting' }
+  // Taking is required for its account, and nobody took it within the account's window.
+  | { kind: 'not-taken'; since: Millis }
   | { kind: 'not-seen' };
 
 export type StatusKind = Status['kind'];
 
-/** The order the status is decided in: the first a message reached wins. Done and Dismissed share their place. */
+/**
+ * The order the status is decided in: the first a message reached wins. Done and Dismissed share their place; a
+ * take's done counts as Done by an agent.
+ */
 export const STATUS_ORDER: readonly StatusKind[] = [
   'replied',
   'acknowledged',
   'done',
   'dismissed',
+  'taken',
+  'handed-back',
   'read',
   'waiting',
+  'not-taken',
   'not-seen',
 ];
+
+/** Since when a message has waited with nobody taking it, past its account's window (0.35.0). */
+export interface NotTaken {
+  /** When it started waiting: it arrived, or it was open again (handed back, taken back, lapsed). */
+  since: Millis;
+  /** When it counted as not taken: its window after `since`, or at once for a hand-back that needs the person. */
+  due: Millis;
+  /** Why: it waited past the window, or a session handed it back saying it needs the person. */
+  why: 'waited' | 'needs-the-person';
+}
 
 /** One message on the screen: its event when the event service saw it, and every step after. */
 export interface JoinedMessage {
@@ -104,6 +167,12 @@ export interface JoinedMessage {
   status: Status;
   /** Whether any agent window read it or acted on it (being woken is neither). */
   agentSeen: boolean;
+  /** The id a take names it by: Gmail's message id, Slack's `<channelId>/<ts>`, Resend's email id; or null. */
+  takeId: string | null;
+  /** Its take record, when core has one (0.35.0): who has it, and every take, hand-back and lapse. */
+  take: TakeView | null;
+  /** Taking required for its account and nobody took it within the window: since when; otherwise null. */
+  notTaken: NotTaken | null;
 }
 
 // ── Which lines are which ──────────────────────────────────────────────────────────────────────────────────────
@@ -283,6 +352,193 @@ function queueTouch(line: HistoryLine, index: ActivityIndex): Touch {
   };
 }
 
+// ── A message's take (0.35.0) ──────────────────────────────────────────────────────────────────────────────────
+
+/** Each line of a take's history as the step it is: a take's `done` is `take-done`, beside a queue item's `done`. */
+const TAKE_TOUCHES: Readonly<Record<Exclude<TakeLineKind, 'acknowledged'>, TouchKind>> = {
+  offered: 'offered',
+  taken: 'taken',
+  'handed-back': 'handed-back',
+  done: 'take-done',
+  expired: 'expired',
+  ended: 'ended',
+  released: 'released',
+  given: 'given',
+  kept: 'kept',
+};
+
+/** The app's own process, as a CLI call's ancestors name it: a person's act from the app, not from a terminal. */
+const APP_PROCESS = /^(?:agentcomms-desktop|Agent Comms(?: Test)?)$/i;
+
+/** Where a person's act came from: this app, when its process is among the call's ancestors; else a terminal. */
+function fromOf(line: TakeLineView): TakeStep['from'] {
+  if (line.by !== 'person') return null;
+  if (line.terminal === null) return { terminal: null };
+  const app = line.terminal.ancestors.some((name) => APP_PROCESS.test(name.split(/[\\/]/).pop()?.trim() ?? ''));
+  return app ? 'app' : { terminal: line.terminal.folder };
+}
+
+/** Each line of a take's history as a step, oldest first; a 👀 the take made is said on the take it went with. */
+function takeTouches(record: TakeView | null, index: ActivityIndex | null): Touch[] {
+  if (record === null) return [];
+  const touches: Touch[] = [];
+  for (const line of record.history) {
+    if (line.kind === 'acknowledged') {
+      const taken = [...touches].reverse().find((touch) => touch.kind === 'taken');
+      if (taken?.take !== undefined && line.ack === 'sent') taken.take = { ...taken.take, eyes: true };
+      continue;
+    }
+    const key = line.window?.key ?? null;
+    const known = key === null ? undefined : index?.windows.get(key);
+    touches.push({
+      kind: TAKE_TOUCHES[line.kind],
+      at: line.at,
+      actor: line.by,
+      window:
+        key === null
+          ? null
+          : {
+              key,
+              folder: line.window?.folder ?? known?.folder ?? null,
+              client: line.window?.client ?? known?.client ?? null,
+            },
+      windowKey: key,
+      via: 'take',
+      operation: null,
+      draftId: null,
+      channel: null,
+      replied: false,
+      take: { window: line.window, reason: line.reason, note: line.note, from: fromOf(line), eyes: false },
+    });
+  }
+  return touches;
+}
+
+/** The lines after which nobody has the message: a hand-back, the person's Take back, a lease or an offer run out. */
+const REOPENING: ReadonlySet<TakeLineKind> = new Set(['handed-back', 'released', 'expired', 'ended']);
+
+/** The newest line that left the message open. */
+function lastReopening(record: TakeView): TakeLineView | undefined {
+  return [...record.history].reverse().find((line) => REOPENING.has(line.kind));
+}
+
+/** The lines that set what state a record is in; an acknowledgement does not. */
+const STATE_LINES: ReadonlySet<TakeLineKind> = new Set([...REOPENING, 'offered', 'given', 'taken', 'kept', 'done']);
+
+/**
+ * The newest line that left the message open, as "nobody took it" counts from it (§8, as the event service's sweep
+ * does): an offer that ran out counts from when it was made, not from when it ran out (security review of 0.35.0, M5) —
+ * being offered to one window is no session taking it, so the clock runs on through the offer.
+ */
+function reopenedFrom(record: TakeView): TakeLineView | undefined {
+  const index = record.history.findLastIndex((line) => REOPENING.has(line.kind));
+  if (index < 0) return undefined;
+  const line = record.history[index] as TakeLineView;
+  if (line.kind !== 'expired') return line;
+  for (let before = index - 1; before >= 0; before -= 1) {
+    const earlier = record.history[before] as TakeLineView;
+    if (earlier.kind === 'offered' || earlier.kind === 'given') return { ...line, at: earlier.at };
+    if (STATE_LINES.has(earlier.kind)) break;
+  }
+  return line;
+}
+
+/** When the offer `record` is in was made: its newest offered or given line, or null when no line says. */
+function offerMadeAt(record: TakeView): Millis | null {
+  const line = record.history.findLast((each) => each.kind === 'offered' || each.kind === 'given');
+  return line?.at ?? null;
+}
+
+/** Whether the message is open again because a session handed it back: what the Handed back filter shows. */
+export function isHandedBack(record: TakeView | null): boolean {
+  return record !== null && record.state === 'open' && lastReopening(record)?.kind === 'handed-back';
+}
+
+/** Who handed a message back, each once: by its activity key, or its Claude Code session id. */
+function handBacks(record: TakeView): { lines: TakeLineView[]; sessions: number } {
+  const lines = record.history.filter((line) => line.kind === 'handed-back');
+  const sessions = new Set(lines.map((line, index) => line.window?.key ?? line.window?.sessionId ?? `#${index}`));
+  return { lines, sessions: sessions.size };
+}
+
+/** The types of event a session takes: a message that came in (§8). */
+const INBOUND: ReadonlySet<string> = new Set([
+  'gmail.message.received',
+  'slack.message.posted',
+  'resend.email.received',
+]);
+
+/** The targets a rule hands a message to for a session or the person: a queue (a lane is one) or a session. */
+const FOR_SOMEONE: ReadonlySet<string> = new Set(['queue', 'session']);
+
+/** The delivery states that never reached their target. */
+const NEVER_DELIVERED: ReadonlySet<string> = new Set([
+  'dead-lettered',
+  'retention-expired',
+  'cancelled',
+  'content-unreadable',
+  'in-flight-at-disable',
+  'in-flight-at-account-removal',
+]);
+
+const MINUTE_MS = 60_000;
+
+/**
+ * Whether nobody took a message in time (§8, as the event service's sweep counts it): taking is required for its
+ * account; it came in, and a rule matched it and delivered it to a lane, a session or the Queue; nobody has taken it,
+ * marked it done or holds a live offer of it; and the account's window has passed since it arrived or was last open
+ * again — at once for a hand-back that says it needs the person. A delivery's offer still waiting for its window lives
+ * only that window after it was made (M5), and an offer that ran out counts from when it was made.
+ */
+export function notTakenOf(
+  event: MessageEvent | null,
+  record: TakeView | null,
+  setting: TakingSettingView | undefined,
+  now: Millis,
+): NotTaken | null {
+  if (event === null || setting === undefined || !setting.required || !INBOUND.has(event.type)) return null;
+  const matched = event.decisions.some((decision) => decision.outcome === 'matched');
+  const delivered = event.deliveries.some(
+    (delivery) => FOR_SOMEONE.has(delivery.targetKind) && !NEVER_DELIVERED.has(delivery.state),
+  );
+  if (!matched || !delivered) return null;
+  if (record !== null && (record.state === 'taken' || record.state === 'done')) return null;
+  const waitMs = setting.unclaimed.afterMinutes * MINUTE_MS;
+  const offer = record?.state === 'offered' ? record.offer : null;
+  const offerMade = record !== null && offer !== null ? offerMadeAt(record) : null;
+  // A live offer stops it: until its time — or, a delivery's still waiting for its window, until the account's window
+  // after it was made, when it lapses by itself (M5). Without a line saying when it was made, it is live.
+  const offerEnds =
+    offer === null ? null : (offer.until ?? (offer.byPerson || offerMade === null ? null : offerMade + waitMs));
+  if (record?.state === 'offered' && (offerEnds === null || offerEnds > now)) return null;
+  const arrived = event.occurredAt ?? event.observedAt;
+  if (arrived === null) return null;
+  let since = arrived;
+  let why: NotTaken['why'] = 'waited';
+  const reopened = record === null ? undefined : reopenedFrom(record);
+  if (reopened !== undefined && reopened.at >= since) {
+    since = reopened.at;
+    if (reopened.kind === 'handed-back' && reopened.reason === 'needs-the-person') why = 'needs-the-person';
+  }
+  // An offer that ran out, not yet written down: from when it was made, as one written down counts — or, with no line
+  // to say when, from when it ran out.
+  const offerFrom = offer === null ? null : (offerMade ?? offerEnds);
+  if (offerFrom !== null && offerFrom > since) {
+    since = offerFrom;
+    why = 'waited';
+  }
+  const due = why === 'needs-the-person' ? since : since + waitMs;
+  return now >= due ? { since, due, why } : null;
+}
+
+/** What a message's status reads of its take: the record, and whether nobody took it in time. */
+export interface TakeFacts {
+  record: TakeView | null;
+  notTaken: NotTaken | null;
+}
+
+const NO_TAKE: TakeFacts = { record: null, notTaken: null };
+
 /** Every step the activity log and the queue's history recorded for the message `id` names. */
 function touchesOf(id: string | null, queueItem: QueueItemView | null, index: ActivityIndex): Touch[] {
   const touches: Touch[] = (queueItem?.history ?? []).map((line) => queueTouch(line, index));
@@ -313,10 +569,15 @@ function touchesOf(id: string | null, queueItem: QueueItemView | null, index: Ac
 
 /**
  * The furthest step reached (§3.6): Replied (a send of a reply, a post in the thread, or an acknowledgement that
- * replied), Acknowledged (by reaction), Done or Dismissed with who, Read by an agent (or a reply drafted to it), Waiting
- * for you (an open item no agent has read), or Not seen.
+ * replied), Acknowledged (by reaction), Done or Dismissed with who — a take's done is Done by an agent — Taken (by an
+ * agent, or by you), Handed back, Read by an agent (or a reply drafted to it), Waiting for you (an open item no agent has
+ * read), Nobody took it, or Not seen.
  */
-export function statusOf(touches: readonly Touch[], queueItem: QueueItemView | null): Status {
+export function statusOf(
+  touches: readonly Touch[],
+  queueItem: QueueItemView | null,
+  take: TakeFacts = NO_TAKE,
+): Status {
   const sent = touches.find((touch) => touch.kind === 'sent');
   const ackReply = touches.find((touch) => touch.kind === 'acknowledged' && touch.replied);
   const replies = [sent, ackReply].filter((touch): touch is Touch => touch !== undefined).sort((a, b) => a.at - b.at);
@@ -332,10 +593,26 @@ export function statusOf(touches: readonly Touch[], queueItem: QueueItemView | n
     const marked = [...queueItem.history].reverse().find((line) => line.kind === state);
     return { kind: state, at: queueItem.stateAt ?? marked?.at ?? null, actor: marked?.actor ?? null };
   }
+  const { record } = take;
+  if (record?.state === 'done') {
+    const done = [...record.history].reverse().find((line) => line.kind === 'done');
+    return { kind: 'done', at: done?.at ?? record.updatedAt, actor: 'window' };
+  }
+  if (record?.state === 'taken' && record.holder !== null) {
+    return record.holder === 'person'
+      ? { kind: 'taken', at: record.takenAt, by: 'person', window: null }
+      : { kind: 'taken', at: record.takenAt, by: 'window', window: record.holder };
+  }
+  if (record !== null && isHandedBack(record)) {
+    const { lines, sessions } = handBacks(record);
+    const last = lines[lines.length - 1] as TakeLineView;
+    return { kind: 'handed-back', at: last.at, reason: last.reason, sessions };
+  }
   // Drafting a reply to it, or asking to send one, is as far as reading it: the agent had it in hand.
   const read = touches.find((touch) => touch.kind === 'read' || touch.kind === 'drafted' || touch.kind === 'prepared');
   if (read !== undefined) return { kind: 'read', at: read.at };
   if (queueItem !== null && queueItem.state === 'open') return { kind: 'waiting' };
+  if (take.notTaken !== null) return { kind: 'not-taken', since: take.notTaken.since };
   return { kind: 'not-seen' };
 }
 
@@ -352,23 +629,57 @@ function senderFromLines(lines: readonly ItemLine[]): SenderView | null {
   return { name: from?.name ?? null, address: from?.address ?? null, subject };
 }
 
-function eventMessage(event: MessageEvent, index: ActivityIndex, aliases: ReadonlyMap<string, string>): JoinedMessage {
+/** The id a take names an event's message by: Gmail's message id, Slack's `<channelId>/<ts>`, Resend's email id. */
+export function takeIdOf(event: MessageEvent): string | null {
+  if (event.channel === 'resend') return event.source.emailId ?? null;
+  return event.sourceId;
+}
+
+/** A message's take record, by its key `<channel>:<accountId>:<id>`; null when there is none, or nothing to find it by. */
+function recordOf(
+  takes: TakeContext | undefined,
+  channel: string,
+  accountId: string | null,
+  id: string | null,
+): TakeView | null {
+  if (takes === undefined || accountId === null || accountId === '' || id === null) return null;
+  return takes.records.get(`${channel}:${accountId}:${id}`) ?? null;
+}
+
+const byTime = (a: Touch, b: Touch) => a.at - b.at;
+
+function eventMessage(
+  event: MessageEvent,
+  index: ActivityIndex,
+  aliases: ReadonlyMap<string, string>,
+  takes: TakeContext | undefined,
+): JoinedMessage {
   const lines = event.sourceId === null ? [] : (index.byItem.get(event.sourceId) ?? []);
-  const touches = touchesOf(event.sourceId, event.queueItem, index);
+  const takeId = takeIdOf(event);
+  const record = recordOf(takes, event.channel, event.accountId, takeId);
+  const touches = [...touchesOf(event.sourceId, event.queueItem, index), ...takeTouches(record, index)].sort(byTime);
   const lineAlias = lines.find((line) => line.account?.id === event.accountId && line.account.alias !== null)?.account
     ?.alias;
+  const accountAlias = event.accountAlias ?? aliases.get(event.accountId) ?? lineAlias ?? record?.account ?? null;
+  const notTaken =
+    takes === undefined || accountAlias === null
+      ? null
+      : notTakenOf(event, record, takes.settings.get(accountAlias), takes.now);
   return {
     key: `event:${event.eventId}`,
     event,
     sourceId: event.sourceId,
     channel: event.channel,
     accountId: event.accountId === '' ? null : event.accountId,
-    accountAlias: event.accountAlias ?? aliases.get(event.accountId) ?? lineAlias ?? null,
+    accountAlias,
     at: event.occurredAt ?? event.observedAt ?? 0,
     sender: event.kept ?? senderFromLines(lines),
     touches,
-    status: statusOf(touches, event.queueItem),
+    status: statusOf(touches, event.queueItem, { record, notTaken }),
     agentSeen: seenByAgent(touches),
+    takeId,
+    take: record,
+    notTaken,
   };
 }
 
@@ -377,26 +688,75 @@ function agentOnlyMessage(
   lines: readonly ItemLine[],
   index: ActivityIndex,
   aliases: ReadonlyMap<string, string>,
+  takes: TakeContext | undefined,
 ): JoinedMessage | null {
   const reads = lines.filter(isRead);
   const first = reads[0];
   if (first === undefined || index.own.has(id)) return null;
   const channel = first.channel;
   if (channel !== 'gmail' && channel !== 'slack') return null;
-  const touches = touchesOf(id, null, index);
   const account = lines.find((line) => line.account !== null)?.account ?? null;
+  const record = recordOf(takes, channel, account?.id ?? null, id);
+  const touches = [...touchesOf(id, null, index), ...takeTouches(record, index)].sort(byTime);
   return {
     key: `item:${id}`,
     event: null,
     sourceId: id,
     channel,
     accountId: account?.id ?? null,
-    accountAlias: account === null ? null : (account.alias ?? aliases.get(account.id) ?? null),
+    accountAlias: account === null ? null : (account.alias ?? aliases.get(account.id) ?? record?.account ?? null),
     at: first.at,
     sender: senderFromLines(lines),
     touches,
-    status: statusOf(touches, null),
+    status: statusOf(touches, null, { record, notTaken: null }),
     agentSeen: seenByAgent(touches),
+    takeId: id,
+    take: record,
+    notTaken: null,
+  };
+}
+
+/** A message only a take names (0.35.0): no event saw it come in, and no activity line read it. */
+function takeOnlyMessage(record: TakeView, index: ActivityIndex, aliases: ReadonlyMap<string, string>): JoinedMessage {
+  const touches = takeTouches(record, index);
+  return {
+    key: `take:${record.key}`,
+    event: null,
+    sourceId: record.channel === 'resend' ? null : record.messageId,
+    channel: record.channel,
+    accountId: record.accountId,
+    accountAlias: record.account ?? aliases.get(record.accountId) ?? null,
+    at: touches[0]?.at ?? record.updatedAt ?? 0,
+    sender: null,
+    touches,
+    status: statusOf(touches, null, { record, notTaken: null }),
+    agentSeen: seenByAgent(touches),
+    takeId: record.messageId,
+    take: record,
+    notTaken: null,
+  };
+}
+
+/** Core's takes, each account's taking settings, and the moment "nobody took it" is judged at (0.35.0). */
+export interface TakeContext {
+  /** Each take record, by its message key, `<channel>:<accountId>:<id>`. */
+  records: ReadonlyMap<string, TakeView>;
+  /** Each account's taking settings, by the account's name. */
+  settings: ReadonlyMap<string, TakingSettingView>;
+  /** When the takes were read: a message counts as not taken once its window has passed by then. */
+  now: Millis;
+}
+
+/** The join's view of what `takes list` and `taking` answered, read at `now`. */
+export function takeContext(
+  takes: readonly TakeView[],
+  settings: readonly TakingSettingView[],
+  now: Millis,
+): TakeContext {
+  return {
+    records: new Map(takes.map((take) => [take.key, take])),
+    settings: new Map(settings.map((setting) => [setting.account, setting])),
+    now,
   };
 }
 
@@ -408,6 +768,8 @@ export interface JoinOptions {
    * before it, is held back until its page is read, since its event may be there.
    */
   cutoff?: Millis | null | undefined;
+  /** Core's takes and each account's taking settings (0.35.0); none before it. */
+  takes?: TakeContext | undefined;
 }
 
 /**
@@ -420,29 +782,43 @@ export function join(
   options: JoinOptions = {},
 ): JoinedMessage[] {
   const aliases = options.aliases ?? new Map<string, string>();
+  const { takes } = options;
   const index = indexActivity(activity);
   const seen = new Set<string>();
   const messages: JoinedMessage[] = [];
   for (const event of events) {
     if (messages.some((each) => each.key === `event:${event.eventId}`)) continue;
     if (event.sourceId !== null) seen.add(event.sourceId);
-    messages.push(eventMessage(event, index, aliases));
+    messages.push(eventMessage(event, index, aliases, takes));
   }
   const cutoff = options.cutoff ?? null;
   for (const [id, lines] of activity) {
     if (seen.has(id)) continue;
-    const message = agentOnlyMessage(id, lines, index, aliases);
+    const message = agentOnlyMessage(id, lines, index, aliases, takes);
     if (message !== null && (cutoff === null || message.at >= cutoff)) messages.push(message);
+  }
+  // A message only a take names: every record no message above found.
+  const joined = new Set(messages.flatMap((message) => (message.take === null ? [] : [message.take.key])));
+  for (const record of takes?.records.values() ?? []) {
+    if (joined.has(record.key)) continue;
+    const message = takeOnlyMessage(record, index, aliases);
+    if (cutoff === null || message.at >= cutoff) messages.push(message);
   }
   return messages.sort((a, b) => b.at - a.at || a.key.localeCompare(b.key));
 }
 
 // ── Filters ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The screen's four views: all, waiting for you, handled by an agent, no agent has seen. */
-export type Show = 'all' | 'waiting' | 'handled' | 'unseen';
+/**
+ * The screen's views: all, waiting for you, handled by an agent, no agent has seen; and with taking (core 0.35.0),
+ * nobody took it and handed back.
+ */
+export type Show = 'all' | 'waiting' | 'handled' | 'unseen' | 'not-taken' | 'handed-back';
 
 export const SHOWS: readonly Show[] = ['all', 'waiting', 'handled', 'unseen'];
+
+/** The views with taking (core 0.35.0): the four, then Nobody took it and Handed back. */
+export const TAKING_SHOWS: readonly Show[] = [...SHOWS, 'not-taken', 'handed-back'];
 
 /** The account a message is filtered by: its name, or its id when it has none. */
 export function accountOf(message: JoinedMessage): string | null {
@@ -459,6 +835,10 @@ function shows(message: JoinedMessage, show: Show): boolean {
       return message.agentSeen;
     case 'unseen':
       return !message.agentSeen;
+    case 'not-taken':
+      return message.notTaken !== null;
+    case 'handed-back':
+      return isHandedBack(message.take);
   }
 }
 
@@ -476,7 +856,7 @@ export function filterMessages(
 export function showCounts(messages: readonly JoinedMessage[], account: string | null): Record<Show, number> {
   const inAccount = messages.filter((message) => account === null || accountOf(message) === account);
   return Object.fromEntries(
-    SHOWS.map((show) => [show, inAccount.filter((message) => shows(message, show)).length]),
+    TAKING_SHOWS.map((show) => [show, inAccount.filter((message) => shows(message, show)).length]),
   ) as Record<Show, number>;
 }
 

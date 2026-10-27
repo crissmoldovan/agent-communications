@@ -1,5 +1,10 @@
 import {
+  appConnectionPart,
   CHANNEL_SERVERS,
+  type CliHandoffs,
+  type Config,
+  findById,
+  handoffSentence,
   type InstallOptions,
   type InstallResult,
   mcpInstall as install,
@@ -8,9 +13,11 @@ import {
   listRegisteredServers,
   type McpProduct,
   missingEntryFile,
+  narrowedAppPart,
   type PruneResult,
   pruneManagedRuntimes,
   type RegisteredServer,
+  readConnections,
   type ServerEntry,
   type SupportedClient,
   verifyEntry as verify,
@@ -49,13 +56,92 @@ export const GMAIL_MCP: McpProduct = {
  * that is whether the entry serves the mailbox it has just connected, `clientServesInbox`. A config that cannot be
  * read is left out rather than failing: for "which clients have it" the answer is the ones that could be read.
  */
-export async function clientsRegisteredWith(env: NodeJS.ProcessEnv): Promise<string[]> {
+export async function clientsRegisteredWith(env: NodeJS.ProcessEnv, config?: Config): Promise<string[]> {
+  let clients: string[] = [];
   try {
     const servers = await listRegisteredServers(env);
-    return [...new Set(servers.filter((server) => isProductServer(server, GMAIL_MCP)).map((server) => server.client))];
+    clients = servers.filter((server) => isProductServer(server, GMAIL_MCP)).map((server) => server.client);
   } catch {
-    return [];
+    // The ones that could be read: none.
   }
+  /*
+   * And every app whose MCP connection has Gmail as a part (single-server design D17, D19): what `setup` and
+   * `mcp install` register from 0.35.0, and which no app's config holds an entry of Gmail's own for. Left out, a
+   * setup that had just put Gmail into the app's connection would say the agent step was still to do.
+   */
+  if (config !== undefined) {
+    for (const read of readConnections(config).connections) {
+      if (!read.readable || read.record.revokedAt !== null || read.record.app === 'manual') continue;
+      if (read.record.parts.some((part) => part.server === 'gmail')) clients.push(read.record.app);
+    }
+  }
+  return [...new Set(clients)];
+}
+
+/**
+ * The app's MCP connection — the one `mcp install --client <app>` puts Gmail into (`appConnectionPart`) — when its
+ * Gmail part reaches `inbox`: every mailbox, or kept to exactly this one. What a finish checks before it puts Gmail
+ * into the connection, as `clientServesInbox` is for an entry of Gmail's own. Null otherwise, and for an app with
+ * several connections for every folder, where `mcp install` names none.
+ */
+export function connectionServesInbox(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  request: { client: string; inbox: string },
+): { id: string; name: string } | null {
+  const found = appConnectionPart(config, env, request.client, 'gmail');
+  if (found === null) return null;
+  const { pin } = found.part;
+  if (pin !== undefined && findById(config, 'inbox', pin.id)?.alias !== request.inbox) return null;
+  return { id: found.connection.id, name: found.connection.name };
+}
+
+/** What setup did not do to the app's connection's Gmail part, and why: the connection, the part as it is, in words. */
+export interface GmailPartLeftAlone {
+  readonly connection: { readonly id: string; readonly name: string; readonly label: string };
+  readonly part: string;
+  /** In plain words: that setup left it as it is, what it does not reach, and the command that would let it. */
+  readonly next: string;
+}
+
+/**
+ * Whether setup leaves the app's connection's Gmail part as it is (decision 5 of the 0.35.0 security review's fixes):
+ * `setup --mcp-client` and the finish of its sign-in ask for Gmail for every mailbox, as `mcp install` with no
+ * `--inbox` does, and where the part is kept to one mailbox, or read-only, that asks for a loosening the person never
+ * asked setup for. So it is left as it is, nothing is prepared, and this says so — with core's `connection change` that
+ * would let it reach every mailbox (its read-only kept), or, for a read-only part that does, do more than read.
+ * `inbox` is the mailbox setup is connecting, when it is connecting one. Null when there is nothing to leave alone.
+ */
+export function gmailPartLeftAlone(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  handoffs: CliHandoffs,
+  request: { client: string; inbox?: string | undefined },
+): GmailPartLeftAlone | null {
+  const asIs = narrowedAppPart(config, env, request.client, 'gmail');
+  if (asIs === null) return null;
+  const how =
+    asIs.account === null
+      ? 'is read-only, for every mailbox'
+      : `is kept to the mailbox ${asIs.account}${asIs.readOnly ? ', read-only' : ''}`;
+  const missed =
+    asIs.account !== null && request.inbox !== undefined && request.inbox !== asIs.account
+      ? `, so it does not reach ${request.inbox}`
+      : '';
+  const words = asIs.everyAccount ?? asIs.everyTool ?? [];
+  const what =
+    asIs.everyAccount !== null
+      ? `let it reach every mailbox${asIs.readOnly ? ', still read-only' : ''}`
+      : 'let it change mail too';
+  const said = `Gmail in the connection ${asIs.connection.label} ${how}: setup left it as it is${missed}, and prepared nothing.`;
+  const next = handoffSentence(
+    handoffs.core(words),
+    (command) => `${said} To ${what}, run ${command} — a change you approve.`,
+    {
+      instead: `${said} To ${what}, change its parts in the Agent Comms app.`,
+    },
+  );
+  return { connection: asIs.connection, part: asIs.text, next };
 }
 
 /**

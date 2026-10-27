@@ -199,7 +199,17 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
     );
     // Core read the release this entry's client fetches, to verify it, before it asked anybody.
     assert.ok(npm.asked.includes('/@agentcomms/resend'), `the registry was asked about Resend: ${npm.asked}`);
-    const install = ['mcp', 'install', '--client', 'cursor', '--account', 'acme/resend', '--launcher', 'npx'];
+    const install = [
+      'mcp',
+      'install',
+      '--client',
+      'cursor',
+      '--standalone',
+      '--account',
+      'acme/resend',
+      '--launcher',
+      'npx',
+    ];
     const fromCommand = pending(await cli(m, [...install, '--no-verify']));
     assert.equal(body(fromCommand.preview), body(asked.preview), 'the same words from either surface');
     // The command an agent is told to run again carries the pin: without it, it would ask for a wider server. It is
@@ -226,7 +236,17 @@ test('pinned with `account`: prepared by comms_server_install, written with --ac
     ]);
 
     // ── Registered again with --force and no pin named: the pin is kept, never widened ──
-    const force = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--force'];
+    const force = [
+      'mcp',
+      'install',
+      '--client',
+      'cursor',
+      '--standalone',
+      '--launcher',
+      'npx',
+      '--no-verify',
+      '--force',
+    ];
     const again = pending(await cli(m, force));
     assert.match(
       again.preview,
@@ -300,7 +320,16 @@ test('the pin is refused where it cannot mean one thing: an account not here, an
     assert.equal(slackOption.isError, true);
     assert.match(JSON.stringify(slackOption.structuredContent), /`workspace` is an option of the Slack server/);
 
-    const ran = await cli(m, ['mcp', 'install', '--client', 'cursor', '--account', 'nobody/resend', '--no-verify']);
+    const ran = await cli(m, [
+      'mcp',
+      'install',
+      '--client',
+      'cursor',
+      '--standalone',
+      '--account',
+      'nobody/resend',
+      '--no-verify',
+    ]);
     assert.equal(ran.code, EXIT_CODES.NOT_FOUND, ran.stdout);
     assert.deepEqual(await m.harness.core.approvals.list(), [], 'nobody was asked');
     assert.equal(await cursorEntry(m), undefined);
@@ -313,11 +342,24 @@ test('the pin is refused where it cannot mean one thing: an account not here, an
 test('unpinned, the preview says it reaches every account; --print and --client json ask nobody', async () => {
   const m = await machine();
   try {
-    const asked = pending(await cli(m, ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify']));
+    const asked = pending(
+      await cli(m, ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify']),
+    );
     assert.match(asked.preview, /not pinned: it reaches every account on this machine/);
     for (const argv of [
-      ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--print'],
-      ['mcp', 'install', '--client', 'json', '--launcher', 'npx', '--account', 'acme/resend', '--no-verify'],
+      ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify', '--print'],
+      [
+        'mcp',
+        'install',
+        '--client',
+        'json',
+        '--standalone',
+        '--launcher',
+        'npx',
+        '--account',
+        'acme/resend',
+        '--no-verify',
+      ],
     ]) {
       const ran = await cli(m, argv);
       assert.equal(ran.code, 0, `${argv.join(' ')}: ${ran.stdout}`);

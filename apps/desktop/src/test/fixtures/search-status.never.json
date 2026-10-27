@@ -1,0 +1,43 @@
+{
+  "on": false,
+  "accounts": [],
+  "retentionDays": 30,
+  "folder": "/example/home/.config/agent-communications/state/search",
+  "kept": {
+    "messages": 0,
+    "asked": 0,
+    "answered": 0,
+    "people": 0,
+    "waiting": 0,
+    "bytes": 0,
+    "oldestDay": null
+  },
+  "words": "ready",
+  "model": null,
+  "models": [
+    {
+      "name": "qwen3-embedding:0.6b",
+      "download": "639 MB",
+      "licence": "Apache-2.0"
+    },
+    {
+      "name": "embeddinggemma:latest",
+      "download": "622 MB",
+      "licence": "Gemma Terms of Use"
+    },
+    {
+      "name": "bge-m3:latest",
+      "download": "1.2 GB",
+      "licence": "MIT"
+    }
+  ],
+  "backups": "not-checked",
+  "diskEncryption": "on",
+  "keyStore": "keychain",
+  "key": "none",
+  "lastCaptureFailure": null,
+  "notes": [
+    "Treat this folder like your mail: the words index holds keyed hashes of the words, not the words, but the vectors are not encrypted, and vectors can be turned back into text close to what was said."
+  ],
+  "problems": []
+}

@@ -143,7 +143,8 @@ registers it only once npm has installed exactly that tarball; a runtime already
 once that runtime is shown to be that tarball. A channel's own `mcp install`
 (`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
 running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
-verified and that core's command checks it; any other release it refuses. With `--launcher npx`, core verifies the
+verified and that core's command checks it; any other release it refuses — so where the app has no connection yet,
+it makes none whose Agent Comms runtime it would have to fetch, and names core's `connection add` instead. With `--launcher npx`, core verifies the
 release the entry names before it registers it, and a channel's own command, which cannot, registers it unchecked;
 either way the client fetches the package from npm again each time it starts it, unverified, where the managed
 launcher's runtime is the verified one. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
@@ -269,8 +270,9 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 ```
 
 The one step it cannot finish is the grant itself: it hands back the sign-in link and the command that
-completes it, which goes on to register the MCP server when `--mcp-client` came with the mailbox. Registering the
-OAuth client and registering the MCP server are each a change you approve: at a terminal you read what it will do
+completes it, which goes on to put Gmail into that app's MCP connection when `--mcp-client` came with the mailbox
+(`--standalone` registers an entry of Gmail's own instead, as before 0.35.0). Registering the OAuth client and
+connecting the MCP server are each a change you approve: at a terminal you read what it will do
 and type `yes`; run by an agent, it stops at that step with the preview and an approval id, and runs again with
 `--approval <id>` (the OAuth client) or `--mcp-approval <id>` (the MCP server) once you have agreed. The individual commands it wraps — `client add`, `inbox add`, `mcp install` — are all still there if
 you would rather drive them yourself.
@@ -310,6 +312,20 @@ your yes. At a terminal you type `yes` to the same preview; an agent running the
 it again with `--approval <id>`. Under the `confirm` change policy (`inbox policy <alias> --change confirm`) you
 approve with the approve command the result gives, and a code, instead, and moving a mailbox off `confirm` is itself
 approved that way ([the design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)).
+
+### One Agent Comms per app: MCP connections (0.35)
+
+Instead of one entry per channel, an app can start Agent Comms once, for a *connection*: a name, the parts it reaches
+and the account each is kept to, and a key that names it in Activity and stops every copy of it when replaced.
+
+```bash
+npx -y @agentcomms/core connection add --app claude-code --name "Work — Claude Code"
+npx -y @agentcomms/core connection migrate      # your separate entries into one connection, when you choose
+```
+
+Adding one, or letting one reach more, is approved first; taking away applies at once. Its tools appear under
+`agentcomms` in the app, so permission rules that named the old servers need allowing again. Separate entries keep
+working until you migrate. [How connections work](packages/core/README.md#mcp-connections-one-agent-comms-per-place-an-app-uses-it).
 
 ### Slack
 
@@ -418,6 +434,53 @@ WhatsApp is recorded only as counts.
   long it is kept; `comms_activity_settings` does the same for an agent. Turning recording back on, or keeping it
   longer, is a loosening, approved as every other is.
 
+### Search on this machine: what each person asked
+
+From 0.35.0 Agent Comms can keep the words of the messages your agents read, so you can find what one person asked
+— "what did David ask about invoices?" — by words and, with a local model, by meaning. It is off until you switch it
+on, and only you search it: at your terminal, or in the app.
+
+- **What is kept:** only what Agent Comms already had in hand — a Gmail or Slack message an agent read, a search's
+  subjects and snippets, and the replies Agent Comms sent — for the accounts you choose. Nothing is fetched for it,
+  and never WhatsApp or Resend, or a message from your own address or Slack user. It is kept for as long as Activity
+  keeps its days, 30 by default.
+- **Where:** `<state>/search/` on this machine, owner-only, left out of Time Machine on macOS. Each message's text,
+  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store), and the words
+  index holds keyed hashes of the words under that key, not the words. The vectors are not encrypted, and vectors can
+  be turned back into text close to the original: treat this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
+  whether FileVault is on.
+- **Meaning, on this machine only:** `agentcomms search model set http://127.0.0.1:11434` uses your own Ollama, at a
+  literal `127.0.0.1` or `[::1]` address, with `qwen3-embedding:0.6b` (the default), `embeddinggemma` or `bge-m3`.
+  Agent Comms downloads nothing: `ollama pull qwen3-embedding:0.6b` first. A model Ollama runs elsewhere — listed with
+  `remote_host` or `remote_model`, or named `…cloud` — is refused, and setting `OLLAMA_NO_CLOUD=1` is recommended.
+  Without a model, search is by words only, and says so.
+- **The commands:** `agentcomms search on` (approved first), `search accounts add <account>`,
+  `search query <words…>`, `search people`, `search person <id>`, `search show <id>`, `search link` and `unlink`
+  (only you join a Gmail address and a Slack user as one person; names never join anyone), `search index` and
+  `rebuild`. `search off`, `accounts remove`, `model none` and `search delete --all --confirm` apply at once —
+  Delete everything removes the folder and its key, and only you can run it: it is refused to an agent.
+- **No agent searches it.** No MCP tool reads it, and every search command but `status` and the tightenings is
+  refused inside an MCP server's process and from an agent's shell — a speed bump against agents, not a boundary
+  against code running as you. Agents keep their own live searches, `gmail_search` and `slack_search`.
+
+### Which session answers a message
+
+From 0.35.0, when several agent windows read the same mailbox or workspace, a session takes a message before it acts
+on it, and the others leave it. Per account, `agentcomms taking <account> --require on` makes the take required: a
+reply, a reaction or an acknowledgement without it is refused, `TAKE_REQUIRED`, and one another session has is refused
+whatever the setting, `TAKEN_ELSEWHERE`. Turning it off again is approved, as every loosening is. A session takes with
+`gmail_take`, `slack_take` or `resend_take`, hands a message back with a closed reason, or marks it done; every read
+says who has each message in closed words, never which session. `agentcomms takes list|release|give|keep` are yours: who
+has each message across every window, and ending, giving or keeping one. [More](packages/core/README.md).
+
+With the take required, the event service offers each message a rule delivers to a lane or a session to that window:
+no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is posted,
+and the window still takes it itself — its pointer or prompt says until when. A window that is never woken for it holds
+it only for the account's reminder time; then the offer lapses, and the message counts as not taken. The event service
+never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
+reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one handed back as
+needing you at once; the notice never says what they are, and the app lists them under Not taken.
+
 ### Agent sessions, through claude-stream
 
 From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working
@@ -476,13 +539,16 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
 
 `mcp install` pins the exact version into the entry it registers, so upgrading the package elsewhere
 on your machine cannot change what your agents run underneath you. The cost is that a new release
-reaches an already-registered client only when you re-register it:
+reaches an already-registered client only when you re-register it.
+
+From 0.35.0 a channel's own `mcp install` puts the channel into the app's MCP connection, whose parts
+`agentcomms update` moves. An entry of its own, made with `--standalone`, is brought up to date so:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
-npx -y @agentcomms/slack@latest mcp install --client claude-code --force
-npx -y @agentcomms/resend@latest mcp install --client claude-code --force
-npx -y @agentcomms/whatsapp@latest mcp install --client claude-code --force   # keeps the account it is pinned to
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/slack@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/resend@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/whatsapp@latest mcp install --client claude-code --standalone --force   # keeps the account it is pinned to
 npx -y @agentcomms/core@latest mcp install --client claude-code --force   # the core server, if you use it
 ```
 

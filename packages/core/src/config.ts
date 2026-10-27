@@ -23,6 +23,7 @@ import {
 import { CHANNEL_SNAPSHOT } from './channels.generated.ts';
 import { CONVERSION_HOOKS, type ConversionHooks } from './config-hooks.ts';
 import { type ConfigVersion, NEW_CONFIG_VERSION } from './config-version.ts';
+import { changedConnectionSettings, classifyConnectionChange } from './connections.ts';
 import { CommsError } from './errors.ts';
 import { FILE_MODE, writeFileAtomic } from './fs.ts';
 import { type CliHandoffs, handoffSentence, requiredHandoffs } from './handoff-text.ts';
@@ -38,6 +39,8 @@ import {
 } from './name-grammar.ts';
 import { expandHome } from './paths.ts';
 import { namesMigrationEnabled } from './release-gate.ts';
+import { readSearchSettings, searchModelText, storedSearch } from './search/settings.ts';
+import { classifyTakingChange, storedTakingEntries } from './taking.ts';
 
 /**
  * The one config file. Provider-neutral: provider-specific fields (scopes, tiers) are plain strings here and validated
@@ -308,6 +311,37 @@ interface ConfigBody {
    * `classifyChange`: recording again and keeping more days are loosenings, off and fewer days tightenings.
    */
   activity?: unknown;
+  /**
+   * Search on this machine's settings (design 2026-10-26-local-search, S1, S9): `{ enabled: 'on' | 'off', accounts:
+   * [<id>…], model: { address, name } | null }`, off with no account and no model when absent.
+   *
+   * `unknown` here, as `activity` is: it is read only through `readSearchSettings`, which reads a value it does not
+   * understand as keeping less — off, no account, no model — so a hand edit or a later release's word can only
+   * tighten. Kept through every write as the schemas keep every key they do not name, and judged by `classifyChange`:
+   * on, an account added and a model set are loosenings; off, an account removed and no model tightenings.
+   */
+  search?: unknown;
+  /**
+   * Taking messages, per account (design 2026-10-26-taking-messages §4): `{ accounts: [{ accountId, account, required,
+   * acknowledge, unclaimed }] }`.
+   *
+   * `unknown` here, as `behaviour` is: it is read only through `readTakingSettings`, which reads a value it does not
+   * understand as demanding more — a take required, nothing said to the sender — never as the defaults. Kept through
+   * every write as the schemas keep every key they do not name, and judged by `classifyChange`: a take no longer
+   * required and a 👀 on taking are loosenings; the rest applies at once.
+   */
+  taking?: unknown;
+  /**
+   * The MCP connections (single-server design D9): each place an app uses Agent Comms, by id — its name, app, where its
+   * entry is, its parts and their pins, read-only, and its key's hash.
+   *
+   * `unknown` here, as `agentLabel`, `behaviour` and `activity` are: it is read only through `readConnections`, which
+   * reads what it does not understand as reaching less — a part it cannot read left out, a record it cannot read serving
+   * nothing — so a hand edit or a later release's word can only narrow what a connection reaches. Kept through every
+   * write as the schemas keep every key they do not name, and judged by `classifyChange`: a connection or part added, a
+   * pin taken away or moved, and read-only off are loosenings; the rest apply at once.
+   */
+  connections?: unknown;
 }
 
 export interface ConfigV1 extends ConfigBody {
@@ -2156,6 +2190,33 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   if (activityAfter.retentionDays > activityBefore.retentionDays) {
     loosen('activity.retentionDays', activityBefore.retentionDays, activityAfter.retentionDays);
   }
+  // Search on this machine (design 2026-10-26-local-search, S1, S9): keeping message words at all, for one more account,
+  // or sending them to a model to make vectors, each lets more be kept of what people wrote, so a person agrees to it;
+  // off, an account removed and no model apply at once. Accounts are shown by the names the person knows them by.
+  const searchBefore = readSearchSettings(before);
+  const searchAfter = readSearchSettings(after);
+  if (searchBefore.enabled === 'off' && searchAfter.enabled === 'on') {
+    loosen('search.enabled', searchBefore.enabled, searchAfter.enabled);
+  }
+  if (searchAfter.accounts.some((id) => !searchBefore.accounts.includes(id))) {
+    const names = (config: Config, ids: readonly string[]) =>
+      ids.map((id) => connectedAccounts(config).find((account) => account.id === id)?.alias ?? id);
+    loosen('search.accounts', names(before, searchBefore.accounts), names(after, searchAfter.accounts));
+  }
+  const modelBefore = searchModelText(searchBefore.model);
+  const modelAfter = searchModelText(searchAfter.model);
+  if (modelAfter !== null && modelAfter !== modelBefore) loosen('search.model', modelBefore, modelAfter);
+  // Taking messages (design 2026-10-26-taking-messages §5), judged per account by its id, by the settings in force on
+  // each side: letting a session act without taking a message first, a 👀 on taking, a longer wait before a message
+  // nobody took counts, and no reminder of one wait for the person (security review of 0.35.0).
+  for (const loosening of classifyTakingChange(before, after)) {
+    loosen(loosening.path, loosening.was, loosening.now, loosening.id);
+  }
+  // The MCP connections (single-server design §6.2), read on each side as the gateway reads them: a connection or a
+  // part added, a pin taken away or moved, read-only off. Removing, pinning, read-only on and cutting off apply at once.
+  for (const loosening of classifyConnectionChange(before, after)) {
+    loosen(loosening.path, loosening.before, loosening.after, loosening.id);
+  }
   return { loosened: changes.map((change) => change.path), changes };
 }
 
@@ -2252,7 +2313,7 @@ const ACCOUNT_SETTINGS = ['sendPolicy', 'changePolicy', 'mode'] as const;
 
 /**
  * Every setting that differs between `before` and `after`, loosened or tightened: the defaults, the secret store,
- * the agent label's settings, the behaviour rules, the activity log's, and each mailbox's and account's own settings — including those of
+ * the agent label's settings, the behaviour rules, the activity log's, taking messages', and each mailbox's and account's own settings — including those of
  * one added or removed.
  *
  * What a change approval binds, beside its loosenings. A preview shows the whole change — "sends approved by never;
@@ -2299,6 +2360,11 @@ export function changedSettings(before: Config, after: Config): SettingChange[] 
   record('behaviour.rules', storedBehaviourRules(before), storedBehaviourRules(after));
   record('activity.record', storedActivity(before)?.record, storedActivity(after)?.record);
   record('activity.retentionDays', storedActivity(before)?.retentionDays, storedActivity(after)?.retentionDays);
+  record('search.enabled', storedSearch(before)?.enabled, storedSearch(after)?.enabled);
+  record('search.accounts', storedSearch(before)?.accounts, storedSearch(after)?.accounts);
+  record('search.model', storedSearch(before)?.model, storedSearch(after)?.model);
+  record('taking.accounts', storedTakingEntries(before), storedTakingEntries(after));
+  for (const change of changedConnectionSettings(before, after)) record(change.path, change.before, change.after);
   return changes;
 }
 

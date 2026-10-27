@@ -48,6 +48,7 @@ import {
 } from '../domain/compose.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
+import { refuseGmailHeldElsewhere, requireGmailTake, threadAnswered } from '../takes.ts';
 import { ownAddresses } from './analyse.ts';
 import { type NumberOption, numberOption } from './numbers.ts';
 import { type UnsentDraft, unsentSection } from './unsent.ts';
@@ -519,6 +520,20 @@ async function draftReplyTo(
 
   const original = await transport.getMessage(messageId);
   const headers = original.payload?.headers ?? [];
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §6), before anything is written: a reply answers the message, so
+   * it needs this session's take where the mailbox asks for one, and is refused while someone else has it. A forward
+   * answers nobody, and one of this mailbox's own messages — sent, or a draft — is nobody's to take: each is refused
+   * while someone else has it. A reply to one of its own still goes into its thread, so the thread's take applies
+   * (`threadAnswered`, security review of 0.35.0).
+   */
+  const own = (original.labelIds ?? []).some((label) => label === 'SENT' || label === 'DRAFT');
+  if (mode === 'forward' || own) await refuseGmailHeldElsewhere(context, resolved, [messageId]);
+  else await requireGmailTake(context, resolved, messageId, 'gmail.draft.reply');
+  if (mode !== 'forward' && own) {
+    const answered = await threadAnswered(context, transport, resolved, original.threadId);
+    if (answered !== undefined) await requireGmailTake(context, resolved, answered, 'gmail.draft.reply');
+  }
 
   const plan = planReply(
     {

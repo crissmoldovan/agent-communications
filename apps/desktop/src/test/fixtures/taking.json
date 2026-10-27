@@ -1,0 +1,38 @@
+{
+  "accounts": [
+    {
+      "account": "example/gmail",
+      "channel": "gmail",
+      "required": true,
+      "acknowledge": "nothing",
+      "unclaimed": {
+        "afterMinutes": 15,
+        "notify": true
+      },
+      "stored": true
+    },
+    {
+      "account": "example/resend",
+      "channel": "resend",
+      "required": false,
+      "acknowledge": "nothing",
+      "unclaimed": {
+        "afterMinutes": 15,
+        "notify": true
+      },
+      "stored": false
+    },
+    {
+      "account": "example/slack",
+      "channel": "slack",
+      "required": true,
+      "acknowledge": "eyes",
+      "unclaimed": {
+        "afterMinutes": 5,
+        "notify": false
+      },
+      "stored": true
+    }
+  ],
+  "problems": []
+}

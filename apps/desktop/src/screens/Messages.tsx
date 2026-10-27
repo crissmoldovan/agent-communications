@@ -18,14 +18,18 @@ import { type Loadable, useAppData } from '../data.tsx';
 import { supports } from '../gates.ts';
 import { useReloadOnReturn, useReloadOnServiceTurn } from '../hooks/use-reload-on-return.ts';
 import { type Bridge, type Call, errorMessage, type Product } from '../ipc.ts';
+import { type AccountsInfo, NO_ACCOUNTS, readAccounts } from '../messages/accounts.ts';
 import {
   accountChoices,
   filterMessages,
   type JoinedMessage,
+  type JoinOptions,
   join,
   SHOWS,
   type Show,
   showCounts,
+  TAKING_SHOWS,
+  takeContext,
 } from '../messages/join.ts';
 import {
   type ActivityItems,
@@ -36,11 +40,15 @@ import {
   type Millis,
   readActivityItems,
   readMessagesPage,
+  type TakesRead,
+  type TakingRead,
 } from '../messages/read.ts';
 import { cardSteps, type StoryContext, whereWords } from '../messages/story.ts';
+import { readTakes, readTakingSettings } from '../messages/takes.ts';
 import { takeDestination } from '../navigation.tsx';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
 import { MessageByEvent, MessageStory } from './MessageStory.tsx';
+import { MessagesTabs } from './search/parts.tsx';
 
 /** The screen's words (spec 2026-10-26-owner-feedback-0320 §3.6, prototype row 4). */
 export const MESSAGES_COPY = {
@@ -53,6 +61,8 @@ export const MESSAGES_COPY = {
     waiting: 'Waiting for you',
     handled: 'Handled by an agent',
     unseen: 'No agent has seen',
+    'not-taken': 'Nobody took it',
+    'handed-back': 'Handed back',
   } satisfies Record<Show, string>,
   account: 'Account',
   allAccounts: 'All accounts',
@@ -66,6 +76,7 @@ export const MESSAGES_COPY = {
   noMatch: 'No messages match these filters.',
   unreadable: 'The messages could not be read.',
   activityUnreadable: 'What agents did could not be read.',
+  takesUnreadable: 'Who has each message could not be read, so the list shows without it.',
   noEventService:
     "The event service isn't installed, so only the messages an agent read through Agent Comms are shown.",
   olderEventService:
@@ -113,54 +124,7 @@ function When({ at }: { at: Millis }) {
 
 // ── Reading ────────────────────────────────────────────────────────────────────────────────────────────────────
 
-/** The accounts the app read: each one's name by its id, and what a link to it needs. */
-export interface AccountsInfo {
-  aliases: ReadonlyMap<string, string>;
-  /** A Gmail account's address, by its id. */
-  gmailAddresses: ReadonlyMap<string, string>;
-  /** A Slack account's workspace id, by its id. */
-  slackTeams: ReadonlyMap<string, string>;
-}
-
-const NO_ACCOUNTS: AccountsInfo = { aliases: new Map(), gmailAddresses: new Map(), slackTeams: new Map() };
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === 'object' && value !== null && !Array.isArray(value);
-const word = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
-
-/** The accounts `accounts` lists for Gmail and Slack, read for their names; a read that fails names none. */
-async function readAccounts(bridge: Bridge, present: readonly Product[]): Promise<AccountsInfo> {
-  const aliases = new Map<string, string>();
-  const gmailAddresses = new Map<string, string>();
-  const slackTeams = new Map<string, string>();
-  const list = async (product: 'gmail' | 'slack'): Promise<Record<string, unknown>[]> => {
-    if (!present.includes(product)) return [];
-    try {
-      const result = await bridge.cli({ kind: 'accounts', product });
-      return result.status === 'ok' && Array.isArray(result.data) ? result.data.filter(isRecord) : [];
-    } catch {
-      return [];
-    }
-  };
-  const [gmail, slack] = await Promise.all([list('gmail'), list('slack')]);
-  for (const inbox of gmail) {
-    const id = word(inbox.id);
-    const alias = word(inbox.alias);
-    if (id === null) continue;
-    if (alias !== null) aliases.set(id, alias);
-    const address = word(inbox.email);
-    if (address !== null) gmailAddresses.set(id, address);
-  }
-  for (const workspace of slack) {
-    const id = word(workspace.accountId);
-    const alias = word(workspace.alias);
-    if (id === null) continue;
-    if (alias !== null) aliases.set(id, alias);
-    const team = word(workspace.workspaceId);
-    if (team !== null) slackTeams.set(id, team);
-  }
-  return { aliases, gmailAddresses, slackTeams };
-}
+export type { AccountsInfo } from '../messages/accounts.ts';
 
 async function readPage(bridge: Bridge, call: Call): Promise<Loadable<MessagesPage>> {
   try {
@@ -203,46 +167,72 @@ function withPage(pages: MessagesPage, next: MessagesPage): MessagesPage {
 export interface MessagesReads {
   /** The window's start: what both reads were asked `--since`. */
   since: Millis;
+  /** When they were asked: the moment "nobody took it" is judged at. */
+  readAt: Millis;
   /** The events read, page by page; `off` when the event service is not asked. */
   events: Loadable<MessagesPage> | 'off';
   activity: Loadable<ActivityItems>;
   accounts: AccountsInfo;
+  /** Core's takes and each account's taking settings (0.35.0); `off` before core takes messages. */
+  takes: Loadable<TakesRead> | 'off';
+  taking: Loadable<TakingRead> | 'off';
 }
 
 /**
- * Reads the screen's three things for the same window — the event service's first page (when `eventsOn`), core's
- * activity by message, and the accounts' names — when it opens, and again on `reload`, keeping only the answers of the
- * read asked last. `older` reads the next page of events and adds it.
+ * How the reads are joined: the accounts' names, and — once core's takes are read — who has each message and whether
+ * nobody took it in time. A takes read that failed joins none, and the screen says so.
  */
-function useMessagesReads(eventsOn: boolean) {
+export function joinOptionsOf(reads: MessagesReads): JoinOptions {
+  const { takes, taking } = reads;
+  if (takes === 'off' || takes.state !== 'ready') return { aliases: reads.accounts.aliases };
+  const settings = taking !== 'off' && taking.state === 'ready' ? taking.value.accounts : [];
+  return { aliases: reads.accounts.aliases, takes: takeContext(takes.value.takes, settings, reads.readAt) };
+}
+
+/**
+ * Reads the screen's things for the same window — the event service's first page (when `eventsOn`), core's activity by
+ * message, the accounts' names, and with `takingOn` (core 0.35.0) core's takes and taking settings — when it opens, and
+ * again on `reload`, keeping only the answers of the read asked last. `older` reads the next page of events and adds
+ * it.
+ */
+function useMessagesReads(eventsOn: boolean, takingOn: boolean) {
   const bridge = useBridge();
   const { installation } = useAppData();
   const present = installation.state === 'ready' ? installation.value.present : [];
   const presentKey = present.join(',');
-  const [reads, setReads] = useState<MessagesReads>(() => ({
-    since: Date.now() - MESSAGES_WINDOW_MS,
-    events: eventsOn ? { state: 'loading' } : 'off',
-    activity: { state: 'loading' },
-    accounts: NO_ACCOUNTS,
-  }));
+  const [reads, setReads] = useState<MessagesReads>(() => {
+    const readAt = Date.now();
+    return {
+      since: readAt - MESSAGES_WINDOW_MS,
+      readAt,
+      events: eventsOn ? { state: 'loading' } : 'off',
+      activity: { state: 'loading' },
+      accounts: NO_ACCOUNTS,
+      takes: takingOn ? { state: 'loading' } : 'off',
+      taking: takingOn ? { state: 'loading' } : 'off',
+    };
+  });
   const [olderBusy, setOlderBusy] = useState(false);
   const [olderProblem, setOlderProblem] = useState<string | null>(null);
   const asked = useRef(0);
   const reload = useCallback(async () => {
     const ask = ++asked.current;
-    const since = Date.now() - MESSAGES_WINDOW_MS;
+    const readAt = Date.now();
+    const since = readAt - MESSAGES_WINDOW_MS;
     const products = presentKey === '' ? [] : (presentKey.split(',') as Product[]);
-    const [events, activity, accounts] = await Promise.all([
+    const [events, activity, accounts, takes, taking] = await Promise.all([
       eventsOn
         ? readPage(bridge, { kind: 'eventsMessagesList', since, limit: MESSAGES_LIMIT })
         : Promise.resolve('off' as const),
       readActivity(bridge, since),
-      readAccounts(bridge, products),
+      readAccounts(bridge, products, { resend: takingOn }),
+      takingOn ? readTakes(bridge) : Promise.resolve('off' as const),
+      takingOn ? readTakingSettings(bridge) : Promise.resolve('off' as const),
     ]);
     if (ask !== asked.current) return;
     setOlderProblem(null);
-    setReads({ since, events, activity, accounts });
-  }, [bridge, eventsOn, presentKey]);
+    setReads({ since, readAt, events, activity, accounts, takes, taking });
+  }, [bridge, eventsOn, takingOn, presentKey]);
   useEffect(() => {
     void reload();
   }, [reload]);
@@ -314,14 +304,14 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
   const mode = useEventsMode();
   if (!supports(core, 'messages')) {
     return (
-      <Frame>
+      <Frame onScreen={onScreen}>
         <NeedsNewerCli feature="messages" installed={core} />
       </Frame>
     );
   }
   if (mode === 'loading') {
     return (
-      <Frame>
+      <Frame onScreen={onScreen}>
         <Spinner label={COPY.loading} />
       </Frame>
     );
@@ -330,16 +320,21 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
     <MessagesView
       key={mode === 'on' ? 'on' : 'off'}
       mode={mode}
+      takingOn={supports(core, 'taking')}
       onScreen={onScreen}
       requested={mode === 'on' ? requested : null}
     />
   );
 }
 
-function Frame({ children }: { children: ReactNode }) {
+function Frame({ children, onScreen }: { children: ReactNode; onScreen?: ((screen: Screen) => void) | undefined }) {
   return (
     <PageShell title={MESSAGES_COPY.title} subtitle={MESSAGES_COPY.about} width="wide">
-      <div className="flex flex-col gap-(--cue-space-4)">{children}</div>
+      <div className="flex flex-col gap-(--cue-space-4)">
+        {/* Asking about past messages is Messages' second part (0.35.0, Search on this Mac). */}
+        <MessagesTabs current="messages" onScreen={onScreen} />
+        {children}
+      </div>
     </PageShell>
   );
 }
@@ -348,23 +343,27 @@ const ALL = 'all';
 
 function MessagesView({
   mode,
+  takingOn = false,
   onScreen,
   requested = null,
 }: {
   mode: Exclude<EventsMode, 'loading'>;
+  /** Core takes messages (0.35.0): who has each is read, and its two filters are offered. */
+  takingOn?: boolean;
   onScreen?: ((screen: Screen) => void) | undefined;
   /** An event whose story opens first, as another screen asked. */
   requested?: string | null;
 }) {
   const { installation } = useAppData();
   const home = installation.state === 'ready' ? (installation.value.home ?? null) : null;
-  const { reads, reload, older, olderBusy, olderProblem } = useMessagesReads(mode === 'on');
+  const { reads, reload, older, olderBusy, olderProblem } = useMessagesReads(mode === 'on', takingOn);
   const [show, setShow] = useState<Show>('all');
   const [account, setAccount] = useState<string | null>(null);
   // The message whose story is open, by its key; the list keeps its filters while it is.
   const [open, setOpen] = useState<string | null>(requested === null ? null : `event:${requested}`);
   const context: StoryContext = useMemo(() => ({ time: timeWords, home }), [home]);
-  const { events, activity, accounts } = reads;
+  const { events, activity } = reads;
+  const views = takingOn ? TAKING_SHOWS : SHOWS;
   const joined = useMemo(() => {
     if (activity.state !== 'ready') return null;
     if (events !== 'off' && events.state !== 'ready') return null;
@@ -375,14 +374,16 @@ function MessagesView({
       const at = each.observedAt ?? each.occurredAt;
       return at === null ? least : least === null ? at : Math.min(least, at);
     }, null);
-    return join(loaded, activity.value, { aliases: accounts.aliases, cutoff: more ? oldest : null });
-  }, [events, activity, accounts]);
+    return join(loaded, activity.value, { ...joinOptionsOf(reads), cutoff: more ? oldest : null });
+  }, [events, activity, reads]);
 
   const loading = activity.state === 'loading' || (events !== 'off' && events.state === 'loading');
   const problems = [
     events !== 'off' && events.state === 'error' ? events.message : null,
     activity.state === 'error' ? activity.message : null,
     typeof mode === 'object' ? mode.problem : null,
+    // Who has each message could not be read: the list shows without it, and says so.
+    reads.takes !== 'off' && reads.takes.state === 'error' ? MESSAGES_COPY.takesUnreadable : null,
   ].filter((each): each is string => each !== null);
   // A read that failed shows what went wrong, and no list joined from half of what it needs.
   const failedRead = (events !== 'off' && events.state === 'error') || activity.state === 'error';
@@ -395,7 +396,14 @@ function MessagesView({
 
   if (opened !== undefined) {
     return (
-      <MessageStory listed={opened} reads={reads} context={context} onBack={() => setOpen(null)} onScreen={onScreen} />
+      <MessageStory
+        listed={opened}
+        reads={reads}
+        context={context}
+        onBack={() => setOpen(null)}
+        onScreen={onScreen}
+        onChanged={reload}
+      />
     );
   }
   // An event another screen asked for that the list's page does not hold: its story from `message show` alone.
@@ -407,17 +415,18 @@ function MessagesView({
         context={context}
         onBack={() => setOpen(null)}
         onScreen={onScreen}
+        onChanged={reload}
       />
     );
   }
   return (
-    <Frame>
+    <Frame onScreen={onScreen}>
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <SegmentedControl
           indicator
           aria-label={MESSAGES_COPY.show}
           size="sm"
-          items={SHOWS.map((each) => ({
+          items={views.map((each) => ({
             value: each,
             label:
               each === 'all' || counts === null ? (

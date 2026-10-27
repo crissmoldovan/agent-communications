@@ -359,7 +359,7 @@ test('doctor says when the registered MCP server is an older version than this o
   // which is the incomplete-sanitisation shape even where the input happens to be a semver string.
   assert.ok(check?.detail?.includes(`this release is ${VERSION}`), check?.detail);
   // Remove-then-install: the client CLIs refuse to overwrite an entry that already exists, so --force is the fix.
-  assert.match(check?.fix ?? '', /mcp install --client claude-code --force/);
+  assert.match(check?.fix ?? '', /mcp install --client claude-code --standalone --force/);
   // A warning, not a failure: an old server still works, it just is not the one that was published.
   assert.notEqual(check?.status, 'fail');
 
@@ -454,7 +454,7 @@ test('doctor says when a registered entry’s runtime is gone, and recognises en
   assert.equal(check?.status, 'fail', JSON.stringify(result.checks.map((entry) => entry.id)));
   assert.ok(check?.detail.includes(gone), check?.detail);
   // The repair keeps what the entry was, as the version check's does.
-  assert.match(check?.fix ?? '', /mcp install --client claude-code --read-only --force/);
+  assert.match(check?.fix ?? '', /mcp install --client claude-code --standalone --read-only --force/);
 });
 
 test('doctor’s tests never reach the real keychain: the harness starts on the file store', async () => {

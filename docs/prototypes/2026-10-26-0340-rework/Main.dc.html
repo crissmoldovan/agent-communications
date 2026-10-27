@@ -120,7 +120,7 @@ a{color:inherit}a:hover{color:inherit}
 @media (max-width:720px){.tiles{grid-template-columns:minmax(0,1fr)}}
 </style>
 </helmet>
-<div class="app {{themeClass}}" style="min-height: 1000px">
+<div class="app {{themeClass}}" style="min-height: 1160px">
 
 <nav aria-label="Sections" class="nav">
   <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
@@ -166,27 +166,37 @@ a{color:inherit}a:hover{color:inherit}
       <span class="faint">Tell me: Anything missing?</span>
     </a>
     <a class="card tile" href="McpServers.dc.html">
-      <span class="row"><span class="num">4</span><span class="h2 grow">MCP servers</span><span class="link">Open ›</span></span>
-      <span class="muted">Agent Comms in each of your AI apps: connect it once per app, choose its parts, bring it up to date.</span>
-      <span class="faint">Tell me: Is “Connect Agent Comms” per app what you expected?</span>
+      <span class="row"><span class="num">4</span><span class="h2 grow">MCP connections</span><span class="link">Open ›</span></span>
+      <span class="muted">Each place an AI app uses Agent Comms, as a connection of its own: several per app if you like, each with a name, its parts and a key. Drawn for 0.35, with the single Agent Comms server.</span>
+      <span class="faint">Tell me: Is a connection per place, not one per app, what you meant? (Tweaks: empty)</span>
+    </a>
+    <a class="card tile" href="AddConnection.dc.html">
+      <span class="row"><span class="num">5</span><span class="h2 grow">Add a connection</span><span class="link">Open ›</span></span>
+      <span class="muted">Choose the app, where, a name, then the parts and accounts; approve it; get its key, or a snippet to paste for any other app.</span>
+      <span class="faint">Tell me: Are the steps in the right order? Is the key explained plainly? (Tweaks: type, step)</span>
+    </a>
+    <a class="card tile" href="Connection.dc.html">
+      <span class="row"><span class="num">6</span><span class="h2 grow">A connection, opened</span><span class="link">Open ›</span></span>
+      <span class="muted">Rename it, see its key and replace it, change its parts and accounts, see what it did today, or remove it.</span>
+      <span class="faint">Tell me: Is it clear what removing it does to its key? (Tweaks: connection)</span>
     </a>
     <a class="card tile" href="EventsService.dc.html">
-      <span class="row"><span class="num">5</span><span class="h2 grow">Events → Service</span><span class="link">Open ›</span></span>
+      <span class="row"><span class="num">7</span><span class="h2 grow">Events → Service</span><span class="link">Open ›</span></span>
       <span class="muted">Whether the event service is watching your accounts, in plain words, with Switch on, Pause and Resume.</span>
       <span class="faint">Tell me: Does “Switched off: running, but not watching your accounts” make sense now? (Tweaks: off, on, paused)</span>
     </a>
     <a class="card tile" href="Deliveries.dc.html">
-      <span class="row"><span class="num">6</span><span class="h2 grow">Events → Deliveries</span><span class="link">Open ›</span></span>
+      <span class="row"><span class="num">8</span><span class="h2 grow">Events → Deliveries</span><span class="link">Open ›</span></span>
       <span class="muted">What happened to each match of a rule in dry-run, and what can reach an agent.</span>
       <span class="faint">Tell me: Does it answer what reached your agent?</span>
     </a>
     <a class="card tile" href="Doctor.dc.html">
-      <span class="row"><span class="num">7</span><span class="h2 grow">Doctor</span><span class="link">Open ›</span></span>
+      <span class="row"><span class="num">9</span><span class="h2 grow">Doctor</span><span class="link">Open ›</span></span>
       <span class="muted">The checks, with long details wrapping beside each check’s name.</span>
       <span class="faint">Tell me: Is the layout fixed? (Tweaks: now, before)</span>
     </a>
     <a class="card tile" href="Face.dc.html">
-      <span class="row"><span class="num">8</span><span class="h2 grow">Which face?</span><span class="link">Open ›</span></span>
+      <span class="row"><span class="num">10</span><span class="h2 grow">Which face?</span><span class="link">Open ›</span></span>
       <span class="muted">The same screen in Inter and in SF Pro.</span>
       <span class="faint">Tell me: Which do you prefer?</span>
     </a>
@@ -199,7 +209,7 @@ a{color:inherit}a:hover{color:inherit}
 </main>
 </div>
 </x-dc>
-<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1000}}'>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1160}}'>
 class Component extends DCLogic {
 renderVals() {
 return { themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light' };

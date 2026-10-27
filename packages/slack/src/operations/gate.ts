@@ -9,6 +9,7 @@ import { attachPolicyOf } from './drafts.ts';
 import { labelSettingsOf } from './label.ts';
 import type { PostDeps, PrepareDeps } from './send.ts';
 import { openApp, openWorkspace, type SessionDeps } from './session.ts';
+import { slackTakeGateFor } from './take-gate.ts';
 import { requireWorkspace } from './workspaces.ts';
 
 /**
@@ -60,6 +61,8 @@ export async function gateDepsFor(context: SlackContext, alias: string, deps: Se
     sendPacing: context.sendPacing,
     // This account's own record of its app's posts (design 2026-10-15 S5).
     appPosts: appPostRecordFor(context.core.paths.stateDir, account.id),
+    // Who is acting, for the take an act that answers a message needs (design 2026-10-26-taking-messages §6).
+    take: slackTakeGateFor(context),
     // A security fix this machine does not install on its own, asked about once in a preview (design 2026-10-16, U7).
     securityNotice: (act, approvalId) =>
       securityNotice({ core: context.core, env: context.env, running: VERSION, act, approvalId }),

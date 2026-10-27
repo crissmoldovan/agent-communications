@@ -217,7 +217,7 @@ test('every command and every tool runs with the network cut off, and attempts n
       ['deny', GROUP, '--account', account],
       ['allow', ALICE, '--account', account],
       ['clear', '--account', account],
-      ['mcp', 'install', '--client', 'json', '--print', '--no-verify', '--account', account],
+      ['mcp', 'install', '--client', 'json', '--standalone', '--print', '--no-verify', '--account', account],
     ];
     for (const argv of commands) {
       for (const json of [true, false]) {

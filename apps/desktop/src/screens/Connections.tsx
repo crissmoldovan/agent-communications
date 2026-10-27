@@ -32,6 +32,7 @@ import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { MCP_SERVERS, type McpClient, type McpServer } from '../ipc.ts';
+import { McpConnections } from './connections/McpConnections.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /** The first core with `mcp uninstall` (`connections.rs`, `MCP_UNINSTALL_VERSION`). */
@@ -45,7 +46,7 @@ export const MCP_APP_APPROVAL_VERSION = '0.32.0';
 
 /** The screen's words (the prototype's, row 5, screen 1). */
 export const CONNECTIONS_COPY = {
-  title: 'Connections',
+  title: 'MCP connections',
   intro:
     'The apps on this Mac that can use Agent Comms, and which parts each one has. An app sees a change after you restart it.',
   apps: 'Apps',
@@ -147,6 +148,23 @@ interface Adding {
  * Bring everything up to date runs `update`, approved in the app. The test build only shows, under its banner.
  */
 export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }) {
+  const { installation } = useAppData();
+  const version = installation.state === 'ready' ? installation.value.version : null;
+  // From core 0.35.0, MCP connections (single-server design §11): each place an app uses Agent Comms. Before it, the
+  // table of apps by server, as 0.34.0 showed it.
+  return supports(version, 'connections') ? (
+    <McpConnections onScreen={onScreen} />
+  ) : (
+    <AppsByServer onScreen={onScreen} />
+  );
+}
+
+/**
+ * Connections before core 0.35.0 (0.32.0, spec §3.3): the apps on this machine by the servers each has, from core's
+ * `channels`; when each was last used, as its windows reported; who can reach the servers; and the agent windows used
+ * recently.
+ */
+function AppsByServer({ onScreen }: { onScreen: (screen: Screen) => void }) {
   const { installation } = useAppData();
   const ready = installation.state === 'ready' ? installation.value : null;
   const version = ready?.version ?? null;
@@ -687,7 +705,7 @@ function AddPreview({
  * attests the app; an approval core calls void is prepared again. The test build shows it and cannot press it: core
  * refuses it there, since it would register the person's real apps again.
  */
-function UpToDate({
+export function UpToDate({
   check,
   readOnly,
   here,

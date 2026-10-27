@@ -12,6 +12,8 @@ import { keychainNamespace, openSecretStore, type SecretStore, type SecretStoreK
 import { AckLedger } from './standing-ledger.ts';
 import { InboxStateStore } from './state.ts';
 import { TaintStore } from './taint.ts';
+import { TakeStore } from './takes.ts';
+import { offerWaitMs, takingAccountsOf } from './taking.ts';
 import { securityAnswered } from './update-state.ts';
 
 /** Everything a provider package needs from the core, wired to one config directory. */
@@ -36,6 +38,11 @@ export interface Core {
    * by day, under the settings in `config.json`'s `activity`. Never throws into a caller (`ActivityLog.append`).
    */
   activity: ActivityLog;
+  /**
+   * Taking messages (design 2026-10-26-taking-messages, T1): which session has each inbound message, one record per
+   * message under its own lock — so the first take wins — and nothing a sender wrote.
+   */
+  takes: TakeStore;
   /** Opens the config directory's one secret backend (as recorded in config, or `kind` before the first write). */
   secrets(kind?: SecretStoreKind): Promise<SecretStore>;
   /**
@@ -66,6 +73,14 @@ export function openCore(options: OpenCoreOptions = {}): Core {
   const config = new ConfigStore(paths.configDir, { handoffs });
   const audit = new AuditLog(paths.stateDir, now);
   let cached: { kind: SecretStoreKind; store: SecretStore } | null = null;
+  const approvals = new ApprovalStore(paths.stateDir, {
+    now,
+    handoffs,
+    loadConfig: () => config.load(),
+    audit,
+    // A send or post answered: the security line its preview carried counts as asked (design 2026-10-16, U7).
+    answered: (approvalId) => securityAnswered(paths.stateDir, approvalId),
+  });
   return {
     paths,
     pathOverrides,
@@ -74,14 +89,7 @@ export function openCore(options: OpenCoreOptions = {}): Core {
     // The store's one window on the configuration — bound to this `ConfigStore`, whose `load` reads private state and
     // so must never be passed loose.
     // Its daily retention records each deletion in this same audit log (design 2026-10-05 §D9).
-    approvals: new ApprovalStore(paths.stateDir, {
-      now,
-      handoffs,
-      loadConfig: () => config.load(),
-      audit,
-      // A send or post answered: the security line its preview carried counts as asked (design 2026-10-16, U7).
-      answered: (approvalId) => securityAnswered(paths.stateDir, approvalId),
-    }),
+    approvals,
     ledger: new SendLedger(paths.stateDir, now),
     acks: new AckLedger(paths.stateDir, now),
     plans: new PlanStore(paths.stateDir, now),
@@ -92,6 +100,18 @@ export function openCore(options: OpenCoreOptions = {}): Core {
     activity: new ActivityLog(paths.stateDir, {
       now,
       settings: async () => readActivitySettings(await config.load()),
+    }),
+    // A take does not expire while an approval prepared under it still waits (T3): pending, or approved and unclaimed.
+    // Its daily prune drops the folder of an account no longer connected.
+    takes: new TakeStore(paths.stateDir, {
+      now,
+      pinLive: async (approvalId) => {
+        const stored = await approvals.get(approvalId).catch(() => null);
+        return stored?.form === 'v2' && (stored.record.state === 'pending' || stored.record.state === 'approved');
+      },
+      accountIds: async () => new Set(takingAccountsOf(await config.load()).map((account) => account.id)),
+      // A delivery's offer its window is never handed lapses at the account's reminder window (M5).
+      offerWait: async (accountId) => offerWaitMs(await config.load(), accountId),
     }),
     handoffs,
     async secrets(kind?: SecretStoreKind): Promise<SecretStore> {

@@ -1,0 +1,248 @@
+{
+  "connections": [
+    {
+      "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D",
+      "readable": true,
+      "name": "Work — Claude Code",
+      "app": "claude-code",
+      "appLabel": "Claude Code",
+      "where": {
+        "scope": "user",
+        "folder": null,
+        "configDir": null
+      },
+      "launcher": "managed",
+      "parts": [
+        {
+          "server": "core",
+          "label": "Agent Comms itself",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Agent Comms itself"
+        },
+        {
+          "server": "gmail",
+          "label": "Gmail",
+          "account": "acme/gmail",
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Gmail, the mailbox acme/gmail"
+        },
+        {
+          "server": "slack",
+          "label": "Slack",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Slack"
+        },
+        {
+          "server": "events",
+          "label": "Events",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Events"
+        }
+      ],
+      "entry": {
+        "name": "agentcomms",
+        "path": "/example/home/.claude.json",
+        "present": true,
+        "keyMatches": true
+      },
+      "key": {
+        "issuedAt": "2026-10-12T09:00:00.000Z",
+        "revoked": false
+      },
+      "createdAt": "2026-10-12T09:00:00.000Z",
+      "lastUsed": "2026-10-26T10:42:00.000Z",
+      "problems": []
+    },
+    {
+      "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5E",
+      "readable": true,
+      "name": "Acme site — Claude Code",
+      "app": "claude-code",
+      "appLabel": "Claude Code",
+      "where": {
+        "scope": "local",
+        "folder": "/example/home/work/acme-site",
+        "configDir": null
+      },
+      "launcher": "managed",
+      "parts": [
+        {
+          "server": "core",
+          "label": "Agent Comms itself",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Agent Comms itself"
+        },
+        {
+          "server": "gmail",
+          "label": "Gmail",
+          "account": null,
+          "readOnly": true,
+          "available": true,
+          "why": null,
+          "text": "Gmail, read-only"
+        }
+      ],
+      "entry": {
+        "name": "agentcomms",
+        "path": "/example/home/.claude.json",
+        "present": true,
+        "keyMatches": true
+      },
+      "key": {
+        "issuedAt": "2026-10-24T17:00:00.000Z",
+        "revoked": false
+      },
+      "createdAt": "2026-10-24T17:00:00.000Z",
+      "lastUsed": null,
+      "problems": []
+    },
+    {
+      "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5F",
+      "readable": true,
+      "name": "Personal — Claude Desktop",
+      "app": "claude-desktop",
+      "appLabel": "Claude Desktop",
+      "where": {
+        "scope": "user",
+        "folder": null,
+        "configDir": null
+      },
+      "launcher": "managed",
+      "parts": [
+        {
+          "server": "core",
+          "label": "Agent Comms itself",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Agent Comms itself"
+        },
+        {
+          "server": "gmail",
+          "label": "Gmail",
+          "account": "personal/gmail",
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Gmail"
+        },
+        {
+          "server": "whatsapp",
+          "label": "WhatsApp",
+          "account": "old/whatsapp",
+          "readOnly": false,
+          "available": false,
+          "why": "the account it is kept to, old/whatsapp, is no longer connected",
+          "text": "WhatsApp"
+        }
+      ],
+      "entry": {
+        "name": "agentcomms",
+        "path": "/example/home/Library/Application Support/Claude/claude_desktop_config.json",
+        "present": true,
+        "keyMatches": false
+      },
+      "key": {
+        "issuedAt": "2026-10-03T08:00:00.000Z",
+        "revoked": false
+      },
+      "createdAt": "2026-10-03T08:00:00.000Z",
+      "lastUsed": "2026-10-26T09:40:00.000Z",
+      "problems": []
+    },
+    {
+      "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5G",
+      "readable": true,
+      "name": "Reviews — Codex",
+      "app": "codex",
+      "appLabel": "Codex",
+      "where": {
+        "scope": "user",
+        "folder": null,
+        "configDir": "/example/home/.codex-reviews"
+      },
+      "launcher": "managed",
+      "parts": [
+        {
+          "server": "gmail",
+          "label": "Gmail",
+          "account": null,
+          "readOnly": true,
+          "available": true,
+          "why": null,
+          "text": "Gmail"
+        }
+      ],
+      "entry": {
+        "name": "agentcomms",
+        "path": "/example/home/.codex-reviews/config.toml",
+        "present": true,
+        "keyMatches": true
+      },
+      "key": {
+        "issuedAt": "2026-10-20T16:00:00.000Z",
+        "revoked": false
+      },
+      "createdAt": "2026-10-20T16:00:00.000Z",
+      "lastUsed": "2026-10-24T16:05:00.000Z",
+      "problems": []
+    },
+    {
+      "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5H",
+      "readable": true,
+      "name": "Raycast",
+      "app": "manual",
+      "appLabel": "the app you paste it into",
+      "where": {
+        "scope": "user",
+        "folder": null,
+        "configDir": null
+      },
+      "launcher": "managed",
+      "parts": [
+        {
+          "server": "core",
+          "label": "Agent Comms itself",
+          "account": null,
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Agent Comms itself"
+        },
+        {
+          "server": "slack",
+          "label": "Slack",
+          "account": "acme/slack",
+          "readOnly": false,
+          "available": true,
+          "why": null,
+          "text": "Slack"
+        }
+      ],
+      "entry": null,
+      "key": {
+        "issuedAt": "2026-10-26T08:00:00.000Z",
+        "revoked": false
+      },
+      "createdAt": "2026-10-26T08:00:00.000Z",
+      "lastUsed": null,
+      "problems": []
+    }
+  ],
+  "problems": []
+}

@@ -91,6 +91,142 @@
       "reason": "Fewer days kept applies at once and deletes the older days; more days is a loosening the person approves (design 2026-10-25-activity §4.1)."
     },
     {
+      "id": "core.search.status",
+      "package": "core",
+      "cli": "search status",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Where Search on this machine stands — on or off, the accounts, counts, size, the oldest day, the model's state, backups and FileVault — is content-free and is shown by doctor, so comms_doctor gives an agent the same facts; a tool of its own would add nothing an agent needs (design 2026-10-26-local-search §7, §8)."
+    },
+    {
+      "id": "core.search.query",
+      "package": "core",
+      "cli": "search query",
+      "mcp": null,
+      "status": "exception",
+      "reason": "What everyone asked, across every kept account, searchable by meaning, is the widest read there is: the person's alone, in the app and at a terminal, refused inside an MCP server's process and under an agent's marker. No MCP tool returns message content (2026-10-26-owner-feedback-0320 §4); agents search each account live with gmail_search and slack_search (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.people",
+      "package": "core",
+      "cli": "search people",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every person a message is kept from, with their addresses and Slack users, across every account, is the person's view, refused inside an MCP server's process and under an agent's marker; a tool would hand one project's correspondents to another project's agent (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.person",
+      "package": "core",
+      "cli": "search person",
+      "mcp": null,
+      "status": "exception",
+      "reason": "What one person sent, across every kept account, is the person's read, refused inside an MCP server's process and under an agent's marker, as search query is (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.show",
+      "package": "core",
+      "cli": "search show",
+      "mcp": null,
+      "status": "exception",
+      "reason": "A kept message in full is message content from the person's own store, refused inside an MCP server's process and under an agent's marker; agents read a message live, through their own recorded read (design 2026-10-26-local-search S13)."
+    },
+    {
+      "id": "core.search.index",
+      "package": "core",
+      "cli": "search index",
+      "mcp": null,
+      "status": "exception",
+      "reason": "The indexer is the one writer of the person's search database, run by the person's own commands and the app — never as a job of its own and never by an agent; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S8, S10, S13)."
+    },
+    {
+      "id": "core.search.rebuild",
+      "package": "core",
+      "cli": "search rebuild",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Making every vector again from the kept text is upkeep of the person's own store, refused inside an MCP server's process and under an agent's marker, as search index is (design 2026-10-26-local-search §5, S13)."
+    },
+    {
+      "id": "core.search.link",
+      "package": "core",
+      "cli": "search link",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Joining two people is the person's own act: names never join, and no agent may decide that two handles are one person; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.unlink",
+      "package": "core",
+      "cli": "search unlink",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Separating a handle from a person undoes the person's own join, and is theirs alone, as search link is (design 2026-10-26-local-search S5, S13)."
+    },
+    {
+      "id": "core.search.label",
+      "package": "core",
+      "cli": "search label",
+      "mcp": null,
+      "status": "exception",
+      "reason": "The name the person knows someone by is kept sealed in the person's own store and is theirs to give; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S5, S11, S13)."
+    },
+    {
+      "id": "core.search.on",
+      "package": "core",
+      "cli": "search on",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Switching Search on is the first store whose job is to keep message words: a loosening the person approves — at a terminal, or in the attested app with --app-approval — and refused inside an MCP server's process and under an agent's marker, so no tool can ask for it (design 2026-10-26-local-search S1, S13)."
+    },
+    {
+      "id": "core.search.off",
+      "package": "core",
+      "cli": "search off",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Off is a tightening that applies at once from anywhere; a tool for it alone would let an agent stop what the person chose to keep, which only the person, in the app or at a terminal, decides (design 2026-10-26-local-search S1, §8)."
+    },
+    {
+      "id": "core.search.accounts.add",
+      "package": "core",
+      "cli": "search accounts add",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Keeping one more account's messages is a loosening the person approves, at a terminal or in the attested app, and refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S1, S2, S13)."
+    },
+    {
+      "id": "core.search.accounts.remove",
+      "package": "core",
+      "cli": "search accounts remove",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Taking an account out applies at once from anywhere and deletes what is kept of it; it is the person's setting, changed in the app or at a terminal, with no tool (design 2026-10-26-local-search §7, §8)."
+    },
+    {
+      "id": "core.search.model.set",
+      "package": "core",
+      "cli": "search model set",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Sending kept words to a local model server, even on loopback, is a loosening the person approves, at a terminal or in the attested app; refused inside an MCP server's process and under an agent's marker (design 2026-10-26-local-search S9, S13)."
+    },
+    {
+      "id": "core.search.model.none",
+      "package": "core",
+      "cli": "search model none",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Words only applies at once from anywhere and drops every vector; the person's setting, with no tool (design 2026-10-26-local-search S9, §8)."
+    },
+    {
+      "id": "core.search.delete",
+      "package": "core",
+      "cli": "search delete",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Delete everything applies at once once --all --confirm says so — or the app's confirm — and deletes the key with the folder. It cannot be undone, so it is the person's alone: refused inside an MCP server's process and under an agent's marker, and a tool would put it one agent call away (design 2026-10-26-local-search §7, note of 2026-10-27)."
+    },
+    {
       "id": "core.approvals.list",
       "package": "core",
       "cli": "approvals list",
@@ -387,6 +523,127 @@
       "reason": "Removing a rule lets the wider one hold there, so it is approved first, unless that one allows no more."
     },
     {
+      "id": "core.taking",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingReport",
+      "reason": "Taking messages, per account: whether a session must take a message before it acts on it, what a take says to the sender, and when a message nobody took counts. `comms_taking` with no change is this report."
+    },
+    {
+      "id": "core.taking.require",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--require", "on"],
+      "args": {
+        "account": "parity/slack",
+        "required": true
+      },
+      "expect": {
+        "request.required": true,
+        "request.acknowledge": null,
+        "request.afterMinutes": null,
+        "request.notify": null
+      },
+      "reason": "Requiring a take applies at once; letting sessions act without taking a message first is a loosening the person approves (design 2026-10-26-taking-messages §5)."
+    },
+    {
+      "id": "core.taking.acknowledge",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--acknowledge", "nothing"],
+      "args": {
+        "account": "parity/slack",
+        "acknowledge": "nothing"
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": "nothing",
+        "request.afterMinutes": null,
+        "request.notify": null
+      },
+      "reason": "Saying nothing to the sender applies at once; a 👀 on taking is a loosening the person approves, made only under a standing approval they made at their terminal (§7)."
+    },
+    {
+      "id": "core.taking.unclaimed",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--unclaimed", "30"],
+      "args": {
+        "account": "parity/slack",
+        "afterMinutes": 30
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": null,
+        "request.afterMinutes": 30,
+        "request.notify": null
+      },
+      "reason": "A shorter wait before a message nobody took counts as not taken applies at once; a longer one lets it go unnoticed for longer, so it is a loosening the person approves (security review of 0.35.0)."
+    },
+    {
+      "id": "core.taking.notify",
+      "package": "core",
+      "cli": "taking",
+      "mcp": "comms_taking",
+      "status": "both",
+      "operation": "takingChange",
+      "argv": ["parity/slack", "--notify", "off"],
+      "args": {
+        "account": "parity/slack",
+        "notify": false
+      },
+      "expect": {
+        "request.required": null,
+        "request.acknowledge": null,
+        "request.afterMinutes": null,
+        "request.notify": false
+      },
+      "reason": "A reminder of a message nobody took applies at once; none is a loosening the person approves, since only Not taken would show it then (security review of 0.35.0)."
+    },
+    {
+      "id": "core.takes.list",
+      "package": "core",
+      "cli": "takes list",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Every session's takes, offers, hand-backs and notes — their folders and clients among them — is the person's view, the CLI's and the desktop app's through it, and is refused inside an MCP server's process and in an agent's shell. A tool that answered it would name one project's agent to another's, and hand on notes an agent may have copied a sender's words into; over MCP each channel's `*_taken` answers in closed words only (design 2026-10-26-taking-messages T7, T8, §5)."
+    },
+    {
+      "id": "core.takes.release",
+      "package": "core",
+      "cli": "takes release",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Ending a take is the person's override: no session may end another's (design 2026-10-26-taking-messages §2, §10), and a session's own hand-back is its channel's take tool with `step: \"hand-back\"`. Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
+      "id": "core.takes.give",
+      "package": "core",
+      "cli": "takes give",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Giving a message to a window is the person's: no session may offer a message to another, or to itself past another's take (§2, T4, §10). Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
+      "id": "core.takes.keep",
+      "package": "core",
+      "cli": "takes keep",
+      "mcp": null,
+      "status": "exception",
+      "reason": "Keeping a message is the person saying they will handle it, which refuses every session; a session takes for itself only, with its channel's take tool (T2, §10). Refused inside an MCP server's process and in an agent's shell."
+    },
+    {
       "id": "core.standing.list",
       "package": "core",
       "cli": "standing list",
@@ -631,7 +888,104 @@
       "cli": "mcp",
       "mcp": null,
       "status": "exception",
-      "reason": "It runs the MCP server. A tool is a call into a server that is already running, so no tool can be the one that starts it."
+      "reason": "It runs the MCP server — or, with `--connection <id>`, the gateway an app starts for one MCP connection (single-server design D2). A tool is a call into a server that is already running, so no tool can be the one that starts it."
+    },
+    {
+      "id": "core.connection.list",
+      "package": "core",
+      "cli": "connection list",
+      "mcp": "comms_connections_list",
+      "status": "both",
+      "operation": "connectionList",
+      "reason": "Every MCP connection — each place an app uses Agent Comms, its parts, accounts and entry — never with its key (single-server design §10)."
+    },
+    {
+      "id": "core.connection.show",
+      "package": "core",
+      "cli": "connection show",
+      "mcp": "comms_connection_show",
+      "status": "both",
+      "operation": "connectionShow",
+      "argv": ["cn_0123456789ABCDEFGHJKMNPQRS"],
+      "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "reason": "One connection and the Agent Comms running for it now; with no id, inside a connection's part, that connection (design D3)."
+    },
+    {
+      "id": "core.connection.add",
+      "package": "core",
+      "cli": "connection add",
+      "mcp": "comms_connection_add",
+      "status": "both",
+      "operation": "connectionAddChange",
+      "argv": ["--app", "claude-code", "--name", "Parity"],
+      "args": { "app": "claude-code", "name": "Parity" },
+      "expect": { "request.app": "claude-code", "request.name": "Parity" },
+      "reason": "Adding a connection hands an app a set of tools: a loosening the person approves, which registers its one entry with its key in the entry's environment (design §6.2, D10). A Manual connection is a snippet with its key in it, shown once: comms_connection_add takes no `manual`, and the command refuses it to an agent's shell, since the key would stay in a transcript (design §8.1) — the person adds it at their own terminal or in the app."
+    },
+    {
+      "id": "core.connection.change",
+      "package": "core",
+      "cli": "connection change",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionChangeChange",
+      "argv": ["cn_0123456789ABCDEFGHJKMNPQRS", "--parts", "core"],
+      "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS", "parts": [{ "server": "core" }] },
+      "reason": "Every part a connection has from now on: what narrows applies at once, beside what waits; a part added, an account let go or moved, and read-only off are approved first (design §6.2). Over MCP and from an agent's shell, only the connection the caller is a part of, narrowing included: another's parts are the person's (0.35.0 re-review, LOW 2)."
+    },
+    {
+      "id": "core.connection.rename",
+      "package": "core",
+      "cli": "connection rename",
+      "mcp": "comms_connection_rename",
+      "status": "both",
+      "operation": "connectionRenameChange",
+      "argv": ["cn_0123456789ABCDEFGHJKMNPQRS", "Parity"],
+      "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS", "name": "Parity" },
+      "reason": "A new name gives agents nothing more: applied at once and audited (design §6.2). Over MCP and from an agent's shell, only the connection the caller is a part of: another is the person's (0.35.0 security review, M1)."
+    },
+    {
+      "id": "core.connection.key.replace",
+      "package": "core",
+      "cli": "connection key replace",
+      "mcp": "comms_connection_key_replace",
+      "status": "both",
+      "operation": "connectionKeyReplaceChange",
+      "argv": ["cn_0123456789ABCDEFGHJKMNPQRS"],
+      "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "reason": "A new key, written into the connection's entry and never shown, the old one stopping at once: applied at once and audited (design §6.2). A Manual connection's new key is a snippet shown to the person only, refused over MCP and to an agent's shell. Over MCP and from an agent's shell, only the connection the caller is a part of (0.35.0 security review, M1)."
+    },
+    {
+      "id": "core.connection.remove",
+      "package": "core",
+      "cli": "connection remove",
+      "mcp": "comms_connection_remove",
+      "status": "both",
+      "operation": "connectionRemoveChange",
+      "argv": ["cn_0123456789ABCDEFGHJKMNPQRS"],
+      "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "reason": "Removing a connection is a tightening: its entry goes from its app and its key stops working at once, applied at once and audited (design §6.2). Where its entry shadows a wider one the agents in its folder would then use, it is approved first, like a loosening; over MCP and from an agent's shell, only the connection the caller is a part of (0.35.0 security review, H1, M1)."
+    },
+    {
+      "id": "core.connection.migrate",
+      "package": "core",
+      "cli": "connection migrate",
+      "mcp": "comms_connection_migrate",
+      "status": "both",
+      "operation": "connectionMigrateChange",
+      "reason": "Each app's separate entries into one connection that reaches exactly what they reached, adding nothing, each removed entry saved first: approved first, as it rewrites the apps' configs and moves their tools under agentcomms (single-server design D16, §9.1, §9.4). Never run by update or the background job."
+    },
+    {
+      "id": "core.connection.migrate.undo",
+      "package": "core",
+      "cli": "connection migrate",
+      "mcp": "comms_connection_migrate",
+      "status": "both",
+      "operation": "connectionMigrateUndoChange",
+      "argv": ["--undo", "cn_0123456789ABCDEFGHJKMNPQRS"],
+      "args": { "undo": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "expect": { "request.id": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "reason": "A connection's parts registered again as entries of their own, under the names they had, and the connection taken out: approved first, as every registration is (design §9.1, step 6)."
     },
     {
       "id": "core.mcp.install",
@@ -759,7 +1113,7 @@
       "operation": "finishSignIn",
       "argv": ["--finish", "parity"],
       "after": {
-        "serverInstallChange": "A sign-in `setup --mcp-client` handed off carries the client it was asked to register with, and `inbox add --finish` registers it once the mailbox is connected — through the change `mcp install` runs, approved the same way. gmail_inbox_finish does not: this server has no tool that registers anything, so it returns the registration as `pendingRegistration`, naming the core server's comms_server_install with `channel: \"gmail\"`, that client, `inbox` — the mailbox just connected — when the entry under that name serves another, `name: \"gmail-<org>\"` — a second entry of its own — when that entry serves another and is not being replaced, and `force` when `setup` was given `--replace-server` — the same change, from chat (design §5). Both decide by the same rule that the client already has it: an entry of ours under that name, at user scope, unpinned or pinned to this mailbox, whose runtime is there (`clientServesInbox`)."
+        "connectionPartChange": "A sign-in `setup --mcp-client` handed off carries the client it was asked to put Gmail into the connection of, and `inbox add --finish` makes that change once the mailbox is connected — the change `mcp install` runs, approved the same way. gmail_inbox_finish does not: this server has no tool that changes a connection, so it returns the change as `pendingRegistration`, naming the core server's comms_connection_change with `app` and `add: { server: \"gmail\" }` — the same change, from chat. Both leave alone an app whose connection's Gmail part reaches the mailbox already: every mailbox, or kept to this one (`connectionServesInbox`) — and one kept to another mailbox, or read-only, which every mailbox would loosen: nothing is prepared or handed back, and the result says so with core's `connection change` that would let it reach the mailbox too (`gmailPartLeftAlone`; `left-alone`, and gmail_inbox_finish's `connectionLeftAlone`). After `setup --standalone`, or with `--replace-server`, it is an entry of Gmail's own instead — the change `mcp install --standalone` runs (`serverInstallChange`) — and gmail_inbox_finish names comms_server_install with `channel: \"gmail\"`, that client, `inbox` when the entry under that name serves another mailbox, `name: \"gmail-<org>\"` for a second entry, and `force` for `--replace-server`, deciding as the finish does by an entry of ours that serves the mailbox (`clientServesInbox`)."
       },
       "reason": "The CLI completes a sign-in begun with --start as `inbox add --finish <flowId>`. Over MCP that is a call of its own, because a tool call cannot sit waiting on a browser."
     },
@@ -1076,6 +1430,66 @@
       "operation": "trash"
     },
     {
+      "id": "gmail.take",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "args": {
+        "step": "take"
+      },
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "This session takes a message before it replies, so no other session does (design 2026-10-26-taking-messages §5). The session is the server's or the command's own, never an argument; at the person's own terminal a command takes nothing."
+    },
+    {
+      "id": "gmail.take.hand-back",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back with a closed reason other sessions see, and a note for the person alone (T8)."
+    },
+    {
+      "id": "gmail.take.done",
+      "package": "gmail",
+      "cli": "take",
+      "mcp": "gmail_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "gmail.taken",
+      "package": "gmail",
+      "cli": "taken",
+      "mcp": "gmail_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has these messages, in closed words — never another session's folder, client or key (T7); with none named, this session's own takes."
+    },
+    {
       "id": "gmail.label.create",
       "package": "gmail",
       "cli": "label",
@@ -1119,13 +1533,25 @@
       "id": "gmail.mcp.install",
       "package": "gmail",
       "cli": "mcp install",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionPartChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "app": "claude-code", "add": { "server": "gmail" } },
+      "expect": { "request.server": "gmail", "request.app": "claude-code" },
+      "reason": "From 0.35.0 a channel's own `mcp install` puts that channel into the app's MCP connection, or makes the app one with Agent Comms itself and that channel (single-server design D17, §10): from chat that is the core server's comms_connection_change with `add: { server: \"gmail\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Kept to an account and read-only as the command's own flags say; where the app has several connections for every folder it goes into none until `--connection` (`id`) names one."
+    },
+    {
+      "id": "gmail.mcp.install.standalone",
+      "package": "gmail",
+      "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
       "operation": "serverInstallChange",
-      "argv": ["--client", "claude-code"],
+      "argv": ["--client", "claude-code", "--standalone"],
       "args": { "channel": "gmail", "client": "claude-code" },
       "expect": { "request.channel": "gmail" },
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
+      "reason": "`--standalone` registers the server as an entry of its own, as before 0.35.0 — the way back single-server design D17 keeps for 0.35. From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"gmail\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "gmail.mcp.prune",
@@ -1190,14 +1616,27 @@
       "id": "gmail.setup.mcp",
       "package": "gmail",
       "cli": "setup",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionPartChange",
+      "via": "setupState",
+      "argv": ["--inbox", "parity/gmail", "--mcp-client", "cursor"],
+      "args": { "app": "cursor", "add": { "server": "gmail" } },
+      "expect": { "request.server": "gmail", "request.app": "cursor" },
+      "reason": "From 0.35.0 `setup --mcp-client <client>` puts Gmail into the app's MCP connection as `mcp install` does, or makes the app one with Agent Comms itself and Gmail (single-server design D17); from chat that step is the core server's comms_connection_change with `add: { server: \"gmail\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Where the app's connection already has Gmail kept to one mailbox, or read-only, setup leaves that part as it is and prepares nothing, saying so among `warnings` with the `connection change` that would let it reach every mailbox (0.35.0 review fixes, decision 5)."
+    },
+    {
+      "id": "gmail.setup.mcp.standalone",
+      "package": "gmail",
+      "cli": "setup",
       "mcp": "comms_server_install",
       "status": "both",
       "operation": "serverInstallChange",
       "via": "setupState",
-      "argv": ["--inbox", "parity/gmail", "--mcp-client", "claude-code"],
+      "argv": ["--inbox", "parity/gmail", "--mcp-client", "claude-code", "--standalone"],
       "args": { "channel": "gmail", "client": "claude-code" },
       "expect": { "request.channel": "gmail" },
-      "reason": "`setup --mcp-client <client>` registers the server as `mcp install` does; from chat that step is the core server's comms_server_install with `channel: \"gmail\"` (design §5)."
+      "reason": "`setup --mcp-client <client> --standalone` registers the server as an entry of its own, as before 0.35.0 — the way back D17 keeps for 0.35 — as `mcp install --standalone` does; from chat that step is the core server's comms_server_install with `channel: \"gmail\"` (design §5)."
     },
     {
       "id": "gmail.doctor",
@@ -1395,13 +1834,25 @@
       "id": "resend.mcp.install",
       "package": "resend",
       "cli": "mcp install",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionPartChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "app": "claude-code", "add": { "server": "resend" } },
+      "expect": { "request.server": "resend" },
+      "reason": "From 0.35.0 a channel's own `mcp install` puts that channel into the app's MCP connection, or makes the app one with Agent Comms itself and that channel (single-server design D17, §10): from chat that is the core server's comms_connection_change with `add: { server: \"resend\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Kept to an account and read-only as the command's own flags say; where the app has several connections for every folder it goes into none until `--connection` (`id`) names one."
+    },
+    {
+      "id": "resend.mcp.install.standalone",
+      "package": "resend",
+      "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
       "operation": "serverInstallChange",
-      "argv": ["--client", "claude-code"],
+      "argv": ["--client", "claude-code", "--standalone"],
       "args": { "channel": "resend", "client": "claude-code" },
       "expect": { "request.channel": "resend" },
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"resend\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5). Pinned with the generic `account`, as `--account` here."
+      "reason": "`--standalone` registers the server as an entry of its own, as before 0.35.0 — the way back single-server design D17 keeps for 0.35. From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"resend\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5). Pinned with the generic `account`, as `--account` here."
     },
     {
       "id": "resend.mcp.prune",
@@ -1413,6 +1864,60 @@
       "args": { "channel": "resend" },
       "expect": { "request.channel": "resend" },
       "reason": "From chat this is the core server's comms_server_prune, which prunes any channel's runtimes: `channel: \"resend\"` is this command — the same change, `serverPruneChange`, so an approval either one prepared is claimed by the other (design §5)."
+    },
+    {
+      "id": "resend.take",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take"
+      },
+      "reason": "A session takes a received email before it replies to it, so no other session answers it (design 2026-10-26-taking-messages §5): the session is the server's or the command's own, never an argument. `step` tells the take from the hand-back and the done."
+    },
+    {
+      "id": "resend.take.hand-back",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back"
+      },
+      "reason": "Only the holder hands an email back, with a closed reason other sessions see and a note only the person does (T8)."
+    },
+    {
+      "id": "resend.take.done",
+      "package": "resend",
+      "cli": "take",
+      "mcp": "resend_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done"
+      },
+      "reason": "Only the holder marks an email done; other sessions stay refused it (T3)."
+    },
+    {
+      "id": "resend.taken",
+      "package": "resend",
+      "cli": "taken",
+      "mcp": "resend_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each received email, in closed words — `you`, `another session`, `the person` — never who another session is (T7); with none named, this session's own."
     },
     {
       "id": "slack.manifest",
@@ -1799,13 +2304,25 @@
       "id": "slack.mcp.install",
       "package": "slack",
       "cli": "mcp install",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionPartChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "app": "claude-code", "add": { "server": "slack" } },
+      "expect": { "request.server": "slack" },
+      "reason": "From 0.35.0 a channel's own `mcp install` puts that channel into the app's MCP connection, or makes the app one with Agent Comms itself and that channel (single-server design D17, §10): from chat that is the core server's comms_connection_change with `add: { server: \"slack\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Kept to an account and read-only as the command's own flags say; where the app has several connections for every folder it goes into none until `--connection` (`id`) names one."
+    },
+    {
+      "id": "slack.mcp.install.standalone",
+      "package": "slack",
+      "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
       "operation": "serverInstallChange",
-      "argv": ["--client", "claude-code"],
+      "argv": ["--client", "claude-code", "--standalone"],
       "args": { "channel": "slack", "client": "claude-code" },
       "expect": { "request.channel": "slack" },
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
+      "reason": "`--standalone` registers the server as an entry of its own, as before 0.35.0 — the way back single-server design D17 keeps for 0.35. From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"slack\"` is this command — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "slack.mcp.prune",
@@ -1841,6 +2358,63 @@
       "mcp": null,
       "status": "exception",
       "reason": "Needs an app configuration token, which must never pass through chat. From chat, slack_manifest returns the manifest to create the app from on api.slack.com (design §4, §6.4)."
+    },
+    {
+      "id": "slack.take",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "expect": {
+        "request.step": "take",
+        "request.reason": null
+      },
+      "reason": "Takes a message for the session the server or command runs in — never one an argument names — after reading it from Slack to check it is someone else's (design 2026-10-26-taking-messages T2, T5). `slack_take` with no step is a take."
+    },
+    {
+      "id": "slack.take.hand-back",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--hand-back", "--reason", "not-mine"],
+      "args": {
+        "step": "hand-back",
+        "reason": "not-mine"
+      },
+      "expect": {
+        "request.step": "hand-back",
+        "request.reason": "not-mine"
+      },
+      "reason": "The holder hands a message back, with a closed reason others may see and a note for the person alone (T8): `take --hand-back` at a terminal, `step: \"hand-back\"` over MCP."
+    },
+    {
+      "id": "slack.take.done",
+      "package": "slack",
+      "cli": "take",
+      "mcp": "slack_take",
+      "status": "both",
+      "operation": "takeMessage",
+      "argv": ["--done"],
+      "args": {
+        "step": "done"
+      },
+      "expect": {
+        "request.step": "done",
+        "request.reason": null
+      },
+      "reason": "The holder marks a message done, and other sessions stay refused it (T3): `take --done` at a terminal, `step: \"done\"` over MCP."
+    },
+    {
+      "id": "slack.taken",
+      "package": "slack",
+      "cli": "taken",
+      "mcp": "slack_taken",
+      "status": "both",
+      "operation": "takenMessages",
+      "reason": "Who has each message, in closed words — never which session (T7): reads only this machine's records."
     },
     {
       "id": "whatsapp.status",
@@ -1951,13 +2525,25 @@
       "id": "whatsapp.mcp.install",
       "package": "whatsapp",
       "cli": "mcp install",
+      "mcp": "comms_connection_change",
+      "status": "both",
+      "operation": "connectionPartChange",
+      "argv": ["--client", "claude-code"],
+      "args": { "app": "claude-code", "add": { "server": "whatsapp" } },
+      "expect": { "request.server": "whatsapp" },
+      "reason": "From 0.35.0 a channel's own `mcp install` puts that channel into the app's MCP connection, or makes the app one with Agent Comms itself and that channel (single-server design D17, §10): from chat that is the core server's comms_connection_change with `add: { server: \"whatsapp\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Kept to an account and read-only as the command's own flags say; where the app has several connections for every folder it goes into none until `--connection` (`id`) names one."
+    },
+    {
+      "id": "whatsapp.mcp.install.standalone",
+      "package": "whatsapp",
+      "cli": "mcp install",
       "mcp": "comms_server_install",
       "status": "both",
       "operation": "serverInstallChange",
-      "argv": ["--client", "claude-code"],
+      "argv": ["--client", "claude-code", "--standalone"],
       "args": { "channel": "whatsapp", "client": "claude-code" },
       "expect": { "request.channel": "whatsapp" },
-      "reason": "From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"whatsapp\"` with `account` is this command with `--account` — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
+      "reason": "`--standalone` registers the server as an entry of its own, as before 0.35.0 — the way back single-server design D17 keeps for 0.35. From chat this is the core server's comms_server_install, which registers any channel's server: `channel: \"whatsapp\"` with `account` is this command with `--account` — the same change, `serverInstallChange`, so an approval either one prepared is claimed by the other (design §5)."
     },
     {
       "id": "whatsapp.mcp.prune",

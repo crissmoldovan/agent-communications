@@ -12,13 +12,17 @@ async function advance(ms: number): Promise<void> {
   });
 }
 
-const LABELS: Record<Screen, string> = {
+const LABELS: Record<Screen, string | RegExp> = {
   overview: 'Overview',
   queue: 'Queue',
   messages: 'Messages New',
+  // People (0.35.0), with its "New" tag, whose space is a screen reader's; Search has no row of its own: it is
+  // Messages' second part.
+  people: /^People ?New$/,
+  search: /^Messages ?New$/,
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).
-  connections: 'Connections New',
+  connections: 'MCP connections New',
   approvals: 'Approvals',
   activity: 'Activity',
   agent: 'Your agents',
@@ -55,7 +59,18 @@ describe('what each CLI version supports', () => {
       bringUpToDate: '0.34.0',
       collectionSwitch: '0.34.0',
       accountAppApproval: '0.34.0',
+      taking: '0.35.0',
+      search: '0.35.0',
+      connections: '0.35.0',
     });
+    // Taking messages is core's from 0.35.0, a pull request's build of it included.
+    expect(supports('0.34.0', 'taking')).toBe(false);
+    expect(supports('0.35.0', 'taking')).toBe(true);
+    expect(supports('0.35.0-feat-0.35-take-app', 'taking')).toBe(true);
+    // Search on this machine is core's from 0.35.0, a pull request's build of it included.
+    expect(supports('0.34.0', 'search')).toBe(false);
+    expect(supports('0.35.0', 'search')).toBe(true);
+    expect(supports('0.35.0-feat-0.35-search-app', 'search')).toBe(true);
     // Events → Service's Switch on… approved in the app, and Switch off, are the event service's from 0.34.0.
     expect(supports('0.33.0', 'collectionSwitch')).toBe(false);
     expect(supports('0.34.0', 'collectionSwitch')).toBe(true);
@@ -131,6 +146,8 @@ describe('the gated sections', () => {
       ['activity', ['Needs 0.29.0 or later; this machine has 0.21.0.']],
       // The queue is gated on the events service's own version, which the fake bridge gives as 0.24.0.
       ['queue', ['Needs 0.30.0 or later; this machine has 0.24.0.']],
+      // People is Search on this machine's, core's from 0.35.0.
+      ['people', ['Needs 0.35.0 or later; this machine has 0.21.0.']],
     ];
     for (const [name, lines] of expectations) {
       const main = await open(name);
@@ -161,6 +178,17 @@ describe('the gated sections', () => {
       'labelName',
       'labelRuleAdd',
       'labelRuleRemove',
+      'takesList',
+      'takesRelease',
+      'takesGive',
+      'takesKeep',
+      'taking',
+      'takingChange',
+      'searchStatus',
+      'searchQuery',
+      'searchPeople',
+      'searchPerson',
+      'searchIndex',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.

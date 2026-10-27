@@ -1,0 +1,155 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-26T23:00:00Z"
+  },
+  "title": "Agent Comms: messages, from arrival to answer",
+  "launch": {
+    "view": "focused",
+    "file": "Main.dc.html"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": -2280,
+      "w": 1280,
+      "h": 1760,
+      "title": "Start here: messages, from arrival to answer",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "MessageStory.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 1760,
+      "title": "Messages → a message’s story: who took it, and what each session did (case=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Messages.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 1400,
+      "title": "Messages: who has each one, by state (show=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Person.dc.html": {
+      "x": 0,
+      "y": 2280,
+      "w": 1280,
+      "h": 1220,
+      "title": "People → David Park: everything he asked",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Search.dc.html": {
+      "x": 1360,
+      "y": 2280,
+      "w": 1280,
+      "h": 1700,
+      "title": "Messages → Ask about past messages (q=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "SettingsTaking.dc.html": {
+      "x": 0,
+      "y": 4500,
+      "w": 1280,
+      "h": 1560,
+      "title": "Settings → Taking messages",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "SettingsSearch.dc.html": {
+      "x": 1360,
+      "y": 4500,
+      "w": 1280,
+      "h": 1640,
+      "title": "Settings → Search on this Mac (searchOn=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Projects.dc.html": {
+      "x": 0,
+      "y": 6660,
+      "w": 1280,
+      "h": 1620,
+      "title": "Projects: folders, sessions and profiles (justAdded=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AddProject.dc.html": {
+      "x": 1360,
+      "y": 6660,
+      "w": 1280,
+      "h": 1620,
+      "title": "Add a project from GitHub: four steps",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "MessageRouted.dc.html": {
+      "x": 2720,
+      "y": 6660,
+      "w": 1280,
+      "h": 1700,
+      "title": "A message’s story, routed to a project",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "MessageStory.dc.html",
+    "Messages.dc.html",
+    "Person.dc.html",
+    "Search.dc.html",
+    "SettingsTaking.dc.html",
+    "SettingsSearch.dc.html",
+    "Projects.dc.html",
+    "AddProject.dc.html",
+    "MessageRouted.dc.html"
+  ],
+  "notes": {
+    "row0": {
+      "x": 0,
+      "y": -2540,
+      "text": "0 · Start here",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · One message, from arrival to answer",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row2": {
+      "x": 0,
+      "y": 2020,
+      "text": "2 · What one person asked, and asking about past messages",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row3": {
+      "x": 0,
+      "y": 4240,
+      "text": "3 · Settings: taking messages, and search on this Mac",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row4": {
+      "x": 0,
+      "y": 6400,
+      "text": "4 · Projects, and a message routed to one",
+      "kind": "title1",
+      "maxW": 4000
+    }
+  },
+  "designSystems": []
+}

@@ -27,6 +27,7 @@ import type {
   ThreadResult,
 } from './operations/read.ts';
 import type { PostedFiles, PostedMessage, PreparedPost, ReactionOptions, ReactionResult } from './operations/send.ts';
+import { captureSlack } from './search-capture.ts';
 
 /**
  * What this package writes in core's activity log (design 2026-10-25-activity, §4.2 and §8 Task 2b): one line for each
@@ -81,13 +82,23 @@ export async function recordSlack<T>(
 ): Promise<T> {
   const account = await accountOf(context, alias);
   if (account === undefined) return fn();
-  return withActivity(
+  const result = await withActivity(
     { core: context.core, channel: CHANNEL, surface: context.surface, account, clientInfo: context.clientInfo },
     operation,
     kind,
     fn,
     describe,
   );
+  // What the call had in hand, for Search on this machine, where the person switched it on: never thrown, never
+  // changing the result (design 2026-10-26-local-search §5).
+  await captureSlack(context, account, operation, result, () => {
+    try {
+      return describe(result) ?? {};
+    } catch {
+      return {};
+    }
+  });
+  return result;
 }
 
 // ── Reads ────────────────────────────────────────────────────────────────────────────────────────────────────────

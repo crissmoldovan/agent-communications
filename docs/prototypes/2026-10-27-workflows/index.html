@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workflows, start to finish</title>
+<style>
+:root{--bg:#F7F7F8;--s1:#FFFFFF;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10)}
+@media (prefers-color-scheme: dark){:root{--bg:#0E0E10;--s1:#18181B;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16)}}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:15px;margin:28px 0 8px}
+p{color:var(--text2);margin:0 0 8px}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+li a{display:block;background:var(--s1);border-radius:10px;padding:10px 14px;text-decoration:none;color:var(--text)}
+li a:hover{color:var(--accent)}
+.state{color:var(--text3);font-weight:400;font-size:12px}
+.new{display:inline-block;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:0 6px}
+code{font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Comms: workflows, from a message to the right session</h1>
+<p>Drawn on 2026-10-27 for the owner’s feedback, before anything is built: a workflow as a graph of steps, with your example (a message comes in, the right project and session are found or started, in a worktree if you like, a Linear issue is made and closed when the session’s run ends), built by dragging steps, by describing it, or as text. Each screen is clickable. Add <code>?theme=dark</code> to a screen’s address for its dark look.</p>
+<p>A small <span class="new">new</span> chip on a screen marks what the app can’t do yet. Everything else is there today.</p>
+
+<h2>0 · Start here</h2>
+<ul>
+<li><a href="Main.dc.html">Start here: workflows, from your words to a closed issue</a> — every board, your 13 points and where each one is, and what to tell the lead</li>
+</ul>
+
+<h2>1 · Workflows, and building one by dragging</h2>
+<ul>
+<li><a href="Workflows.dc.html">Workflows <span class="state">your workflows, and your rules as straight lines</span></a></li>
+<li><a href="Workflows.dc.html?approved=true">Workflows, just after approving version 2</a></li>
+<li><a href="WorkflowDesigner.dc.html">The designer, with your example <span class="state">steps on the left, the graph, the selected step’s settings</span></a></li>
+<li><a href="WorkflowDesigner.dc.html?selected=project">The designer, Which project? selected</a></li>
+<li><a href="WorkflowDesigner.dc.html?show=rule">A rule, opened as a straight-line workflow <span class="state">client-asks</span></a></li>
+<li><a href="WorkflowDesigner.dc.html?show=rule&amp;rule=mail-subjects">A rule in dry-run, as a straight line <span class="state">mail-subjects</span></a></li>
+<li><a href="WorkflowDesigner.dc.html?show=blank">A new workflow, from an empty canvas</a></li>
+<li><a href="WorkflowDesigner.dc.html?stage=dragging">A step being dragged onto the canvas</a></li>
+<li><a href="WorkflowDrag.dc.html">Building it by drag and drop <span class="state">a step dropped, a wire half-drawn to its input</span></a></li>
+<li><a href="WorkflowDrag.dc.html?stage=connected">Building it by drag and drop, connected</a></li>
+</ul>
+
+<h2>2 · Building one by describing it, or as text</h2>
+<ul>
+<li><a href="Describe.dc.html">Describe a workflow <span class="state">your words, drafted as steps, with four questions</span></a></li>
+<li><a href="Describe.dc.html?drafted=false">Describe a workflow, before the draft</a></li>
+<li><a href="WorkflowText.dc.html">The same workflow as text, beside the canvas</a></li>
+</ul>
+
+<h2>3 · A step in full, a run, and approving</h2>
+<ul>
+<li><a href="WorkflowStep.dc.html">Editing a step: Create a Linear issue <span class="state">title, description in parts, labels, a live preview</span></a></li>
+<li><a href="WorkflowRun.dc.html">A run: one message’s path <span class="state">busy → queued 4 min → delivered → closed</span></a></li>
+<li><a href="WorkflowRun.dc.html?run=waiting">A run, waiting for the session’s run to end</a></li>
+<li><a href="WorkflowRun.dc.html?run=test">A test of version 2 with a recent message <span class="state">nothing done</span></a></li>
+<li><a href="WorkflowApprove.dc.html">Review and approve version 2</a></li>
+</ul>
+</main>
+</body>
+</html>

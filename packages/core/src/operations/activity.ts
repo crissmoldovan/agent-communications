@@ -23,6 +23,7 @@ import {
   MAX_ACTIVITY_RETENTION_DAYS,
   MIN_ACTIVITY_RETENTION_DAYS,
   readActivitySettings,
+  searchRetentionDays,
   storedActivity,
 } from '../activity-settings.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -34,6 +35,7 @@ import { CommsError } from '../errors.ts';
 import { type Remedy, remedy } from '../handoffs.ts';
 import { MCP_SERVER_MARKER, mcpServerOf } from '../mcp-marker.ts';
 import { homeDirectory, shortenHome } from '../paths.ts';
+import { pruneSearchIndex, searchHoldsWords } from '../search/indexer.ts';
 import { newBoundary, wrapUntrusted } from '../untrusted.ts';
 import type { DoctorCheck } from './maintenance.ts';
 
@@ -89,8 +91,8 @@ export interface ActivityMineRequest extends ActivityShowRequest {
   readonly clientInfo?: ClientInfo | undefined;
   /** The most lines to return, newest first: `MINE_DEFAULT_LIMIT` when left out, `MINE_MAX_LIMIT` at most. */
   readonly limit?: number | undefined;
-  /** The MCP connection's own session id, where its transport has one: part of the session key. */
-  readonly connection?: string | undefined;
+  /** The MCP transport's own session id, where it has one: part of the session key. */
+  readonly transportSession?: string | undefined;
 }
 
 /** How many lines `mine` returns when asked for no number, and the most it returns at all. */
@@ -268,7 +270,7 @@ export async function activityMine(
     deps.identity === undefined
       ? await sessionIdentity(request.surface, request.clientInfo, {
           log: core.activity,
-          connection: request.connection,
+          transportSession: request.transportSession,
         })
       : await deps.identity();
   const shown = await core.activity.show(identity.key, filters);
@@ -584,9 +586,19 @@ export function activitySettingsChange(
     activity: { ...(storedActivity(config) ?? {}), [field]: value },
   });
   return {
-    plan: (config) => {
+    plan: async (config) => {
       // The file's own value, so a word this release reads as off is written over even when `off` is asked for.
       const same = storedActivity(config)?.[field] === value;
+      // Search keeps a message's words while Activity keeps its day (design 2026-10-26-local-search, S12): more days
+      // are more days of message words too, and the person approving them is told so (the review of 2026-10-27, M6).
+      // Only on a loosening — an effect on fewer days would make a tightening wait for approval. Judged by the days
+      // Search keeps now, which are 30 where Activity's cannot be read (LOW 5): from there, 60 days are fewer for
+      // Activity, which keeps the most, and more for Search.
+      const keptNow = searchRetentionDays(config);
+      const longer =
+        field === 'retentionDays' && !same && typeof value === 'number' && value > keptNow
+          ? await searchHoldsWords(core, config)
+          : false;
       return {
         before: config,
         after: same ? config : edit(config),
@@ -594,6 +606,13 @@ export function activitySettingsChange(
           record !== undefined
             ? RECORD_SUMMARIES[record as ActivityRecordSetting]
             : `Keep the activity log for ${value} ${value === 1 ? 'day' : 'days'}`,
+        ...(longer
+          ? {
+              effects: [
+                `keeps the words of the messages Search on this machine holds for as long too: ${value} days, not ${keptNow}`,
+              ],
+            }
+          : {}),
       };
     },
     apply: async (consent, planned) => {
@@ -615,6 +634,11 @@ export function activitySettingsChange(
         field === 'retentionDays' && settings.retentionDays < keptBefore
           ? (await core.activity.prune(settings.retentionDays)).deleted
           : [];
+      // Search keeps a message as long as Activity keeps its day (design 2026-10-26-local-search, S12): fewer days
+      // prune its rows, words and vectors now too. Best effort, as the activity prune is: a search prunes again first.
+      if (field === 'retentionDays' && settings.retentionDays < keptBefore) {
+        await pruneSearchIndex(core).catch(() => 0);
+      }
       return { ...(await reportOf(core, settings)), changed: true, pruned };
     },
   };

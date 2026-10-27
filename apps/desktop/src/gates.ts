@@ -21,6 +21,14 @@
  * prepares Switch on…, which is then approved in Terminal.
  * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
  * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
+ * `taking` is core's (`TAKING_VERSION`, 0.35.0): who has each message in Messages, the story's Take back, Give to… and
+ * I'll handle it, the Queue's Not taken, and Settings → Taking messages, each loosening approved in the app (in Terminal
+ * where nothing attests the app); an older core shows none of them.
+ * `search` is core's (`SEARCH_VERSION`, 0.35.0): Search on this machine — People, Search, and Settings → Search on this
+ * Mac, whose loosenings are approved in the app.
+ * `connections` is core's (`CONNECTIONS_VERSION`, 0.35.0, `mcp_connections.rs`): MCP connections — each place an app
+ * uses Agent Comms, added, changed and moved into one entry in the app; an older core keeps Connections' table of apps
+ * by server.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -40,7 +48,16 @@ export const GATES = {
   bringUpToDate: '0.34.0',
   collectionSwitch: '0.34.0',
   accountAppApproval: '0.34.0',
+  taking: '0.35.0',
+  search: '0.35.0',
+  connections: '0.35.0',
 } as const;
+
+/** The first core that takes messages (`taking.rs`, `TAKING_VERSION`). */
+export const TAKING_VERSION: string = GATES.taking;
+
+/** The first core with MCP connections (`mcp_connections.rs`, `CONNECTIONS_VERSION`). */
+export const CONNECTIONS_VERSION: string = GATES.connections;
 
 export type Feature = keyof typeof GATES;
 

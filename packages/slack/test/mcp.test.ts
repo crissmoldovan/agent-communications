@@ -595,6 +595,8 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       'slack_react_send',
       // It writes a standing approval's pending record on this machine, for the person to approve at a terminal.
       'slack_standing_add',
+      // It writes which session has a message, on this machine; nothing changes in Slack (taking messages, §5).
+      'slack_take',
       'slack_workspace_add',
       'slack_workspace_finish',
       'slack_workspace_policy',
@@ -623,6 +625,13 @@ test('every tool says whether it writes and whether it reaches Slack', async () 
       assert.equal(tool?.annotations?.destructiveHint, false, `${prepare} is not destructive`);
       assert.equal(tool?.annotations?.openWorldHint, true, `${prepare} reads Slack`);
     }
+    // Taking a message writes this machine's record and allows nothing: not destructive, and not counted as reaching
+    // Slack, though a take reads the message to check it is someone else's (design 2026-10-26-taking-messages §5).
+    const take = tools.find((candidate) => candidate.name === 'slack_take');
+    assert.equal(take?.annotations?.destructiveHint, false, 'slack_take is not destructive');
+    assert.equal(take?.annotations?.openWorldHint, false, 'slack_take is local');
+    const taken = tools.find((candidate) => candidate.name === 'slack_taken');
+    assert.equal(taken?.annotations?.readOnlyHint, true, 'slack_taken only looks');
     // A download creates files and never replaces one, and it reaches Slack for them.
     const download = tools.find((candidate) => candidate.name === 'slack_file_download');
     assert.equal(download?.annotations?.destructiveHint, false, 'slack_file_download is not destructive');

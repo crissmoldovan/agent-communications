@@ -4,6 +4,7 @@ import {
   escapeForDisplay,
   handoffSentenceToFill,
   paint,
+  type TakenView,
   truncateDisplay,
 } from '@agentcomms/core';
 import type { AccountView, AddedAccount, PolicyReport, RemovedAccount } from '../operations/accounts.ts';
@@ -11,6 +12,7 @@ import type { DoctorResult } from '../operations/doctor.ts';
 import type { Readable } from '../operations/read.ts';
 import type { CancelledEmail } from '../operations/scheduled.ts';
 import type { SendPreparation, SendResult, SendStatus } from '../operations/send.ts';
+import type { TakenResult, TakeResult } from '../operations/take.ts';
 
 /**
  * What a person reads at the terminal. `--json` prints the whole result instead; nothing here is the only place a
@@ -123,4 +125,34 @@ export function renderStatus(result: SendStatus): string {
 export function renderCancelled(result: CancelledEmail): string {
   const cancelled = `Cancelled ${result.id} (${result.recipients} recipient(s)). It cannot be rescheduled.`;
   return result.hint ? `${cancelled}\nNote: ${escapeForDisplay(result.hint)}` : cancelled;
+}
+
+/** Who has an email, in the closed words an agent sees (design 2026-10-26-taking-messages, T7). */
+function takenText(taken: TakenView): string {
+  if (taken === null) return 'nobody has taken it';
+  const back = taken.handedBack === undefined ? '' : `; handed back: ${taken.handedBack.join(', ')}`;
+  if (taken.state === 'open') return `nobody has it${back}`;
+  if (taken.state === 'offered') {
+    const until = taken.offered?.until ?? null;
+    return `offered to ${taken.offered?.to ?? 'another session'}${until === null ? '' : ` until ${until}`}${back}`;
+  }
+  const who = taken.by === 'you' ? 'this session' : (taken.by ?? 'another session');
+  return `${taken.state === 'done' ? 'done by' : 'taken by'} ${who}${taken.since === undefined ? '' : ` since ${taken.since}`}${back}`;
+}
+
+export function renderTake(result: TakeResult): string {
+  const said =
+    result.step === 'take'
+      ? result.changed
+        ? `Taken: ${result.account} ${result.message} is this session's`
+        : `Still this session's: ${result.account} ${result.message}`
+      : result.step === 'hand-back'
+        ? `Handed back: ${result.account} ${result.message} is open to every session again`
+        : `Done: ${result.account} ${result.message}; other sessions stay refused it`;
+  return result.leaseUntil === null ? `${said}.` : `${said}, until ${result.leaseUntil} without another act on it.`;
+}
+
+export function renderTaken(result: TakenResult): string {
+  if (result.messages.length === 0) return `This session holds no email in ${result.account}.`;
+  return result.messages.map((entry) => `${entry.id}  ${takenText(entry.taken)}`).join('\n');
 }

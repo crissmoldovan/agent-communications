@@ -298,9 +298,13 @@ start", and the command exits non-zero — and `skipped` is one that did not run
 with no runtime installed yet).
 
 ```bash
-agent-gmail mcp install --client claude-code
-agent-gmail mcp install --client claude-code --print   # see what would be written, write nothing
+agent-gmail mcp install --client claude-code                              # Gmail into the app's connection
+agent-gmail mcp install --client claude-code --standalone --print         # an entry of its own: see it, write nothing
 ```
+
+From 0.35.0 `mcp install` puts Gmail into the app's MCP connection — or makes the app one, with Agent Comms itself
+and Gmail. `--standalone` registers an entry of Gmail's own, as before; `--name`, `--force`, `--print` and
+`--client json` are for such an entry only, and are refused without it.
 
 Registering is a change the user approves. Run by an agent, the first command exits `10` with
 `APPROVAL_PENDING`, the preview and an approval id, and writes nothing: show the preview, and after the
@@ -317,16 +321,16 @@ wherever the person answers that a download should go.
 
 | What happened | Why | Fix |
 |---|---|---|
-| The client starts the server and it exits immediately | Clients start servers with a minimal `PATH`, so `node` by bare name is not found | Re-run `mcp install` with `--force` and the entry's own flags; every entry it writes uses an absolute interpreter path and an explicit `PATH` |
-| The server starts but reports no mailboxes | It is reading a different configuration directory | The written entry sets `AGENT_COMMS_CONFIG_DIR` explicitly; re-run `mcp install` with `--force` rather than hand-editing |
-| The server starts but cannot read its secrets | A keychain item written by one Node build is not always readable by another, and on Linux a background process needs the session bus | Re-run `mcp install` with `--force` (it prefers the `node` on `PATH` and forwards `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` on Linux); or `agentcomms secrets migrate --to file` |
+| The client starts the server and it exits immediately | Clients start servers with a minimal `PATH`, so `node` by bare name is not found | Re-run `mcp install --standalone` with `--force` and the entry's own flags; every entry it writes uses an absolute interpreter path and an explicit `PATH` |
+| The server starts but reports no mailboxes | It is reading a different configuration directory | The written entry sets `AGENT_COMMS_CONFIG_DIR` explicitly; re-run `mcp install --standalone` with `--force` rather than hand-editing |
+| The server starts but cannot read its secrets | A keychain item written by one Node build is not always readable by another, and on Linux a background process needs the session bus | Re-run `mcp install --standalone` with `--force` (it prefers the `node` on `PATH` and forwards `DBUS_SESSION_BUS_ADDRESS` and `XDG_RUNTIME_DIR` on Linux); or `agentcomms secrets migrate --to file` |
 | It worked, then stopped after an upgrade | The registered command path no longer exists — `doctor`'s `mcp-command` check | the `fix` that check prints, which re-registers with the entry's own flags and `--force` |
 | The client's config file is not plain JSON | Something else wrote it badly, or it holds comments its client accepts; the installer refuses to touch it rather than rewrite it without them | Add the printed snippet by hand, or fix the file |
 | Tools appear but nothing has changed | The client has not been restarted | Restart it |
 | Nothing can reach npm to install the runtime | The default `managed` launcher installs the exact running version into its own directory | `--launcher npx` runs the published package directly instead |
 
-An entry that is already registered is replaced only with `--force`; without it `mcp install` is refused for
-that name, with the command that replaces it as it is. `--force` keeps the `--inbox` and `--read-only` of the
+An entry of its own that is already registered is replaced only with `--force`; without it `mcp install
+--standalone` is refused for that name, with the command that replaces it as it is. `--force` keeps the `--inbox` and `--read-only` of the
 entry it replaces unless others are passed, and says so in a warning; pass the entry's own `--name` again, since
 another name is another entry — doctor's `fix` for a stale or broken entry already carries all three. To widen an
 entry, remove it with the client's own command first, and only when the user asks for that.

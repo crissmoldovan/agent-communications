@@ -1,5 +1,6 @@
 import type { ChannelEntry, ChannelManifest } from './channel-manifest.ts';
 import { type BuiltInChannel, CHANNEL_SNAPSHOT, SERVICE_SNAPSHOT } from './channels.generated.ts';
+import { partFacts } from './connections.ts';
 import { CommsError } from './errors.ts';
 import type { InstallOptions, McpProduct, Narrowing } from './mcp-install.ts';
 import { rivalPackageWarnings, rivalWordWarnings } from './other-servers.ts';
@@ -174,6 +175,15 @@ export const SERVER_LABELS: Readonly<Record<string, string>> = Object.freeze({
     SERVICE_SNAPSHOT.map(({ declaration }) => [declaration.server.defaultName, declaration.server.defaultName]),
   ),
 });
+
+/**
+ * The prefix a declared server's tools are named with, without the underscore (single-server design D5): `comms` for
+ * core, a channel's word, a service's server name (`events`). The gateway routes a call to the part whose prefix it
+ * carries, and drops a tool a part lists outside its own. Undefined for a word that is no declared server.
+ */
+export function toolPrefix(server: ServerId): string | undefined {
+  return partFacts(server)?.prefix;
+}
 
 /** A channel's manifest, from core's snapshot. */
 export function channelManifest(channel: string): ChannelManifest | undefined {

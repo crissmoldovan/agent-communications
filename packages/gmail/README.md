@@ -73,8 +73,11 @@ agent-gmail setup --client-json ~/Downloads/client_secret_*.json \
 ```
 
 The one step it cannot finish is the grant: it returns the sign-in link and the command that completes it, which
-goes on to register the MCP server when `--mcp-client` came with the mailbox. Registering the OAuth client and
-registering the MCP server are changes you approve. Run by an agent, `setup` stops at each with the preview and an
+goes on to put Gmail into that app's MCP connection when `--mcp-client` came with the mailbox (`--standalone`
+registers an entry of Gmail's own instead, as before 0.35.0). It asks for Gmail for every mailbox; where the app's
+connection already has Gmail kept to one mailbox, or read-only, it leaves that as you chose it, asks nothing, and says
+so with the `agentcomms connection change` that would let it reach the new mailbox too. Registering the OAuth client
+and connecting the MCP server are changes you approve. Run by an agent, `setup` stops at each with the preview and an
 approval id, and runs again with `--approval <id>` for the OAuth client or `--mcp-approval <id>` for the MCP server
 once you have said yes; at a terminal it asks you there.
 
@@ -213,6 +216,45 @@ The MCP server offers each of these as a tool that asks the same way, and an app
 claimed on the other: it is one change. Registering and pruning are the core server's `comms_server_install` and
 `comms_server_prune` with `channel: "gmail"`, and the same holds between them and `mcp install` and `mcp prune`.
 `mcp install --print`, `--client json` and `mcp prune --dry-run` change nothing, and ask nobody.
+
+### Taking messages
+
+When several agent sessions read the same mailbox, the first to take a message has it, and the others leave it. A
+session takes a message before it replies to it, hands it back when it is not its own — saying why, in closed words —
+or marks it done:
+
+```sh
+agent-gmail take 18c2f0a1b2c3d4e5 --inbox acme/gmail                    # this session has it now
+agent-gmail take 18c2f0a1b2c3d4e5 --inbox acme/gmail --hand-back --reason not-mine --note "about billing"
+agent-gmail take 18c2f0a1b2c3d4e5 --inbox acme/gmail --done
+agent-gmail taken 18c2f0a1b2c3d4e5 --inbox acme/gmail                   # who has it
+```
+
+Over MCP these are `gmail_take` (`step`: `take`, `hand-back` or `done`) and `gmail_taken`. Which session is taking is
+worked out by the server or the command from the process it runs in — never from an argument — and a take lapses an
+hour after the session's last act on the message, or as soon as its agent window has ended, unless a send it prepared
+is still waiting for your yes. Only mail that arrived can be taken: not a message this mailbox sent, and not a draft. A
+reason is `not-mine`, `wrong-account`, `needs-the-person`, `duplicate` or `other`; a note is at most 200 characters and
+is shown to you alone. A read-only server offers `gmail_taken` and not `gmail_take`.
+
+What other sessions learn is closed words only: `you`, `another session` or `the person`, taken or done, offered, and
+the reasons it was handed back — never which session, its folder or its client, and never a note. `read`, `thread`,
+`search` and their tools say so on each message, as `taken`.
+
+With `agentcomms taking acme/gmail --require on`, a session must take a message before it drafts a reply to it, and
+before it prepares or sends a reply — one whose In-Reply-To names mail this mailbox received. Without the take the act
+is refused with `TAKE_REQUIRED` (exit `10`), before any draft, preview or approval, and again just before the send: a
+take released in between sends nothing, and the approval is as it was. A message another session has is refused with
+`TAKEN_ELSEWHERE` (exit `10`) whether or not a take is required — and so are organising and binning it, which never
+need a take. A new message and a forward answer nobody's message, and need no take. A follow-up to your own mail goes
+into its thread, so it needs the take of the thread's newest message this mailbox received, and is refused while
+another session has any of them; one in a thread of your own mail alone needs no take. At your own terminal you are
+never held to taking: `agentcomms takes keep` holds a message for you, and `takes list`, `release` and `give` are yours
+too, in core's README.
+
+A take allows nothing by itself: every send still needs the behaviour rules, the send policy and your yes. It keeps two
+sessions from answering the same message; it is not a boundary against a process running as you. Gmail has no 👀, so
+a take says nothing to the sender.
 
 ## Coming from another Gmail MCP server
 

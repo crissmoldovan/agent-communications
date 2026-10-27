@@ -6,8 +6,7 @@ import type {
   LaneUnbindResultV1,
   LaneWindowIdentity,
 } from '../domain/lanes.ts';
-import type { LaneTaskV1, LaneWaitResultV1, LaneWhoamiV1 } from '../runtime/lanes.ts';
-import type { QueueItemV1 } from '../runtime/queue.ts';
+import type { LaneItemV1, LaneTaskV1, LaneWaitResultV1, LaneWhoamiV1 } from '../runtime/lanes.ts';
 
 /**
  * Routing's lanes (routing design 2026-10-25, §3.7 and §6). `laneList`, `laneBind` and `laneUnbind` are the person's,
@@ -90,8 +89,8 @@ export async function laneWait(
 export async function laneItem(
   itemId: string,
   options: Options & { readonly caller: LaneWindowIdentity },
-): Promise<{ readonly item: QueueItemV1 }> {
+): Promise<{ readonly item: LaneItemV1 }> {
   return (await client(options).request('lane-item', withCaller({ itemId }, options))) as {
-    readonly item: QueueItemV1;
+    readonly item: LaneItemV1;
   };
 }

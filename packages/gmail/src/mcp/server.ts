@@ -1,6 +1,7 @@
 import {
   type ApprovalKind,
   type ApprovalOutcome,
+  activityClient,
   answerDownloadInForm,
   approvalNotFound,
   approveAndWaitSentence,
@@ -16,14 +17,17 @@ import {
   type GatedChange,
   gatedChange,
   handoffSentence,
+  isGatewayPart,
   lookupName,
   MAX_WAIT_SECONDS as MAX_APPROVAL_WAIT_SECONDS,
   NEVER_NOTICE,
   orgAddChange,
   profileSourcePath,
+  requestClient,
   retiredOutHint,
   shownPath,
   stateOf,
+  stdinClosed,
   stricterPolicy,
   strictToolArguments,
   toCommsError,
@@ -32,7 +36,7 @@ import {
   waitForApproval,
   warmSessionIdentity,
 } from '@agentcomms/core';
-import { acceptedContent, inputRequired, inputResponse, McpServer } from '@modelcontextprotocol/server';
+import { acceptedContent, inputRequired, inputResponse, McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import type { RegistrationIntent } from '../auth/flows.ts';
 import { GmailContext, type GmailContextOptions } from '../context.ts';
@@ -85,8 +89,9 @@ import {
   type StartedSignIn,
   startSignIn,
 } from '../operations/signin.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
-import { clientServesInbox, mailboxServedElsewhere } from './install.ts';
+import { clientServesInbox, connectionServesInbox, gmailPartLeftAlone, mailboxServedElsewhere } from './install.ts';
 import { inboxArgument, mcpBoolean, mcpInboxes, mcpInteger, mcpStringArray } from './schemas.ts';
 
 export interface GmailMcpOptions extends GmailContextOptions {
@@ -107,6 +112,11 @@ export interface GmailMcpServer {
   /** The alias this server is pinned to, if any. */
   pinned: string | undefined;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
   close(): Promise<void>;
 }
 
@@ -158,6 +168,29 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
 }
 
 /**
+ * Gmail's brief, as a part of an MCP connection (single-server design D14, §5.6): `inbox` on every call first, and its
+ * mailboxes last, the first line to go when the gateway's budget is short — gmail_inboxes_list gives them.
+ */
+export async function gatewayBrief(context: GmailContext, pinned: string | undefined): Promise<string> {
+  let aliases: string[] = [];
+  try {
+    aliases = Object.keys((await context.config()).inboxes);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) aliases = aliases.filter((alias) => alias === pinned);
+  const shown = aliases.slice(0, 8).join(', ');
+  const more = aliases.length > 8 ? `, and ${aliases.length - 8} more` : '';
+  return [
+    pinned
+      ? `This part serves only the mailbox ${pinned}; \`inbox\` may be left out.`
+      : 'Pass `inbox` on every call: there is no default mailbox.',
+    'A send goes only after the person approves that exact message; if a call says so, show the preview and ask.',
+    aliases.length > 0 ? `Known mailboxes: ${shown}${more}.` : 'No mailbox is connected yet.',
+  ].join('\n');
+}
+
+/**
  * The registration a finished sign-in hands back for comms_server_install: the request `inbox add --finish` makes,
  * and what to do with it, in words an agent can follow.
  *
@@ -165,7 +198,7 @@ export async function buildInstructions(context: GmailContext, pinned: string | 
  * `setup --replace-server`, which travels as `force` — then serves this mailbox rather than keeping the other's pin;
  * and without replacing, the way to reach both is a second entry under a name of its own, which the text names.
  */
-async function pendingRegistrationOf(
+async function standalonePendingOf(
   env: NodeJS.ProcessEnv,
   intent: RegistrationIntent,
   alias: string,
@@ -174,12 +207,13 @@ async function pendingRegistrationOf(
 ) {
   const served = await mailboxServedElsewhere(env, { client: intent.client, inbox: alias });
   const second = `gmail-${alias.split('/')[0]}`;
-  // This installation's own `mcp install`, located: the same change comms_server_install makes, at a terminal.
+  // This installation's own `mcp install --standalone`, located: the change comms_server_install makes, at a terminal.
   const command = handoffs.own([
     'mcp',
     'install',
     '--client',
     intent.client,
+    '--standalone',
     ...(intent.launcher ? ['--launcher', intent.launcher] : []),
     ...(!replace && served !== null ? ['--name', second] : []),
     ...(served === null ? [] : ['--inbox', alias]),
@@ -219,6 +253,39 @@ async function pendingRegistrationOf(
 }
 
 /**
+ * The registration a finished sign-in hands back, from 0.35.0 (single-server design D17): Gmail put into the app's MCP
+ * connection, the change comms_connection_change makes with `add` — what `inbox add --finish` makes through
+ * `mcp install`'s change. A sign-in `setup --standalone` handed off, or one with `--replace-server`, hands back the
+ * entry of Gmail's own instead (`standalonePendingOf`).
+ */
+async function pendingRegistrationOf(
+  env: NodeJS.ProcessEnv,
+  intent: RegistrationIntent,
+  alias: string,
+  replace: boolean,
+  handoffs: CliHandoffs,
+) {
+  if (intent.standalone === true || replace) return standalonePendingOf(env, intent, alias, replace, handoffs);
+  // This installation's own `mcp install`, located: the change comms_connection_change makes with `add`, at a terminal.
+  const command = handoffs.own([
+    'mcp',
+    'install',
+    '--client',
+    intent.client,
+    ...(intent.launcher ? ['--launcher', intent.launcher] : []),
+  ]);
+  return {
+    client: intent.client,
+    tool: 'comms_connection_change' as const,
+    arguments: { app: intent.client, add: { server: 'gmail' as const } },
+    next: `The mailbox is connected; Gmail is not in ${intent.client}'s MCP connection, or does not reach this mailbox there, yet. Call comms_connection_change on the core server with these arguments, show the person its preview, and call it again with the approvalId once they say yes. ${handoffSentence(
+      command,
+      (line) => `Without the core server, the person runs ${line} at a terminal.`,
+    )}`,
+  };
+}
+
+/**
  * Builds the MCP server. Tools are registered by process flags only — never by which inboxes exist — so `tools/list`
  * is the same for every connection and an inbox added later works without a restart. What an inbox may actually do is
  * checked on every call, against config as it is at that moment.
@@ -245,12 +312,23 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
 
   const server = new McpServer(
     { name: 'agent-gmail', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
-  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
-  context.clientInfo = () => server.server.getClientVersion();
+  // The activity log's session names the client each call came from: its 2026-07-28 envelope's, or the one it named on
+  // connecting (design 2026-10-25-activity, S2; single-server design D7).
+  context.clientInfo = activityClient(() => server.server.getClientVersion());
+  /**
+   * The name of the client a request comes from, as it said it is: its envelope's on 2026-07-28, where `serveStdio`
+   * sets no `getClientVersion()`, and its `initialize`'s on 2025-11-25. Read per request, so a form the person chose to
+   * trust a client with is offered to it in either era.
+   */
+  const clientName = (ctx: unknown): string => requestClient(ctx, () => server.server.getClientVersion())?.name ?? '';
 
   /**
    * Every tool answers with the same envelope, and the text block mirrors it for clients that drop structured data.
@@ -820,6 +898,32 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  /**
+   * Who has a message (design 2026-10-26-taking-messages §6, T7), in closed words: never another session's folder,
+   * client, key or session id, and never a hand-back's note.
+   */
+  const takenSchema = z
+    .object({
+      state: z.enum(['open', 'offered', 'taken', 'done']),
+      by: z.enum(['you', 'another session', 'the person']).optional(),
+      since: z.string().optional(),
+      leaseUntil: z
+        .string()
+        .nullable()
+        .optional()
+        .describe('your own take: when it lapses with no further act; null while an approval holds it'),
+      offered: z
+        .object({ to: z.enum(['you', 'another session']), until: z.string().nullable() })
+        .optional()
+        .describe('reserved for one session, which must still take it'),
+      handedBack: z
+        .array(z.enum(['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other']))
+        .optional()
+        .describe('why sessions handed it back since it was last taken'),
+    })
+    .nullable()
+    .describe('who has the message: null when nobody has taken, offered or handed it back');
+
   const rowSchema = z.object({
     inbox: z.string(),
     threadId: z.string(),
@@ -833,6 +937,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     attachmentCount: z.number(),
     unread: z.boolean(),
     webLink: z.string(),
+    taken: takenSchema.optional(),
   });
 
   server.registerTool(
@@ -941,6 +1046,38 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       try {
         const thread = await readThread(context, targetInbox(inbox), threadId, { includeQuoted, maxChars });
         return reply({ thread });
+      } catch (error) {
+        return fail(error);
+      }
+    },
+  );
+
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): who has these messages, in closed words — this machine's
+   * records alone, one file look each. A look, kept apart from gmail_take so a client that asks before each write does
+   * not ask before it.
+   */
+  server.registerTool(
+    'gmail_taken',
+    {
+      title: 'Who has a message',
+      description:
+        'Who has these messages, before you act on one: `you`, `another session`, `the person`, offered to one session, done, or handed back and why — never which session, folder or client. With no `messages`, the ones this session has taken or been offered in the mailbox. Reads only this machine’s records. A message another session has is not yours to answer: leave it.',
+      inputSchema: z.object({
+        inbox: inboxArgument(Boolean(pinned)),
+        messages: mcpStringArray()
+          .optional()
+          .describe('message ids, at most 50; leave out for this session’s own takes'),
+      }),
+      outputSchema: z.object({
+        inbox: z.string(),
+        messages: z.array(z.object({ id: z.string(), taken: takenSchema })),
+      }),
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ inbox, messages }) => {
+      try {
+        return reply(await takenMessages(context, targetInbox(inbox), messages as string[] | undefined));
       } catch (error) {
         return fail(error);
       }
@@ -1110,7 +1247,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
          * and answered only to it: an answer the form was never raised for is refused, as a send's code is.
          */
         if (typeof choiceId === 'string' && (await downloadNeedsPerson(choiceId, alias))) {
-          const client = server.server.getClientVersion()?.name ?? '';
+          const client = clientName(ctx);
           const answered = inputResponse(ctx.mcpReq.inputResponses, SAVE_KEY);
           if (answered.kind === 'missing' && (await isAllowlisted(client))) {
             const form = await downloadQuestionForm(context.core, choiceId, context.env);
@@ -1528,7 +1665,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     {
       title: 'What setup still needs',
       description:
-        'Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_server_install with channel "gmail" (the agent connection).',
+        'Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_connection_change with `add` {server: "gmail"} and the client as `app` (the agent connection; comms_server_install with channel "gmail" registers an entry of Gmail’s own instead).',
       inputSchema: z.object({
         inbox: z.string().min(1).optional().describe('the mailbox name setup is preparing, e.g. acme/gmail'),
         email: z.string().min(1).optional().describe('the address that mailbox must turn out to be'),
@@ -1819,7 +1956,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
         {
           title: 'Finish connecting a mailbox',
           description:
-            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and registering the server is a change of its own that this tool does not make — call the core server’s comms_server_install with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).',
+            'Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and putting Gmail into the client’s MCP connection is a change of its own that this tool does not make — call the core server’s tool it names (comms_connection_change; comms_server_install after `setup --standalone`) with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).',
           inputSchema: z.object({
             flowId: z.string().min(1),
             url: z
@@ -1852,22 +1989,41 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               .looseObject({ id: z.string(), email: z.string(), client: z.string(), tier: z.string() })
               .describe('the mailbox as it was saved, as `--finish --json` prints it, without where its token is kept'),
             pendingRegistration: z
+              .union([
+                z.object({
+                  client: z.string(),
+                  tool: z.literal('comms_connection_change'),
+                  arguments: z.object({ app: z.string(), add: z.object({ server: z.literal('gmail') }) }),
+                  next: z.string(),
+                }),
+                z.object({
+                  client: z.string(),
+                  tool: z.literal('comms_server_install'),
+                  arguments: z.object({
+                    channel: z.literal('gmail'),
+                    client: z.string(),
+                    launcher: z.string().optional(),
+                    inbox: z.string().optional(),
+                    name: z.string().optional(),
+                    force: z.literal(true).optional(),
+                  }),
+                  next: z.string(),
+                }),
+              ])
+              .optional()
+              .describe(
+                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and that client’s MCP connection does not reach this mailbox yet — and its Gmail part, if it has one, is not kept to another mailbox or read-only (then see `connectionLeftAlone`): nothing was registered — call the tool it names, comms_connection_change, with `arguments`, show its preview, and claim it after the user says yes. A sign-in `setup --standalone` handed off names comms_server_install instead, for an entry of Gmail’s own, when no entry of this server in that client serves this mailbox — or `setup` was given `--replace-server`, which `force` carries; there `inbox` pins it to this mailbox, where the entry under that name serves another, and `name` names a second entry when that one is not being replaced',
+              ),
+            connectionLeftAlone: z
               .object({
                 client: z.string(),
-                tool: z.literal('comms_server_install'),
-                arguments: z.object({
-                  channel: z.literal('gmail'),
-                  client: z.string(),
-                  launcher: z.string().optional(),
-                  inbox: z.string().optional(),
-                  name: z.string().optional(),
-                  force: z.literal(true).optional(),
-                }),
+                connection: z.object({ id: z.string(), name: z.string() }),
+                part: z.string().describe('the Gmail part as it is: "Gmail, the mailbox acme/gmail, read-only"'),
                 next: z.string(),
               })
               .optional()
               .describe(
-                'present when the Gmail CLI’s `setup --mcp-client` handed this sign-in off and no entry of this server in that client serves this mailbox yet — or `setup` was given `--replace-server`, which `force` carries: nothing was registered — call comms_server_install with `arguments`, show its preview, and claim it after the user says yes. `inbox` pins it to this mailbox, where the entry under that name serves another; `name` names a second entry when that one is not being replaced',
+                'present instead when that client’s connection has Gmail kept to another mailbox, or read-only: setup asks for every mailbox, which would loosen it, so it was left as it is and nothing is pending — tell the person `next`, which names the command that would let it reach this mailbox too, a change they approve',
               ),
           }),
           annotations: { readOnlyHint: false, openWorldHint: true },
@@ -1896,17 +2052,35 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
             /*
              * The registration `setup --mcp-client` asked for, handed back rather than made. `inbox add --finish`
              * makes it, through `mcp install`'s change; this server has no tool that registers anything, and
-             * growing one here would be a second way in for what the core server's comms_server_install already is
-             * — the same change, approved the same way. So an agent is told what to call, and nothing is claimed
-             * that did not happen. Decided as `inbox add --finish` decides it: a client whose entry of ours already
-             * serves this mailbox has nothing pending (`clientServesInbox`), unless `setup` was given
-             * `--replace-server`, which asked for that entry to be replaced and travels as `force`.
+             * growing one here would be a second way in for what the core server's comms_connection_change (and,
+             * for an entry of Gmail's own, comms_server_install) already is — the same change, approved the same way.
+             * So an agent is told what to call, and nothing is claimed that did not happen. Decided as
+             * `inbox add --finish` decides it: a client whose MCP connection's Gmail part reaches this mailbox has
+             * nothing pending (`connectionServesInbox`); after `setup --standalone`, a client whose entry of ours
+             * serves it (`clientServesInbox`), unless `setup` was given `--replace-server`, which asked for that entry
+             * to be replaced and travels as `force`.
              */
             const intent = result.registerWith;
             const replace = intent?.replace === true;
+            const served =
+              intent === undefined || replace
+                ? false
+                : intent.standalone === true
+                  ? await clientServesInbox(context.env, { client: intent.client, inbox: result.alias })
+                  : connectionServesInbox(await context.core.config.load(), context.env, {
+                      client: intent.client,
+                      inbox: result.alias,
+                    }) !== null;
+            // Kept to another mailbox, or read-only: every mailbox would loosen it — left as it is, and said (decision 5).
+            const leftAlone =
+              intent && !served && intent.standalone !== true && !replace
+                ? gmailPartLeftAlone(await context.core.config.load(), context.env, context.handoffs, {
+                    client: intent.client,
+                    inbox: result.alias,
+                  })
+                : null;
             const pending =
-              intent &&
-              (replace || !(await clientServesInbox(context.env, { client: intent.client, inbox: result.alias })))
+              intent && !served && leftAlone === null
                 ? await pendingRegistrationOf(context.env, intent, result.alias, replace, context.handoffs)
                 : undefined;
             return reply({
@@ -1919,6 +2093,16 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
               missingScopes: result.missingScopes,
               inbox: saved,
               ...(pending ? { pendingRegistration: pending } : {}),
+              ...(intent && leftAlone !== null
+                ? {
+                    connectionLeftAlone: {
+                      client: intent.client,
+                      connection: { id: leftAlone.connection.id, name: leftAlone.connection.name },
+                      part: leftAlone.part,
+                      next: leftAlone.next,
+                    },
+                  }
+                : {}),
             });
           } catch (error) {
             return fail(error);
@@ -2465,6 +2649,52 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
     );
 
+    /*
+     * Taking messages (design 2026-10-26-taking-messages §5): this session takes a message before it acts on it, so no
+     * other session does — and hands it back, saying why, or marks it done. The session is the server's own, worked
+     * out from its process, never an argument. Nothing is said to the sender: mail has no 👀.
+     */
+    server.registerTool(
+      'gmail_take',
+      {
+        title: 'Take a message',
+        description:
+          'Take a message before you reply to it, so no other session does: `step` "take" (the default) takes it, or renews your own take; "hand-back" gives it back when it is not yours, with a `reason` — not-mine, wrong-account, needs-the-person, duplicate or other — and an optional `note` for the person alone; "done" marks it done, and other sessions stay refused. Where the mailbox asks for it, a reply refuses with TAKE_REQUIRED until you take the message; one another session has refuses with TAKEN_ELSEWHERE whatever the setting — leave it. A take lapses an hour after your last act on the message. It reads the message to check it arrived, and sends nothing.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          message: z.string().min(1).describe('the message id, as a search or a read gives it'),
+          step: z.enum(['take', 'hand-back', 'done']).optional().describe('take (the default), hand-back or done'),
+          reason: z
+            .enum(['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other'])
+            .optional()
+            .describe('with hand-back: why, in closed words other sessions see'),
+          note: z
+            .string()
+            .optional()
+            .describe('with hand-back or done: at most 200 characters, for the person alone — no session sees it'),
+        }),
+        outputSchema: z.object({
+          inbox: z.string(),
+          message: z.string(),
+          thread: z.string().nullable(),
+          step: z.enum(['take', 'hand-back', 'done']),
+          state: z.enum(['open', 'offered', 'taken', 'done']),
+          you: z.boolean().describe('true while this session has it'),
+          leaseUntil: z.string().nullable().describe('when your take lapses with no further act'),
+          changed: z.boolean(),
+          taken: takenSchema,
+        }),
+        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+      },
+      async ({ inbox, message, step, reason, note }) => {
+        try {
+          return reply(await takeMessage(context, targetInbox(inbox), message, { step, reason, note }));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
     server.registerTool(
       'gmail_label_create',
       {
@@ -2676,7 +2906,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           if (outcome !== undefined && needsConfirmation(outcome)) {
             const answered = inputResponse(ctx.mcpReq.inputResponses, APPROVAL_KEY);
             if (answered.kind === 'missing') {
-              const client = server.server.getClientVersion()?.name ?? '';
+              const client = clientName(ctx);
               if (!(await isAllowlisted(client))) {
                 throw new CommsError('APPROVAL_REQUIRED', 'this send needs approval outside the chat', {
                   hint: approveAndWaitSentence(
@@ -2779,7 +3009,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       },
       async (_args, ctx) => {
         try {
-          const client = server.server.getClientVersion()?.name ?? '';
+          const client = clientName(ctx);
           if (!client) throw new CommsError('USAGE', 'this client did not say what it is called');
           const answered = inputResponse(ctx.mcpReq.inputResponses, PROBE_KEY);
           if (answered.kind === 'missing') {
@@ -3064,27 +3294,39 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const handles: { close(): Promise<void> }[] = [];
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    const handle = serveStdio(
+      async () => {
+        const next = unserved ?? (await createGmailMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+    handles.push(handle);
+    return handle;
+  };
   return {
     server,
     pinned,
-    /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((resolve) => {
-        const previous = transport.onclose;
-        transport.onclose = () => {
-          previous?.();
-          resolve();
-        };
-        // A client that dies without closing the transport simply closes our stdin.
-        process.stdin.once('end', resolve);
-        process.stdin.once('close', resolve);
-      });
-      await server.connect(transport);
+      // A client that dies without closing the transport simply closes our stdin.
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
     async close(): Promise<void> {
+      await Promise.all(handles.map((handle) => handle.close()));
       await server.close();
     },
   };

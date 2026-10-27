@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  agentMarkerHint,
   channelManifest,
   cliHandoffs,
   handoffSentence,
@@ -122,30 +123,32 @@ test('a usage error names this installation’s --help, located, never `agent-wh
 
 test('add, remove, allow, deny and clear refused to an agent hand the person the command, located (7d)', async () => {
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
+  // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review, LOW 3).
+  const clear = agentMarkerHint('CLAUDECODE', 'darwin');
   const add = await harness.cli(['add', ACCOUNT, '--json']);
   assert.equal(add.code, 10);
   assert.equal(
     add.json().error?.hint,
-    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT])} in their own terminal.`,
+    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT])} in their own terminal. ${clear}`,
   );
   const source = await harness.cli(['add', ACCOUNT, '--source', '/tmp/store path/ChatStorage.sqlite', '--json']);
   assert.equal(
     source.json().error?.hint,
-    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT, '--source', '/tmp/store path/ChatStorage.sqlite'])} in their own terminal.`,
+    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT, '--source', '/tmp/store path/ChatStorage.sqlite'])} in their own terminal. ${clear}`,
   );
 
   await harness.ready(ACCOUNT);
   const remove = await harness.cli(['remove', ACCOUNT, '--json']);
   assert.equal(
     remove.json().error?.hint,
-    `Ask the person to run ${ownInline(harness.env, ['remove', ACCOUNT])} in their own terminal.`,
+    `Ask the person to run ${ownInline(harness.env, ['remove', ACCOUNT])} in their own terminal. ${clear}`,
   );
   for (const argv of [['allow', ALICE], ['deny', ALICE], ['clear'], ['clear', ALICE]]) {
     const refused = await harness.cli([...argv, '--account', ACCOUNT, '--json']);
     assert.equal(refused.code, 10);
     assert.equal(
       refused.json().error?.hint,
-      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal.`,
+      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal. ${clear}`,
     );
     assertNoBareCommand(String(refused.json().error?.hint));
   }
@@ -159,7 +162,7 @@ test('on Windows a refusal whose words no line can carry gives them as JSON to t
   assert.ok(isCommand(handoff) && handoff.line === null, 'no line: `%` cannot be quoted for every Windows shell');
   assert.equal(
     hint,
-    handoffSentence(handoff, (command) => `Ask the person to run ${command} in their own terminal.`),
+    `${handoffSentence(handoff, (command) => `Ask the person to run ${command} in their own terminal.`)} ${agentMarkerHint('CLAUDECODE', 'win32')}`,
   );
   assert.match(hint, /cannot be quoted the same way for cmd\.exe and for PowerShell/);
   assertNoBareCommand(hint);
@@ -332,7 +335,7 @@ test('approve refused to an agent, or away from a terminal, names this installat
   const wait = coreInline(harness.env, ['approval', 'wait', 'ap_1']);
   assert.equal(
     byAgent.json().error?.hint,
-    `Ask the person to run ${approve} in their own terminal; learn when they have with ${wait}.`,
+    `Ask the person to run ${approve} in their own terminal; learn when they have with ${wait}. ${agentMarkerHint('CLAUDECODE', 'darwin')}`,
   );
   assertNoBareCommand(String(byAgent.json().error?.hint));
   const noTerminal = await harness.cli(['approve', 'ap_1', '--json'], { env: harness.personEnv });
@@ -342,12 +345,34 @@ test('approve refused to an agent, or away from a terminal, names this installat
 test('a change waiting for approval is run again with this installation’s own mcp install, located', async () => {
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
   await harness.ready(ACCOUNT);
-  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--account', ACCOUNT];
+  const argv = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'npx',
+    '--no-verify',
+    '--account',
+    ACCOUNT,
+  ];
   const asked = await harness.cli([...argv, '--json']);
   assert.equal(asked.code, 10, asked.stdout);
   const error = asked.json().error as { hint: string; details: { approvalId: string } };
   const { approvalId } = error.details;
-  const rerun = ['mcp', 'install', '--client', 'cursor', '--account', ACCOUNT, '--launcher', 'npx', '--no-verify'];
+  const rerun = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--account',
+    ACCOUNT,
+    '--launcher',
+    'npx',
+    '--no-verify',
+  ];
   assert.equal(
     error.hint,
     `Show the person the preview. Once they say yes, run ${ownInline(harness.env, [...rerun, '--approval', approvalId])}.`,

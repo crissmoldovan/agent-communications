@@ -11,6 +11,8 @@ import {
   cliHandoffs,
   colorEnabled,
   commandPathOf,
+  connectionPartChange,
+  connectionPartExitStatus,
   downloadAtTerminal,
   EXIT_CODES,
   exemptFromUpdateNotice,
@@ -30,8 +32,10 @@ import {
   pathOverridesFromCliOptions,
   personAtTerminal,
   refuseRetiredOut,
+  refuseStandaloneOptions,
   refuseUnclaimedApproval,
   renderApprovalWait,
+  renderConnectionPart,
   renderPrune,
   resolvePaths,
   runCommand,
@@ -120,8 +124,10 @@ import {
 import { openWorkspace } from '../operations/session.ts';
 import { finishSignIn, type ListenerEntry, runSignInListener, type StartedSignIn } from '../operations/signin.ts';
 import { prepareStandingAdd } from '../operations/standing.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { checkAliasFree, listWorkspaces, requireWorkspace, showWorkspace } from '../operations/workspaces.ts';
 import { standingNarrowedView, standingPending } from '../standing-views.ts';
+import { takenLookupFor } from '../taken-lookup.ts';
 import { VERSION } from '../version.ts';
 import { openInBrowser } from './browser.ts';
 import { askHidden, readConfigurationToken } from './config-token.ts';
@@ -1148,6 +1154,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               latest: flags.latest as string | undefined,
               cursor: flags.cursor as string | undefined,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeHistory(channel),
@@ -1174,6 +1181,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               limit,
               cursor: flags.cursor as string | undefined,
               ourTeamId: teamId,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeThread,
@@ -1206,6 +1214,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
               page,
               ourTeamId: teamId,
               surface: context.surface,
+              taken: takenLookupFor(context, String(flags.workspace)),
             });
           },
           describeSearch,
@@ -1765,6 +1774,77 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     );
 
   /*
+   * Taking messages (design 2026-10-26-taking-messages §5): `take` takes a message for the session this command runs in
+   * — its agent window, worked out from the process, never an argument — hands it back, or marks it done; `taken` says
+   * who has messages. At your own terminal a command is you, who take nothing: core's `takes keep` is yours.
+   */
+  workspaceOption(program.command('take <channel> <ts>'))
+    .description('take a message before acting on it, so no other session does; hand it back, or mark it done')
+    .option('--hand-back', 'hand it back: it is not this session’s', false)
+    .option('--reason <reason>', 'why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other')
+    .option('--note <note>', 'at most 200 characters for the person, with --hand-back or --done; no session sees it')
+    .option('--done', 'mark it done: other sessions stay refused', false)
+    .action(
+      act(async (context, _options, channel: string, ts: string, flags: Options) => {
+        if (flags.handBack === true && flags.done === true) {
+          throw new CommsError('USAGE', '--hand-back or --done, not both');
+        }
+        const step = flags.handBack === true ? 'hand-back' : flags.done === true ? 'done' : 'take';
+        const done = await takeMessage(
+          context,
+          String(flags.workspace),
+          channel,
+          ts,
+          { step, reason: flags.reason, note: flags.note },
+          { fetch: deps.read, baseUrl: deps.slackBaseUrl },
+        );
+        writeResult(
+          done,
+          output(),
+          (data) =>
+            data.step === 'take'
+              ? `${data.changed ? 'Taken' : 'Still yours'}: ${data.message}${data.leaseUntil === null ? '' : `, until ${data.leaseUntil} unless you act on it again`}.`
+              : data.step === 'hand-back'
+                ? `Handed back: ${data.message} is open to every session again.`
+                : `Done: ${data.message}. Other sessions stay refused it.`,
+          streams,
+        );
+      }),
+    );
+
+  workspaceOption(program.command('taken [messages...]'))
+    .description('who has these messages, each <channel>/<ts>, in closed words; none: this session’s own')
+    .action(
+      act(async (context, _options, messages: string[], flags: Options) => {
+        const asked = messages.length === 0 ? undefined : messages;
+        const result = await takenMessages(context, String(flags.workspace), asked);
+        writeResult(
+          result,
+          output(),
+          (data) =>
+            data.messages.length === 0
+              ? asked === undefined
+                ? 'This session has no message taken or offered here.'
+                : 'Nobody has these messages.'
+              : data.messages
+                  .map(({ id, taken }) => {
+                    if (taken === null) return `${id}  nobody`;
+                    const who =
+                      taken.state === 'offered'
+                        ? `offered to ${taken.offered?.to ?? 'another session'}`
+                        : taken.state === 'open'
+                          ? 'open'
+                          : `${taken.state} by ${taken.by ?? 'another session'}`;
+                    const back = taken.handedBack === undefined ? '' : `; handed back: ${taken.handedBack.join(', ')}`;
+                    return `${id}  ${who}${back}`;
+                  })
+                  .join('\n'),
+          streams,
+        );
+      }),
+    );
+
+  /*
    * Editing and deleting a message this account posted (design 2026-10-06), through the gate a post goes through: a
    * preview of the act on the message as Slack has it now, an approval bound to both, and a second command that makes
    * it once. `edit` takes its new words from a draft, as `post` does; `delete` takes only the message.
@@ -2056,8 +2136,14 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
     .option('--workspace <name>', 'pin the server to one workspace')
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
-    .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
-    .option('--print', 'only print what would be written', false)
+    .option('--force', "with --standalone: replace this server's own earlier entry — this is how you upgrade", false)
+    .option('--print', 'with --standalone: only print what would be written', false)
+    .option('--connection <id>', "the app's connection to put it into, when the app has several")
+    .option(
+      '--standalone',
+      "register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection",
+      false,
+    )
     .option('--approval <approvalId>', 'register the server this approval was given for')
     .action(
       act(async (context, options, flags: Options) => {
@@ -2087,6 +2173,58 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
         const launcher = flags.launcher as 'managed' | 'npx' | 'local' | undefined;
         const name = flags.name as string | undefined;
         /*
+         * From 0.35.0 this puts Slack into the app's MCP connection (single-server design D17), or makes the app one
+         * with Agent Comms itself and Slack: the change comms_connection_change makes with `add`, approved the same
+         * way — so an approval either prepared is claimed by the other. What names an entry of Slack's own is
+         * refused here, never taken as asking for one; `--standalone` registers that entry, as before.
+         */
+        if (flags.standalone !== true) {
+          refuseStandaloneOptions({
+            client: String(flags.client),
+            name,
+            defaultName: SLACK_MCP.defaultServerName,
+            force: flags.force === true,
+            print: flags.print === true,
+          });
+          const added = await changeAt(
+            context,
+            connectionPartChange(
+              context.core,
+              env,
+              {
+                server: 'slack',
+                app: String(flags.client),
+                ...(flags.connection === undefined ? {} : { id: String(flags.connection) }),
+                ...(pinned === undefined ? {} : { account: pinned }),
+                ...(launcher === undefined ? {} : { launcher }),
+                ...(flags.verify === false ? { noVerify: true } : {}),
+                ...(flags.approval === undefined ? {} : { approvalId: String(flags.approval) }),
+              },
+              'cli',
+              // This command cannot verify a release: it may install the one it is running, as its entry did.
+              { running: { packageName: SLACK_MCP.packageName, version: SLACK_MCP.version } },
+            ),
+            flags,
+            [
+              'mcp',
+              'install',
+              '--client',
+              String(flags.client),
+              ...(pinned !== undefined ? ['--workspace', pinned] : []),
+              ...(launcher !== undefined ? ['--launcher', launcher] : []),
+              ...(flags.verify === false ? ['--no-verify'] : []),
+              ...(flags.connection !== undefined ? ['--connection', String(flags.connection)] : []),
+            ],
+          );
+          const status = connectionPartExitStatus(added);
+          if (status !== EXIT_CODES.OK) softExit = status;
+          writeResult(added, output(), () => renderConnectionPart(added, options.color), streams);
+          return;
+        }
+        if (flags.connection !== undefined) {
+          throw new CommsError('USAGE', '--connection names the connection to put Slack into: not with --standalone');
+        }
+        /*
          * Registering a server is a change a person approves (design §3.1), and this is the change
          * `comms_server_install` makes, with this package's own product for its version and its code. It registered with no approval at all while the tool asked for one — the same
          * operation, refused on one surface and not the other. An approval from the tool is claimed here with
@@ -2097,6 +2235,7 @@ temporary (retry later) · 77 sign-in or permission needed · 78 configuration p
           'install',
           '--client',
           String(flags.client),
+          '--standalone',
           ...(name !== undefined && name !== 'slack' ? ['--name', name] : []),
           ...(pinned !== undefined ? ['--workspace', pinned] : []),
           ...(launcher !== undefined ? ['--launcher', launcher] : []),

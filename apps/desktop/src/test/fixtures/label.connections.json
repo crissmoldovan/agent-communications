@@ -1,0 +1,49 @@
+{
+  "word": "agent",
+  "words": ["agent", "assistant", "twin", "minion", "bot", "fake", "AI"],
+  "name": null,
+  "rules": [],
+  "accounts": [
+    {
+      "account": "acme/gmail",
+      "platform": "gmail",
+      "channel": "Gmail",
+      "phrase": null,
+      "kinds": [],
+      "conversations": []
+    },
+    {
+      "account": "acme/resend",
+      "platform": "resend",
+      "channel": "Resend",
+      "phrase": null,
+      "kinds": [],
+      "conversations": []
+    },
+    {
+      "account": "acme/slack",
+      "platform": "slack",
+      "channel": "Slack",
+      "phrase": null,
+      "kinds": [],
+      "conversations": []
+    },
+    {
+      "account": "personal/gmail",
+      "platform": "gmail",
+      "channel": "Gmail",
+      "phrase": null,
+      "kinds": [],
+      "conversations": []
+    },
+    {
+      "account": "personal/whatsapp",
+      "platform": "whatsapp",
+      "channel": "WhatsApp",
+      "phrase": null,
+      "kinds": [],
+      "conversations": []
+    }
+  ],
+  "ignored": []
+}

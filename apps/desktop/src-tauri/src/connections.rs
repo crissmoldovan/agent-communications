@@ -31,7 +31,8 @@ impl Call {
     /// `mcpInstall` of the same app and the same servers in the same order, `updateApproved` the `update` the app
     /// prepared (0.34.0), `eventsRuleApprove` the rule activation `eventsRuleEnable` came back with, for the same digest
     /// (0.33.0), and `eventsCollectionApprove` the switching on `eventsEnableAll` came back with (0.34.0); and a label
-    /// change with `appApproval` the same change without it (0.34.0, `label`). None for every other call.
+    /// change with `appApproval` the same change without it (0.34.0, `label`), as a taking change's is (0.35.0,
+    /// `taking`). None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -88,8 +89,13 @@ impl Call {
                     style: *style,
                 },
             )),
-            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
-            _ => self.answers_label_approval(),
+            // A label change (0.34.0, Your agents), a taking change, one of Search's loosenings or an MCP connection's
+            // (0.35.0): the same change, without the approval the app prepared it for.
+            _ => self
+                .answers_label_approval()
+                .or_else(|| self.answers_taking_approval())
+                .or_else(|| self.answers_search_approval())
+                .or_else(|| self.answers_connection_approval()),
         }
     }
 }
@@ -98,13 +104,14 @@ impl Call {
 /// `mcp uninstall` and `update` write are the person's real ones (`~/.claude.json` and the rest), so a test could
 /// register an unverified local build into their real apps, or take their real servers away.
 const TEST_BUILD_REFUSAL: &str =
-    "the test build does not change which apps have which servers, or bring them up to date: \
+    "the test build does not change which apps have which servers or connections, or bring them up to date: \
 Connections only shows there, because changing it would edit your real apps' settings. Use your own Agent Comms for \
 that";
 
 impl Call {
     /// Whether the call writes a client's own config: adding a server to an app, taking one away, or an update, which
-    /// registers servers again (0.34.0).
+    /// registers servers again (0.34.0); or changes an MCP connection, whose entry is in an app's config and which that
+    /// entry starts (0.35.0).
     pub fn edits_client_configs(&self) -> bool {
         matches!(
             self,
@@ -113,7 +120,7 @@ impl Call {
                 | Call::McpUninstall { .. }
                 | Call::Update {}
                 | Call::UpdateApproved { .. }
-        )
+        ) || self.changes_connection()
     }
 }
 

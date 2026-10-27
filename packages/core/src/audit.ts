@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RetainedApproval } from './approval-maintenance.ts';
 import type { SendPolicy } from './config.ts';
+import { connectionOfThisProcess } from './connections.ts';
 import { appendPrivateLine } from './fs.ts';
 
 /**
@@ -31,6 +32,11 @@ export interface AuditRecord {
   surface?: 'cli' | 'mcp' | 'app' | 'daemon';
   /** The requesting client surface; autonomous work is `daemon`/`daemon`. */
   origin?: 'cli' | 'mcp' | 'app' | 'daemon';
+  /**
+   * The MCP connection a line is about, or the one the call came through (single-server design D11, §7): its id, never
+   * its key or the key's hash.
+   */
+  connection?: string;
   /**
    * Who approved a change, when it was the person in the desktop app (0.32.0): the approval answered through the app
    * channel, as judge setup's disclosures are (`approvedVia: 'app'` on the record). `desktop-app` when the release app
@@ -95,8 +101,11 @@ export class AuditLog {
     options: { durable?: boolean } = {},
   ): Promise<AuditRecord> {
     const at = record.at ?? this.#now().toISOString();
+    // A line a part of an MCP connection writes names the connection it came through (single-server design §7).
+    const connection = record.connection ?? connectionOfThisProcess();
     const full: AuditRecord = {
       ...record,
+      ...(connection === undefined ? {} : { connection }),
       at,
       ...(record.ids ? { ids: condense(record.ids) as NonNullable<AuditRecord['ids']> } : {}),
     };

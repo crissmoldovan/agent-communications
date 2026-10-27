@@ -1,0 +1,727 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflow as text</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.av{width:28px;height:28px;border-radius:8px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11.5px;flex:none}
+.av.lg{width:44px;height:44px;border-radius:12px;font-size:15px}
+.av.out{background:var(--warnSoft);color:var(--warn)}
+.av.n{background:var(--s2);color:var(--text2)}
+.quote{margin:0;border-radius:10px;padding:10px 12px;background:var(--s2);overflow-wrap:anywhere}
+.back{align-self:flex-start;text-decoration:none;color:var(--text2);font-weight:500}
+.back:hover{color:var(--text)}
+.words{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 14px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:150px;flex:none;color:var(--text2)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.arrow{color:var(--text3)}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--s2)}
+.setrow.first{border-top:0;padding-top:2px}
+.setrow .grow{display:flex;flex-direction:column;gap:3px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:0;background:var(--s2);text-align:left;cursor:pointer;width:100%;box-sizing:border-box;transition:background-color 160ms ease}
+.opt:hover{background:var(--s3)}
+.opt[aria-checked="true"]{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.opt .grow{display:flex;flex-direction:column;gap:2px}
+.rb{width:14px;height:14px;border-radius:50%;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .rb{border:4px solid var(--accent)}
+.cb{width:14px;height:14px;border-radius:4px;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .cb{border:0;background:var(--accent)}
+.sel{height:30px;border-radius:8px;border:0;background:var(--s2);padding:0 8px;cursor:pointer}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:62px 14px minmax(0,1fr);column-gap:10px;position:relative;padding-bottom:13px}
+.ev .t{color:var(--text3);font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin-top:4px;position:relative;z-index:1;justify-self:center;box-shadow:0 0 0 3px var(--s1)}
+.ev .ln{position:absolute;left:78px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.ev .w{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500}
+.d-grey{background:var(--text3)}
+.d-acc{background:var(--accent)}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+.note{background:var(--s2);border-radius:10px;padding:10px 12px;color:var(--text2);display:flex;gap:8px;align-items:flex-start}
+.ta{width:100%;box-sizing:border-box;min-height:84px;border-radius:10px;border:0;background:var(--s2);padding:10px 12px;resize:vertical;line-height:1.5}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.app textarea{font:inherit;color:inherit}
+.app .link{color:var(--accent)}
+.ni.sub{margin-left:14px}
+.t-light{--scrim:rgba(24,24,27,.32);--str:#9A3412}
+.t-dark{--scrim:rgba(0,0,0,.55);--str:#FDBA74}
+.app{position:relative}
+.main.tight{padding:24px 24px 56px}
+.wide{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.seg{display:inline-flex;background:var(--s2);border-radius:10px;padding:3px;gap:2px;flex:none}
+.sg{height:28px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.sg:hover{color:var(--text)}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.gl{width:20px;height:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex:none;line-height:1}
+.k-start{background:var(--accentSoft);color:var(--accent)}
+.k-logic{background:var(--s3);color:var(--text2)}
+.k-act{background:var(--warnSoft);color:var(--warn)}
+.fx{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--accent)}
+.new.xs{height:15px;font-size:9.5px;padding:0 4px;border-radius:5px;vertical-align:1px;margin-left:4px}
+.tag{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:7px;border:0;background:var(--s2);font-size:12px;font-weight:500;cursor:pointer;color:var(--text2)}
+.tag.on{background:var(--accentSoft);color:var(--accent)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.vp{position:relative;overflow:hidden;border-radius:14px;background-color:var(--s2);background-image:radial-gradient(color-mix(in srgb,var(--text3) 32%,transparent) 1px,transparent 1.2px)}
+.cv{position:absolute;left:0;top:0;transform-origin:0 0}
+.node{position:absolute;box-sizing:border-box;border:0;padding:0;margin:0;text-align:left;background:var(--s1);border-radius:10px;outline:1px solid color-mix(in srgb,var(--text3) 40%,transparent);outline-offset:-1px;box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;transition:outline-color 160ms ease,opacity 160ms ease}
+.node:hover{outline-color:var(--text3)}
+.node.sel{outline:2px solid var(--text);outline-offset:-2px}
+.node.ghost{background:transparent;box-shadow:none;outline:1.5px dashed var(--text3);outline-offset:-1.5px}
+.node.r-passed{outline:1.5px solid var(--accent);outline-offset:-1.5px}
+.node.r-live{outline:2px solid var(--accent);outline-offset:-2px;animation:wfpulse 1.6s ease-in-out infinite}
+.node.r-skipped{opacity:.45;outline-style:dashed}
+.node.r-pending{opacity:.7;outline-style:dashed}
+.node.r-would{outline:1.5px dashed var(--accent);outline-offset:-1.5px}
+@keyframes wfpulse{0%,100%{box-shadow:0 0 0 0 var(--ring)}50%{box-shadow:0 0 0 6px transparent}}
+.nh{height:30px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 9px;box-shadow:inset 0 -1px 0 var(--s2);font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;flex:none}
+.nh .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ntime{font-weight:500;font-size:11px;color:var(--text3);font-variant-numeric:tabular-nums}
+.nb{display:flex;flex-direction:column;padding:8px 10px 10px}
+.nl{display:block;height:17px;line-height:17px;font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eg{position:absolute;box-sizing:border-box;pointer-events:none;--ec:color-mix(in srgb,var(--text3) 75%,transparent)}
+.eg.h{height:2px;background:var(--ec)}
+.eg.v{width:2px;background:var(--ec)}
+.eg.c{border:0 solid var(--ec);background:transparent}
+.e-hi{--ec:var(--text)}
+.e-taken{--ec:var(--accent)}
+.e-not{--ec:color-mix(in srgb,var(--text3) 28%,transparent)}
+.e-would{--ec:var(--accent)}
+.e-live{--ec:var(--accent)}
+.eg.h.e-live{background:repeating-linear-gradient(90deg,var(--accent) 0 6px,transparent 6px 11px);animation:wfflowh .7s linear infinite}
+.eg.v.e-live{background:repeating-linear-gradient(180deg,var(--accent) 0 6px,transparent 6px 11px);animation:wfflowv .7s linear infinite}
+.eg.h.e-would,.eg.h.e-stub{background:repeating-linear-gradient(90deg,var(--ec) 0 5px,transparent 5px 9px)}
+.eg.v.e-would,.eg.v.e-stub{background:repeating-linear-gradient(180deg,var(--ec) 0 5px,transparent 5px 9px)}
+@keyframes wfflowh{to{background-position:11px 0}}
+@keyframes wfflowv{to{background-position:0 11px}}
+.pin{position:absolute;width:10px;height:10px;box-sizing:border-box;border-radius:50%;background:color-mix(in srgb,var(--text3) 80%,transparent);box-shadow:0 0 0 2px var(--s2);pointer-events:none}
+.pin.p-hi{background:var(--text)}
+.pin.p-taken,.pin.p-live,.pin.p-would{background:var(--accent)}
+.pin.p-not{background:color-mix(in srgb,var(--text3) 35%,transparent)}
+.pin.p-end{background:var(--s2);border:2px solid color-mix(in srgb,var(--text3) 80%,transparent)}
+.el{position:absolute;height:18px;padding:0 6px;border-radius:6px;background:var(--s1);color:var(--text2);font-size:11px;font-weight:500;display:flex;align-items:center;white-space:nowrap;box-shadow:var(--shadow);pointer-events:none}
+.el.l-hi{color:var(--text)}
+.el.l-taken,.el.l-live,.el.l-would{color:var(--accent)}
+.el.l-not{opacity:.55}
+.node.q{outline:1.5px dashed var(--warn);outline-offset:-1.5px}
+.node.loose{outline:1.5px dashed var(--accent);outline-offset:-1.5px}
+.nl.from{font-style:italic;color:var(--text3)}
+.qmark{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;color:var(--warn);background:var(--warnSoft);flex:none}
+.fport{position:absolute;width:14px;height:14px;box-sizing:border-box;border-radius:50%;border:2px solid var(--text3);background:var(--s1);padding:0;cursor:crosshair;box-shadow:0 0 0 2px var(--s2)}
+.fport:hover{border-color:var(--accent)}
+.fport.glow,.inport{border-color:var(--accent);animation:wfpulse 1.4s ease-in-out infinite}
+.inport{position:absolute;width:16px;height:16px;box-sizing:border-box;border-radius:50%;border:2px solid var(--accent);background:var(--accentSoft);padding:0;cursor:pointer;box-shadow:0 0 0 2px var(--s2)}
+.fpl{position:absolute;height:16px;padding:0 5px;border-radius:5px;background:var(--s1);color:var(--text3);font-size:10.5px;font-weight:500;display:flex;align-items:center;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow)}
+.dh{position:absolute;width:14px;height:14px;box-sizing:border-box;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft),0 0 0 5px var(--s2);pointer-events:none}
+.slot{position:absolute;box-sizing:border-box;border:0;border-radius:10px;outline:1.5px dashed var(--accent);outline-offset:-1.5px;background:var(--accentSoft);color:var(--accent);font-weight:600;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:copy}
+.dghost{position:absolute;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px 0 7px;border-radius:9px;background:var(--s1);box-shadow:0 8px 24px rgba(0,0,0,.18),0 0 0 1.5px var(--accent);font-weight:600;font-size:12.5px;transform:rotate(-2deg);pointer-events:none;white-space:nowrap}
+.dghost .cur{position:absolute;right:-12px;bottom:-14px;color:var(--text)}
+.mm{position:absolute;right:12px;top:12px;background:var(--s1);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+.mmn{position:absolute;border-radius:1.5px;background:color-mix(in srgb,var(--text3) 45%,transparent)}
+.mmn.lit{background:var(--accent)}
+.mmn.dim{opacity:.35}
+.mmn.on{background:var(--text)}
+.mmv{position:absolute;left:0;top:0;box-sizing:border-box;border:1.5px solid var(--accent);border-radius:3px;background:var(--accentSoft)}
+.ctl{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;background:var(--s1);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}
+.cb2{width:30px;height:28px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2)}
+.cb2:hover{background:var(--s2);color:var(--text)}
+.cb2[aria-pressed="true"]{color:var(--accent)}
+.zr{min-width:44px;text-align:center;font-size:11.5px;color:var(--text3);font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion: reduce){.node.r-live,.eg.e-live{animation:none !important}}
+.two{display:flex;gap:16px;align-items:flex-start}
+.ed{flex:1;min-width:0;background:var(--s1);border-radius:14px;box-shadow:var(--shadow);overflow:hidden}
+.bar{display:flex;align-items:center;gap:8px;padding:8px 12px;background:var(--s2);font-size:12px;color:var(--text3)}
+.code{padding:10px 0 14px;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12.5px;line-height:20px}
+.cl{display:flex;width:100%;border:0;background:transparent;padding:0 14px 0 0;margin:0;text-align:left;cursor:pointer;font:inherit;color:var(--text);min-height:20px;box-sizing:border-box}
+.cl:hover{background:var(--s2)}
+.cl.on{background:var(--accentSoft)}
+.cl.chg{box-shadow:inset 3px 0 0 var(--ok)}
+.cl .ln2{width:40px;flex:none;text-align:right;padding-right:12px;color:var(--text3);user-select:none;font-variant-numeric:tabular-nums}
+.cl .tx{white-space:pre-wrap;overflow-wrap:anywhere;flex:1;min-width:0}
+.k{color:var(--accent);font-weight:600}
+.v{color:var(--ok)}
+.s{color:var(--str)}
+.right{flex:none;width:390px;display:flex;flex-direction:column;gap:12px}
+.chk{display:flex;gap:8px;align-items:flex-start;padding:3px 0}
+.chk .ok{color:var(--ok);font-weight:600;width:14px;flex:none}
+.chk .wn{color:var(--warn);font-weight:600;width:14px;flex:none}
+.mini{position:relative;overflow:hidden;border-radius:12px;background-color:var(--s2);background-image:radial-gradient(color-mix(in srgb,var(--text3) 32%,transparent) 1px,transparent 1.2px);background-size:11.2px 11.2px}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1820px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.9-3.6 3.6-5.5 7-5.5s6.1 1.9 7 5.5"></path></svg><span>People</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg><span>Projects</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni sub on" href="Workflows.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="14" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="8.5" y="15.5" width="7" height="5" rx="1.5"></rect><path d="M6.5 8.5v2a2 2 0 0 0 2 2H12v3M17.5 8.5v2a2 2 0 0 1-2 2H12"></path></svg><span>Workflows</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main tight">
+<div class="wide">
+  <a class="back" href="Workflows.dc.html">‹ Workflows</a>
+  <div class="row wrap" style="gap: 10px">
+    <h1 class="h1">Client asks → the right session</h1><span class="chip c-n">Version 2, a draft</span><span class="chip c-ok">Version 1 is on</span>
+    <span style="margin-left: auto"><nav class="seg" aria-label="Edit as"><a class="sg" href="WorkflowDesigner.dc.html">Visual</a><a class="sg on" href="WorkflowText.dc.html" aria-current="page">Text</a><a class="sg" href="Describe.dc.html">Describe</a></nav></span>
+  </div>
+  <div class="row wrap">
+    <span class="faint grow">The same workflow as text: the rule language you know, with steps, names and branches. Each view changes the other.</span>
+    <button type="button" class="btn" onClick="{{saveDraft}}">Save draft</button>
+    <a class="btn p" href="WorkflowApprove.dc.html">Review and approve…</a>
+  </div>
+  <sc-if value="{{said}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{said}}</p></sc-if>
+  <div class="two">
+    <div class="ed">
+      <div class="bar"><span class="grow">Plain text. A step goes on to the one below it, unless it says where with →, or ends with stop. Click a line to see its step.</span><span class="new">new</span></div>
+      <div class="code" aria-label="The workflow as text">
+        <sc-for list="{{lines}}" as="l" hint-placeholder-count="60">
+          <button type="button" class="{{l.cls}}" onClick="{{l.pick}}"><span aria-hidden="true" class="ln2">{{l.n}}</span><span class="tx"><sc-for list="{{l.toks}}" as="t" hint-placeholder-count="3"><span class="{{t.c}}">{{t.t}}</span></sc-for></span></button>
+        </sc-for>
+      </div>
+    </div>
+    <div class="right">
+      <section class="card" aria-labelledby="chk">
+        <h2 id="chk" class="h3">Checks, as you type</h2>
+        <div><sc-for list="{{checks}}" as="c" hint-placeholder-count="6"><div class="chk"><span aria-hidden="true" class="{{c.cls}}">{{c.mark}}</span><span>{{c.t}}</span></div></sc-for></div>
+      </section>
+      <section class="card" aria-labelledby="try">
+        <div class="row"><h2 id="try" class="h3 grow">See both views stay in step</h2><span class="new">new</span></div>
+        <span class="muted">Each change is made in the text; watch the line and the step change together.</span>
+        <div class="row wrap"><button type="button" class="btn sm" onClick="{{tryWait}}">{{waitWord}}</button><button type="button" class="btn sm" onClick="{{tryWt}}">{{wtWord}}</button></div>
+      </section>
+      <section class="card" aria-labelledby="cvt" style="padding: 12px">
+        <div class="row"><h2 id="cvt" class="h3 grow">The canvas</h2><a class="link" href="WorkflowDesigner.dc.html">Open it ›</a></div>
+        <div class="mini" style="{{miniStyle}}">
+        <div class="cv" style="{{g.cvStyle}}{{g.zoomStyle}}">
+        <sc-for list="{{g.pieces}}" as="p" hint-placeholder-count="20"><span aria-hidden="true" class="{{p.cls}}" style="{{p.style}}"></span></sc-for>
+        <sc-for list="{{g.labels}}" as="l" hint-placeholder-count="10"><span aria-hidden="true" class="{{l.cls}}" style="{{l.style}}">{{l.t}}</span></sc-for>
+        <sc-for list="{{g.nodes}}" as="n" hint-placeholder-count="12">
+          <button type="button" class="{{n.cls}}" style="{{n.style}}" aria-pressed="{{n.sel}}" aria-label="{{n.title}}" onClick="{{n.pick}}">
+            <span class="nh"><span aria-hidden="true" class="{{n.gcls}}">{{n.glyph}}</span><span class="tt">{{n.title}}</span><sc-if value="{{n.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if><sc-if value="{{n.isQ}}" hint-placeholder-val="{{ false }}"><span class="qmark" title="A question to answer">?</span></sc-if><sc-if value="{{n.hasTime}}" hint-placeholder-val="{{ false }}"><span class="ntime">{{n.time}}</span></sc-if></span>
+            <span class="nb"><sc-for list="{{n.lines}}" as="ln" hint-placeholder-count="2"><span class="{{ln.lc}}" title="{{ln.full}}"><sc-for list="{{ln.segs}}" as="s" hint-placeholder-count="1"><span class="{{s.c}}">{{s.t}}</span></sc-for><sc-if value="{{ln.isNew}}" hint-placeholder-val="{{ false }}"><span class="new xs">new</span></sc-if></span></sc-for></span>
+          </button>
+        </sc-for>
+        <sc-for list="{{g.pins}}" as="q" hint-placeholder-count="20"><span aria-hidden="true" class="{{q.cls}}" style="{{q.style}}"></span></sc-for>
+      </div>
+        </div>
+        <span class="faint">Click a step to find its lines.</span>
+      </section>
+    </div>
+  </div>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1820}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { sel: 'start', short: false, wt: true, changed: null, said: null, saidTone: 'n' };
+}
+wfGraph(o) {
+o = o || {};
+const show = o.show || 'example';
+const SX = 16, SW = 236, BX = 316, BW = 200, LANE = 284, R = 10;
+const cx = SX + SW / 2, sr = SX + SW, bcx = BX + BW / 2;
+const W = 532;
+const TYPES = {
+trigger: ['start', '◉', 'New message', ['choose an account', 'and where in it']],
+condition: ['logic', '≡', 'Condition', ['choose a field', 'and what it should be']],
+judge: ['logic', '?', 'Ask a judge', ['choose a judge', 'and ask it a question']],
+project: ['logic', '◫', 'Which project?', ['of your 3 projects', 'gives the project, and why']],
+branch: ['logic', '⑃', 'Branch', ['if this, one way', 'otherwise the other']],
+find: ['logic', '⌕', 'Find a session', ['in a project or a folder', 'busy, idle or none']],
+start: ['act', '▶', 'Start a session', ['Claude Code or Codex', 'in a folder you choose']],
+worktree: ['act', '⑂', 'Make a worktree', ['in {{project}}’s checkout', 'branch agent/{{ticket}}']],
+deliver: ['act', '→', 'Deliver to a session', ['the message, and what you add', 'to the session found']],
+linCreate: ['act', '◇', 'Create a Linear issue', ['choose a team', 'and what it says']],
+linUpdate: ['act', '◇', 'Update a Linear issue', ['{{ticket}}', 'choose what changes']],
+linComment: ['act', '◇', 'Comment on an issue', ['{{ticket}}', 'choose what it says']],
+linClose: ['act', '✓', 'Close a Linear issue', ['{{ticket}} as Done', 'with a comment, or not']],
+queue: ['logic', '▤', 'Put it in the Queue', ['choose a lane', 'kept 7 days']],
+webhook: ['act', '⇢', 'Send to a webhook', ['choose an address', 'with the fields you map']],
+waitFor: ['logic', '◷', 'Wait for', ['a session’s run to end', 'at most 1 day']],
+reply: ['act', '↩', 'Reply in the thread', ['asks you each time', 'labelled as sent by an agent']],
+notify: ['logic', '◔', 'Notify me', ['in this app, and macOS', '“{{workflow}} needs you”']]
+};
+const nodes = [];
+const edges = [];
+const hOf = (n) => 48 + 17 * n;
+const add = (id, cat, glyph, x, y, w, title, lines, opt) => {
+const op = opt || {};
+nodes.push({ id, cat, glyph, x, y, w, h: hOf(lines.length), title, lines, isNew: op.isNew === true, newLine: op.newLine ?? -1, ghost: op.ghost === true, added: op.added === true });
+};
+const down = (id, from, to, y1, y2, label) => edges.push({ id, from, to, pts: [[cx, y1], [cx, y2]], label: label || null, lx: cx + 8, ly: (y1 + y2) / 2 - 9 });
+const path = (id, from, to, pts, label, lx, ly, opt) => edges.push({ id, from, to, pts, label: label || null, lx, ly, stub: !!(opt && opt.stub), half: !!(opt && opt.half) });
+let H = 400;
+let port = null;
+let slot = null;
+if (show === 'example') {
+const app = o.app || 'Claude Code';
+const wt = o.worktree !== false;
+const thr = o.threshold || '0.70';
+const qwait = o.qwait || '2 hours';
+const v2 = (o.version ?? 2) === 2;
+const none = o.noneMode || 'queue';
+add('trigger', 'start', '◉', SX, 24, SW, o.triggerTitle || 'New Slack message', [o.triggerLine || 'acme/slack · #client-requests', 'not yours, and not a bot’s']);
+add('cond', 'logic', '≡', SX, 144, SW, 'Conditions', ['match any of 3', 'the sender is at acme, or …']);
+add('judge', 'logic', '?', SX, 264, SW, 'Ask a judge', ['“A request for work on one of…”', 'Jev · yes at ' + thr + ' or more']);
+add('project', 'logic', '◫', SX, 384, SW, 'Which project?', ['acme-site, billing or booking-app', 'gives the project, and why'], { isNew: true });
+if (none === 'notify') add('queueNone', 'logic', '◔', BX, 384, BW, 'Notify me', ['you choose what to do', 'in this app, and macOS']);
+else if (none === 'stop') add('queueNone', 'logic', '■', BX, 384, BW, 'Stop here', ['nothing else happens', 'it stays in Messages']);
+else add('queueNone', 'logic', '▤', BX, 384, BW, 'Put it in the Queue', ['lane triage, for you to see', 'kept 7 days']);
+add('issue', 'act', '◇', SX, 504, SW, 'Create a Linear issue', [o.team ? 'team ' + o.team + ', assigned to you' : 'team ?, assigned to you', 'gives {{ticket}} to later steps']);
+add('find', 'logic', '⌕', SX, 624, SW, 'Find a session', ['in {{project}}’s checkout', 'busy, idle or none', 'the most recently active one']);
+add('queueFor', 'logic', '▤', BX, 630, BW, 'Queue for the session', ['until its run ends', 'at most ' + qwait + ', then tell me']);
+add('another', 'logic', '⌕', SX, 762, SW, 'Find another session', ['any idle one in {{project}}', 'found or none'], { isNew: true });
+add('start', 'act', '▶', SX, 882, SW, 'Start a session', [app + ' in {{project}}', o.wtLine || (wt ? 'in a new worktree' : 'in the checkout itself'), wt && !o.wtLine ? 'branch agent/{{ticket}}' : 'it asks before acting'], { newLine: wt || o.wtLine ? 1 : -1 });
+add('deliver', 'act', '→', SX, 1020, SW, 'Deliver to the session', ['the message and {{ticket}}', 'and why it’s for this project']);
+add('wait', 'logic', '◷', SX, 1140, SW, 'Wait for the run to end', ['claude-stream says when', 'at most 1 day'], { isNew: true });
+add('close', 'act', '✓', SX, 1260, SW, 'Close the Linear issue', ['{{ticket}} as Done', o.closeComment === false ? 'with no comment' : 'comment: its last message'], { isNew: true });
+if (v2) add('reply', 'act', '↩', SX, 1380, SW, 'Reply in the thread', [o.replyMode === 'standing' ? 'a short reply you approved' : 'asks you each time', 'labelled as sent by an agent'], { isNew: true });
+down('e1', 'trigger', 'cond', 106, 144);
+down('e2', 'cond', 'judge', 226, 264, 'matches');
+down('e3', 'judge', 'project', 346, 384, 'yes');
+path('eJ', 'judge', null, [[sr, 305], [sr + 24, 305]], 'no: it stops', sr + 30, 296, { stub: true });
+down('e4', 'project', 'issue', 466, 504, 'a project');
+path('e5', 'project', 'queueNone', [[sr, 425], [BX, 425]], 'none', sr + 10, 404);
+down('e6', 'issue', 'find', 586, 624);
+path('e7', 'find', 'queueFor', [[sr, 671], [BX, 671]], 'busy', sr + 10, 650);
+path('e8', 'find', 'deliver', [[sr, 705], [LANE, 705], [LANE, 1061], [sr, 1061]], 'idle', LANE + 6, 714);
+down('e9', 'find', 'another', 723, 762, 'none');
+path('e10', 'another', 'deliver', [[sr, 803], [LANE, 803], [LANE, 1061], [sr, 1061]], 'found', LANE + 6, 792);
+down('e11', 'another', 'start', 844, 882, 'none');
+down('e12', 'start', 'deliver', 981, 1020);
+path('e13', 'queueFor', 'deliver', [[bcx, 712], [bcx, 1061], [sr, 1061]], 'free', bcx + 8, 728);
+down('e14', 'deliver', 'wait', 1102, 1140);
+down('e15', 'wait', 'close', 1222, 1260, 'run ended');
+if (v2) down('e16', 'close', 'reply', 1342, 1380);
+H = v2 ? 1490 : 1370;
+port = { from: 'wait', x: sr, y: 1181, dir: 'right', label: 'timed out', lx: sr + 8, ly: 1160, edgeLabel: 'timed out' };
+slot = { x: BX, y: 1140 };
+} else if (show === 'rule') {
+const RULES = {
+'client-asks': { t: ['New Slack message', ['acme/slack · 3 client channels', 'new messages, not yours']], c: ['match any of 2', 'the sender is at acme'], j: ['“Is someone at acme asking…”', 'Jev · yes at 0.70 or more'], last: ['queue', 'logic', '▤', 'Put it in the Queue', ['lane acme-site, kept 7 days', 'wakes the window bound to it']] },
+'invoices': { t: ['New Slack message', ['acme/slack · #acme-site', 'new messages, not yours']], c: ['match any of 2', 'mentions “invoice” or “payment”'], j: ['“Is this asking me to pay…”', 'Jev · yes at 0.70 or more'], last: ['queue', 'logic', '▤', 'Put it in the Queue', ['lane billing, kept 7 days', 'wakes the window bound to it']] },
+'mail-subjects': { t: ['New email', ['acme/gmail · the inbox', 'new email, not yours']], c: ['match all of 1', 'the subject isn’t empty'], j: null, last: ['dry', 'logic', '▦', 'Write it in the dry-run log', ['sends nothing anywhere', 'kept 24 hours']] }
+};
+const r = RULES[o.rule] || RULES['client-asks'];
+add('trigger', 'start', '◉', SX, 24, SW, r.t[0], r.t[1]);
+add('cond', 'logic', '≡', SX, 144, SW, 'Conditions', r.c);
+down('e1', 'trigger', 'cond', 106, 144);
+let y = 264;
+if (r.j) { add('judge', 'logic', '?', SX, 264, SW, 'Ask a judge', r.j); down('e2', 'cond', 'judge', 226, 264, 'matches'); y = 384; }
+add(r.last[0], r.last[1], r.last[2], SX, y, SW, r.last[3], r.last[4]);
+down('e3', r.j ? 'judge' : 'cond', r.last[0], y - 38, y, r.j ? 'yes' : 'matches');
+H = y + 82 + 28;
+port = { from: r.last[0], x: cx, y: y + 82, dir: 'down', label: null, edgeLabel: null };
+slot = { x: SX, y: y + 120 };
+} else {
+add('trigger', 'start', '◉', SX, 24, SW, 'Choose what starts it', ['a message, an email, a reaction…', 'in one of your accounts'], { ghost: true });
+H = 400;
+port = { from: 'trigger', x: cx, y: 106, dir: 'down', label: null, edgeLabel: null };
+slot = { x: SX, y: 144 };
+}
+const stage = o.stage || 'none';
+const drop = o.drop && TYPES[o.drop.type] ? o.drop : null;
+let inport = null, dragHandle = null, slotOut = null, ghost = null, freePort = null;
+if (o.free && port && (stage === 'added' || stage === 'dragging' || (stage === 'none' && !drop))) {
+freePort = { cls: 'fport' + (stage === 'added' ? ' glow' : ''), style: 'left:' + (port.x - 7) + 'px;top:' + (port.y - 7) + 'px', label: port.label, hasLabel: !!port.label, lstyle: 'left:' + (port.lx || 0) + 'px;top:' + (port.ly || 0) + 'px' };
+}
+if (stage === 'dragging' && TYPES[o.dragType || 'notify']) {
+const t = TYPES[o.dragType || 'notify'];
+slotOut = { style: 'left:' + slot.x + 'px;top:' + slot.y + 'px;width:' + (show === 'example' ? BW : SW) + 'px;height:82px', text: 'Drop ' + t[2] + ' here' };
+ghost = { style: 'left:' + (slot.x + 46) + 'px;top:' + (slot.y + 52) + 'px', title: t[2], glyph: t[1], gcls: 'gl k-' + t[0] };
+}
+if (drop && stage !== 'dragging') {
+const t = TYPES[drop.type];
+const w = show === 'example' && drop.x >= BX - 20 ? BW : SW;
+add('added', t[0], t[1], drop.x, drop.y, w, t[2], t[3], { isNew: true, added: true });
+const n = nodes[nodes.length - 1];
+H = Math.max(H, n.y + n.h + 28);
+const ip = port && port.dir === 'right' ? [n.x, n.y + 41] : [n.x + n.w / 2, n.y];
+let pts;
+if (port.dir === 'right') {
+pts = ip[1] === port.y ? [[port.x, port.y], ip] : [[port.x, port.y], [Math.round((port.x + ip[0]) / 2), port.y], [Math.round((port.x + ip[0]) / 2), ip[1]], ip];
+} else {
+pts = ip[0] === port.x ? [[port.x, port.y], ip] : [[port.x, port.y], [port.x, Math.round((port.y + ip[1]) / 2)], [ip[0], Math.round((port.y + ip[1]) / 2)], ip];
+}
+if (stage === 'connected' || stage === 'none') {
+const lb = port.edgeLabel;
+path('eNew', port.from, 'added', pts, lb, port.x + 8, port.dir === 'right' ? port.y - 21 : (port.y + ip[1]) / 2 - 9);
+} else if (stage === 'drawing') {
+const end = port.dir === 'right' ? [port.x + 40, port.y] : [port.x, port.y + 26];
+path('eHalf', port.from, null, [[port.x, port.y], end], null, 0, 0, { half: true });
+dragHandle = { style: 'left:' + (end[0] - 7) + 'px;top:' + (end[1] - 7) + 'px' };
+inport = { style: 'left:' + (ip[0] - 8) + 'px;top:' + (ip[1] - 8) + 'px' };
+}
+}
+const RUNS = {
+finished: {
+trigger: ['passed', '10:14:02', ['David Park in #client-requests', '“Can we add a download button…”']],
+cond: ['passed', '10:14:03', ['matched: the sender is at acme', 'and it mentions “add”']],
+judge: ['passed', '0.9 s', ['Jev said yes, 0.91', '“asks for a change to a page”']],
+project: ['passed', '1.6 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['passed', '10:14:08', ['ACME-142 created', 'assigned to you']],
+find: ['passed', '10:14:09', ['acme-site · Claude Code', 'busy: a run since 10:02', 'so it queued for it']],
+queueFor: ['passed', '4 min', ['waited 4 min 3 s', 'its run ended at 10:18:12']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['passed', '10:18:13', ['the message and ACME-142', 'to acme-site · Claude Code']],
+wait: ['passed', '38 min', ['its run took 38 min 26 s', 'and ended without an error']],
+close: ['passed', '10:56:41', ['ACME-142 is Done', 'commented: “Added a Download…”']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e7: 'taken', e13: 'taken', e14: 'taken', e15: 'taken' }
+},
+waiting: {
+trigger: ['passed', '10:14:02', ['David Park in #client-requests', '“Can we add a download button…”']],
+cond: ['passed', '10:14:03', ['matched: the sender is at acme', 'and it mentions “add”']],
+judge: ['passed', '0.9 s', ['Jev said yes, 0.91', '“asks for a change to a page”']],
+project: ['passed', '1.6 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['passed', '10:14:08', ['ACME-142 created', 'assigned to you']],
+find: ['passed', '10:14:09', ['acme-site · Claude Code', 'busy: a run since 10:02', 'so it queued for it']],
+queueFor: ['passed', '4 min', ['waited 4 min 3 s', 'its run ended at 10:18:12']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['passed', '10:18:13', ['the message and ACME-142', 'to acme-site · Claude Code']],
+wait: ['live', '13 min', ['waiting for its run to end…', '13 min so far, at most 1 day']],
+close: ['pending', '', ['next, when the run ends', '']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e7: 'taken', e13: 'taken', e14: 'taken', e15: 'live' }
+},
+test: {
+trigger: ['passed', 'sample', ['David’s message from 10:14', 'used as the sample']],
+cond: ['passed', '', ['would match', 'the sender is at acme']],
+judge: ['passed', '0.8 s', ['Jev said yes, 0.91', 'asked for real: it only reads']],
+project: ['passed', '1.4 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['would', '', ['would create an issue in ACME', 'nothing created: see the preview']],
+find: ['passed', '', ['acme-site · Claude Code', 'idle now', 'so it would deliver at once']],
+queueFor: ['skipped', '', ['not needed: it’s idle', '']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['would', '', ['would deliver the message', 'and the issue, to it']],
+wait: ['would', '', ['skipped in a test', 'a test never waits']],
+close: ['would', '', ['would close it as Done', 'with its last message']],
+reply: ['would', '', ['would ask you first', 'nothing is sent in a test']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e8: 'taken', e14: 'would', e15: 'would', e16: 'would' }
+}
+};
+const run = show === 'example' && o.run ? RUNS[o.run] : null;
+const sel = o.selected || null;
+const annot = o.annot || null;
+const qs = o.qs || {};
+const segs = (t) => String(t).split(/(\{\{[^}]+\}\})/).filter((s) => s !== '').map((s) => ({ t: s, c: /^\{\{/.test(s) ? 'fx' : '' }));
+const outNodes = nodes.map((n) => {
+const ri = run ? run[n.id] : null;
+let src = ri ? ri[2] : n.lines;
+const an = annot ? annot[n.id] : null;
+const lines = src.map((t, i) => ({ segs: segs(t), isNew: !ri && !an && i === n.newLine, lc: 'nl', full: t }));
+if (an) lines[lines.length - 1] = { segs: [{ t: an, c: '' }], isNew: false, lc: 'nl from', full: an };
+let cls = 'node';
+if (n.ghost) cls += ' ghost';
+if (ri) cls += ' r-' + ri[0];
+if (qs[n.id]) cls += ' q';
+if (n.added && (stage === 'added' || stage === 'drawing')) cls += ' loose';
+if (sel === n.id) cls += ' sel';
+return {
+id: n.id, cat: n.cat, title: n.title, glyph: n.glyph, gcls: 'gl k-' + n.cat, isNew: n.isNew && !ri && !qs[n.id], isQ: !!qs[n.id], lines,
+time: ri ? ri[1] : '', hasTime: !!(ri && ri[1]), cls, sel: sel === n.id,
+x: n.x, y: n.y, w: n.w, h: n.h,
+style: 'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px'
+};
+});
+const rank = { not: 0, rest: 1, would: 2, hi: 3, live: 4, taken: 5 };
+const pieces = [];
+const pins = {};
+const labels = [];
+const order = edges.map((e) => {
+let st = 'rest';
+if (run) st = run.edges[e.id] || 'not';
+else if (e.half) st = 'live';
+else if (sel && (e.from === sel || e.to === sel)) st = 'hi';
+return { e, st };
+}).sort((a, b) => rank[a.st] - rank[b.st]);
+const piece = (pts, cls) => {
+const out = [];
+for (let i = 0; i < pts.length - 1; i++) {
+const a = pts[i].slice(), b = pts[i + 1].slice();
+const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
+if (i > 0) { a[0] += dx * R; a[1] += dy * R; }
+if (i < pts.length - 2) { b[0] -= dx * R; b[1] -= dy * R; }
+if (dy === 0) {
+const x1 = Math.min(a[0], b[0]), x2 = Math.max(a[0], b[0]);
+out.push({ cls: 'eg h ' + cls, style: 'left:' + x1 + 'px;top:' + (a[1] - 1) + 'px;width:' + (x2 - x1) + 'px' });
+} else {
+const y1 = Math.min(a[1], b[1]), y2 = Math.max(a[1], b[1]);
+out.push({ cls: 'eg v ' + cls, style: 'left:' + (a[0] - 1) + 'px;top:' + y1 + 'px;height:' + (y2 - y1) + 'px' });
+}
+}
+for (let j = 1; j < pts.length - 1; j++) {
+const p = pts[j], q = pts[j - 1], s = pts[j + 1];
+const din = [Math.sign(p[0] - q[0]), Math.sign(p[1] - q[1])], dout = [Math.sign(s[0] - p[0]), Math.sign(s[1] - p[1])];
+const A = [p[0] - din[0] * R, p[1] - din[1] * R], B = [p[0] + dout[0] * R, p[1] + dout[1] * R];
+const minX = Math.min(A[0], B[0]), maxX = Math.max(A[0], B[0]), minY = Math.min(A[1], B[1]), maxY = Math.max(A[1], B[1]);
+const right = p[0] === maxX, top = p[1] === minY;
+const l = right ? minX : minX - 1, rr = right ? maxX + 1 : maxX;
+const t = top ? minY - 1 : minY, bt = top ? maxY : maxY + 1;
+const vs = top ? 'top' : 'bottom', hs = right ? 'right' : 'left';
+out.push({ cls: 'eg c ' + cls, style: 'left:' + l + 'px;top:' + t + 'px;width:' + (rr - l) + 'px;height:' + (bt - t) + 'px;border-' + vs + '-width:2px;border-' + hs + '-width:2px;border-' + vs + '-' + hs + '-radius:' + R + 'px' });
+}
+return out;
+};
+const pin = (p, st, end) => {
+const key = p[0] + ',' + p[1];
+if (!pins[key] || rank[st] > rank[pins[key].st]) pins[key] = { st, x: p[0], y: p[1], end: !!end };
+};
+order.forEach(({ e, st }) => {
+const ecls = 'e-' + st + (e.stub ? ' e-stub' : '');
+piece(e.pts, ecls).forEach((pc) => pieces.push(pc));
+pin(e.pts[0], st);
+if (!e.half) pin(e.pts[e.pts.length - 1], st, e.stub);
+if (e.label) labels.push({ t: e.label, cls: 'el l-' + st, style: 'left:' + e.lx + 'px;top:' + e.ly + 'px' });
+});
+const pinList = Object.keys(pins).map((key) => {
+const p = pins[key];
+return { cls: 'pin p-' + p.st + (p.end ? ' p-end' : ''), style: 'left:' + (p.x - 5) + 'px;top:' + (p.y - 5) + 'px' };
+});
+const mmW = 84;
+const sc = mmW / W;
+const mmH = Math.round(H * sc);
+const mm = { w: mmW, h: mmH, style: 'width:' + mmW + 'px;height:' + mmH + 'px', nodes: nodes.map((n) => {
+const ri = run ? run[n.id] : null;
+const c = 'mmn' + (sel === n.id ? ' on' : '') + (ri && (ri[0] === 'passed' || ri[0] === 'live') ? ' lit' : '') + (ri && ri[0] === 'skipped' ? ' dim' : '');
+return { cls: c, style: 'left:' + Math.round(n.x * sc) + 'px;top:' + Math.round(n.y * sc) + 'px;width:' + Math.max(2, Math.round(n.w * sc)) + 'px;height:' + Math.max(2, Math.round(n.h * sc)) + 'px' };
+}) };
+return {
+W, H, nodes: outNodes, pieces, pins: pinList, labels, mm, raw: nodes, edges, types: TYPES,
+cvStyle: 'width:' + W + 'px;height:' + H + 'px',
+freePort, hasFreePort: !!freePort, inport, hasInport: !!inport, dragHandle, hasDragHandle: !!dragHandle,
+slot: slotOut, hasSlot: !!slotOut, ghost, hasGhost: !!ghost, slotAt: slot, portInfo: port
+};
+}
+renderVals() {
+const s = this.state;
+const qwait = s.short ? '30 minutes' : '2 hours';
+const g = this.wfGraph({ show: 'example', version: 2, selected: s.sel === 'triage' ? 'queueNone' : s.sel, qwait, worktree: s.wt });
+g.zoomStyle = ';transform:scale(0.7)';
+g.nodes.forEach((n) => { n.pick = () => this.setState({ sel: n.id === 'queueNone' ? 'triage' : n.id, said: null }); });
+const L = [
+['head', '*workflow* "Client asks → the right session", version [2], a draft'],
+['', ''],
+['trigger', '*when* a new message arrives in [acme/slack], in [#client-requests]'],
+['trigger', '  leave out my own messages, and bots’'],
+['', ''],
+['cond', '*match any*'],
+['cond', '  sender is at [acme]'],
+['cond', '  text mentions "fix", "change", "add"'],
+['cond', '  not in a thread I started'],
+['', ''],
+['judge', '*ask* [jev] via [openrouter]'],
+['judge', '  question "Is this a request for work on one of our projects?"'],
+['judge', '  looking at sender, text, channel'],
+['judge', '  yes at [0.70], if unsure *drop*'],
+['', ''],
+['project', '*step* project: *which project* of [acme-site], [billing], [booking-app]'],
+['project', '  decided by [jev] via [openrouter]'],
+['project', '  none *→* triage'],
+['', ''],
+['issue', '*step* issue: *linear create* in team [ACME]'],
+['issue', '  title "{{project}}: {{message.subject}}"'],
+['issue', '  description'],
+['issue', '    text "Asked in Slack by {{sender}} in {{channel}}."'],
+['issue', '    written by [claude] "In two or three lines, say what is asked, and by when."'],
+['issue', '    the message’s text, quoted; its link; the session’s link'],
+['issue', '  labels [agent], [from-slack]; assigned to [me]'],
+['', ''],
+['find', '*step* find: *find session* in the checkout of {{project}}'],
+['find', '  busy *→* queued'],
+['find', '  idle *→* deliver'],
+['find', '  none *→* another'],
+['', ''],
+['queueFor', '*step* queued: *queue for* that session, at most [' + qwait + ']', 'wait'],
+['queueFor', '  free *→* deliver'],
+['queueFor', '  still busy *→* notify me'],
+['', ''],
+['another', '*step* another: *find session*, any idle one in {{project}}'],
+['another', '  found *→* deliver'],
+['another', '  none *→* start'],
+['', ''],
+['start', '*step* start: *start session* with [claude-code] in {{project.checkout}}'],
+['start', s.wt ? '  in a new worktree, branch "agent/{{ticket}}", from [main]' : '  in the checkout itself', 'wt'],
+['start', '  mode [asks before acting]'],
+['', ''],
+['deliver', '*step* deliver: *deliver* to the session'],
+['deliver', '  give the message, {{ticket}}, {{project.reason}}'],
+['deliver', '  text "Work in the folder you are in. Say what you changed in your last message."'],
+['', ''],
+['wait', '*step* wait: *wait for* the session’s run to end, at most [1 day]'],
+['', ''],
+['close', '*step* close: *linear close* {{ticket}} as [Done]'],
+['close', '  comment the session’s last message'],
+['', ''],
+['reply', '*step* reply: *reply* in the thread, *ask me* each time, then *stop*'],
+['', ''],
+['triage', '*step* triage: *queue* in lane [triage], keep [7 days], then *stop*'],
+['', ''],
+['settings', '*keep* sender, text, channel for [30 days]'],
+['settings', '*at most* [20] runs an hour, [3] sessions at once'],
+['settings', '*worktrees* removed [7 days] after their issue is closed']
+];
+const RX = /("[^"]*")|(\*[^*]+\*)|(\[[^\]]+\])|(\{\{[^}]+\}\})/;
+const tok = (line) => {
+const out = [];
+let rest = line;
+while (rest.length) {
+const m = RX.exec(rest);
+if (!m) { out.push({ t: rest, c: '' }); break; }
+if (m.index > 0) out.push({ t: rest.slice(0, m.index), c: '' });
+const w = m[0];
+if (m[1]) out.push({ t: w, c: 's' });
+else if (m[2]) out.push({ t: w.slice(1, -1), c: 'k' });
+else if (m[3]) out.push({ t: w.slice(1, -1), c: 'v' });
+else out.push({ t: w, c: 'fx' });
+rest = rest.slice(m.index + w.length);
+}
+if (!out.length) out.push({ t: ' ', c: '' });
+return out;
+};
+const lines = L.map(([step, text, tag], i) => ({
+n: i + 1, toks: tok(text),
+cls: 'cl' + (step && step === s.sel ? ' on' : '') + (tag && tag === s.changed ? ' chg' : ''),
+pick: () => (step && step !== 'head' && step !== 'settings' ? this.setState({ sel: step, said: null }) : this.setState({ said: step === 'settings' ? 'These lines are the Workflow settings: in the designer, click the canvas’s background to see them.' : 'The name and version. Approving makes version 2 the one that runs.', saidTone: 'n' }))
+}));
+const checks = [
+['ok', 'Understood: 1 trigger, 14 steps, 4 branches.'],
+['ok', 'Every path ends: at reply, or in the Queue at triage.'],
+['ok', '{{ticket}} comes from the step issue, which runs before start, deliver and close.'],
+['ok', '“triage” is a lane that exists.'],
+['wn', 'reply posts in Slack: only after your yes, each time.']
+];
+if (s.wt) checks.push(['wn', 'Worktrees go in ~/work/acme-site-wt/, which is inside claude-stream’s allowed folders.']);
+if (s.short) checks.push(['ok', 'queued waits at most 30 minutes now: a busy session that takes longer means you’re told sooner.']);
+const say = (t, tone) => this.setState({ said: t, saidTone: tone || 'n' });
+const waitN = L.findIndex((x) => x[2] === 'wait') + 1;
+const wtN = L.findIndex((x) => x[2] === 'wt') + 1;
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+lines, g,
+miniStyle: 'height:' + Math.round(g.H * 0.7 + 8) + 'px;width:' + Math.round(g.W * 0.7 + 4) + 'px',
+checks: checks.map(([c, t]) => ({ cls: c, mark: c === 'ok' ? '✓' : '!', t })),
+waitWord: s.short ? 'Make it wait 2 hours again' : 'Wait 30 minutes, not 2 hours',
+wtWord: s.wt ? 'Switch the worktree off' : 'Switch the worktree on',
+tryWait: () => this.setState({ short: !s.short, sel: 'queueFor', changed: 'wait', said: 'Changed in both: line ' + waitN + ' now says at most ' + (s.short ? '2 hours' : '30 minutes') + ', and so does Queue for the session.', saidTone: 'ok' }),
+tryWt: () => this.setState({ wt: !s.wt, sel: 'start', changed: 'wt', said: 'Changed in both: line ' + wtN + ' and Start a session now say ' + (s.wt ? 'in the checkout itself' : 'in a new worktree') + '.', saidTone: 'ok' }),
+saveDraft: () => say('Saved as a draft: version 2. Version 1 keeps running until you approve this one.', 'ok'),
+said: s.said, saidClass: s.saidTone === 'ok' ? 'said' : 'said n'
+};
+}
+}
+</script>
+</body>
+</html>

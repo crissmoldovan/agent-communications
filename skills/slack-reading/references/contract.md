@@ -269,3 +269,27 @@ exact message, and it covers only those acknowledgements.
 - **Ending one is theirs, at any moment, and applies at once:** `comms_standing` with `revoke` or `narrow`, or `off`
   for every one (CLI: `agentcomms standing revoke <id>`, `agentcomms standing narrow <id>`, `agentcomms standing
   off`). Do it whenever they ask; it needs no preview.
+
+## 13. Take a message before you answer it, and leave one another session has.
+
+- **Several sessions may read one workspace; one answers each message.** Before you react to a message, acknowledge
+  it, reply in its thread, or post at the top of a DM or group DM — where what you answer is the newest message from
+  someone else there — take that message: `slack_take` with its `channel` and `ts` (CLI: `agent-slack take <channel>
+  <ts> --workspace <workspace>`). Only a message someone else sent can be taken. `slack_taken` (CLI: `agent-slack
+  taken`) says who has messages, each `<channel>/<ts>`, in closed words — `you`, `another session`, `the person` — and
+  every read says it on each message, as `taken`. Look before you start work on one.
+- **`TAKE_REQUIRED` (exit `10`)** means the workspace asks a session to take a message before it acts on it, and you
+  have not: nothing was prepared or posted. Take it if it is yours, then make the same call again. Its `reason`
+  `NO_SESSION` means you ran a command in a shell that joined no agent window and has no Claude Code session id, where
+  nothing can be taken: act through the MCP tools instead.
+- **`TAKEN_ELSEWHERE` (exit `10`)** means another session, or the person, has it: leave it. Never answer it another way
+  — a top-level post about it, another channel, a DM to its sender — and never ask the person to release it for you
+  unless they asked you to handle it.
+- **Not yours? Hand it back:** `step: "hand-back"` with a closed `reason` — `not-mine`, `wrong-account`,
+  `needs-the-person`, `duplicate` or `other` — and, when it helps the person, a `note` of at most 200 characters. The
+  person reads the note; no other session sees it. Never copy what the sender wrote into one. When you have finished
+  with a message, mark it `done`. A post at the top of a channel, and an edit or a deletion of your own, need no take.
+- **A take allows nothing by itself.** Every act still needs the behaviour rules, the send policy and the person's
+  yes. A take lapses an hour after your last act on the message, unless an approval prepared under it still waits.
+  Whether a take is required is the person's setting (`comms_taking`): start a change that lets sessions act without
+  one only when the person asked for it.

@@ -145,7 +145,16 @@ test(
     const m = await machine();
     const calls = fakeCodex(m.later);
     const reads = racingPath(m.env, m.bin, [m.later, m.bin].join(delimiter));
-    const result = await command(m, ['mcp', 'install', '--client', 'codex', '--launcher', 'npx', '--no-verify']);
+    const result = await command(m, [
+      'mcp',
+      'install',
+      '--client',
+      'codex',
+      '--standalone',
+      '--launcher',
+      'npx',
+      '--no-verify',
+    ]);
     assert.ok(reads() >= 2, 'the install looked for the client again');
     assertDrifted(result, /codex was not on PATH when this was planned, and is now/);
     assert.deepEqual(writesOf(calls()), [], 'codex was never asked to add anything');
@@ -160,7 +169,7 @@ test(
     const m = await machine();
     // Asked once for the approval, once when it is claimed; gone by the third.
     const calls = fakeCodex(m.bin, { entry: PINNED, answers: 2 });
-    const argv = ['mcp', 'install', '--client', 'codex', '--launcher', 'npx', '--force', '--no-verify'];
+    const argv = ['mcp', 'install', '--client', 'codex', '--standalone', '--launcher', 'npx', '--force', '--no-verify'];
 
     const asked = await command(m, argv);
     assert.equal(asked.code, 10, JSON.stringify(asked.envelope));

@@ -84,6 +84,11 @@ export * from './cli-runtime.ts';
 export { type ExternalCommand, externalCommand } from './command-brands.ts';
 export * from './compose-profile.ts';
 export * from './config.ts';
+/*
+ * The MCP connections (single-server design §6): each place an app uses Agent Comms, read as reaching less wherever it
+ * cannot be read, its key kept only as a hash, and every change to one judged as `classifyChange` judges it.
+ */
+export * from './connections.ts';
 export * from './core.ts';
 export * from './desktop-origin.ts';
 export * from './digest.ts';
@@ -124,6 +129,11 @@ export * from './mcp-clients.ts';
 export * from './mcp-install.ts';
 /* The mark an MCP server sets in its own process, so a person's reads refuse inside it and everything it starts. */
 export * from './mcp-marker.ts';
+/*
+ * Who an MCP request says it comes from, in both protocol eras: its 2026-07-28 envelope first, then what the client
+ * said on connecting (single-server design D7). Every server reads its client this way.
+ */
+export * from './mcp-request.ts';
 export * from './name-grammar.ts';
 export * from './names.ts';
 // The notification on the person's screen for each standing act (design 2026-10-19-standing-approvals, S10).
@@ -141,6 +151,18 @@ export {
   type WaitProgress,
   waitForApproval,
 } from './operations/approval-wait.ts';
+/*
+ * A channel's own `mcp install` (single-server design D17): that channel put into the app's MCP connection, or a
+ * connection made for it — the change comms_connection_change makes with `add`.
+ */
+export {
+  type AppPartAsIs,
+  appConnectionPart,
+  type ConnectionPartRequest,
+  type ConnectionPartResult,
+  connectionPartChange,
+  narrowedAppPart,
+} from './operations/connections.ts';
 export {
   type OrgAddRequest,
   type OrgChangeResult,
@@ -221,6 +243,20 @@ export * from './sanitize.ts';
 export * from './save-deny.ts';
 export * from './save-destination.ts';
 export * from './saved-files.ts';
+/*
+ * Search on this machine (design 2026-10-26-local-search, S2, S8): a channel's capture of a message it had in hand —
+ * after an ok read, or a send — appended, sealed, to its process's own inbox file. Never throws, never changes a
+ * result, and keeps nothing unless the person switched Search on for that account. Only the indexer, run by the
+ * person's own `agentcomms search` commands, writes the database; no tool reads it.
+ */
+export {
+  type CaptureOptions,
+  captureForSearch,
+  type SearchCapture,
+  type SearchChannel,
+  type SearchDirection,
+} from './search/capture.ts';
+export { readSearchSettings, type SearchSettings, searchKeeps } from './search/settings.ts';
 export * from './secrets.ts';
 export * from './send-epoch.ts';
 export * from './send-pacing.ts';
@@ -250,6 +286,16 @@ export {
 export * from './state.ts';
 export * from './system-programs.ts';
 export * from './taint.ts';
+// The take steps, the gate every act that answers a message passes, and a read's `taken`: one way for every channel.
+export * from './take-flow.ts';
+/*
+ * Taking messages (design 2026-10-26-taking-messages): the take store — one record per message, the first take winning
+ * under its lock — who a caller is (`takerIdentity`, never an argument), the gate every act that answers a message
+ * passes, the two refusals, and the closed words an agent sees.
+ */
+export * from './takes.ts';
+// Their settings per account, read fail-closed: a take required, a 👀 on taking, when a message nobody took is reminded of.
+export * from './taking.ts';
 export * from './tool-arguments.ts';
 /*
  * The unsent report (design 2026-10-05 §D9): drafts grouped by each channel's declared rule, worded to the evidence the

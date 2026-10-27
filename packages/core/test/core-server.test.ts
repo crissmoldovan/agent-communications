@@ -247,12 +247,15 @@ const READING = [
   'comms_org_show',
   'comms_profile',
   'comms_activity',
+  'comms_connections_list',
+  'comms_connection_show',
 ];
 const CHANGING = [
   'comms_attach',
   'comms_activity_settings',
   'comms_label',
   'comms_behaviour',
+  'comms_taking',
   'comms_org_add',
   'comms_org_update',
   'comms_org_remove',
@@ -262,6 +265,11 @@ const CHANGING = [
   'comms_names_migrate',
   'comms_secrets_migrate',
   'comms_update',
+  'comms_connection_add',
+  'comms_connection_change',
+  'comms_connection_migrate',
+  // A tightening, at once — except where its entry shadows a wider one the agents there would use (0.35.0 review, H1).
+  'comms_connection_remove',
 ];
 /**
  * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, narrowing or
@@ -269,6 +277,11 @@ const CHANGING = [
  * 2026-10-26-owner-feedback-0320 §3.3).
  */
 const TAKING_AWAY = ['comms_approval_revoke', 'comms_standing', 'comms_server_uninstall'];
+/**
+ * Tools whose change gives an agent nothing more, so it applies at once and is audited, taking no approval: renaming an
+ * MCP connection, and replacing its key (single-server design §6.2).
+ */
+const NEUTRAL = ['comms_connection_rename', 'comms_connection_key_replace'];
 
 test('the server offers the core tools, and no tool that approves or claims a change it did not plan', async () => {
   /*
@@ -281,7 +294,7 @@ test('the server offers the core tools, and no tool that approves or claims a ch
   try {
     const { tools } = await client.listTools();
     const names = tools.map((tool) => tool.name).sort();
-    assert.deepEqual(names, [...READING, ...CHANGING, ...TAKING_AWAY].sort());
+    assert.deepEqual(names, [...READING, ...CHANGING, ...TAKING_AWAY, ...NEUTRAL].sort());
     for (const name of names) {
       assert.doesNotMatch(name, /claim|prepare|approve(?!d)|apply/, `${name} reads as a generic approval tool`);
     }
@@ -321,7 +334,7 @@ test('the greeting says how a change is approved, names the policy in force, and
       assert.match(greeting, /restarted/, 'the last line survives too');
       assert.match(greeting, /comms_update with `check`/, 'an agent learns it can see what is behind');
       // Standing approvals: reading and ending them is here; creating one only ever prepares, for a person's terminal.
-      assert.match(greeting, /comms_label, comms_behaviour and comms_standing with no change/);
+      assert.match(greeting, /comms_label, comms_behaviour, comms_taking and comms_standing with no change/);
       assert.match(greeting, /comms_standing narrows or ends standing approvals at once/);
       assert.match(greeting, /slack_standing_add\nonly prepares one the person asked for/);
       assert.match(greeting, /at their own terminal with its code, never in chat/);
@@ -544,6 +557,7 @@ test('the doctor over MCP is the same report, and the keychain it probes is the 
       'system keychain',
       'secret backend',
       'activity',
+      'search',
       'update check',
     ]);
     const keychain = (report.checks as { name: string; ok: boolean; detail: string }[]).find(
@@ -2586,6 +2600,8 @@ test('comms_channels_available says what is installed and where each server is r
         missing: gmailEntry,
         // Older than this core: seen without asking the registry.
         behindCore: true,
+        // An entry of the server's own, not one of an MCP connection's (single-server design §9.2).
+        connection: null,
       },
     ]);
     if (process.platform !== 'win32') {
@@ -2605,6 +2621,8 @@ test('comms_channels_available says what is installed and where each server is r
         pathPins: {},
         missing: null,
         behindCore: true,
+        // An entry of the server's own, not one of an MCP connection's (single-server design §9.2).
+        connection: null,
       },
     ]);
     assert.ok(!JSON.stringify(report).includes('fake-token-2'));

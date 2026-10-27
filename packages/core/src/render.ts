@@ -3,6 +3,7 @@ import { isDangerous } from './chars.ts';
 import { paint } from './cli-runtime.ts';
 import { type CliHandoffs, handoffSentence } from './handoffs.ts';
 import type { InstallResult, PruneResult } from './mcp-install.ts';
+import type { ConnectionPartResult } from './operations/connections.ts';
 import type { DoctorReport } from './operations/maintenance.ts';
 import type { PruneAllResult, ServerInstallsResult } from './operations/servers.ts';
 import type { UpdateItem, UpdateReport, UpdateResult } from './operations/update.ts';
@@ -446,6 +447,32 @@ export function renderInstall(result: InstallResult, color: boolean): string {
     if (result.backupPath) lines.push(`The entry it replaced is still in ${result.backupPath}, to put back by hand.`);
   } else lines.push(paint(color, 'yellow', `Not checked: ${result.verifyDetail ?? 'skipped'}`));
   for (const warning of result.warnings) lines.push('', paint(color, 'red', warning));
+  return lines.join('\n');
+}
+
+/**
+ * What a channel's own `mcp install` prints once its part is in the app's connection (single-server design D17): the
+ * connection made, or what it has now, what applied at once, and what the person does next.
+ */
+export function renderConnectionPart(result: ConnectionPartResult, color: boolean): string {
+  const name = result.connection.name ?? result.connection.id;
+  const parts = result.connection.parts.map((part) => part.text).join('; ') || 'no parts';
+  const lines: string[] = [];
+  if (!result.changed) return result.next;
+  lines.push(
+    paint(
+      color,
+      'green',
+      result.created
+        ? `Made the connection “${name}” for ${result.connection.appLabel ?? 'the app'}, with ${parts}.`
+        : `“${name}” now has: ${parts}.`,
+    ),
+  );
+  if (result.appliedAtOnce.length > 0) lines.push(`Applied at once: ${result.appliedAtOnce.join('; ')}.`);
+  if (result.verification === 'failed') {
+    lines.push(paint(color, 'red', `Failed to start: ${result.verifyDetail ?? 'no reason given'}`));
+  }
+  lines.push(result.next);
   return lines.join('\n');
 }
 

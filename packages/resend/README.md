@@ -51,6 +51,34 @@ whichever account asks, and a 429 through any account stops every account until 
 
 It never manages domains, API keys, webhooks, broadcasts, contacts or audiences, from any surface.
 
+## Taking messages
+
+When several agent sessions read the same received email, the first to **take** it has it, and the others leave it
+([design](../../docs/superpowers/specs/2026-10-26-taking-messages-design.md)). `resend_take` (or `agent-resend take
+<email>`) reads the email from Resend first — one this account did not receive, or one it sent, cannot be taken — and
+keeps only its id and its Message-ID. A session that finds it is not its own hands it back (`step: "hand-back"`, or
+`--hand-back`, with a reason: `not-mine`, `wrong-account`, `needs-the-person`, `duplicate` or `other`), and may mark
+one done (`step: "done"`, `--done`). `resend_taken` (`agent-resend taken [<email>…]`) says who has each: `you`,
+`another session` or `the person` — never which session, folder or app — and the received list and one received
+email carry the same as `taken`.
+
+- **A reply needs the take of the email it answers.** A send with an In-Reply-To answers the received email with that
+  Message-ID. Another session's take refuses it with `TAKEN_ELSEWHERE` (exit `10`), whatever the setting; when the
+  person turned **taking on** for the account (core's `agentcomms taking acme/resend --require on`, or
+  `comms_taking`), a session that has not taken it is refused with `TAKE_REQUIRED` (exit `10`). Both are asked at
+  prepare, before any preview or approval, and again before the send — so a take released in between sends nothing.
+  A new email, with no In-Reply-To, answers nobody and is not held to it. When several received emails carry that
+  Message-ID — the sender writes it, so a forged copy can carry another's — the reply answers each, and is refused
+  while another session has any of them.
+- **An In-Reply-To nobody has taken**, with taking on, is refused too: Resend cannot be asked which received email has
+  a given Message-ID, so one naming the account's own earlier email cannot be told apart. Leave In-Reply-To out for a
+  follow-up to your own mail, or let the person send it.
+- **Who a session is** is worked out by the server or the command from its own process, never passed in. The person
+  at their own terminal is never held to taking: they keep an email with core's `agentcomms takes keep`, and end
+  or move a session's take with `agentcomms takes release` or `agentcomms takes give`.
+- **A speed bump, not a boundary.** It keeps two sessions from answering one email; the send gate, the behaviour rules
+  and the person's approval still decide what is sent. Every process here runs as the person.
+
 ## Getting started
 
 A person connects an account at their own terminal, then registers the server with their agent:
@@ -104,6 +132,8 @@ terminal), `approve` (under `confirm`, a person at a terminal) and `mcp` (it sta
 | `agent-resend received list` | `resend_received_list` |
 | `agent-resend received show <id>` | `resend_received_show` |
 | `agent-resend received download <id>` | `resend_received_download` |
+| `agent-resend take <email>` | `resend_take` |
+| `agent-resend taken [<email>…]` | `resend_taken` |
 | `agent-resend metrics` | `resend_metrics` |
 | `agent-resend suppressions` | `resend_suppressions` |
 | `agent-resend send prepare` | `resend_send_prepare` |
@@ -114,7 +144,8 @@ terminal), `approve` (under `confirm`, a person at a terminal) and `mcp` (it sta
 | `agent-resend scheduled cancel <id>` | `resend_scheduled_cancel` |
 | `agent-resend approve <approvalId>` | — a person at a terminal, with the command the result gives |
 | `agent-resend mcp` | — it starts the server |
-| `agent-resend mcp install --client <client>` | `comms_server_install` (core) |
+| `agent-resend mcp install --client <client>` | `comms_connection_change` with `add` and `app` (core): Resend into the app's connection |
+| `agent-resend mcp install --client <client> --standalone` | `comms_server_install` (core): an entry of its own |
 | `agent-resend mcp prune` | `comms_server_prune` (core) |
 
 Every command that reads or changes an account — all but `account`, `doctor`, `send wait`, `approve` and `mcp` — is

@@ -59,7 +59,8 @@ function repairCommand(server: RegisteredServer, handoffs: CliHandoffs): Remedy 
   if (server.scope === 'project') {
     return remedy(`remove "${server.name}" from the project entry in ${server.path} by hand, then re-run mcp install`);
   }
-  const words = ['mcp', 'install', '--client', server.client];
+  // An entry of its own, repaired as one: `mcp install` alone puts Gmail into the app's connection (D17).
+  const words = ['mcp', 'install', '--client', server.client, '--standalone'];
   if (server.name && server.name !== 'gmail') words.push('--name', server.name);
   const inbox = server.args[server.args.indexOf('--inbox') + 1];
   if (server.args.includes('--inbox') && inbox) words.push('--inbox', inbox);

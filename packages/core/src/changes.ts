@@ -638,6 +638,9 @@ const SETTING_LABELS: Readonly<Record<string, string>> = {
   'behaviour.rules': 'what an agent may do',
   'activity.record': 'recording what agent sessions read and send',
   'activity.retentionDays': 'how many days the activity log keeps',
+  'search.enabled': 'keeping the words of messages on this machine, to search them',
+  'search.accounts': 'the accounts whose messages Search keeps',
+  'search.model': 'the local model that makes kept messages searchable by meaning',
 };
 
 /**
@@ -708,6 +711,12 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
       return 'every call an agent session makes to your accounts will be recorded on this machine again: the subjects and senders it read, what it searched for, what it sent and to whom — never a message body';
     case 'activity.retentionDays':
       return 'what agent sessions read and sent — subjects, senders, searches, recipients — will be kept on this machine for longer';
+    case 'search.enabled':
+      return 'the words of new messages agents read, and of replies sent, will be kept on this machine for Activity’s days — the text encrypted, the words index as keyed hashes; Activity keeps no message’s words, and this does';
+    case 'search.accounts':
+      return 'the words of new messages agents read in these accounts will be kept on this machine while Search is on, so you can search them';
+    case 'search.model':
+      return 'the words of each kept message will be sent to this model server on this machine — 127.0.0.1 or ::1 only — to make them searchable by meaning';
     default:
       return '';
   }
@@ -793,7 +802,9 @@ function describeLoosening(loosening: Loosening): string {
   const line = `${moved}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.
-  return truncateDisplay(line, 300);
+  // A connection's line names it by its label, and a widening remove's names the one its agents would use instead and
+  // what that reaches (H1): the most it can need is two labels and every part, so it is cut later, never before that.
+  return truncateDisplay(line, loosening.path.startsWith('connections[') ? 640 : 300);
 }
 
 /**

@@ -1,4 +1,4 @@
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { ACTIVITY_KINDS, ACTIVITY_OUTCOMES, warmSessionIdentity } from '../activity.ts';
 import { ACT_KINDS, AGENT_LABEL_WORDS, SLACK_STYLES } from '../agent-label.ts';
@@ -8,10 +8,12 @@ import { changeToolResult, type GatedChange, gatedChange, refuseUnclaimedApprova
 import { SERVERS } from '../channel-servers.ts';
 import { accountChannels, listed, narrowingOwner } from '../channel-words.ts';
 import { UPDATE_LEVELS } from '../config.ts';
+import { CONNECTION_APPS, CONNECTION_LAUNCHERS, isGatewayPart, PART_FACTS } from '../connections.ts';
 import { type Core, openCore } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { CORE_CALLER, requireHandoffs } from '../handoffs.ts';
 import { installFailure, SERVER_NAME_MESSAGE, SERVER_NAME_PATTERN } from '../mcp-install.ts';
+import { requestClient, stdinClosed } from '../mcp-request.ts';
 import {
   activityMine,
   activitySettingsChange,
@@ -33,6 +35,17 @@ import {
   changePolicyReport,
   refuseApprovalWithoutChange,
 } from '../operations/change-policy.ts';
+import { connectionMigrateChange, connectionMigrateUndoChange } from '../operations/connection-migrate.ts';
+import {
+  connectionAddChange,
+  connectionChangeChange,
+  connectionKeyReplaceChange,
+  connectionList,
+  connectionPartChange,
+  connectionRemoveChange,
+  connectionRenameChange,
+  connectionShow,
+} from '../operations/connections.ts';
 import { LABEL_CHANGE_KINDS, type LabelChangeRequest, labelChange, labelReport } from '../operations/label.ts';
 import { auditTail, corePaths, doctor, listApprovals, revokeApproval } from '../operations/maintenance.ts';
 import { namesDryRun, namesMigration } from '../operations/names-migrate.ts';
@@ -55,6 +68,7 @@ import {
   standingChange,
   standingReport,
 } from '../operations/standing.ts';
+import { TAKING_CHANGE_KINDS, type TakingChangeRequest, takingChange, takingReport } from '../operations/taking.ts';
 import { type UpdateDeps, updateChange, updateCheck } from '../operations/update.ts';
 import { updateJobChange } from '../operations/update-job.ts';
 import { updateRollbackChange } from '../operations/update-rollback.ts';
@@ -114,6 +128,12 @@ export interface CoreMcpOptions {
 export interface CoreMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one (a discarded `server/discover` probe, then
+   * the real opening). For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 /*
@@ -146,12 +166,14 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     'Reading needs nobody: comms_paths, comms_doctor, comms_audit_tail, comms_approvals_list, comms_approval_wait,',
     'comms_channels_available, comms_orgs_list, comms_org_show, comms_profile, comms_attach, comms_change_policy,',
-    'comms_label, comms_behaviour and comms_standing with no change, and comms_update with `check` or `status`.',
+    'comms_label, comms_behaviour, comms_taking and comms_standing with no change, and comms_update with `check` or',
+    '`status`.',
     '',
     'Every change — registering, updating or pruning a server, migrating names or secrets, loosening the change',
     'policy, allowing another folder for attachments, adding, updating or removing an organisation profile',
     '(comms_org_add, comms_org_update, comms_org_remove), loosening the agent label (comms_label), letting an agent',
-    'do more (comms_behaviour) — is shown to the person before it happens. The first call',
+    'do more (comms_behaviour), letting sessions act without taking a message first (comms_taking) — is shown to the',
+    'person before it happens. The first call',
     'returns `approvalRequired` with a `preview` and an `approvalId`: show the preview in full and ask. Then call the',
     'same tool again, with the same arguments and the `approvalId`. Under the `chat` change policy the person’s yes in',
     'this conversation is the approval; under `confirm` they first run the approve command the result gives, in their',
@@ -165,6 +187,17 @@ async function buildInstructions(core: Core): Promise<string> {
     '',
     `The default change policy here is ${policy}.`,
     'A server registered with a client appears only after that client is restarted: say so.',
+  ].join('\n');
+}
+
+/**
+ * Core's brief, as a part of an MCP connection (single-server design D14, §5.6): its must-not-miss line first. The
+ * gateway composes it with the other parts' within one 2,048-byte budget.
+ */
+export function coreBrief(): string {
+  return [
+    'Every change here comes with a preview: show it in full and ask, and call again with its approvalId only after the person’s yes.',
+    'comms_connection_show, with no id, says which connection this is.',
   ].join('\n');
 }
 
@@ -182,7 +215,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
   };
   const server = new McpServer(
     { name: 'agentcomms', version: VERSION },
-    { instructions: await buildInstructions(core) },
+    { instructions: isGatewayPart(env) ? coreBrief() : await buildInstructions(core) },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
@@ -369,13 +402,14 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
     async (args, ctx) =>
       read(() => {
-        const client = server.server.getClientVersion();
+        // The client this request names in its envelope (2026-07-28), or the one it named on connecting (2025).
+        const client = requestClient(ctx, () => server.server.getClientVersion());
         return activityMine(core, {
           surface: 'mcp',
           ...args,
           ...(client?.name ? { clientInfo: { name: client.name, version: client.version } } : {}),
           // A transport's own session id, where it has one (stdio has none): one connection, one session.
-          ...(ctx.sessionId ? { connection: ctx.sessionId } : {}),
+          ...(ctx.sessionId ? { transportSession: ctx.sessionId } : {}),
         });
       }),
   );
@@ -726,6 +760,70 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       }
       const request = Object.fromEntries(asked.map((kind) => [kind, args[kind]])) as BehaviourChangeRequest;
       return change(() => behaviourChange(core, request, 'mcp'), args.approvalId);
+    },
+  );
+
+  // ── Taking messages ──────────────────────────────────────────────────────────────────────────────────────────
+
+  /*
+   * Whether a session must take a message before it acts on it, per account (design 2026-10-26-taking-messages §5):
+   * `agentcomms taking` and this, one operation. Requiring a take and saying nothing apply at once; letting sessions act
+   * without taking first, and a 👀 on taking, are loosenings, shown first and approved. Who has a message is each
+   * channel's `*_taken`; the person's list and overrides are the CLI's alone.
+   */
+  server.registerTool(
+    'comms_taking',
+    {
+      title: 'Taking messages',
+      description:
+        'Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`\'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true`, `acknowledge: "nothing"`, a shorter `afterMinutes` and `notify: true` apply at once. `required: false`, `acknowledge: "eyes"` (Slack only), a longer `afterMinutes` and `notify: false` are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.',
+      inputSchema: {
+        account: z
+          .string()
+          .optional()
+          .describe('the mailbox or account, by its name: `organisation/platform`; for a change, required'),
+        required: z
+          .boolean()
+          .optional()
+          .describe('true: a session must take a message first — at once; false: approved first'),
+        acknowledge: z
+          .enum(['eyes', 'nothing'])
+          .optional()
+          .describe('what a take says to the sender: `nothing` at once; `eyes` (Slack) approved first'),
+        afterMinutes: z
+          .number()
+          .int()
+          .min(5)
+          .max(240)
+          .optional()
+          .describe('a message nobody takes within this many minutes, 5 to 240, counts as not taken'),
+        notify: z
+          .boolean()
+          .optional()
+          .describe('remind the person of a message nobody took, or let it wait under Not taken'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const asked = TAKING_CHANGE_KINDS.filter((kind) => args[kind] !== undefined);
+      if (asked.length === 0) {
+        return read(async () => {
+          refuseUnclaimedApproval(args.approvalId, {
+            message: 'with no change this only reports, so it takes no approvalId',
+            hint: 'Pass the change the approval was prepared for — `required`, `acknowledge`, `afterMinutes` or `notify` — with it.',
+          });
+          return takingReport(core, args.account === undefined ? {} : { account: args.account });
+        });
+      }
+      if (args.account === undefined) {
+        return fail(new CommsError('USAGE', 'a change names its account: `account`, by its name'));
+      }
+      const request = {
+        account: args.account,
+        ...Object.fromEntries(asked.map((kind) => [kind, args[kind]])),
+      } as TakingChangeRequest;
+      return change(() => takingChange(core, request, 'mcp'), args.approvalId);
     },
   );
 
@@ -1173,6 +1271,238 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       ),
   );
 
+  /*
+   * MCP connections (single-server design §10; the 0.35 prototype's MCP connections): what the person sees and changes
+   * of each place an app uses Agent Comms. Never a key, nor its hash, in any result: a Manual connection — whose snippet
+   * shows its key — is added and re-keyed only by the person, at their terminal or in the app.
+   */
+  const partArg = z
+    .array(
+      z.strictObject({
+        server: z.string().describe(`the part: ${PART_FACTS.map((facts) => facts.server).join(', ')}`),
+        account: z
+          .string()
+          .optional()
+          .describe('the one account it is kept to, `organisation/platform`; left out, every account'),
+        readOnly: z.boolean().optional().describe('Gmail only: keep it to reading'),
+      }),
+    )
+    .describe('every part, each server once');
+  const connectionId = z.string().describe('the connection, by its id: cn_ and 26 letters and digits');
+  server.registerTool(
+    'comms_connections_list',
+    {
+      title: 'List MCP connections',
+      description:
+        'Every MCP connection on this machine — each place an app uses Agent Comms: its id, name, app and where its entry is; its parts, each with the account it is kept to, read-only, and whether it can start; whether its entry is in its app and carries its key; when its key was issued; and when it was last used. Never a key. Reads only.',
+      inputSchema: {},
+      annotations: readsLocal,
+    },
+    async () => read(() => connectionList(core, env)),
+  );
+  server.registerTool(
+    'comms_connection_show',
+    {
+      title: 'Show an MCP connection',
+      description:
+        'One MCP connection, as comms_connections_list gives it, and the Agent Comms running for it now, part by part. With no `id`, inside a connection, it is the one this server is a part of: which connection this is. Reads only.',
+      inputSchema: { id: connectionId.optional() },
+      annotations: readsLocal,
+    },
+    async (args) => read(() => connectionShow(core, env, { id: args.id })),
+  );
+  server.registerTool(
+    'comms_connection_add',
+    {
+      title: 'Add an MCP connection',
+      description:
+        'Add a connection for an app — its own key, and one entry in that app that starts Agent Comms with its parts — and register it. A loosening: the first call returns `approvalRequired` with a preview naming every part and account it reaches, where its entry goes and anything it installs, and an approvalId; call again with the approvalId once the person agrees. `parts` left out are Agent Comms itself, each channel with an account here, and Events where it is installed. `folder` is one project, for Claude Code only. A Manual connection is not added here: its snippet carries its key, which would stay in this chat — the person adds it themselves. The app sees it once restarted: tell the person.',
+      inputSchema: {
+        app: z
+          .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
+          .describe('the app it is for'),
+        name: z
+          .string()
+          .describe(
+            'what the person calls it: shown in previews and in Activity, 1 to 64 characters, with no quotation marks, brackets or “…”',
+          ),
+        parts: partArg.optional(),
+        folder: z.string().optional().describe('Claude Code only: the one project folder it is for'),
+        profile: z.string().optional().describe('another Claude profile’s folder, or another Codex home'),
+        launcher: z.enum(CONNECTION_LAUNCHERS).optional().describe('how its parts are started: managed, the default'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          connectionAddChange(
+            core,
+            env,
+            {
+              app: args.app as (typeof CONNECTION_APPS)[number],
+              name: args.name,
+              ...(args.parts === undefined ? {} : { parts: args.parts }),
+              ...(args.folder === undefined ? {} : { folder: args.folder }),
+              ...(args.profile === undefined ? {} : { profile: args.profile }),
+              ...(args.launcher === undefined ? {} : { launcher: args.launcher }),
+            },
+            'mcp',
+            installVerification(updateDeps, npmRegistry(env)),
+          ),
+        args.approvalId,
+      ),
+  );
+  server.registerTool(
+    'comms_connection_change',
+    {
+      title: 'Change an MCP connection’s parts',
+      description:
+        'Every part a connection has from now on, with `id` and `parts` — of the connection this server is a part of: another’s parts are the person’s, at their terminal or in the app, and are refused here. Or, with `add`, one part put into an app’s connection — what a channel’s own `mcp install` does: `app` names the app, and its connection for every folder takes the part, kept to the account and read-only `add` names; an app with none gets a connection made for it, with Agent Comms itself and that part; one with several needs `id` to say which. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits, and the preview marks it done; `add` takes away only in this server’s own connection. Giving more — a part added, an account let go or moved, read-only off, a connection made — returns `approvalRequired` with a preview naming the connection and an approvalId: call again with it once the person agrees. A running app sees a change of parts through tools/list_changed where it supports it; a connection made needs the app restarted — tell the person.',
+      inputSchema: {
+        id: connectionId.optional().describe('the connection, by its id: cn_ and 26 letters and digits'),
+        parts: partArg.optional(),
+        add: z
+          .strictObject({
+            server: z.string().describe(`the part: ${PART_FACTS.map((facts) => facts.server).join(', ')}`),
+            account: z
+              .string()
+              .optional()
+              .describe('the one account it is kept to, `organisation/platform`; left out, every account'),
+            readOnly: z.boolean().optional().describe('Gmail only: keep it to reading'),
+          })
+          .optional()
+          .describe('one part to put into the app’s connection, in place of the one of that server it has'),
+        app: z
+          .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
+          .optional()
+          .describe('with `add`: the app whose connection takes the part'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => {
+      const deps = installVerification(updateDeps, npmRegistry(env));
+      if (args.add !== undefined) {
+        if (args.parts !== undefined) {
+          return fail(new CommsError('USAGE', '`add` puts one part in, and `parts` says every part: give one of them'));
+        }
+        if (args.app === undefined) {
+          return fail(new CommsError('USAGE', '`add` names the app whose connection takes the part: give `app`'));
+        }
+        const add = args.add;
+        return change(
+          () =>
+            connectionPartChange(
+              core,
+              env,
+              {
+                server: add.server,
+                app: args.app as string,
+                ...(args.id === undefined ? {} : { id: args.id }),
+                ...(add.account === undefined ? {} : { account: add.account }),
+                ...(add.readOnly === undefined ? {} : { readOnly: add.readOnly }),
+                approvalId: args.approvalId,
+              },
+              'mcp',
+              deps,
+            ),
+          args.approvalId,
+        );
+      }
+      if (args.id === undefined || args.parts === undefined) {
+        return fail(
+          new CommsError('USAGE', 'name the connection with `id` and every part it has from now on with `parts`', {
+            hint: 'Or put one part into an app’s connection with `add` and `app`.',
+          }),
+        );
+      }
+      if (args.app !== undefined) return fail(new CommsError('USAGE', '`app` goes with `add`: `parts` names no app'));
+      const id = args.id;
+      const parts = args.parts;
+      return change(
+        () => connectionChangeChange(core, env, { id, parts, approvalId: args.approvalId }, 'mcp', deps),
+        args.approvalId,
+      );
+    },
+  );
+  server.registerTool(
+    'comms_connection_rename',
+    {
+      title: 'Rename an MCP connection',
+      description:
+        'Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
+      inputSchema: {
+        id: connectionId,
+        name: z.string().describe('its new name, 1 to 64 characters, with no quotation marks, brackets or “…”'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    async (args) => change(() => connectionRenameChange(core, env, { id: args.id, name: args.name }, 'mcp'), undefined),
+  );
+  server.registerTool(
+    'comms_connection_key_replace',
+    {
+      title: 'Replace an MCP connection’s key',
+      description:
+        'Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. Another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.',
+      inputSchema: { id: connectionId },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) =>
+      change(
+        () =>
+          connectionKeyReplaceChange(
+            core,
+            env,
+            { id: args.id },
+            'mcp',
+            installVerification(updateDeps, npmRegistry(env)),
+          ),
+        undefined,
+      ),
+  );
+  server.registerTool(
+    'comms_connection_remove',
+    {
+      title: 'Remove an MCP connection',
+      description:
+        'Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.',
+      inputSchema: { id: connectionId, ...approvalArg },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), args.approvalId),
+  );
+
+  server.registerTool(
+    'comms_connection_migrate',
+    {
+      title: 'Move entries into one MCP connection',
+      description:
+        'Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. `client` keeps it to one app. With `undo` and a connection’s id, its parts become entries of their own again, under the names they had, and the connection goes. Either way a change: the first call returns `approvalRequired` with a preview naming every entry it writes, removes and leaves alone, and an approvalId. Tell the person the tools then appear under the one Agent Comms entry — mcp__agentcomms__… — so permission rules that named the old servers need allowing again, and that the app needs one restart.',
+      inputSchema: {
+        client: z
+          .enum(CLIENTS.filter((client) => client !== 'json') as [string, ...string[]])
+          .optional()
+          .describe('only this app'),
+        undo: connectionId.optional().describe('undo this connection: its parts as entries of their own again'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      const deps = installVerification(updateDeps, npmRegistry(env));
+      const undo = args.undo;
+      if (undo === undefined) {
+        return change(() => connectionMigrateChange(core, env, { client: args.client }, 'mcp', deps), args.approvalId);
+      }
+      if (args.client !== undefined)
+        return fail(new CommsError('USAGE', '`undo` takes no `client`: it undoes one connection'));
+      return change(() => connectionMigrateUndoChange(core, env, { id: undo }, 'mcp', deps), args.approvalId);
+    },
+  );
+
   server.registerTool(
     'comms_update',
     {
@@ -1357,21 +1687,33 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    return serveStdio(
+      async () => {
+        const next = unserved ?? (await createCoreMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+  };
   return {
     server,
-    /** Connects on stdio and resolves when the client disconnects, so the process does not outlive its client. */
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((resolve) => {
-        transport.onclose = () => resolve();
-        // A client that dies without closing the transport simply closes our stdin.
-        process.stdin.once('end', resolve);
-        process.stdin.once('close', resolve);
-      });
-      await server.connect(transport);
+      // A client that dies without closing the transport simply closes our stdin.
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
   };
 }
 

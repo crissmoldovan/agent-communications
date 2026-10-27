@@ -1,20 +1,25 @@
 import {
+  activityClient,
   CommsError,
   type CoreHandOff,
   changeToolResult,
   checkForUpdates,
   type GatedChange,
   gatedChange,
+  HAND_BACK_REASONS,
+  isGatewayPart,
   MAX_WAIT_SECONDS,
   refuseUnclaimedApproval,
+  stdinClosed,
   strictToolArguments,
+  TAKE_STEPS,
   toCommsError,
   updateToolNotice,
   waitCallOptions,
   waitForApproval,
   warmSessionIdentity,
 } from '@agentcomms/core';
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { CHANGE_POLICIES, MODES, SEND_POLICIES } from '../accounts.ts';
 import { ResendContext, type ResendContextOptions } from '../context.ts';
@@ -41,6 +46,7 @@ import {
 } from '../operations/read.ts';
 import { cancelScheduledChange } from '../operations/scheduled.ts';
 import { executeSend, prepareSend, sendStatus } from '../operations/send.ts';
+import { takeMessage, takenMessages } from '../operations/take.ts';
 import { VERSION } from '../version.ts';
 
 /**
@@ -74,6 +80,11 @@ export interface ResendMcpOptions extends ResendContextOptions {
 export interface ResendMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 const MAX_LISTED = 8;
@@ -87,6 +98,27 @@ function listOf(names: readonly string[]): string {
  * Under 2 KB, most important first: Claude Code cuts a server's instructions at 2,048 bytes, so what a model must not
  * get wrong comes before what it can look up. `mcp.test.ts` holds it under the limit with many accounts.
  */
+/**
+ * Resend's brief, as a part of an MCP connection (single-server design D14, §5.6): `account` on every call, that mail
+ * goes only after the person's yes, and last its accounts — the first line to go when the gateway's budget is short.
+ */
+export async function gatewayBrief(context: ResendContext, pinned: string | undefined): Promise<string> {
+  let names: string[] = [];
+  try {
+    names = (await listAccounts(context)).accounts.map((view) => view.name);
+  } catch {
+    // For the tools to report.
+  }
+  if (pinned) names = names.filter((name) => name === pinned);
+  return [
+    pinned
+      ? `This part serves only the account ${pinned}; \`account\` may be left out.`
+      : 'Pass `account` on every call: there is no default.',
+    'An email goes only after the person approves that exact email; never repeat a send whose outcome is unknown.',
+    names.length > 0 ? `Known accounts: ${listOf(names)}.` : 'No account is connected yet.',
+  ].join('\n');
+}
+
 export async function buildInstructions(context: ResendContext, pinned: string | undefined): Promise<string> {
   let accounts: { name: string; canSend: boolean }[] = [];
   try {
@@ -108,6 +140,7 @@ export async function buildInstructions(context: ResendContext, pinned: string |
     'above 10 recipients — the person runs the approve command the preparation gives, at their own terminal;',
     'you cannot approve it yourself, so say so; resend_send_wait tells you when they have. Under `never` nothing',
     'sends. Never repeat a send whose outcome is unknown: check it with `resend_send_status`.',
+    'Before replying to a received email, take it with resend_take; one another session has, leave.',
     '',
     'Read-only is enforced by this package’s own code, not by the key: Resend has no read-only key.',
     'A key is added only by a person, at their own terminal. Never ask for one in chat.',
@@ -132,12 +165,17 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
 
   const server = new McpServer(
     { name: 'agent-resend', version: VERSION },
-    { instructions: await buildInstructions(context, pinned) },
+    {
+      instructions: isGatewayPart(context.env)
+        ? await gatewayBrief(context, pinned)
+        : await buildInstructions(context, pinned),
+    },
   );
   // Which agent window started this server, read in the background now, so its first calls find it done (S2).
   warmSessionIdentity('mcp');
-  // The activity log's session names the client by what it said on connecting (design 2026-10-25-activity, S2).
-  context.clientInfo = () => server.server.getClientVersion();
+  // The activity log's session names the client each call came from: its 2026-07-28 envelope's, or the one it named on
+  // connecting (design 2026-10-25-activity, S2; single-server design D7).
+  context.clientInfo = activityClient(() => server.server.getClientVersion());
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text
@@ -432,6 +470,58 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     ),
   );
 
+  /*
+   * Taking messages (design 2026-10-26-taking-messages §5): a session takes a received email before it replies to it,
+   * hands it back, or marks it done. The session is the server's own, worked out from its process, never an argument —
+   * so no argument here names one, and one passed is refused as a key the tool does not declare.
+   */
+  server.registerTool(
+    'resend_take',
+    {
+      title: 'Take a received email',
+      description: `Take a received email before acting on it — replying — so no other session answers it; or hand it back (\`step: "hand-back"\`, with a \`reason\`: ${HAND_BACK_REASONS.join(', ')}) when it is not this session's, or mark it done (\`step: "done"\`). A take is this session's for 60 minutes after its last act on the email, and longer while a send prepared under it waits. Another session's take is refused with TAKEN_ELSEWHERE: leave the email. A \`note\`, for the person alone, may say more on a hand-back or a done; other sessions never see it. Reads the email from Resend to check it was received here; says nothing to its sender.`,
+      inputSchema: {
+        ...accountArg,
+        email: z.string().describe('the received email id'),
+        step: words(TAKE_STEPS).optional().describe('take (the default), hand-back or done'),
+        reason: words(HAND_BACK_REASONS).optional().describe('with hand-back: why, in closed words'),
+        note: z.string().optional().describe('with hand-back or done: for the person alone, at most 200 characters'),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    },
+    wrapped(
+      async (args: {
+        account?: string | undefined;
+        email: string;
+        step?: string | undefined;
+        reason?: string | undefined;
+        note?: string | undefined;
+      }) =>
+        takeMessage(context, await resolve(args.account), args.email, {
+          step: args.step ?? 'take',
+          ...(args.reason === undefined ? {} : { reason: args.reason }),
+          ...(args.note === undefined ? {} : { note: args.note }),
+        }),
+    ),
+  );
+
+  server.registerTool(
+    'resend_taken',
+    {
+      title: 'Who has these emails',
+      description:
+        'Who has each of these received emails — `you`, `another session` or `the person` — whether it is done, offered or handed back, and why in closed words; null for one nobody took. With no `emails`, the ones this session holds or is offered in the account. Never names another session. Reads only this machine.',
+      inputSchema: {
+        ...accountArg,
+        emails: z.array(z.string()).max(50).optional().describe('received email ids, at most 50'),
+      },
+      annotations: readsLocal,
+    },
+    wrapped(async (args: { account?: string | undefined; emails?: string[] | undefined }) =>
+      takenMessages(context, await resolve(args.account), args.emails),
+    ),
+  );
+
   server.registerTool(
     'resend_metrics',
     {
@@ -646,18 +736,30 @@ export async function createResendMcpServer(options: ResendMcpOptions = {}): Pro
     }),
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    return serveStdio(
+      async () => {
+        const next = unserved ?? (await createResendMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+  };
   return {
     server,
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      const transport = new StdioServerTransport();
-      const closed = new Promise<void>((settle) => {
-        transport.onclose = () => settle();
-        process.stdin.once('end', settle);
-        process.stdin.once('close', settle);
-      });
-      await server.connect(transport);
+      const closed = stdinClosed();
+      await serve();
       await closed;
     },
+    serve,
   };
 }

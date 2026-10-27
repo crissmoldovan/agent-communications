@@ -39,6 +39,8 @@ Scripts should read these rather than parse output.
 | [`domains`](#agent-resend-domains) | the team’s domains and their status; with --domain, the DNS records one needs |
 | [`emails`](#agent-resend-emails) | sent emails: what went, and what happened to it |
 | [`received`](#agent-resend-received) | received emails — untrusted content, shown with Resend’s SPF, DKIM and DMARC results |
+| [`take`](#agent-resend-take) | take a received email before replying to it, as this agent session — or hand it back, or mark it done; a person keeps one with core’s takes keep |
+| [`taken`](#agent-resend-taken) | who has these received emails, in closed words; with none, the ones this session has taken |
 | [`metrics`](#agent-resend-metrics) | delivery, bounce and complaint counts; the last 7 days unless --start and --end say otherwise |
 | [`suppressions`](#agent-resend-suppressions) | addresses Resend will not send to, and why |
 | [`send`](#agent-resend-send) | prepare an email, and send it once a person has approved it |
@@ -220,6 +222,34 @@ agent-resend received download [options] <id>
 | `--attachment <attachmentId>` | only this attachment | — |
 | `--out <subpath>` | a folder inside the account’s downloads folder | — |
 
+### `agent-resend take`
+
+take a received email before replying to it, as this agent session — or hand it back, or mark it done; a person keeps one with core’s takes keep
+
+```
+agent-resend take [options] <email>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--account <name>` | which account, as `organisation/resend` | — |
+| `--hand-back` | hand it back: it is open to every session again | — |
+| `--reason <reason>` | with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other | — |
+| `--done` | mark it done: other sessions stay refused it | — |
+| `--note <note>` | with --hand-back or --done: for the person alone, at most 200 characters | — |
+
+### `agent-resend taken`
+
+who has these received emails, in closed words; with none, the ones this session has taken
+
+```
+agent-resend taken [options] [emails...]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--account <name>` | which account, as `organisation/resend` | — |
+
 ### `agent-resend metrics`
 
 delivery, bounce and complaint counts; the last 7 days unless --start and --end say otherwise
@@ -390,8 +420,10 @@ agent-resend mcp install [options]
 | `--account <name>` | pin the server to one account | — |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
-| `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
-| `--print` | only print what would be written | `false` |
+| `--force` | with --standalone: replace this server's own earlier entry — this is how you upgrade | `false` |
+| `--print` | with --standalone: only print what would be written | `false` |
+| `--connection <id>` | the app's connection to put it into, when the app has several | — |
+| `--standalone` | register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
 | `--approval <approvalId>` | register the server this approval was given for | — |
 
 ### `agent-resend mcp prune`

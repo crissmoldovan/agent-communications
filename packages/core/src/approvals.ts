@@ -63,6 +63,7 @@ import {
   type SettingChange,
   sameLoosening,
 } from './config.ts';
+import { connectionOfThisProcess } from './connections.ts';
 import { canonicalJson, normaliseAddress, sha256Hex } from './digest.ts';
 import { CommsError, type ErrorCode } from './errors.ts';
 import { ensurePrivateDir, writeFileAtomic } from './fs.ts';
@@ -477,6 +478,21 @@ export interface ApprovalRecord {
    * still tighten the policy (design 2026-10-19-standing-approvals, S8, the lead's call after review).
    */
   approvedChangePolicy?: ChangePolicy | undefined;
+  /**
+   * The MCP connection it was prepared through (single-server design §7, P3): the id of the connection whose part made
+   * it, as its gateway set it (`connectionOfThisProcess`) — so the app's Approvals can say which connection asks.
+   * Content-free: an id, never the key, which no part is ever given. Written once, when it is made, and kept through
+   * every state after. Not bound: it decides nothing, and a release before 0.35.0, whose binding has no such field,
+   * reads the record unchanged. Read only as a connection's id: anything else makes the record corrupt. Absent on
+   * everything prepared outside a connection, and on every record an earlier release wrote.
+   */
+  preparedBy?: string | undefined;
+}
+
+/** The connection a record made in this process is prepared through, as the record keeps it: `{ preparedBy }`, or none. */
+function preparedByThisProcess(): { preparedBy?: string } {
+  const id = connectionOfThisProcess();
+  return id === undefined ? {} : { preparedBy: id };
 }
 
 /**
@@ -1071,6 +1087,7 @@ export class ApprovalStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
       updatedAt: now.toISOString(),
+      ...preparedByThisProcess(),
     });
     await this.#write(record);
     return record;
@@ -1094,6 +1111,7 @@ export class ApprovalStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
       updatedAt: now.toISOString(),
+      ...preparedByThisProcess(),
     } as Omit<ApprovalRecord, 'bindingDigest'>) as DisclosureApprovalRecord;
     await this.#write(record as ApprovalRecord);
     return record;
@@ -1808,6 +1826,7 @@ export class ApprovalStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
       updatedAt: now.toISOString(),
+      ...preparedByThisProcess(),
       change,
     });
     await this.#write(record);
@@ -1926,6 +1945,7 @@ export class ApprovalStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + pendingMs).toISOString(),
       updatedAt: now.toISOString(),
+      ...preparedByThisProcess(),
       standing,
     });
     await this.#write(record);
@@ -2084,6 +2104,7 @@ export class ApprovalStore {
       approvedVia: 'standing',
       approvedAt: at,
       usableUntil: until,
+      ...preparedByThisProcess(),
     });
     // The binding it was approved with is its own, as for every approved send.
     const record: ApprovalRecord = { ...sealed, approvedBindingDigest: sealed.bindingDigest };
@@ -2182,6 +2203,7 @@ export class ApprovalStore {
       createdAt: now.toISOString(),
       expiresAt: new Date(now.getTime() + APPROVAL_LIFETIMES.download).toISOString(),
       updatedAt: now.toISOString(),
+      ...preparedByThisProcess(),
       download,
     });
     await this.#write(record);

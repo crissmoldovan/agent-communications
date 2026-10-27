@@ -12,7 +12,10 @@ import {
   type EventServiceStatus,
   errorMessage,
   type Installation,
+  type Product,
 } from './ipc.ts';
+import type { JoinedMessage } from './messages/join.ts';
+import { readNotTaken } from './messages/takes.ts';
 import { type QueueCounts, readQueueCounts } from './queue.ts';
 
 /** Something a screen waits for: loading, there, or what went wrong. */
@@ -59,12 +62,32 @@ export interface AppData {
    * `absent` when there is no launcher.
    */
   queueCounts: Loadable<QueueCounts> | 'unsupported' | 'absent';
+  /**
+   * The messages nobody took in time (0.35.0, design 2026-10-26-taking-messages §8): the Queue's Not taken, which counts
+   * toward the Queue's badge. Read with the shared reads at most once a minute — as often as the event service's sweep
+   * — and at once on `refresh('notTaken')`, once core takes messages and the event service has Messages (0.32.0);
+   * `off` before, and nothing is asked.
+   */
+  notTaken: Loadable<JoinedMessage[]> | 'off';
   /** Whether the window can be seen: a screen's own poll runs only then. */
   visible: boolean;
-  refresh(what?: 'approvals' | 'updateStatus' | 'events' | 'installation' | 'queue' | 'eventsVersion'): Promise<void>;
+  refresh(what?: Refreshed): Promise<void>;
   runDoctors(products: DoctorProduct[]): Promise<void>;
   clearDeepLink(): void;
 }
+
+/** What `refresh` reads again: one of the shared reads, or every one. */
+export type Refreshed =
+  | 'approvals'
+  | 'updateStatus'
+  | 'events'
+  | 'installation'
+  | 'queue'
+  | 'eventsVersion'
+  | 'notTaken';
+
+/** How often Not taken is read with the shared reads: once a minute, as the event service's sweep runs. */
+export const NOT_TAKEN_EVERY_MS = 60_000;
 
 /** Whether a service in `status` runs: running, or still stopping. */
 const runs = (status: EventServiceStatus): boolean => status === 'running' || status === 'stopping';
@@ -142,6 +165,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [queueCounts, setQueueCounts] = useState<Loadable<QueueCounts> | 'unsupported' | 'absent'>({
     state: 'loading',
   });
+  const [notTaken, setNotTaken] = useState<Loadable<JoinedMessage[]> | 'off'>('off');
   const visible = useVisible(bridge);
 
   const installed = installation.state === 'ready' && installation.value.installed ? installation.value : null;
@@ -162,6 +186,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const eventServiceRead = useLatestOnly();
   const eventsVersionRead = useLatestOnly();
   const queueCountsRead = useLatestOnly();
+  const notTakenRead = useLatestOnly();
 
   const loadApprovals = useCallback(async () => {
     const latest = approvalsRead();
@@ -234,9 +259,37 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     if (latest()) setQueueCounts(counts);
   }, [bridge, eventsPresent, queueCountsRead]);
 
+  // Not taken (0.35.0): once core takes messages and the event service has Messages, at most once a minute with the
+  // shared reads, and at once when asked. The versions are read through refs, as the counts' is.
+  const takingOn = supports(installed?.version ?? null, 'taking');
+  const presentKey = installed?.present.join(',') ?? '';
+  const notTakenAt = useRef(0);
+  const loadNotTaken = useCallback(
+    async (now: boolean) => {
+      const version = knownEventsVersion.current;
+      if (!takingOn || !eventsPresent || version === 'absent' || version.state === 'error') {
+        notTakenRead();
+        setNotTaken('off');
+        return;
+      }
+      if (version.state === 'loading') return;
+      if (!supports(version.value, 'messages')) {
+        notTakenRead();
+        setNotTaken('off');
+        return;
+      }
+      if (!now && Date.now() - notTakenAt.current < NOT_TAKEN_EVERY_MS) return;
+      notTakenAt.current = Date.now();
+      const latest = notTakenRead();
+      const value = await readNotTaken(bridge, presentKey === '' ? [] : (presentKey.split(',') as Product[]));
+      if (latest()) setNotTaken(value);
+    },
+    [bridge, takingOn, eventsPresent, presentKey, notTakenRead],
+  );
+
   const ready = installed !== null;
   const refresh = useCallback(
-    async (what?: 'approvals' | 'updateStatus' | 'events' | 'installation' | 'queue' | 'eventsVersion') => {
+    async (what?: Refreshed) => {
       if (what === 'installation') return loadInstallation();
       // Nothing runs without core's launcher.
       if (!ready) return;
@@ -245,9 +298,19 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       if (what === 'events') return loadEvents();
       if (what === 'queue') return loadQueueCounts();
       if (what === 'eventsVersion') return loadEventsVersion();
-      await Promise.all([loadApprovals(), loadUpdateStatus(), loadEvents(), loadQueueCounts()]);
+      if (what === 'notTaken') return loadNotTaken(true);
+      await Promise.all([loadApprovals(), loadUpdateStatus(), loadEvents(), loadQueueCounts(), loadNotTaken(false)]);
     },
-    [ready, loadInstallation, loadApprovals, loadUpdateStatus, loadEvents, loadQueueCounts, loadEventsVersion],
+    [
+      ready,
+      loadInstallation,
+      loadApprovals,
+      loadUpdateStatus,
+      loadEvents,
+      loadQueueCounts,
+      loadEventsVersion,
+      loadNotTaken,
+    ],
   );
 
   // The events service's own version, once core's launcher and its own are here, and whenever which are here changes.
@@ -262,7 +325,8 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!ready) return;
     void loadQueueCounts();
-  }, [ready, eventsVersion, loadQueueCounts]);
+    void loadNotTaken(true);
+  }, [ready, eventsVersion, loadQueueCounts, loadNotTaken]);
 
   const runDoctors = useCallback(
     async (products: DoctorProduct[]) => {
@@ -391,6 +455,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       deepLink,
       eventsVersion,
       queueCounts,
+      notTaken,
       visible,
       refresh,
       runDoctors,
@@ -409,6 +474,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       deepLink,
       eventsVersion,
       queueCounts,
+      notTaken,
       visible,
       refresh,
       runDoctors,

@@ -51,6 +51,8 @@ Scripts should read these rather than parse output.
 | [`organise\|organize`](#agent-gmail-organise) | label, archive, star and mark read — every change reversible, and previewable with --dry-run |
 | [`organise-undo\|organize-undo`](#agent-gmail-organise-undo) | put an organising change back, from the `undo` a --json organise returned |
 | [`trash`](#agent-gmail-trash) | move mail to the bin, or take it out again — nothing is ever deleted outright |
+| [`take`](#agent-gmail-take) | take a message before replying to it, so no other session does; hand it back, or mark it done |
+| [`taken`](#agent-gmail-taken) | who has these messages, in closed words; none named: this session’s own takes |
 | [`label`](#agent-gmail-label) | create a label, or find the one already there |
 | [`labels`](#agent-gmail-labels) | the labels in a mailbox |
 | [`sendas`](#agent-gmail-sendas) | the addresses this mailbox can send as |
@@ -657,6 +659,34 @@ agent-gmail trash [options]
 | `--undo` | take them out of the bin instead | `false` |
 | `--dry-run` | say what would move and move nothing | `false` |
 
+### `agent-gmail take`
+
+take a message before replying to it, so no other session does; hand it back, or mark it done
+
+```
+agent-gmail take [options] <messageId>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--inbox <alias>` | which mailbox | — |
+| `--hand-back` | hand it back: it is not this session’s | `false` |
+| `--reason <reason>` | why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other | — |
+| `--note <note>` | at most 200 characters for the person, with --hand-back or --done; no session sees it | — |
+| `--done` | mark it done: other sessions stay refused | `false` |
+
+### `agent-gmail taken`
+
+who has these messages, in closed words; none named: this session’s own takes
+
+```
+agent-gmail taken [options] [messageIds...]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--inbox <alias>` | which mailbox | — |
+
 ### `agent-gmail label`
 
 create a label, or find the one already there
@@ -734,8 +764,10 @@ agent-gmail mcp install [options]
 | `--read-only` | leave out every tool that changes the mailbox | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
-| `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
-| `--print` | only print what would be written | `false` |
+| `--force` | with --standalone: replace this server's own earlier entry — this is how you upgrade | `false` |
+| `--print` | with --standalone: only print what would be written | `false` |
+| `--connection <id>` | the app's connection to put it into, when the app has several | — |
+| `--standalone` | register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
 | `--approval <id>` | register the server this approval was given for | — |
 
 ### `agent-gmail mcp prune`
@@ -768,8 +800,9 @@ agent-gmail setup [options]
 | `--client <name>` | sign that mailbox in through this OAuth client | — |
 | `--profile <file>` | add this organisation profile before continuing setup | — |
 | `--org-approval <id>` | add the organisation profile this approval was given for | — |
-| `--mcp-client <client>` | register with this MCP client when the mailbox is connected (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode") | — |
-| `--replace-server` | replace an MCP entry of the same name that is already there | `false` |
+| `--mcp-client <client>` | put Gmail into this MCP client's connection when the mailbox is connected (choices: "claude-code", "claude-desktop", "codex", "cursor", "gemini", "vscode") | — |
+| `--standalone` | register the server as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
+| `--replace-server` | with --standalone: replace an MCP entry of the same name that is already there | `false` |
 | `--store <store>` | where secrets are kept (first time only) (choices: "keychain", "file") | — |
 | `--move` | delete the downloaded client JSON once its secret is stored | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |

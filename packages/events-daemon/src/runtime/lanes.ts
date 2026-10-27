@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { CommsError, homeDirectory, homeForDiscovery, shortenHome } from '@agentcomms/core';
+import { CommsError, clockTime, homeDirectory, homeForDiscovery, shortenHome, type TakenView } from '@agentcomms/core';
 import { type TargetDocument, targetLane } from '../domain/activation-documents.ts';
 import {
   isActivityKey,
@@ -22,6 +22,7 @@ import type { EventDatabase } from '../store/database.ts';
 import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
 import { recordQueueHistory } from './queue-history.ts';
 import type { RuleShowEntryV1 } from './rule-show.ts';
+import type { LaneOfferPort } from './take-offers.ts';
 
 /**
  * Routing's lanes in the owner (routing design 2026-10-25, §3 and §6): which window the person bound to each lane, who
@@ -41,6 +42,8 @@ import type { RuleShowEntryV1 } from './rule-show.ts';
  * - **History** (0.32.0 §3.6): a wake writes `woken` on the item it names, and a read through `events_lane_item` writes
  *   `read`, each with the window's activity session key, in the event service's own database and never in core's
  *   activity log.
+ * - **Offers** (taking messages T4): a wake hands the window its item, so a delivery's offer of the item's message to
+ *   that window lasts fifteen minutes from the wake, and the pointer says until when.
  */
 
 const TASK_ID = /^lt_[0-9a-f]{32}$/u;
@@ -124,6 +127,15 @@ interface Waiter {
   readonly stop: (error: CommsError) => void;
 }
 
+/**
+ * `events_lane_item`'s item: the queue's, as `queue show` gives it, with `taken` — who has its message (taking design
+ * §6): null, or `{ state, by?: 'you' | 'another session' | 'the person', since?, leaseUntil?, offered?: { to: 'you' |
+ * 'another session', until }, handedBack? }`, in T7's closed words only.
+ */
+export interface LaneItemV1 extends QueueItemV1 {
+  readonly taken: TakenView;
+}
+
 export interface LaneServiceOptions {
   readonly store: EventDatabase;
   readonly queue: Pick<QueueStore, 'laneItem' | 'laneWake' | 'openByLane'>;
@@ -135,6 +147,8 @@ export interface LaneServiceOptions {
    * binding is shown, so a service that shows none never reads it.
    */
   readonly home?: string | undefined;
+  /** Taking messages T4: told when a window is woken for an item, so a delivery's offer of it starts its time. */
+  readonly offers?: LaneOfferPort | undefined;
 }
 
 function usage(message: string, reason?: string): never {
@@ -263,6 +277,7 @@ export class LaneService {
    */
   readonly #marks = new Map<string, LaneWakeMark>();
   readonly #waiters = new Set<Waiter>();
+  readonly #offers: LaneOfferPort | undefined;
   #stopped = false;
 
   #homeFolder(): string {
@@ -277,6 +292,7 @@ export class LaneService {
     this.#now = options.now ?? Date.now;
     this.#recheckMs = options.recheckMs ?? 1_000;
     this.#home = options.home;
+    this.#offers = options.offers;
   }
 
   /**
@@ -655,15 +671,19 @@ export class LaneService {
     });
   }
 
-  /** `events_lane_item`: one item of the caller's lane, since its binding, enveloped as `queue show` gives it. */
-  async item(itemId: unknown, caller: LaneWindowIdentity): Promise<{ readonly item: QueueItemV1 }> {
+  /**
+   * `events_lane_item`: one item of the caller's lane, since its binding, enveloped as `queue show` gives it — and
+   * `taken`, who has its message in the closed words an agent may see (taking design §6, T7), or null.
+   */
+  async item(itemId: unknown, caller: LaneWindowIdentity): Promise<{ readonly item: LaneItemV1 }> {
     this.seen(caller);
     const binding = this.#bindingFor(caller);
     if (binding === undefined) return noLaneHere();
     const read = await this.#queue.laneItem(itemId, binding.lane, binding.since);
     // Only an item the window was given is read; a refusal above names nothing and records nothing.
     this.#record(read.item.id, 'read', caller.activityKey);
-    return read;
+    const taken = (await this.#offers?.takenOfItem(read.item.id, caller)) ?? null;
+    return { item: { ...read.item, taken } };
   }
 
   /** The queue's delivery boundary appended an item: settle every watch and long-poll now rather than on its next look. */
@@ -721,7 +741,16 @@ export class LaneService {
     // The line first: a write that fails leaves the mark where it was, so the item wakes the window on its next look.
     this.#record(next.id, 'woken', windowKey);
     this.#marks.set(binding.binding_id, { appendedAt: next.appendedAt, id: next.id });
-    const pointer = { lane: binding.lane, itemId: next.id, channel: next.channel, ruleId: next.ruleId, waiting };
+    // The window is handed the item now: a delivery's offer of its message lasts fifteen minutes from here (T4).
+    const until = this.#handedOffer(next.id, binding);
+    const pointer = {
+      lane: binding.lane,
+      itemId: next.id,
+      channel: next.channel,
+      ruleId: next.ruleId,
+      waiting,
+      ...(until === null ? {} : { offeredUntil: clockTime(until) }),
+    };
     return {
       lane: binding.lane,
       item: next.id,
@@ -730,6 +759,22 @@ export class LaneService {
       waiting,
       text: lanePointerText(pointer),
     };
+  }
+
+  /** When a delivery's offer of this item's message to the binding's window now lasts until, or null for none. */
+  #handedOffer(itemId: string, binding: BindingRow): string | null {
+    try {
+      return (
+        this.#offers?.handedToLane(
+          itemId,
+          { sessionId: binding.session_id, activityKey: binding.activity_key },
+          this.#now(),
+        ) ?? null
+      );
+    } catch {
+      // An offer's time is best-effort; the wake is not.
+      return null;
+    }
   }
 
   /** One line of an item's history, by the window with this activity session key. */

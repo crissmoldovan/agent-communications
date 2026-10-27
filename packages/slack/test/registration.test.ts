@@ -203,6 +203,7 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
       'install',
       '--client',
       'cursor',
+      '--standalone',
       '--launcher',
       'npx',
       '--workspace',
@@ -215,7 +216,18 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
     // The command an agent is told to run again carries the pin: without it, it would ask for a wider server.
     // This installation's own command, located (CUE-403).
     locatedSlackLine(fromCommand.hint, [
-      ...['mcp', 'install', '--client', 'cursor', '--workspace', 'acme', '--launcher', 'npx', '--no-verify'],
+      ...[
+        'mcp',
+        'install',
+        '--client',
+        'cursor',
+        '--standalone',
+        '--workspace',
+        'acme',
+        '--launcher',
+        'npx',
+        '--no-verify',
+      ],
       ...['--approval', fromCommand.approvalId],
     ]);
     assert.equal(await readFile(cursor, 'utf8'), before, 'nothing is written while it is only asked');
@@ -261,7 +273,7 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
     );
     const gemini = join(home, '.gemini', 'settings.json');
     const fromTerminal = pending(
-      await cli(harness, ['mcp', 'install', '--client', 'gemini', '--no-verify', '--json'], env),
+      await cli(harness, ['mcp', 'install', '--client', 'gemini', '--standalone', '--no-verify', '--json'], env),
     );
     assert.match(fromTerminal.preview, /registers the Slack MCP server with gemini as "slack"/);
     assert.equal(existsSync(gemini), false);
@@ -294,7 +306,18 @@ test('an approval from comms_server_install registers from `agent-slack mcp inst
 test('`agent-slack mcp install` asks before it writes; `--print` and `--client json` ask nobody', async () => {
   const { harness, home, env } = await machine();
   const cursor = join(home, '.cursor', 'mcp.json');
-  const command = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--name', 'team-slack', '--no-verify'];
+  const command = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'npx',
+    '--name',
+    'team-slack',
+    '--no-verify',
+  ];
 
   const asked = await cli(harness, [...command, '--json'], env);
   const { approvalId, preview } = pending(asked);
@@ -302,7 +325,18 @@ test('`agent-slack mcp install` asks before it writes; `--print` and `--client j
   assert.match(preview, /not pinned: it reaches every workspace on this machine/);
   // The command to run again repeats every flag the registration was asked with.
   locatedSlackLine(String(asked.envelope().error?.hint), [
-    ...['mcp', 'install', '--client', 'cursor', '--name', 'team-slack', '--launcher', 'npx', '--no-verify'],
+    ...[
+      'mcp',
+      'install',
+      '--client',
+      'cursor',
+      '--standalone',
+      '--name',
+      'team-slack',
+      '--launcher',
+      'npx',
+      '--no-verify',
+    ],
     ...['--approval', approvalId],
   ]);
   assert.equal(existsSync(cursor), false);
@@ -312,8 +346,8 @@ test('`agent-slack mcp install` asks before it writes; `--print` and `--client j
 
   const other = await machine();
   for (const argv of [
-    ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--print', '--json'],
-    ['mcp', 'install', '--client', 'json', '--launcher', 'npx', '--no-verify', '--json'],
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'npx', '--no-verify', '--print', '--json'],
+    ['mcp', 'install', '--client', 'json', '--standalone', '--launcher', 'npx', '--no-verify', '--json'],
   ]) {
     const ran = await cli(other.harness, argv, other.env);
     assert.equal(ran.code, 0, `${argv.join(' ')}: ${ran.stdout}`);
@@ -326,7 +360,11 @@ test('a server name that could rewrite the preview is refused by `agent-slack mc
   // Quoted in the sentence the person approves, this name read as a pin the entry would not have.
   const { harness, home, env } = await machine();
   const spoof = 'slack", pinned to the workspace acme, "';
-  const ran = await cli(harness, ['mcp', 'install', '--client', 'cursor', '--name', spoof, '--json'], env);
+  const ran = await cli(
+    harness,
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--name', spoof, '--json'],
+    env,
+  );
   assert.equal(ran.code, EXIT_CODES.USAGE, ran.stdout);
   assert.match(String(ran.envelope().error?.message), /a server name is 1 to 64 letters/);
   assert.deepEqual(await harness.core.approvals.list(), [], 'nobody was asked');
@@ -381,7 +419,7 @@ test('`agent-slack mcp install` and comms_server_install warn about the same oth
   try {
     const command = await cli(
       harness,
-      ['mcp', 'install', '--client', 'cursor', '--print', '--no-verify', '--json'],
+      ['mcp', 'install', '--client', 'cursor', '--standalone', '--print', '--no-verify', '--json'],
       env,
     );
     assert.equal(command.code, 0, command.stdout);

@@ -381,16 +381,22 @@ export async function requireAllowed(deps: BehaviourDeps, check: BehaviourCheck)
   return here;
 }
 
-/** A post's or an edit's preview, with the line saying what is allowed where it lands (B4). */
-export type SlackPreview = ChannelPreview & { readonly allowedHere: string };
+/**
+ * A post's or an edit's preview, with the line saying what is allowed where it lands (B4) — and, for a post that
+ * answers a message this session has taken, the line saying so (design 2026-10-26-taking-messages §6).
+ */
+export type SlackPreview = ChannelPreview & { readonly allowedHere: string; readonly taken?: string | undefined };
 
 /**
  * A post's or an edit's preview as a person reads it: core's rendering, with the `Allowed here:` line at its foot,
  * beside what has to happen before it is made — the policy line, which stays last.
  */
-export function renderSlackPreview(preview: ChannelPreview & { readonly allowedHere?: string | undefined }): string {
+export function renderSlackPreview(
+  preview: ChannelPreview & { readonly allowedHere?: string | undefined; readonly taken?: string | undefined },
+): string {
   if (preview.allowedHere === undefined) return renderChannelPreview(preview);
   const lines = [renderChannelPreview({ ...preview, policy: undefined }), escapeForDisplay(preview.allowedHere)];
+  if (preview.taken !== undefined) lines.push(escapeForDisplay(preview.taken));
   if (preview.policy) lines.push(escapeForDisplay(preview.policy));
   return lines.join('\n');
 }

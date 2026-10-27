@@ -17,7 +17,9 @@ import {
   ACTIVITY_KINDS,
   ACTIVITY_OUTCOMES,
   byMinute,
+  type ConnectionNamed,
   channelLabel,
+  connectionOfSession,
   type Filters,
   filterChannels,
   hasOutside,
@@ -366,9 +368,11 @@ function OneSession({
   const read = useRead<TimelineView>(showCall(summary.key, since, filters), readTimeline, tick);
   // The head is the session over the range asked, once it is read; the list's until then.
   const session = read.state === 'ready' ? read.value.session : summary;
+  // The connection its calls came through (0.35.0): the list's, or the newest a line of the timeline names.
+  const connection = connectionOfSession(summary, read.state === 'ready' ? read.value.lines : []);
   return (
     <div className="flex flex-col gap-(--cue-space-4)">
-      <SessionHead session={session} />
+      <SessionHead session={session} connection={connection} />
       <FilterBar session={session} filters={filters} onChange={setFilters} />
       <section aria-label={ACTIVITY_COPY.timeline}>
         <Panel>
@@ -399,8 +403,8 @@ function OneSession({
 }
 
 /** The session's head: where and by what it ran, how it was grouped, when, and its counts. */
-function SessionHead({ session }: { session: SessionView }) {
-  const runner = runnerOf(session);
+function SessionHead({ session, connection }: { session: SessionView; connection: ConnectionNamed | null }) {
+  const runner = runnerOf(session, connection);
   return (
     <section aria-label="Session" className="flex flex-col gap-(--cue-space-2)">
       <h2 className="min-w-0 text-(length:--cue-text-emphasis) font-semibold text-fg">

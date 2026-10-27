@@ -11,6 +11,7 @@ import {
   MAX_ACTIVITY_RETENTION_DAYS,
   MIN_ACTIVITY_RETENTION_DAYS,
 } from './activity-settings.ts';
+import { CONNECTION_ID_PATTERN, connectionById, connectionOfThisProcess, GATEWAY_PID_ENV } from './connections.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { appendPrivateLine, ensurePrivateDir, FILE_MODE, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
@@ -127,6 +128,17 @@ export interface ActivitySession {
   readonly ancestors?: readonly string[] | undefined;
   readonly grouped: boolean;
   readonly surface: ActivitySurface;
+  /**
+   * The MCP connection the call came through (single-server design D11): its id, which the gateway handed the part,
+   * and its name at the time, as account aliases are kept. Absent for a call through no gateway.
+   */
+  readonly connection?: ActivityConnection | undefined;
+}
+
+/** A connection, as a line names it: by id, and by the name it had when the line was written. */
+export interface ActivityConnection {
+  readonly id: string;
+  readonly name: string;
 }
 
 /** What a `told` line says of a delivery (S1): the rule that matched and the target it reached. No sender, no payload. */
@@ -291,6 +303,7 @@ function sessionOf(raw: unknown): ActivitySession {
   const ancestors = Array.isArray(session.ancestors)
     ? session.ancestors.slice(0, 3).flatMap((name) => (typeof name === 'string' ? [cut(name, BOUNDS.word) ?? ''] : []))
     : undefined;
+  const connection = connectionOf(session.connection);
   return {
     // A key that is not one is no session's: this line stands alone rather than in someone else's.
     key: key ?? randomKey(),
@@ -302,7 +315,17 @@ function sessionOf(raw: unknown): ActivitySession {
     ...(ancestors === undefined ? {} : { ancestors }),
     grouped: key !== null && session.grouped === true,
     surface,
+    ...(connection === undefined ? {} : { connection }),
   };
+}
+
+/** A connection a line names, kept only with an id that is a connection's and a name. */
+function connectionOf(raw: unknown): ActivityConnection | undefined {
+  const connection = own<Record<string, unknown>>(raw);
+  const id = connection?.id;
+  const name = cut(connection?.name, BOUNDS.name);
+  if (typeof id !== 'string' || !CONNECTION_ID_PATTERN.test(id) || name === undefined || name === '') return undefined;
+  return { id, name };
 }
 
 /**
@@ -498,6 +521,11 @@ export interface ActivitySessionSummary {
   readonly channels: readonly string[];
   readonly accounts: readonly string[];
   readonly counts: ActivityCounts;
+  /**
+   * The MCP connection it was last used through (single-server design D11), by id and the name it had then — what
+   * `session.connection` is on its timeline — or null for a session no line of which came through one.
+   */
+  readonly connection: ActivityConnection | null;
 }
 
 /** What a session's lines add up to, in a form two days' worth can be added together. */
@@ -520,6 +548,8 @@ interface Aggregate {
   accounts: string[];
   kind: Record<ActivityKind, number>;
   outcome: Record<ActivityOutcome, number>;
+  /** The connection of its latest line that came through one, with that line's time; null for none. */
+  connection: { id: string; name: string; at: string } | null;
 }
 
 function emptyKinds(): Record<ActivityKind, number> {
@@ -553,6 +583,10 @@ function aggregateOf(line: ActivityLine): Aggregate {
     accounts: line.account.alias ? [line.account.alias] : [],
     kind,
     outcome,
+    connection:
+      line.session.connection === undefined
+        ? null
+        : { id: line.session.connection.id, name: line.session.connection.name, at: line.at },
   };
 }
 
@@ -583,6 +617,12 @@ function merge(a: Aggregate, b: Aggregate): Aggregate {
     accounts: union(a.accounts, b.accounts),
     kind,
     outcome,
+    connection:
+      a.connection === null
+        ? b.connection
+        : b.connection === null || a.connection.at >= b.connection.at
+          ? a.connection
+          : b.connection,
   };
 }
 
@@ -605,6 +645,7 @@ function summaryOf(aggregate: Aggregate): ActivitySessionSummary {
     channels: [...aggregate.channels].sort(),
     accounts: [...aggregate.accounts].sort(),
     counts: { kind: { ...aggregate.kind }, outcome: { ...aggregate.outcome } },
+    connection: aggregate.connection === null ? null : { id: aggregate.connection.id, name: aggregate.connection.name },
   };
 }
 
@@ -626,7 +667,13 @@ function aggregatesOf(raw: unknown): Aggregate[] | null {
       !strings(held.processes) ||
       !strings(held.channels) ||
       !strings(held.accounts) ||
-      !strings(held.surfaces)
+      !strings(held.surfaces) ||
+      !(
+        held.connection === null ||
+        (typeof held.connection?.id === 'string' &&
+          typeof held.connection.name === 'string' &&
+          typeof held.connection.at === 'string')
+      )
     ) {
       return null;
     }
@@ -696,6 +743,8 @@ export interface ActivityLogOptions {
 
 const FAILURE_FILE = 'activity-failure.json';
 const INDEX_DIR = '.index';
+/** The day index's shape: 2 since a session's summary names its connection. */
+const INDEX_VERSION = 2;
 /**
  * Each day's server windows: one small line for each server process's window on that day — its key, parent and
  * folder — so a CLI call finds the window it runs in without reading the day (`sessionOfAncestor`).
@@ -950,7 +999,8 @@ export class ActivityLog {
         mark?: unknown;
         sessions?: unknown;
       };
-      const sessions = held.version === 1 && held.mark === mark ? aggregatesOf(held.sessions) : null;
+      // Version 2 keeps each session's connection (D11); an index of version 1 is made again from the day's lines.
+      const sessions = held.version === INDEX_VERSION && held.mark === mark ? aggregatesOf(held.sessions) : null;
       if (sessions !== null) return sessions;
     } catch {
       // No index yet, or one that cannot be read: made again below.
@@ -958,7 +1008,9 @@ export class ActivityLog {
     const groups = new Map<string, Aggregate>();
     for (const line of await this.#lines(day)) add(groups, aggregateOf(line));
     const sessions = [...groups.values()];
-    await writeFileAtomic(index, `${JSON.stringify({ version: 1, mark, sessions })}\n`).catch(() => undefined);
+    await writeFileAtomic(index, `${JSON.stringify({ version: INDEX_VERSION, mark, sessions })}\n`).catch(
+      () => undefined,
+    );
     return sessions;
   }
 
@@ -1275,10 +1327,17 @@ export interface SessionIdentityOptions {
    */
   log?: Pick<ActivityLog, 'sessionOfAncestor'> | undefined;
   /**
-   * The MCP connection's own session id, where its transport has one (`ctx.sessionId`; stdio has none): mixed into
-   * the key, so two connections through one parent are two sessions.
+   * The MCP transport's own session id, where it has one (`ctx.sessionId`; stdio has none): mixed into the key, so two
+   * transport sessions through one parent are two sessions. Not an MCP connection of `connections`: that is
+   * `ActivitySession.connection` (single-server design D11).
    */
-  connection?: string | undefined;
+  transportSession?: string | undefined;
+  /**
+   * The gateway this process was started by, when it is a part of an MCP connection (`GATEWAY_PID_ENV`): its parent is
+   * then looked through, so the part takes the gateway's parent — the agent window — as its own (D8). The process's
+   * own environment says it when this is left out.
+   */
+  gatewayPid?: number | undefined;
   /**
    * Where what was worked out is kept: this process's own when left out — or, when any test seam below is given, nowhere,
    * unless a test hands one in.
@@ -1390,6 +1449,16 @@ async function readAncestry(
   const probe = options.probe ?? psProbe;
   const deadline = Date.now() + budgetMs;
   let next = options.ppid ?? process.ppid;
+  // A part of an MCP connection was started by the gateway, which the agent window started (D8): the window is the
+  // gateway's parent, so the part's session key is the one a server the window started itself would have.
+  const gateway = options.gatewayPid ?? gatewayPidOf(process.env);
+  if (gateway !== undefined && next === gateway && !initIsParent) {
+    const left = deadline - Date.now();
+    if (left <= 0) return { pid, folder, chain, complete: false };
+    const facts = await within(probe(next, left), left);
+    if (facts === null) return { pid, folder, chain, complete: false };
+    next = facts.ppid;
+  }
   // Process 1 adopts a process whose parent has gone: it is no window, except to the event service, which it starts.
   while (chain.length < depth && (next > 1 || (initIsParent && next === 1 && chain.length === 0))) {
     const left = deadline - Date.now();
@@ -1401,6 +1470,32 @@ async function readAncestry(
     next = facts.ppid;
   }
   return { pid, folder, chain, complete: true };
+}
+
+/** The gateway's pid a part was started with, or undefined for a process no gateway started. */
+function gatewayPidOf(env: NodeJS.ProcessEnv): number | undefined {
+  const raw = env[GATEWAY_PID_ENV];
+  if (raw === undefined || !/^[1-9][0-9]{0,9}$/.test(raw)) return undefined;
+  return Number(raw);
+}
+
+/**
+ * The MCP connection this process serves as a part of (D11): its id, which the gateway set in the environment, and its
+ * name in `config.json` now, kept on the line as it is now. Undefined for a process no gateway started, or one whose
+ * connection the configuration no longer has.
+ */
+async function connectionOfProcess(core: Pick<Core, 'activity'>): Promise<ActivityConnection | undefined> {
+  // Only inside a part a gateway started: the variable a process sets for itself names nothing (`connectionOfThisProcess`).
+  const id = connectionOfThisProcess(process.env);
+  if (id === undefined) return undefined;
+  const config = (core as Partial<Pick<Core, 'config'>>).config;
+  if (config === undefined) return undefined;
+  try {
+    const read = connectionById(await config.load(), id);
+    return read?.readable ? { id, name: read.record.name } : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1622,7 +1717,7 @@ async function identityOf(
   if (parent === undefined || folder === null || shared) {
     return { key: own, ...base, ...(parent === undefined ? {} : { parent }), grouped: false };
   }
-  return { key: windowKey(parent, folder, options.connection), ...base, parent, grouped: true };
+  return { key: windowKey(parent, folder, options.transportSession), ...base, parent, grouped: true };
 }
 
 // ── For the channels ───────────────────────────────────────────────────────────────────────────────────────────
@@ -1655,10 +1750,10 @@ export interface ActivityContext {
   /** The session, when the caller has worked it out already; otherwise `sessionIdentity(surface, clientInfo)`. */
   readonly session?: ActivitySession | undefined;
   /**
-   * The MCP connection's own session id, where its transport has one — a tool handler's `ctx.sessionId`; stdio has
-   * none — mixed into the session key (`SessionIdentityOptions.connection`).
+   * The MCP transport's own session id, where it has one — a tool handler's `ctx.sessionId`; stdio has none — mixed
+   * into the session key (`SessionIdentityOptions.transportSession`).
    */
-  readonly connection?: string | (() => string | undefined) | undefined;
+  readonly transportSession?: string | (() => string | undefined) | undefined;
   /** A search's words, known before it runs. */
   readonly query?: string | undefined;
 }
@@ -1698,6 +1793,8 @@ const REFUSED_CODES: ReadonlySet<string> = new Set([
   'ACT_NOT_ALLOWED',
   'STANDING_REFUSED',
   'STANDING_LIMIT',
+  'TAKE_REQUIRED',
+  'TAKEN_ELSEWHERE',
   'RATE_CAPPED',
   'LOOSENING_REFUSED',
   'USAGE',
@@ -1722,8 +1819,10 @@ async function recordCall(
       context.session ??
       (await sessionIdentity(context.surface, clientInfo, {
         log: context.core.activity as Pick<ActivityLog, 'sessionOfAncestor'>,
-        connection: typeof context.connection === 'function' ? context.connection() : context.connection,
+        transportSession:
+          typeof context.transportSession === 'function' ? context.transportSession() : context.transportSession,
       }));
+    const connection = context.session?.connection ?? (await connectionOfProcess(context.core));
     const query = detail.query ?? context.query;
     await recordActivity(context.core, {
       channel: context.channel,
@@ -1732,7 +1831,7 @@ async function recordCall(
       kind,
       outcome: detail.outcome ?? 'ok',
       ...(detail.reason === undefined ? {} : { reason: detail.reason }),
-      session,
+      session: connection === undefined ? session : { ...session, connection },
       ms,
       ...(detail.items === undefined ? {} : { items: detail.items }),
       ...(detail.count === undefined ? {} : { count: detail.count }),

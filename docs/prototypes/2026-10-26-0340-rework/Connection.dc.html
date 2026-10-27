@@ -1,0 +1,522 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A connection</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.v35{display:inline-flex;align-items:center;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;color:var(--text2);background:var(--s1);box-shadow:inset 0 0 0 1px var(--s3);white-space:nowrap;flex:none}
+.crumb{display:flex;align-items:center;gap:6px;color:var(--text3);font-size:12px}
+.crumb a{text-decoration:none}
+.crumb a:hover{color:var(--text)}
+.head{display:flex;align-items:flex-start;gap:12px}
+.si{width:36px;height:36px;border-radius:10px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.si.man{background:var(--s2);color:var(--text2)}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.d-on{background:var(--ok)}
+.d-old{background:var(--warn)}
+.d-off{background:var(--text3)}
+.warnt{color:var(--warn);font-weight:500}
+.okt{color:var(--ok);font-weight:500}
+.facts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.facts > div{display:flex;flex-direction:column;gap:4px;background:var(--s2);border-radius:10px;padding:10px 12px;min-width:0;overflow-wrap:anywhere}
+.keyrow,.sniprow{display:flex;align-items:flex-start;gap:10px;flex-wrap:wrap}
+.keyv{flex:1;min-width:0;margin:0;background:var(--s2);border-radius:8px;padding:7px 10px;overflow-wrap:anywhere}
+.ask .keyv,.ask .snip{background:var(--s1)}
+.snip{flex:1;min-width:0;margin:0;background:var(--s2);border-radius:10px;padding:10px 12px;white-space:pre;overflow-x:auto;line-height:1.5}
+.pline{display:flex;align-items:baseline;gap:16px;padding:9px 0;border-top:1px solid var(--s2)}
+.pline:first-child{border-top:0}
+.pline .pn{width:150px;flex:none;font-weight:500}
+.plist{display:flex;flex-direction:column;gap:8px}
+.part{background:var(--s2);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:10px}
+.ptop{display:flex;align-items:center;gap:12px}
+.pn{font-weight:500}
+.pmore{display:flex;flex-wrap:wrap;gap:10px 24px;padding-top:10px;border-top:1px solid var(--s3)}
+.boxes{display:flex;gap:6px;flex-wrap:wrap}
+.boxes label{display:flex;align-items:center;gap:8px;background:var(--s1);border-radius:8px;padding:6px 10px;cursor:pointer}
+.boxes input{accent-color:var(--accent)}
+.grants{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:2px}
+.act{display:flex;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.act .when{width:110px;flex:none;color:var(--text3);font-size:12px}
+.pc{height:20px;padding:0 7px;border-radius:6px;font-size:11.5px}
+.state{display:flex;flex-direction:column;gap:8px;border-radius:10px;padding:10px 12px;background:var(--s2)}
+.state.w{background:var(--warnSoft)}
+.state.o{background:var(--okSoft)}
+@media (max-width:720px){.facts{grid-template-columns:minmax(0,1fr)}.pline{flex-direction:column;gap:2px}}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 2000px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="AccountSlack.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni on" href="McpServers.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP connections</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="YourAgents.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="EventsService.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Doctor.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.35.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <nav aria-label="Where you are" class="crumb"><a href="McpServers.dc.html">MCP connections</a><span aria-hidden="true">›</span><span>{{name}}</span></nav>
+  <div class="head">
+    <span class="{{markClass}}" aria-hidden="true">{{mark}}</span>
+    <div class="grow">
+      <div class="row wrap" style="gap: 10px"><h1 class="h1">{{name}}</h1><span class="new" title="A connection as a page of its own: new">new</span></div>
+      <p class="sub">{{where}}</p>
+    </div>
+    <sc-if value="{{isLive}}" hint-placeholder-val="{{ true }}"><button type="button" class="btn sm" aria-expanded="{{renaming}}" onClick="{{openRename}}">Rename…</button></sc-if>
+  </div>
+  <div class="row wrap"><span class="v35">Drawn for 0.35, with the single Agent Comms server</span></div>
+
+  <sc-if value="{{said}}" hint-placeholder-val="{{ false }}">
+    <p role="status" class="{{saidClass}}">{{said}}</p>
+  </sc-if>
+
+  <sc-if value="{{renaming}}" hint-placeholder-val="{{ false }}">
+    <div class="ask" role="group" aria-labelledby="ren">
+      <h3 id="ren" class="t">Rename this connection</h3>
+      <label class="fl"><span class="lbl">Name</span><input class="f" value="{{draftName}}" onChange="{{typeName}}" style="max-width: 320px"></label>
+      <span class="faint">Activity uses the new name from then on. Renaming gives agents nothing more, so it applies at once.</span>
+      <sc-if value="{{problem}}" hint-placeholder-val="{{ false }}"><p role="alert" class="err">{{problem}}</p></sc-if>
+      <div class="row"><button type="button" class="btn p" onClick="{{saveName}}">Save</button><button type="button" class="btn q" onClick="{{cancelName}}">Cancel</button></div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{isGone}}" hint-placeholder-val="{{ false }}">
+    <section class="card" aria-labelledby="gone">
+      <h2 id="gone" class="h2">This connection is removed</h2>
+      <p class="muted p0">{{goneText}}</p>
+      <div class="row"><a class="btn p" href="{{backHref}}">Back to MCP connections</a></div>
+    </section>
+  </sc-if>
+
+  <sc-if value="{{isLive}}" hint-placeholder-val="{{ true }}">
+    <section class="card" aria-labelledby="about">
+      <h2 id="about" class="h2">About it</h2>
+      <div class="{{stateClass}}">
+        <div class="row wrap" style="gap: 6px"><span aria-hidden="true" class="{{dotClass}}"></span><span class="{{statusClass}}">{{statusWord}}</span><span aria-hidden="true" class="faint">·</span><span class="faint">{{used}}</span></div>
+        <p class="p0 muted">{{statusLine}}</p>
+        <sc-if value="{{isUpdate}}" hint-placeholder-val="{{ false }}"><div class="row"><button type="button" class="btn sm p" onClick="{{openUpdate}}">Bring everything up to date…</button></div></sc-if>
+      </div>
+      <sc-if value="{{askUpdate}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-up">
+          <h3 id="ask-up" class="t">Bring Agent Comms up to date for every connection? Approve it</h3>
+          <div class="fl"><span class="lbl">What changes</span>
+            <div class="pv">
+              <p class="p0">Agent Comms 0.35.0, the latest release, goes to every connection on this Mac at once:</p>
+              <ul class="grants"><li>{{name}} moves up from 0.34.0</li><li>your other connections have it already</li></ul>
+              <p class="muted" style="margin: 6px 0 0">What agents may do in each connection, and in each account, stays as it is.</p>
+            </div>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{approveUpdate}}">Approve and update</button><button type="button" class="btn q" onClick="{{cancelUpdate}}">Cancel</button><span class="faint" style="margin-left: auto">Then restart {{appName}} to use it.</span></div>
+          <span class="faint">On Windows and Linux, Approve opens Terminal and you approve it there.</span>
+        </div>
+      </sc-if>
+      <div class="facts">
+        <div><span class="lbl">App</span><span>{{appWord}}</span></div>
+        <div><span class="lbl">Where</span><span>{{whereLong}}</span></div>
+        <div><span class="lbl">Added</span><span>{{added}}</span></div>
+        <div><span class="lbl">Starts</span><span>{{starts}}</span></div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="key">
+      <div class="row"><h2 id="key" class="h2 grow">Key</h2><span class="new" title="A key per connection: new">new</span></div>
+      <div class="keyrow"><p class="keyv mono">{{keyMasked}}</p><button type="button" class="btn sm" aria-expanded="{{askReplace}}" onClick="{{openReplace}}">Replace key…</button></div>
+      <p class="muted p0">It isn't a password: apps on this Mac start Agent Comms as you, so a key doesn't keep anyone out. It tells Agent Comms that a call comes from this connection, so Activity can say “used by {{name}}”, and it lets you cut this connection off. Remove it, or replace the key, and the old key stops working.</p>
+      <p class="faint p0">If Agent Comms one day becomes reachable over the network, this key becomes a real secret.</p>
+      <sc-if value="{{askReplace}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-key">
+          <div>
+            <h3 id="ask-key" class="t">Replace the key of {{name}}?</h3>
+            <p class="muted p0">{{replaceText}}</p>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{confirmReplace}}">Replace key</button><button type="button" class="btn q" onClick="{{cancelReplace}}">Cancel</button><span class="faint" style="margin-left: auto">Applies at once: a new key gives agents nothing more.</span></div>
+        </div>
+      </sc-if>
+      <sc-if value="{{showNewKey}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="new-key">
+          <h3 id="new-key" class="t">{{newKeyTitle}}</h3>
+          <sc-if value="{{isKnown}}" hint-placeholder-val="{{ true }}">
+            <div class="keyrow"><p class="keyv mono">{{newKey}}</p><button type="button" class="btn sm" onClick="{{copyKey}}">{{copyKeyWord}}</button></div>
+          </sc-if>
+          <sc-if value="{{isManual}}" hint-placeholder-val="{{ false }}">
+            <div class="sniprow"><pre class="snip mono">{{snippet}}</pre><button type="button" class="btn sm" onClick="{{copyKey}}">{{copyKeyWord}}</button></div>
+          </sc-if>
+          <span class="faint">{{newKeyNote}}</span>
+          <div class="row"><button type="button" class="btn sm q" onClick="{{hideNewKey}}">Done</button></div>
+        </div>
+      </sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="parts">
+      <div class="row"><h2 id="parts" class="h2 grow">Parts and accounts</h2><button type="button" class="btn sm" aria-expanded="{{editing}}" onClick="{{toggleEdit}}">{{editWord}}</button></div>
+      <sc-if value="{{notEditing}}" hint-placeholder-val="{{ true }}">
+        <div>
+          <sc-for list="{{lines}}" as="l" hint-placeholder-count="3"><div class="pline"><span class="pn">{{l.name}}</span><span class="muted grow">{{l.detail}}</span></div></sc-for>
+        </div>
+        <sc-if value="{{offLine}}" hint-placeholder-val="{{ true }}"><span class="faint">{{offLine}}</span></sc-if>
+      </sc-if>
+      <sc-if value="{{editing}}" hint-placeholder-val="{{ false }}">
+        <p class="faint p0">Taking something away applies at once. Giving more shows you what it lets agents do and asks you to approve it.</p>
+        <div class="plist">
+          <div class="part"><div class="ptop"><div class="grow"><div class="pn">Agent Comms itself</div><div class="faint">Setup, approvals and updates. Always included.</div></div><button type="button" role="switch" class="sw" aria-checked="true" aria-label="Agent Comms itself, always included" disabled></button></div></div>
+          <sc-for list="{{parts}}" as="pt" hint-placeholder-count="5">
+            <div class="part">
+              <div class="ptop"><div class="grow"><div class="pn">{{pt.name}}</div><div class="faint">{{pt.purpose}}</div></div><button type="button" role="switch" class="sw" aria-checked="{{pt.on}}" aria-label="{{pt.name}}" onClick="{{pt.flip}}"></button></div>
+              <sc-if value="{{pt.showMore}}" hint-placeholder-val="{{ false }}">
+                <div class="pmore">
+                  <div class="fl"><span class="lbl">Which accounts?</span>
+                    <div class="boxes"><sc-for list="{{pt.accounts}}" as="a" hint-placeholder-count="2"><label><input type="checkbox" checked="{{a.on}}" onChange="{{a.flip}}">{{a.name}}</label></sc-for></div>
+                  </div>
+                  <div class="fl"><span class="lbl">Read-only</span>
+                    <div class="boxes"><label><input type="checkbox" checked="{{pt.ro}}" onChange="{{pt.flipRo}}">{{pt.roLabel}}</label></div>
+                  </div>
+                </div>
+              </sc-if>
+              <sc-if value="{{pt.showAll}}" hint-placeholder-val="{{ false }}"><p class="faint p0">Events covers all your rules and the whole Queue, so there are no accounts to choose.</p></sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{asking}}" hint-placeholder-val="{{ false }}">
+          <div class="ask" role="group" aria-labelledby="ask-part">
+            <h3 id="ask-part" class="t">{{askTitle}}</h3>
+            <div class="fl"><span class="lbl">What this lets agents do</span>
+              <div class="pv">
+                <p class="p0">Agents in {{name}} could then also:</p>
+                <ul class="grants"><sc-for list="{{askLines}}" as="g" hint-placeholder-count="2"><li>{{g}}</li></sc-for></ul>
+              </div>
+            </div>
+            <div class="row wrap"><button type="button" class="btn p" onClick="{{approve}}">Approve</button><button type="button" class="btn q" onClick="{{cancelAsk}}">Cancel</button><span class="faint" style="margin-left: auto">Then restart {{appName}} to use it.</span></div>
+            <span class="faint">On Windows and Linux, Approve opens Terminal and you approve it there.</span>
+          </div>
+        </sc-if>
+      </sc-if>
+    </section>
+
+    <section class="card" aria-labelledby="recent">
+      <div class="row"><h2 id="recent" class="h2 grow">Recent activity</h2><span class="new" title="Activity told apart by connection: new">new</span></div>
+      <p class="muted p0">{{actSummary}}</p>
+      <sc-if value="{{hasActs}}" hint-placeholder-val="{{ true }}">
+        <div>
+          <sc-for list="{{acts}}" as="x" hint-placeholder-count="3"><div class="act"><span class="when">{{x.when}}</span><span class="grow">{{x.what}}</span><span class="chip pc c-n">{{x.account}}</span></div></sc-for>
+        </div>
+      </sc-if>
+      <sc-if value="{{noActs}}" hint-placeholder-val="{{ false }}"><div class="empty">Nothing yet. When {{appName}} first calls Agent Comms through this connection, it shows here.</div></sc-if>
+      <div class="row"><span class="faint grow">In Activity, each of these says “used by {{name}}”.</span><a class="link" href="Main.dc.html">All activity ›</a></div>
+    </section>
+
+    <section class="card" aria-labelledby="rm">
+      <div class="row" style="align-items: flex-start; gap: 12px">
+        <div class="grow"><h2 id="rm" class="h2">Remove this connection</h2><p class="faint p0">{{appName}} loses these tools, and the key stops working at once.</p></div>
+        <button type="button" class="btn d" aria-expanded="{{askRemove}}" onClick="{{openRemove}}">Remove this connection…</button>
+      </div>
+      <sc-if value="{{askRemove}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-rm">
+          <div>
+            <h3 id="ask-rm" class="t">Remove {{name}}?</h3>
+            <p class="muted p0">{{removeText}}</p>
+          </div>
+          <div class="row wrap"><button type="button" class="btn d" onClick="{{confirmRemove}}">Remove</button><button type="button" class="btn q" onClick="{{cancelRemove}}">Cancel</button><span class="faint" style="margin-left: auto">{{removeAfter}}</span></div>
+        </div>
+      </sc-if>
+    </section>
+  </sc-if>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"connection":{"editor":"enum","options":["work","site","personal","reviews","raycast"],"default":"work"},"$preview":{"width":1280,"height":2000}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+const D = this.data();
+let conn = null;
+if (typeof props.added === 'string' && props.added) {
+try { conn = JSON.parse(props.added); } catch (e) { conn = null; }
+if (conn && D.KINDS[conn.kind] && typeof conn.name === 'string') {
+conn = Object.assign({ id: 'added', status: conn.kind === 'manual' ? 'unused' : 'restart', used: conn.kind === 'manual' ? 'Added just now' : 'Not used yet', added: 'Just now', keyEnd: 'Wp8c', acts: [], actSummary: 'Not used yet.' }, conn, { parts: conn.parts || {} });
+} else conn = null;
+}
+if (!conn) conn = D.CONNECTIONS.find((c) => c.id === props.connection) || D.CONNECTIONS[0];
+this.state = { conn: JSON.parse(JSON.stringify(conn)), editing: false, pending: null, said: null, tone: 'ok', renaming: false, draftName: '', problem: null, askReplace: false, newKey: null, askRemove: false, gone: false, askUpdate: false, copied: false };
+}
+data() {
+return {
+KINDS: { 'claude-code': ['Claude Code', 'CC'], 'claude-desktop': ['Claude Desktop', 'CD'], codex: ['Codex', 'Co'], cursor: ['Cursor', 'Cu'], gemini: ['Gemini', 'Ge'], vscode: ['VS Code', 'VS'], manual: ['Manual', 'M'] },
+FILES: { 'claude-desktop': '~/Library/Application Support/Claude/claude_desktop_config.json', cursor: '~/.cursor/mcp.json', gemini: '~/.gemini/settings.json', vscode: '~/Library/Application Support/Code/User/mcp.json' },
+ALL: { gmail: ['acme/gmail', 'personal/gmail'], slack: ['acme/slack'], resend: ['acme/resend'], whatsapp: ['personal/whatsapp'], events: [] },
+PARTS: [
+{ key: 'gmail', name: 'Gmail', purpose: 'Read, search and draft mail. An email goes only after your yes.', ro: 'Read and search only: no drafts, no emails', more: 'can draft, and prepare mail that waits for your yes' },
+{ key: 'slack', name: 'Slack', purpose: 'Read channels and threads, and prepare posts that wait for your yes.', ro: 'Read only: prepare nothing to post', more: 'can prepare posts that wait for your yes' },
+{ key: 'resend', name: 'Resend', purpose: 'Mail from your own domain: see what was sent and received, and prepare mail that waits for your yes.', ro: 'See mail only: prepare none', more: 'can prepare mail that waits for your yes' },
+{ key: 'whatsapp', name: 'WhatsApp', purpose: 'Read your WhatsApp chats on this Mac, and draft replies. It never sends.', ro: 'Read chats only: write no drafts', more: 'can draft replies, for you to send' },
+{ key: 'events', name: 'Events', purpose: 'Work through the Queue, and see your rules and what they passed on.', ro: '', more: 'the Queue, and your rules' }
+],
+CONNECTIONS: [
+{ id: 'work', name: 'Work — Claude Code', kind: 'claude-code', place: 'all', status: 'ok', used: 'Last used 4 minutes ago', added: '12 October', keyEnd: 'Hn3d',
+parts: { gmail: { accounts: ['acme/gmail'], ro: false }, slack: { accounts: ['acme/slack'], ro: false }, events: { accounts: [], ro: false } },
+actSummary: 'Used 3 times today: it searched mail, read Slack and wrote a draft.', acts: [['Today 10:42', 'Searched mail', 'acme/gmail'], ['Today 10:38', 'Read #support', 'acme/slack'], ['Today 09:15', 'Wrote a draft reply', 'acme/gmail']] },
+{ id: 'site', name: 'Acme site — Claude Code', kind: 'claude-code', place: 'project', folder: '~/work/acme-site', status: 'restart', used: 'Last used yesterday at 17:20', added: '24 October', keyEnd: 'b7Kq',
+parts: { slack: { accounts: ['acme/slack'], ro: true } },
+actSummary: 'Used once yesterday.', acts: [['Yesterday 17:20', 'Read #deploys', 'acme/slack']] },
+{ id: 'personal', name: 'Personal — Claude Desktop', kind: 'claude-desktop', status: 'update', used: 'Last used today at 09:40', added: '3 October', keyEnd: 'T2vx',
+parts: { gmail: { accounts: ['personal/gmail'], ro: false }, whatsapp: { accounts: ['personal/whatsapp'], ro: false } },
+actSummary: 'Used twice today.', acts: [['Today 09:40', 'Searched mail', 'personal/gmail'], ['Today 09:38', 'Read a chat', 'personal/whatsapp']] },
+{ id: 'reviews', name: 'Reviews — Codex', kind: 'codex', place: 'this', status: 'ok', used: 'Last used 3 days ago', added: '20 October', keyEnd: '9mLe',
+parts: { gmail: { accounts: ['acme/gmail', 'personal/gmail'], ro: true } },
+actSummary: 'Not used for 3 days.', acts: [['Friday 16:05', 'Read a thread', 'acme/gmail']] },
+{ id: 'raycast', name: 'Raycast', kind: 'manual', app: 'Raycast', status: 'unused', used: 'Added today', added: 'Today', keyEnd: 'Zp4r',
+parts: { slack: { accounts: ['acme/slack'], ro: true } },
+actSummary: 'Not used yet.', acts: [] }
+],
+NEW_KEY: 'ack_R8wd-3NcP-y6Jh-Ve5s'
+};
+}
+renderVals() {
+const D = this.data();
+const s = this.state;
+const c = s.conn;
+const appName = c.kind === 'manual' ? c.app || 'the app' : D.KINDS[c.kind][0];
+const names = (l) => (l.length <= 1 ? l[0] || '' : l.slice(0, -1).join(', ') + ' and ' + l[l.length - 1]);
+const where = c.kind === 'claude-code' ? (c.place === 'project' ? 'Claude Code · project ' + c.folder : c.place === 'profile' ? 'Claude Code · profile ' + c.folder : 'Claude Code · every folder')
+: c.kind === 'codex' ? (c.place === 'home' ? 'Codex · home ' + c.folder : 'Codex') : c.kind === 'manual' ? 'Manual · ' + appName : appName;
+const file = c.kind === 'claude-code' ? (c.place === 'project' ? c.folder + '/.mcp.json' : c.place === 'profile' ? c.folder + '/.claude.json' : '~/.claude.json')
+: c.kind === 'codex' ? (c.place === 'home' ? c.folder + '/config.toml' : '~/.codex/config.toml') : D.FILES[c.kind] || '';
+const whereLong = c.kind === 'manual' ? appName + '’s own settings, where you pasted the snippet. Agent Comms can’t see them.'
+: c.kind === 'claude-code' ? (c.place === 'project' ? 'One project: ' + file : c.place === 'profile' ? 'Another Claude profile: ' + file : 'Every folder: your user settings, ' + file)
+: c.kind === 'codex' ? (c.place === 'home' ? 'Another Codex home: ' + file : 'This Codex: ' + file) : file;
+const restartTail = 'Restart ' + appName + ' to see the change.';
+const say = (text, tone) => ({ said: text, tone: tone || 'ok' });
+const changed = (parts, text) => this.setState(Object.assign({ conn: Object.assign({}, c, { parts, status: c.kind === 'manual' ? c.status : 'restart' }), pending: null }, say(text)));
+const grantsFor = (key, accts, ro) => {
+const a = names(accts);
+if (key === 'gmail') return ro ? ['read and search mail in ' + a] : ['read and search mail in ' + a, 'write drafts, and prepare an email, which goes only after your yes'];
+if (key === 'slack') return ro ? ['read channels and threads in ' + a] : ['read channels and threads in ' + a, 'prepare a post, a reply or a reaction, which goes only after your yes'];
+if (key === 'resend') return ro ? ['see what was sent and received through ' + a] : ['see what was sent and received through ' + a, 'prepare an email from ' + a + ', which goes only after your yes'];
+if (key === 'whatsapp') return ro ? ['read your chats in ' + a + ' on this Mac'] : ['read your chats in ' + a + ' on this Mac', 'write a draft reply, for you to send yourself'];
+return ['read the Queue, and mark items done', 'see your rules and what they passed on, and propose a rule, which waits for your approval'];
+};
+const without = (key) => { const next = Object.assign({}, c.parts); delete next[key]; return next; };
+const put = (key, v) => Object.assign({}, c.parts, { [key]: v });
+const pend = s.pending;
+const pendPart = pend ? D.PARTS.find((p) => p.key === pend.key) : null;
+let askTitle = '';
+let askLines = [];
+if (pend && pend.kind === 'part') { askTitle = 'Let agents in ' + c.name + ' use ' + pendPart.name + '? Approve it'; askLines = grantsFor(pend.key, D.ALL[pend.key], false); }
+if (pend && pend.kind === 'acct') { askTitle = 'Let agents in ' + c.name + ' reach ' + pend.acct + ' too? Approve it'; askLines = grantsFor(pend.key, [pend.acct], c.parts[pend.key].ro); }
+if (pend && pend.kind === 'rw') { askTitle = 'Let agents in ' + c.name + ' do more than read in ' + pendPart.name + '? Approve it'; askLines = grantsFor(pend.key, c.parts[pend.key].accounts, false).slice(1); }
+const approve = () => {
+const p = pendPart;
+if (pend.kind === 'part') return changed(put(p.key, { accounts: D.ALL[p.key].slice(), ro: false }), 'Approved. ' + c.name + ' has ' + p.name + ' now. Restart ' + appName + ' to use it.');
+const cur = c.parts[p.key];
+if (pend.kind === 'acct') return changed(put(p.key, { accounts: D.ALL[p.key].filter((a) => a === pend.acct || cur.accounts.includes(a)), ro: cur.ro }), 'Approved. ' + p.name + ' in ' + c.name + ' reaches ' + pend.acct + ' now. Restart ' + appName + ' to use it.');
+return changed(put(p.key, { accounts: cur.accounts, ro: false }), 'Approved. ' + p.name + ' in ' + c.name + ' can do more than read now. Restart ' + appName + ' to use it.');
+};
+const STATUS = {
+ok: ['Connected', 'dot d-on', 'okt', 'state o', appName + ' starts Agent Comms 0.35.0 through this connection.'],
+restart: ['Restart ' + appName + ' to finish', 'dot d-old', 'warnt', 'state w', 'A change reaches ' + appName + ' after you restart it. Until then, it has the parts it had before.'],
+update: ['An update is available', 'dot d-old', 'warnt', 'state w', 'This connection starts Agent Comms 0.34.0. Version 0.35.0 is out.'],
+unused: ['Not used yet', 'dot d-off', 'muted', 'state', 'Paste its snippet into ' + appName + '’s settings, then restart ' + appName + '. Lost the snippet? Replace the key below for a new one.']
+};
+const st = STATUS[c.status];
+const entry = 'agentcomms-' + (c.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'connection');
+const snippet = JSON.stringify({ mcpServers: { [entry]: { command: '/Users/chris/.agentcomms/bin/agentcomms', args: ['mcp'], env: { AGENTCOMMS_KEY: D.NEW_KEY } } } }, null, 2).replace(/\[\s+"mcp"\s+\]/, '["mcp"]');
+const lines = [{ name: 'Agent Comms itself', detail: 'Setup, approvals and updates' }].concat(D.PARTS.filter((p) => c.parts[p.key]).map((p) => {
+const it = c.parts[p.key];
+const all = D.ALL[p.key];
+const reach = all.length === 0 ? '' : (it.accounts.length < all.length ? 'only ' : '') + names(it.accounts) + ' · ';
+return { name: p.name, detail: reach + (it.ro && p.ro ? 'read-only' : p.more) };
+}));
+const off = D.PARTS.filter((p) => !c.parts[p.key]).map((p) => p.name);
+const close = (patch) => this.setState(Object.assign({ askReplace: false, askRemove: false, askUpdate: false, renaming: false, problem: null }, patch));
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+name: c.name, where, whereLong, appName, appWord: c.kind === 'manual' ? 'Manual: ' + appName + ', with a snippet you pasted' : appName,
+mark: D.KINDS[c.kind][1], markClass: c.kind === 'manual' ? 'si man' : 'si',
+isKnown: c.kind !== 'manual', isManual: c.kind === 'manual',
+isLive: !s.gone, isGone: s.gone,
+goneText: c.kind === 'manual'
+? 'Removed at once. Its key stopped working, so ' + appName + ' gets nothing more from it. Take the snippet out of ' + appName + '’s settings when you can.'
+: 'Removed at once. Its key stopped working, and Agent Comms took it out of ' + file + '. Restart ' + appName + ' to see the change.',
+backHref: c.id === 'added' ? 'McpServers.dc.html' : 'McpServers.dc.html?removed=' + c.id,
+said: s.said, saidClass: s.tone === 'ok' ? 'said' : 'said n',
+
+renaming: s.renaming, draftName: s.draftName, problem: s.problem,
+openRename: () => (s.renaming ? close({}) : close({ renaming: true, draftName: c.name, said: null })),
+// The field keeps what is typed without a render: one on blur would replace the Save button about to be clicked.
+typeName: (e) => { this.state.draftName = e.target.value; },
+saveName: () => {
+const n = s.draftName.trim();
+const others = D.CONNECTIONS.filter((x) => x.id !== c.id).map((x) => x.name.toLowerCase());
+if (n === '') return this.setState({ problem: 'Give it a name: it’s how you’ll find it here and in Activity. Nothing was changed.' });
+if (others.includes(n.toLowerCase())) return this.setState({ problem: 'You have a connection called “' + n + '” already. Nothing was changed.' });
+if (n === c.name) return close(say('Nothing was changed: that is its name already.', 'n'));
+close(Object.assign({ conn: Object.assign({}, c, { name: n }) }, say('Renamed at once to “' + n + '”. Activity uses the new name from now on.')));
+},
+cancelName: () => close(say('Cancelled: the name stays “' + c.name + '”.', 'n')),
+
+statusWord: st[0], dotClass: st[1], statusClass: st[2], stateClass: st[3], statusLine: st[4], used: c.used,
+isUpdate: c.status === 'update', askUpdate: s.askUpdate,
+openUpdate: () => close({ askUpdate: !s.askUpdate, said: null }),
+approveUpdate: () => close(Object.assign({ conn: Object.assign({}, c, { status: 'restart' }) }, say('Approved. Every connection on this Mac now starts Agent Comms 0.35.0. Restart ' + appName + ' to use it.'))),
+cancelUpdate: () => close(say('Cancelled: nothing was changed.', 'n')),
+added: c.added, starts: c.status === 'update' ? 'Agent Comms 0.34.0' : 'Agent Comms 0.35.0',
+
+keyMasked: 'ack_••••-••••-••••-' + c.keyEnd,
+askReplace: s.askReplace,
+replaceText: c.kind === 'manual'
+? 'The old key stops working at once, so ' + appName + ' loses these tools until you paste the new snippet into its settings.'
+: 'The old key stops working at once. Agent Comms writes the new one into ' + file + '; restart ' + appName + ' to use it.',
+openReplace: () => close({ askReplace: !s.askReplace, newKey: null, said: null }),
+confirmReplace: () => close(Object.assign({ newKey: D.NEW_KEY, copied: false, conn: Object.assign({}, c, { keyEnd: D.NEW_KEY.slice(-4), status: c.kind === 'manual' ? 'unused' : 'restart' }) }, say('Replaced at once. The old key stopped working.'))),
+cancelReplace: () => close(say('Cancelled: the key stays as it was.', 'n')),
+showNewKey: !!s.newKey, newKey: s.newKey || '', snippet,
+newKeyTitle: c.kind === 'manual' ? 'The new snippet, shown this once' : 'The new key, shown this once',
+newKeyNote: c.kind === 'manual'
+? 'Paste it into ' + appName + '’s settings in place of the old one, then restart ' + appName + '.'
+: 'Agent Comms has written it into ' + file + ', so there’s nothing to paste. Restart ' + appName + ' to use it.',
+copyKey: () => this.setState({ copied: true }), copyKeyWord: s.copied ? 'Copied' : 'Copy',
+hideNewKey: () => this.setState({ newKey: null }),
+
+editing: s.editing, notEditing: !s.editing, editWord: s.editing ? 'Done' : 'Change…',
+toggleEdit: () => this.setState({ editing: !s.editing, pending: null, said: null }),
+lines, offLine: off.length ? 'Not included: ' + names(off) + '.' : '',
+parts: D.PARTS.map((p) => {
+const it = c.parts[p.key];
+const all = D.ALL[p.key];
+return {
+name: p.name, purpose: p.purpose, on: !!it,
+flip: () => {
+if (it) changed(without(p.key), 'Applied at once: ' + c.name + ' no longer has ' + p.name + '. ' + restartTail);
+else this.setState({ pending: { kind: 'part', key: p.key }, said: null });
+},
+showMore: !!it && all.length > 0, showAll: !!it && all.length === 0,
+accounts: all.map((a) => ({
+name: a, on: !!it && it.accounts.includes(a),
+flip: () => {
+if (!it.accounts.includes(a)) return this.setState({ pending: { kind: 'acct', key: p.key, acct: a }, said: null });
+const left = it.accounts.filter((x) => x !== a);
+if (left.length === 0) return changed(without(p.key), 'Applied at once: no account was left, so ' + c.name + ' no longer has ' + p.name + '. ' + restartTail);
+changed(put(p.key, { accounts: left, ro: it.ro }), 'Applied at once: ' + p.name + ' in ' + c.name + ' no longer reaches ' + a + '. ' + restartTail);
+}
+})),
+ro: !!it && !!it.ro, roLabel: p.ro,
+flipRo: () => {
+if (!it.ro) return changed(put(p.key, { accounts: it.accounts, ro: true }), 'Applied at once: ' + p.name + ' in ' + c.name + ' is read-only now. ' + restartTail);
+this.setState({ pending: { kind: 'rw', key: p.key }, said: null });
+}
+};
+}),
+asking: !!pend, askTitle, askLines, approve,
+cancelAsk: () => this.setState(Object.assign({ pending: null }, say('Cancelled: nothing was changed.', 'n'))),
+
+actSummary: c.actSummary, acts: c.acts.map((x) => ({ when: x[0], what: x[1], account: x[2] })), hasActs: c.acts.length > 0, noActs: c.acts.length === 0,
+
+askRemove: s.askRemove,
+openRemove: () => close({ askRemove: !s.askRemove, said: null }),
+removeText: c.kind === 'manual'
+? 'Its key stops working at once, so ' + appName + ' gets nothing more from it, even before you take the snippet out of its settings. Your accounts, and your other connections, stay as they are.'
+: appName + ' loses every Agent Comms tool from this connection, and its key stops working at once. Agent Comms takes it out of ' + file + '. Your accounts, and your other connections, stay as they are.',
+removeAfter: c.kind === 'manual' ? 'Applies at once.' : 'Applies at once. Restart ' + appName + ' to see the change.',
+confirmRemove: () => close({ gone: true, editing: false, pending: null, newKey: null, said: null }),
+cancelRemove: () => close(say('Cancelled: ' + c.name + ' stays.', 'n'))
+};
+}
+}
+</script>
+</body>
+</html>

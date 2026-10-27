@@ -23,6 +23,7 @@ import {
   writeError,
   writeResult,
 } from './cli-runtime.ts';
+import { connectionCommand } from './connection-command.ts';
 import { openCore } from './core.ts';
 import { CommsError, EXIT_CODES } from './errors.ts';
 import {
@@ -117,6 +118,21 @@ import {
   standingChange,
   standingReport,
 } from './operations/standing.ts';
+import {
+  giveTake,
+  keepTake,
+  listTakes,
+  releaseTake,
+  type TakePersonResult,
+  type TakesListResult,
+} from './operations/takes.ts';
+import {
+  type TakingChangeRequest,
+  type TakingChangeResult,
+  type TakingReport,
+  takingChange,
+  takingReport,
+} from './operations/taking.ts';
 import { type UpdateDeps, updateChange, updateCheck } from './operations/update.ts';
 import { type UpdateJobResult, updateJobChange } from './operations/update-job.ts';
 import { type UpdateRollbackResult, updateRollbackChange } from './operations/update-rollback.ts';
@@ -142,6 +158,8 @@ import {
   renderUpdateStatus,
   truncateDisplay,
 } from './render.ts';
+import { runSearchCommand, SEARCH_OPTIONS } from './search/command.ts';
+import { dailySearchPrune, type SearchDeps } from './search/indexer.ts';
 import { type ExactPlace, parseExpiry } from './standing.ts';
 import { approveStandingAtTerminal } from './standing-flow.ts';
 import { neutralise, wrapUntrusted } from './untrusted.ts';
@@ -198,6 +216,43 @@ Usage — run these with this CLI, each as the words after its program:
   activity retention <days> [--approval <id>]
                                 keep 1 to 365 days: fewer applies at once and deletes the older days;
                                 more is approved first
+  search status                 Search on this machine: on or off, the accounts, what is kept by count and
+                                size and for how long, the local model, backups and disk encryption;
+                                never what a message says
+  search query <words…> [--person <id>] [--account <name>]… [--channel gmail|slack] [--since <when>]
+                                [--until <when>] [--direction in|out|any] [--limit <n>]
+                                what people asked, found by words and by meaning on this machine: the
+                                best 20, 50 at most; a person's search, refused to an agent
+  search people [--since <when>]
+                                every person a message is kept from: their addresses and Slack users,
+                                the latest name they gave, how many messages, when they last wrote
+  search person <id> [--since <when>] [--limit <n>]
+                                what one person sent, newest first, a line each
+  search show <sourceId>        one kept message in full, and the replies sent to it
+  search index [--budget <seconds>]
+                                keep what agents read since the last run, make missing vectors for up to
+                                30 seconds, and delete what is past Activity's days
+  search rebuild [--budget <seconds>]
+                                make every vector again from the kept text; the old ones serve meanwhile
+  search link <person> <person>
+                                the second person is the first: their handles join; only you join people
+  search unlink <handle>        an address or a Slack user becomes a person of its own again
+  search label <person> <name>  the name you know someone by
+  search on [--approval <id>]   keep the words of new messages agents read for Activity's days, the text
+                                encrypted and the words as keyed hashes: approved first
+  search off                    keep nothing new: applies at once; what is kept goes when its days pass
+  search accounts add <account> [--approval <id>]
+                                keep a Gmail mailbox's or a Slack workspace's messages: approved first
+  search accounts remove <account>
+                                keep nothing more of it, and delete what is kept of it: applies at once
+  search model set <address> [<model>] [--approval <id>]
+                                search by meaning too, with a model your Ollama runs on this machine at
+                                http://127.0.0.1:<port> — qwen3-embedding:0.6b (the default),
+                                embeddinggemma or bge-m3: approved first
+  search model none             words only: applies at once, and drops every vector
+  search delete --all --confirm
+                                delete everything Search keeps, and its key: applies at once, and is
+                                refused to an agent
   approvals list [--inbox <alias>] [--state <state>]
   approvals revoke <approvalId>
   approval wait <approvalId> [--wait-seconds <n>]
@@ -217,6 +272,27 @@ Usage — run these with this CLI, each as the words after its program:
   attach deny remove <path> [--approval <id>]
                                 take one of your own deny entries away: approved first
   channels                      which declared servers exist, which are installed, and where they are registered
+  connection list               every MCP connection: each place an app uses Agent Comms, its parts and accounts,
+                                where its entry is and whether its key matches, and when it was last used
+  connection show [<id>]        one connection, and the Agent Comms running for it now, part by part
+  connection add --app <app> --name <name> [--parts <part,…>] [--folder <dir>] [--profile <dir>]
+                                [--launcher managed|npx|local] [--approval <id>]
+                                add a connection, with its own key, and register its one entry with the app:
+                                approved first. --app is claude-code, claude-desktop, codex, cursor, gemini,
+                                vscode or manual; a part is a server, then its account and read-only, as
+                                gmail:cue/gmail:read-only; --folder is one project, for Claude Code only
+  connection change <id> --parts <part,…> [--approval <id>]
+                                every part it has from now on: taking away applies at once, giving more is
+                                approved first
+  connection rename <id> <name> rename it: applies at once
+  connection key replace <id>   a new key, written into its entry, the old one stopping at once: applies at once
+  connection remove <id>        remove it and its entry: its key stops working at once
+  connection migrate [--client <client>] [--approval <id>]
+                                move each app's separate Agent Comms entries into one connection that
+                                reaches exactly what they reached, each removed entry saved first: approved
+                                first. The tools then appear under that one entry: allow them again
+  connection migrate --undo <id> [--approval <id>]
+                                its parts as entries of their own again, and the connection taken out
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -257,6 +333,22 @@ Usage — run these with this CLI, each as the words after its program:
   behaviour clear <account> [--conversation <id>] [--approval <id>]
                                 take a rule away, so the wider one holds there: approved first when that
                                 allows more
+  taking [<account>]            taking messages, per account: whether a session must take a message
+                                before it acts on it, what a take says to the sender, and when a message
+                                nobody took counts
+  taking <account> --require on|off | --acknowledge eyes|nothing | --unclaimed <minutes> | --notify on|off
+                                [--approval <id>]
+                                one change: --require off and --acknowledge eyes are approved first;
+                                --require on, --acknowledge nothing and the rest apply at once
+  takes list [--since <ISO time|7d|12h>] [--account <name>] [--state open|offered|taken|done]
+                                who has each message: every session's takes, offers, hand-backs and
+                                done, with their folders, clients and notes — for you, never an agent
+  takes release <account> <message>
+                                end whoever has a message, at once: it is open to every session again
+  takes give <account> <message> --window <id>
+                                offer a message to one agent window for 15 minutes; it still takes it
+  takes keep <account> <message>
+                                handle a message yourself: every session is refused it until you release it
   standing list                 the standing approvals — what an agent may send without asking: each one's
                                 contents by digest, places, limits and end, its uses in the last day and
                                 its last acts
@@ -274,6 +366,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 start the missing profile file for that place from a starter, and print
                                 its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
+  mcp --connection <id>         run Agent Comms for one MCP connection on stdio: what an app's entry starts,
+                                with the connection's key in its environment
   mcp install --client <client> [--server <server>[,<server>…]] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
@@ -312,19 +406,26 @@ Usage — run these with this CLI, each as the words after its program:
 
 A change that loosens something or cannot be taken back — policy chat, attach roots add, attach deny remove, mcp
 install and prune, update, secrets and names migrate, org add, update and remove, label word, name and icon, label
-rule add --as me, label rule remove --as agent, label style labelled, activity record on and a longer activity
-retention — is shown before it happens. At a terminal you approve it there; anything else gets the preview and an
-approval id (exit 10), and runs the command again with --approval <id> once the person has agreed: in the chat under
-the \`chat\` change policy, with \`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach
-deny add, label rule add --as agent, label rule remove --as me, label style app, activity record off and a shorter
-activity retention — applies at once and asks nobody, and a --dry-run changes nothing. What an agent
-may do is the same: behaviour allow or clear is shown first when it lets an agent do more anywhere, and applies at
-once when it only narrows.
+rule add --as me, label rule remove --as agent, label style labelled, activity record on, a longer activity retention,
+taking --require off and --acknowledge eyes, search on, search accounts add and search model set — is shown before it
+happens. At a terminal you approve it there; anything else gets the preview and an approval id (exit 10), and runs the
+command again with --approval <id> once the person has agreed: in the chat under the \`chat\` change policy, with
+\`approve\` under \`confirm\`. A tightening — policy confirm, attach roots remove, attach deny add, label rule
+add --as agent, label rule remove --as me, label style app, activity record off, a shorter activity retention,
+taking --require on, search off, search accounts remove, search model none and search delete — applies at once and
+asks nobody, and a --dry-run changes nothing. What an agent may do is the same: behaviour allow or clear is shown
+first when it lets an agent do more anywhere, and applies at once when it only narrows.
 
-The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, update and mcp
-install itself: it shows the same preview and, once you press its confirm, runs the same command with --app-approval
-<id>. That counts only on macOS, from the app itself; anywhere else the command says to approve it at your terminal
-instead. It never goes with --approval, and a tightening takes neither: it applies at once.
+The Agent Comms app approves label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp
+install, search on, search accounts add and search model set itself: it shows the same preview and, once you press its
+confirm, runs the same command with --app-approval <id>. That counts only on macOS, from the app itself; anywhere else
+the command says to approve it at your terminal instead. It never goes with --approval, and a tightening takes
+neither: it applies at once.
+
+Search on this machine keeps the words of messages agents read, so you can find what each person asked. It is
+yours alone: every search command but status, off, accounts remove and model none — delete too, since it cannot be
+undone — is refused inside an MCP server's process and from an agent's shell, and no MCP tool reads what it keeps.
+That refusal is a speed bump against agents, not a boundary against code running as you.
 
 A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
 places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the
@@ -406,6 +507,14 @@ function parse(argv: string[]) {
       'app-approval': { type: 'string' },
       client: { type: 'string' },
       server: { type: 'string' },
+      // `mcp --connection <id>`: the gateway an app starts for one MCP connection (single-server design D2).
+      connection: { type: 'string' },
+      // `connection add|change`; refused on every other command (`refuseConnectionOptionsElsewhere`).
+      app: { type: 'string' },
+      parts: { type: 'string' },
+      undo: { type: 'string' },
+      folder: { type: 'string' },
+      profile: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -448,6 +557,19 @@ function parse(argv: string[]) {
       outcome: { type: 'string' },
       // `activity items`; refused on every other command (`refuseActivityOptionsElsewhere`).
       ids: { type: 'string' },
+      // `search`'s own (`SEARCH_OPTIONS`); refused on every other command (`refuseSearchOptionsElsewhere`).
+      person: { type: 'string' },
+      until: { type: 'string' },
+      budget: { type: 'string' },
+      direction: { type: 'string' },
+      all: { type: 'boolean', default: false },
+      confirm: { type: 'boolean', default: false },
+      // `taking <account>`'s changes and `takes give`'s window; refused elsewhere (`refuseTakingOptionsElsewhere`).
+      require: { type: 'string' },
+      acknowledge: { type: 'string' },
+      unclaimed: { type: 'string' },
+      notify: { type: 'string' },
+      window: { type: 'string' },
       'config-dir': { type: 'string' },
       'state-dir': { type: 'string' },
       'data-dir': { type: 'string' },
@@ -503,9 +625,37 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return sub !== undefined;
     case 'activity':
       return sub === 'record' || sub === 'retention';
+    case 'search':
+      return sub === 'on' || sub === 'off' || sub === 'accounts' || sub === 'model';
+    case 'taking':
+      return sub !== undefined;
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate' || sub === 'remove';
     default:
       return false;
   }
+}
+
+/** `connection add|change`'s own options, as typed. */
+const CONNECTION_OPTIONS = ['app', 'parts', 'folder', 'profile', 'undo'] as const;
+
+/**
+ * Refuses `connection`'s own options on any other command, as USAGE, before anything runs — as `label`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseConnectionOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof CONNECTION_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'connection') return;
+  const given = CONNECTION_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the connection command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
 }
 
 /**
@@ -523,24 +673,32 @@ function refuseApprovalNotTaken(command: string | undefined, sub: string | undef
   // The command's own words, without the program: a bare `agentcomms` is not what runs here (CUE-403).
   const typed = [command, sub].filter((word) => word !== undefined).join(' ');
   throw new CommsError('USAGE', `\`${typed}\` takes no --approval: it makes no change a person approves`, {
-    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
+    hint: 'An approval goes with the change it was prepared for — policy chat|confirm, attach roots|deny add|remove, org add|update|remove, label word|name|rule|icon|style, behaviour allow|clear, activity record|retention, taking, search on|off|accounts|model, mcp install, mcp prune, names migrate, secrets migrate or update — run again exactly as the preview named it. Nothing was run.',
   });
 }
 
 /**
  * Whether a command takes `--app-approval`: a change the desktop app makes as the person's own act, approved there
  * (design 2026-10-26-desktop-0340 §3) — `mcp install` (0.32.0); `label word|name|rule|icon|style`, `behaviour
- * allow|clear` and `update` itself (0.34.0). A report takes none, and `update` refuses it beside any of its other modes.
+ * allow|clear` and `update` itself (0.34.0); `taking <account>`, `search on|accounts add|model set` and `connection
+ * add|change|migrate|remove` (0.35.0 — a remove where it widens what agents in its place reach). A report takes none,
+ * and `update` refuses it beside any of its other modes.
  */
 function takesAppApproval(command: string | undefined, sub: string | undefined): boolean {
   switch (command) {
     case 'mcp':
       return sub === 'install';
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate' || sub === 'remove';
     case 'label':
     case 'behaviour':
+    case 'taking':
       return sub !== undefined;
     case 'update':
       return true;
+    // Search on this machine's loosenings (design 2026-10-26-local-search §8): on, an account added, a model set.
+    case 'search':
+      return sub === 'on' || sub === 'accounts' || sub === 'model';
     default:
       return false;
   }
@@ -649,11 +807,61 @@ function refuseActivityOptionsElsewhere(
       hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`),
     });
   }
-  const given = ACTIVITY_OPTIONS.filter((flag) => values[flag] !== undefined);
+  // `search query` narrows by channel too, and reads `--channel` itself.
+  const given = ACTIVITY_OPTIONS.filter(
+    (flag) => values[flag] !== undefined && !(command === 'search' && flag === 'channel'),
+  );
   if (given.length === 0) return;
   throw new CommsError(
     'USAGE',
     `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the activity show and activity mine commands only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
+}
+
+/** `taking`'s change options, as typed. */
+const TAKING_OPTIONS = ['require', 'acknowledge', 'unclaimed', 'notify'] as const;
+
+/**
+ * Refuses `taking`'s change options on any other command, and `--window` on any but `takes give`, as USAGE, before
+ * anything runs — as `activity`'s are: an option a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseTakingOptionsElsewhere(
+  command: string | undefined,
+  sub: string | undefined,
+  values: Partial<Record<(typeof TAKING_OPTIONS)[number] | 'window', unknown>>,
+  help: Handoff,
+): void {
+  const hint = handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`);
+  if (values.window !== undefined && !(command === 'takes' && sub === 'give')) {
+    throw new CommsError('USAGE', '--window is an option of the takes give command only', { hint });
+  }
+  if (command === 'taking') return;
+  const given = TAKING_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the taking command only`,
+    { hint },
+  );
+}
+
+/**
+ * Refuses `search`'s own options on any other command, as USAGE, before anything runs — as `activity`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing, and `--confirm` read by nothing would look like
+ * a confirmation that counted.
+ */
+function refuseSearchOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof SEARCH_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'search') return;
+  const given = SEARCH_OPTIONS.filter((flag) => values[flag] !== undefined && values[flag] !== false);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the search commands only`,
     { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
   );
 }
@@ -690,6 +898,17 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   deps: {
+    /** Starts the gateway for one connection. Injected so a test can inspect its inputs without opening stdio. */
+    startGateway?:
+      | ((options: {
+          core: ReturnType<typeof openCore>;
+          env: NodeJS.ProcessEnv;
+          connection: string;
+          platform: NodeJS.Platform;
+        }) => Promise<{ close(): Promise<void> }>)
+      | undefined;
+    /** When the gateway's client has gone: its stdin ending, unless a test says otherwise. */
+    gatewayClosed?: Promise<void> | undefined;
     /** Starts the stdio server. Injected so a test can inspect its inputs without opening stdio. */
     startMcp?:
       | ((options: {
@@ -714,6 +933,8 @@ export async function main(
      * The program itself never passes it, so a real run always asks codesign.
      */
     appOrigin?: AppOriginCheck | undefined;
+    /** Search's stand-ins — its secret store, the loopback model server, `tmutil` and `fdesetup`, the clock — for a test. */
+    search?: SearchDeps | undefined;
   } = {},
 ): Promise<number> {
   // This installation's own help, for a usage error before the folders are known: it reads none of them.
@@ -756,10 +977,13 @@ export async function main(
     refuseLabelOptionsElsewhere(command, values, help);
     refuseStandingOptionsElsewhere(command, values, help);
     refuseActivityOptionsElsewhere(command, values, help);
+    refuseSearchOptionsElsewhere(command, values, help);
+    refuseTakingOptionsElsewhere(command, sub, values, help);
+    refuseConnectionOptionsElsewhere(command, values, help);
     if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
       throw new CommsError(
         'USAGE',
-        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, update and mcp install only',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp install, connection add, change and migrate, search on, search accounts add and search model set only',
         { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
       );
     }
@@ -781,6 +1005,34 @@ export async function main(
   const appApproval = values['app-approval'];
   /** An exit status for a command that printed its result and still did not do what was asked. */
   let softExit: number = EXIT_CODES.OK;
+
+  if (values.connection !== undefined && !(command === 'mcp' && sub === undefined)) {
+    return writeError(
+      usage('--connection is an option of `mcp` only, which runs the gateway an app starts for that connection'),
+      output,
+    );
+  }
+  // The gateway an app starts for one connection (single-server design D2, §4): on stdio, outside `runCommand` too.
+  if (command === 'mcp' && sub === undefined && values.connection !== undefined) {
+    if (values.json) return writeError(usage('`mcp` runs the server; it prints no result'), output);
+    // Every part it starts inherits the mark, so none of them can make a person's read, or approve in the app (§8.3).
+    markMcpServerProcess(env, 'gateway');
+    if (env !== process.env) markMcpServerProcess(process.env, 'gateway');
+    const toStderr = (...args: unknown[]): void => {
+      process.stderr.write(`${args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' ')}\n`);
+    };
+    console.log = toStderr;
+    console.info = toStderr;
+    console.debug = toStderr;
+    console.warn = toStderr;
+    const runGateway = deps.startGateway ?? (await import('./gateway/serve.ts')).runGateway;
+    const { stdinClosed } = await import('./mcp-request.ts');
+    const closed = deps.gatewayClosed ?? stdinClosed();
+    const gateway = await runGateway({ core, env, connection: values.connection, platform });
+    await closed;
+    await gateway.close();
+    return EXIT_CODES.OK;
+  }
 
   // The server speaks on stdout, so nothing else may: it is run outside `runCommand`, which prints a result there.
   if (command === 'mcp' && sub === undefined) {
@@ -814,6 +1066,10 @@ export async function main(
     });
   }
 
+  // The day's prune of Search on this machine (design 2026-10-26-local-search, S10): what Activity's days no longer
+  // keep goes at the day's first command, as the activity log's days do. Never in the MCP server, run above.
+  await dailySearchPrune(core).catch(() => undefined);
+
   const code = await runCommand(output, async () => {
     switch (command) {
       case 'paths':
@@ -827,6 +1083,7 @@ export async function main(
         const report = await doctor(core, env, {
           platform,
           ...(deps.updateJob === undefined ? {} : { updateJob: deps.updateJob }),
+          ...(deps.search === undefined ? {} : { search: deps.search }),
         });
         writeResult(report, output, renderDoctor);
         if (!report.ok) {
@@ -953,6 +1210,24 @@ export async function main(
           return;
         }
         throw usage('usage: activity sessions|show|mine|items|settings|record|retention');
+      }
+      case 'search': {
+        await runSearchCommand({
+          core,
+          positionals,
+          values,
+          // Every `--account`, in order: `search query` takes several, which `parseArgs` keeps only the last of.
+          accounts: (parsed.tokens ?? []).flatMap((token) =>
+            token.kind === 'option' && token.name === 'account' && token.value !== undefined ? [token.value] : [],
+          ),
+          output,
+          env,
+          approval,
+          appApproval,
+          usage,
+          ...(deps.search === undefined ? {} : { deps: deps.search }),
+        });
+        return;
       }
       case 'approvals': {
         if (sub === 'list') {
@@ -1294,6 +1569,92 @@ export async function main(
         writeResult(result, output, renderBehaviourChange);
         return;
       }
+      case 'taking': {
+        // The account is `sub`; the one change, if any, its option.
+        const [, account, extra] = positionals;
+        if (extra !== undefined) {
+          throw usage(
+            'usage: taking [<account>] [--require on|off | --acknowledge eyes|nothing | --unclaimed <minutes> | --notify on|off]',
+          );
+        }
+        const given = TAKING_OPTIONS.filter((flag) => values[flag] !== undefined);
+        if (given.length === 0) {
+          // Reporting takes no --approval: it would be dropped, and an approval is spent only on its own change.
+          refuseApprovalWithoutTakingChange(values.approval);
+          writeResult(await takingReport(core, account === undefined ? {} : { account }), output, renderTaking);
+          return;
+        }
+        if (account === undefined) throw usage('a change names its account: taking <account> --require on|off');
+        if (given.length > 1) {
+          throw usage(`one change at a time: this asks for --${given.join(' and --')}`);
+        }
+        const [flag] = given as [(typeof TAKING_OPTIONS)[number]];
+        const word = values[flag] as string;
+        const onOff = (name: string): boolean => {
+          if (word !== 'on' && word !== 'off') throw usage(`--${name} is on or off, not "${word.slice(0, 40)}"`);
+          return word === 'on';
+        };
+        let request: TakingChangeRequest;
+        if (flag === 'require') request = { account, required: onOff('require') };
+        else if (flag === 'notify') request = { account, notify: onOff('notify') };
+        else if (flag === 'acknowledge') request = { account, acknowledge: word as 'eyes' | 'nothing' };
+        else {
+          request = {
+            account,
+            afterMinutes: wholeNumber(word, { name: '--unclaimed', min: 5, max: 240 }) as number,
+          };
+        }
+        const result = await gatedChangeAtTerminal(
+          core,
+          takingChange(core, request, appApproval === undefined ? 'cli' : 'app'),
+          { ...approval, rerun: ['taking', account, `--${flag}`, word], appApproval },
+        );
+        writeResult(result, output, renderTakingChange);
+        return;
+      }
+      case 'takes': {
+        // The person's own view and overrides: each refuses inside an MCP server's process and in an agent's shell.
+        const [, , account, message, ...extra] = positionals;
+        const options = { env };
+        if (sub === 'list') {
+          if (account !== undefined) {
+            throw usage('usage: takes list [--since <ISO time|7d|12h>] [--account <name>] [--state <state>]');
+          }
+          writeResult(
+            await listTakes(
+              core,
+              {
+                ...(values.since === undefined ? {} : { since: values.since }),
+                ...(values.account === undefined ? {} : { account: values.account }),
+                ...(values.state === undefined ? {} : { state: values.state }),
+              },
+              options,
+            ),
+            output,
+            (result) => renderTakesList(result, env, platform),
+          );
+          return;
+        }
+        if (sub === 'release' || sub === 'give' || sub === 'keep') {
+          const words = sub === 'give' ? '<account> <message> --window <id>' : '<account> <message>';
+          if (account === undefined || message === undefined || extra.length > 0)
+            throw usage(`usage: takes ${sub} ${words}`);
+          if (values.since !== undefined || values.account !== undefined || values.state !== undefined) {
+            throw usage(`the takes ${sub} command takes no --since, --account or --state`);
+          }
+          const target = { account, message };
+          let result: TakePersonResult;
+          if (sub === 'release') result = await releaseTake(core, target, options);
+          else if (sub === 'keep') result = await keepTake(core, target, options);
+          else {
+            if (values.window === undefined) throw usage(`usage: takes give ${words}`);
+            result = await giveTake(core, { ...target, window: values.window }, options);
+          }
+          writeResult(result, output, renderTakePerson);
+          return;
+        }
+        throw usage('usage: takes list|release|give|keep');
+      }
       case 'standing': {
         // Every change here only takes away, so none is gated: each applies at once, and none takes --approval.
         const [, , id, ...extra] = positionals;
@@ -1384,6 +1745,17 @@ export async function main(
           conversations: conversations.length === 0 ? undefined : conversations,
         });
         writeResult(view, output, (shown) => renderProfile(shown, handoffs, account));
+        return;
+      }
+      case 'connection': {
+        await connectionCommand(core, parsed.positionals, values, {
+          env,
+          output,
+          approval,
+          appApproval,
+          installDeps: installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+          usage,
+        });
         return;
       }
       case 'channels': {
@@ -2136,6 +2508,85 @@ function renderBehaviourChange(result: BehaviourChangeResult): string {
   // A note names the rules it replaced, in the file's own words: made safe as the report is.
   const note = result.note === null ? undefined : shownText(result.note, 400);
   return [note ?? (result.changed ? 'Done.' : 'Nothing was changed.'), '', renderBehaviour(result)].join('\n');
+}
+
+/** A report of `taking` takes no `--approval`: it would be dropped, never claimed. */
+function refuseApprovalWithoutTakingChange(approvalId: unknown): void {
+  if (approvalId === undefined) return;
+  throw new CommsError('USAGE', 'with no change this only reports, so it takes no --approval', {
+    hint: 'Pass the change the approval was prepared for — --require, --acknowledge, --unclaimed or --notify — with it.',
+  });
+}
+
+function renderTaking(report: TakingReport): string {
+  const lines =
+    report.accounts.length === 0
+      ? ['Nothing that takes messages is connected: Gmail mailboxes and Slack and Resend accounts do.']
+      : report.accounts.map((account) =>
+          [
+            account.account,
+            `  a session must take a message first: ${account.required ? 'yes' : 'no'}`,
+            `  when one does, the sender is told: ${account.acknowledge === 'eyes' ? 'with 👀' : 'nothing'}`,
+            `  a message nobody takes in ${counted(account.unclaimed.afterMinutes, 'minute')}: ${account.unclaimed.notify ? 'remind me' : 'it waits under Not taken'}`,
+          ].join('\n'),
+        );
+  return [...lines, ...report.problems.map((problem) => `note: ${problem}`)].join('\n');
+}
+
+function renderTakingChange(result: TakingChangeResult): string {
+  const said = result.changed ? 'Done.' : 'Already so: nothing was changed.';
+  return [result.note === null ? said : `${said} ${result.note}`, '', renderTaking(result)].join('\n');
+}
+
+/** Who has a take, in the person's words: an agent window by its folder and client, the person, or nobody. */
+function takeHolderText(
+  take: TakesListResult['takes'][number],
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): string {
+  const holder = take.holder;
+  if (holder === null) return 'nobody';
+  if ('person' in holder) return 'you';
+  const folder =
+    holder.folder === null ? 'an unknown folder' : shortenHome(holder.folder, homeDirectory(env), platform);
+  const client = holder.client === null ? '' : ` · ${shownText(holder.client.name, 40)}`;
+  return `the agent in ${shownText(folder, 200)}${client}`;
+}
+
+function renderTakesList(result: TakesListResult, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  if (result.takes.length === 0 && result.unreadable.length === 0)
+    return 'No message has been taken, offered or handed back.';
+  const lines = result.takes.map((take) => {
+    const where = `${take.account ?? '(removed)'}  ${take.message.id}`;
+    const state =
+      take.state === 'offered'
+        ? `offered until ${take.offer?.until ?? 'its item is taken'}`
+        : take.state === 'open'
+          ? 'open'
+          : `${take.state} by ${takeHolderText(take, env, platform)} since ${take.takenAt ?? take.updatedAt}`;
+    const back = take.history.filter((line) => line.kind === 'handed-back');
+    const handed =
+      back.length === 0
+        ? ''
+        : `; handed back ${back.length === 1 ? 'once' : `${back.length} times`}: ${[...new Set(back.map((line) => line.reason))].join(', ')}`;
+    return `${where}  ${state}${handed}`;
+  });
+  for (const file of result.unreadable) {
+    lines.push(
+      `${file.account ?? file.accountId}  a record that cannot be read (${file.file}): held until you release it`,
+    );
+  }
+  return lines.join('\n');
+}
+
+function renderTakePerson(result: TakePersonResult): string {
+  const now =
+    result.state === 'open'
+      ? 'it is open to every session'
+      : result.state === 'offered'
+        ? `it is offered to that window until ${result.take?.offer?.until ?? 'it takes it'}; it still takes it itself`
+        : 'you have it: every session is refused it until you release it';
+  return `${result.changed ? 'Done' : 'Already so'}: ${result.account} ${result.message} — ${now}.`;
 }
 
 /** `attach roots add` and the rest, by their words. */

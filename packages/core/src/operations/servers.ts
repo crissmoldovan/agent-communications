@@ -20,6 +20,8 @@ import {
 import { accountNoun, hasNarrowing, listed, narrowingOwner, pinOption } from '../channel-words.ts';
 import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
+import { registeredOrConnected } from '../connection-registrations.ts';
+import { CONNECTION_KEY_ENV, connectionLabel, partFacts, readConnections, withConnection } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { writeFileAtomic } from '../fs.ts';
@@ -32,9 +34,10 @@ import {
   managedShimUnsupportedNotice,
   writeManagedShim,
 } from '../managed-shims.ts';
-import { scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
+import type { UnreadableConfig } from '../mcp-clients.ts';
 import {
   checkServerName,
+  connectionOfEntry,
   entryDestination,
   type InstallContext,
   type InstallOptions,
@@ -165,6 +168,14 @@ async function localModuleUrl(server: ServerId): Promise<string> {
 }
 
 /**
+ * The CLI a part of an MCP connection runs from a checkout (`launcher: local`): this core's sibling package's own
+ * `src/cli.ts` when this core runs from source, its `dist/cli.mjs` otherwise — the file `--launcher local` registers.
+ */
+export async function localPartCli(server: ServerId): Promise<string> {
+  return localCliEntry(await localModuleUrl(server));
+}
+
+/**
  * The product the shared installer registers, for one channel: at this core's version unless another is named.
  *
  * The version is what reaches the launcher. The managed launcher installs exactly `<package>@<version>` into
@@ -239,6 +250,28 @@ export interface ServerInstallRequest {
   /** Only print the entry: nothing is written, and nothing is asked. */
   print?: boolean | undefined;
   noVerify?: boolean | undefined;
+  /**
+   * An MCP connection's entry (single-server design D17, D18), for `connection add`: core's server started as the
+   * gateway for this connection — `mcp --connection <id>` — with its key in the entry's environment, at Claude Code's
+   * user or local scope. Never from a tool's arguments: only the connection operations set it.
+   */
+  connection?: ConnectionEntryRequest | undefined;
+}
+
+/** What registering an MCP connection's entry needs: which connection, its key, and where its entry goes. */
+export interface ConnectionEntryRequest {
+  readonly id: string;
+  readonly name: string;
+  /**
+   * How the preview names it (`connectionLabel`): its name, app, place and short id — "new" for one being added. Left
+   * out, its name alone: an entry only applied, never previewed.
+   */
+  readonly label?: string | undefined;
+  readonly key: string;
+  readonly scope?: 'user' | 'local' | undefined;
+  readonly folder?: string | undefined;
+  /** A migration: the entry takes the place of core's own under the name, put back if it does not land (§9.1). */
+  readonly replaceCore?: boolean | undefined;
 }
 
 export type ServerInstallResult = InstallResult & {
@@ -400,6 +433,15 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
     noVerify: request.noVerify,
     apply: request.print !== true,
     force: request.force,
+    ...(request.connection === undefined
+      ? {}
+      : {
+          entryEnv: { [CONNECTION_KEY_ENV]: request.connection.key },
+          connection: request.connection.id,
+          scope: request.connection.scope ?? 'user',
+          ...(request.connection.replaceCore === true ? { replaceCore: true } : {}),
+          ...(request.connection.folder === undefined ? {} : { folder: request.connection.folder }),
+        }),
   };
 }
 
@@ -456,7 +498,13 @@ export function serverInstallChange(
   const switchable = hasNarrowing(request.channel, 'readOnly');
   const name = request.name ?? facts.defaultServerName;
   const launcher = request.launcher ?? 'managed';
-  const productNow = async (): Promise<McpProduct> => own ?? (await serverProduct(request.channel, request.launcher));
+  const productNow = async (): Promise<McpProduct> => {
+    const product = own ?? (await serverProduct(request.channel, request.launcher));
+    const connection = request.connection;
+    if (connection === undefined) return product;
+    // Core's server as one connection's gateway: `mcp --connection <id>` (D2).
+    return { ...product, serverArgs: (options) => ['--connection', connection.id, ...product.serverArgs(options)] };
+  };
   /*
    * What the plan found, for the apply to hold the install to. The install looks at the machine again when it runs,
    * and what it finds then has to be what the plan found — whether it writes or prints, where, what it replaces, and
@@ -657,7 +705,9 @@ export function serverInstallChange(
             ? `, replacing its own earlier entry of that name${what ? `, which served ${what}${kept.length > 0 ? ',' : ''}` : ''}${kept.length > 0 ? ` and keeping ${kept.join(' ')} from it` : ''}`
             : '';
         effects.push(
-          `registers the ${label} MCP server with ${request.client} as "${name}"${pins.length > 0 ? `, ${pins.join(', ')}` : ''}${replacing}`,
+          request.connection === undefined
+            ? `registers the ${label} MCP server with ${request.client} as "${name}"${pins.length > 0 ? `, ${pins.join(', ')}` : ''}${replacing}`
+            : `registers the connection ${request.connection.label ?? `"${request.connection.name}"`} with ${request.client} as "${name}"${request.connection.scope === 'local' ? `, for the project ${request.connection.folder ?? ''} only` : ''}: one entry that starts Agent Comms with its parts, its key in the entry's environment${previous.length > 0 ? ', replacing its own earlier entry' : ''}`,
         );
         /*
          * What it may reach, said when it is everything rather than left to be inferred from a pin not mentioned.
@@ -679,6 +729,16 @@ export function serverInstallChange(
           effects.push(`${request.client} will fetch ${facts.npxPackage}@${version} from npm each time it starts it`);
         } else if (launcher === 'local') {
           effects.push(`${request.client} will start it from ${await localCliEntry(product.moduleUrl)}`);
+        }
+      }
+      // A server the client reaches through a connection already would be there twice (§9.2): said, never refused.
+      if (target.writes && request.connection === undefined) {
+        for (const read of readConnections(config).connections) {
+          if (!read.readable || read.record.revokedAt !== null || read.record.app !== request.client) continue;
+          if (!read.record.parts.some((part) => part.server === request.channel)) continue;
+          effects.push(
+            `${request.client} reaches the ${label} server through the connection ${connectionLabel(read.record, read.record.id)} already: registered on its own too, the agent sees the same tools twice`,
+          );
         }
       }
       if (fetches) {
@@ -1039,8 +1099,13 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
   const server = SERVERS.find((each) => serverFacts(each).binary === remedy.binary);
   if (server === undefined) return error;
   const maker = await requireHandoffs(core).registered();
+  // A channel's own `mcp install` registers an entry of its own only with `--standalone` (D17); core's always does.
+  const words =
+    server === 'core' || !isChannel(server)
+      ? remedy.words
+      : [...remedy.words.slice(0, 4), '--standalone', ...remedy.words.slice(4)];
   const handoff = isChannel(server)
-    ? maker.of(server, remedy.words)
+    ? maker.of(server, words)
     : maker.core(['mcp', 'install', '--server', server, ...remedy.words.slice(2)]);
   return new CommsError(error.code, error.message, {
     hint: handoffSentence(handoff, remedy.say),
@@ -1267,6 +1332,11 @@ export interface ServerUninstallResult extends UninstallResult {
   label: string;
   /** What to tell the person: the client keeps the server it started until it restarts. */
   restart: string;
+  /**
+   * The MCP connections for this client the server was taken out of, as a part (single-server design §9.2): so "every
+   * entry of that server in that client goes" stays true when the client reaches it through a connection.
+   */
+  connections: { id: string; name: string }[];
 }
 
 /**
@@ -1303,19 +1373,35 @@ export function serverUninstallChange(
     plan: (config) => ({ before: config, after: config, summary: `Take the ${label} server out of ${client}` }),
     apply: async () => {
       const result = await mcpUninstall(context, serverFacts(channel), client as SupportedClient);
+      // Out of every connection for this client too, as a part: a tightening, applied at once beside the rest.
+      const connections: { id: string; name: string }[] = [];
+      await core.config.update((config) => {
+        let held: unknown = config.connections;
+        for (const read of readConnections(config).connections) {
+          if (!read.readable || read.record.app !== client) continue;
+          if (!read.record.parts.some((part) => part.server === channel)) continue;
+          connections.push({ id: read.record.id, name: read.record.name });
+          held = withConnection(
+            { connections: held },
+            { put: { ...read.record, parts: read.record.parts.filter((part) => part.server !== channel) } },
+          );
+        }
+        return connections.length === 0 ? config : ({ ...config, connections: held } as Config);
+      });
       await core.audit.append({
         inboxId: '',
         operation: 'mcp.uninstall',
         outcome: 'ok',
         surface,
-        reason: `${channel} from ${client}: removed ${result.removed.length}, kept ${result.kept.length}`,
+        reason: `${channel} from ${client}: removed ${result.removed.length}, kept ${result.kept.length}, out of ${connections.length} connection(s)`,
       });
       return {
         server: channel,
         label,
         ...result,
+        connections,
         restart:
-          result.removed.length > 0
+          result.removed.length > 0 || connections.length > 0
             ? `${client} keeps the ${label} server it started until it is restarted: restart it for this to take effect`
             : `nothing of the ${label} server was taken out of ${client}`,
       };
@@ -1345,6 +1431,11 @@ export interface ChannelRegistration {
    * whether a newer release exists — `comms_update` with `check` asks npm that — and false for an entry that pins none.
    */
   behindCore: boolean;
+  /**
+   * The MCP connection this registration is (single-server design §9.2): the connection's gateway entry, or one of its
+   * parts, which the gateway starts and no app's config holds. Null for a server's own entry.
+   */
+  connection: string | null;
 }
 
 export interface ChannelAvailability {
@@ -1364,8 +1455,19 @@ export interface ChannelAvailability {
   runtimes: { version: string; path: string }[];
   /** The command on PATH, and the version of the package it belongs to when that can be read. */
   onPath: { path: string; version: string | null } | null;
-  /** Every client entry that starts this channel's server. */
+  /** Every client entry that starts this channel's server, and every connection whose gateway starts it. */
   registered: ChannelRegistration[];
+  /** The MCP connections that reach this server (§9.2): each by id, name and app. */
+  viaConnections: { id: string; name: string; app: string }[];
+  /**
+   * What it takes as a part of an MCP connection (§11, D20) — the account it can be kept to, by its option and what one
+   * is called, and whether it can be started read-only — so the app keeps no table of its own; null for a server no
+   * connection can have.
+   */
+  part: {
+    account: { option: 'inbox' | 'workspace' | 'account'; noun: string } | null;
+    readOnly: boolean;
+  } | null;
 }
 
 export interface ChannelsReport {
@@ -1399,6 +1501,16 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
   return null;
 }
 
+/** A server's choices as a connection's part, from core's snapshot of the declarations (`partFacts`). */
+function partChoice(server: string): ChannelAvailability['part'] {
+  const facts = partFacts(server);
+  if (facts === undefined) return null;
+  return {
+    account: facts.pin === undefined ? null : { option: facts.pin, noun: facts.noun ?? 'account' },
+    readOnly: facts.readOnlySwitch,
+  };
+}
+
 /**
  * Which channel packages exist, which are on this machine and at which version, and which clients start them.
  *
@@ -1406,7 +1518,8 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
  * its `env` is returned — a hand-written entry can carry a token there.
  */
 export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Promise<ChannelsReport> {
-  const scan = await scanRegisteredServers(env);
+  // Every entry in the apps' configs, and every part a connection's gateway starts (D19).
+  const scan = await registeredOrConnected(core, env);
   const channels: ChannelAvailability[] = [];
   for (const channel of SERVERS) {
     const facts = serverFacts(channel);
@@ -1414,7 +1527,14 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
     const bin = await whichExecutable(facts.binary, env);
     const onPath = bin ? { path: bin, version: await versionBehind(bin, facts.packageName) } : null;
     const registered: ChannelRegistration[] = [];
+    const viaConnections: ChannelAvailability['viaConnections'] = [];
     for (const server of scan.servers.filter((entry) => isProductServer(entry, facts))) {
+      // A connection's gateway entry starts core's launcher, but it is the connection's, not core's own registration.
+      const gateway = server.connection === undefined ? connectionOfEntry(server.args) : null;
+      if (channel === 'core' && gateway !== null) continue;
+      if (server.connection !== undefined) {
+        viaConnections.push({ id: server.connection.id, name: server.connection.name, app: server.client });
+      }
       const narrowing = facts.serverArgs({ client: 'json', ...facts.narrowingOf(server.args) });
       const version = registrationVersion(server, facts);
       registered.push({
@@ -1428,6 +1548,7 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
         pathPins: registrationPathPins(server.args),
         missing: await missingEntryFile(server),
         behindCore: version !== null && isBehind(version, VERSION),
+        connection: server.connection?.id ?? null,
       });
     }
     channels.push({
@@ -1442,6 +1563,8 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
       runtimes,
       onPath,
       registered,
+      viaConnections,
+      part: partChoice(channel),
     });
   }
   return { core: VERSION, channels, unreadable: scan.unreadable };

@@ -232,3 +232,26 @@ new release asks of them after an update — they should never be handed several
   they answer.
 - **After an update,** walk through what the new release asks of the person the same way, starting with what changed
   for them. The changelog's **Upgrading** section is the list.
+
+## 17. Take a received email before you answer it, and leave one another session has.
+
+- **Several sessions may read one account; one answers each email.** Before you prepare a reply — a send whose
+  `inReplyTo` names a received email — take that email: `resend_take` with its id (CLI: `agent-resend take <email>
+  --account <account>`). Only a received email can be taken. `resend_taken` (CLI: `agent-resend taken`) says who has
+  emails, in closed words — `you`, `another session`, `the person` — and every read of received mail says it on each
+  email, as `taken`. Look before you start work on one.
+- **`TAKE_REQUIRED` (exit `10`)** means the account asks a session to take an email before it answers it, and you have
+  not — or the `inReplyTo` names no email any session took: nothing was prepared or sent. Take it if it is yours, then
+  make the same call again. A new message, with no `inReplyTo`, needs no take. Its `reason` `NO_SESSION` means you ran
+  a command in a shell that joined no agent window and has no Claude Code session id, where nothing can be taken: act
+  through the MCP tools instead.
+- **`TAKEN_ELSEWHERE` (exit `10`)** means another session, or the person, has it: leave it. Never answer it another way,
+  and never ask the person to release it for you unless they asked you to handle it.
+- **Not yours? Hand it back:** `step: "hand-back"` with a closed `reason` — `not-mine`, `wrong-account`,
+  `needs-the-person`, `duplicate` or `other` — and, when it helps the person, a `note` of at most 200 characters. The
+  person reads the note; no other session sees it. Never copy what the sender wrote into one. When you have finished
+  with an email, mark it `done`.
+- **A take allows nothing by itself.** Every act still needs the behaviour rules, the send policy and the person's
+  yes. A take lapses an hour after your last act on the message, unless an approval prepared under it still waits.
+  Whether a take is required is the person's setting (`comms_taking`): start a change that lets sessions act without
+  one only when the person asked for it.

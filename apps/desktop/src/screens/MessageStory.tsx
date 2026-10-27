@@ -20,7 +20,8 @@ import {
 } from '../messages/story.ts';
 import { queueLink } from '../queue.ts';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
-import type { AccountsInfo, MessagesReads } from './Messages.tsx';
+import { type AccountsInfo, joinOptionsOf, type MessagesReads } from './Messages.tsx';
+import { WhoHasIt } from './TakeActions.tsx';
 
 /** The story's words (spec 2026-10-26-owner-feedback-0320 §3.6, prototype "MessageTimeline"). */
 export const STORY_COPY = {
@@ -35,6 +36,9 @@ export const STORY_COPY = {
   gone: 'The event service no longer keeps this message’s details, so this is what the list read.',
   notKept: 'The event service no longer keeps this message.',
 } as const;
+
+/** The channels whose messages a session takes (0.35.0): Gmail, Slack and Resend. */
+const TAKING_CHANNELS: ReadonlySet<string> = new Set(['gmail', 'slack', 'resend']);
 
 /** The exit the event service answers for an event it does not have. */
 const NO_SUCH_EVENT = 66;
@@ -148,7 +152,7 @@ function useShown(listed: JoinedMessage, reads: MessagesReads, read: boolean): S
         const joined =
           read === null
             ? undefined
-            : join([read], activity, { aliases: reads.accounts.aliases }).find((each) => each.key === listed.key);
+            : join([read], activity, joinOptionsOf(reads)).find((each) => each.key === listed.key);
         setShown(joined === undefined ? { state: 'list' } : { state: 'shown', message: joined });
       })
       .catch((error: unknown) => {
@@ -171,6 +175,7 @@ export function MessageStory({
   context,
   onBack,
   onScreen,
+  onChanged,
   read = false,
 }: {
   listed: JoinedMessage;
@@ -178,6 +183,8 @@ export function MessageStory({
   context: StoryContext;
   onBack: () => void;
   onScreen?: ((screen: Screen) => void) | undefined;
+  /** Reads the list again, after Take back, Give to… or I'll handle it changed who has the message (0.35.0). */
+  onChanged?: (() => Promise<void>) | undefined;
   /** The message is already `message show`'s: it is not asked for again. */
   read?: boolean;
 }) {
@@ -255,6 +262,11 @@ export function MessageStory({
             <p className="text-fg-muted">{storySummary(message, storyContext)}</p>
           </Panel>
         </section>
+        {/* Who has it (0.35.0): once core takes messages, with Take back, Give to… and I'll handle it. WhatsApp's
+            messages are never taken (T11). */}
+        {reads.takes === 'off' || !TAKING_CHANNELS.has(message.channel) ? null : (
+          <WhoHasIt message={message} context={storyContext} onChanged={onChanged ?? (async () => undefined)} />
+        )}
         <SectionPanel title={STORY_COPY.happened}>
           <Timeline.Root>
             {entries.map((entry, index) => (
@@ -336,12 +348,14 @@ export function MessageByEvent({
   context,
   onBack,
   onScreen,
+  onChanged,
 }: {
   eventId: string;
   reads: MessagesReads;
   context: StoryContext;
   onBack: () => void;
   onScreen?: ((screen: Screen) => void) | undefined;
+  onChanged?: (() => Promise<void>) | undefined;
 }) {
   const bridge = useBridge();
   const [found, setFound] = useState<ByEvent>({ state: 'loading' });
@@ -360,9 +374,7 @@ export function MessageByEvent({
         const message =
           read === null
             ? undefined
-            : join([read], activity, { aliases: reads.accounts.aliases }).find(
-                (each) => each.key === `event:${read.eventId}`,
-              );
+            : join([read], activity, joinOptionsOf(reads)).find((each) => each.key === `event:${read.eventId}`);
         setFound(message === undefined ? { state: 'gone' } : { state: 'ready', message });
       })
       .catch((error: unknown) => {
@@ -374,7 +386,15 @@ export function MessageByEvent({
   }, [bridge, eventId, reads]);
   if (found.state === 'ready') {
     return (
-      <MessageStory listed={found.message} reads={reads} context={context} onBack={onBack} onScreen={onScreen} read />
+      <MessageStory
+        listed={found.message}
+        reads={reads}
+        context={context}
+        onBack={onBack}
+        onScreen={onScreen}
+        onChanged={onChanged}
+        read
+      />
     );
   }
   return (

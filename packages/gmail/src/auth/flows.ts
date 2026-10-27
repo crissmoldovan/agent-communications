@@ -81,6 +81,12 @@ export interface RegistrationIntent {
    * replacing had not been asked for. Only written when given; a flow without it finishes as it always did.
    */
   replace?: boolean | undefined;
+  /**
+   * `setup --standalone`: an entry of the Gmail server's own, as before 0.35.0. Without it the finish puts Gmail into
+   * the app's MCP connection, as `mcp install` does (single-server design D17). Only written when given; `replace`,
+   * which only an entry of its own can be, finishes as one too.
+   */
+  standalone?: boolean | undefined;
 }
 
 export type FlowOutcome = { code: string } | { error: string; description?: string | undefined };

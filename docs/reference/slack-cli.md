@@ -50,6 +50,8 @@ Scripts should read these rather than parse output.
 | [`react`](#agent-slack-react) | add a reaction or remove your reaction. Behind the same gate, at lower ceremony |
 | [`standing`](#agent-slack-standing) | acknowledgements your agent may send without asking, once you approve them here with a code |
 | [`ack`](#agent-slack-ack) | acknowledge a message that has just arrived, without asking, with a content a standing approval holds — as the agent |
+| [`take`](#agent-slack-take) | take a message before acting on it, so no other session does; hand it back, or mark it done |
+| [`taken`](#agent-slack-taken) | who has these messages, each <channel>/<ts>, in closed words; none: this session’s own |
 | [`edit`](#agent-slack-edit) | change the words of a message this account posted, through the gate |
 | [`delete`](#agent-slack-delete) | delete a message this account posted, through the gate |
 | [`approval`](#agent-slack-approval) | where an approval stands |
@@ -536,6 +538,34 @@ agent-slack ack [options]
 | `--ts <ts>` | the message | — |
 | `--content <digest>` | the content, by the digest standing list shows for it | — |
 
+### `agent-slack take`
+
+take a message before acting on it, so no other session does; hand it back, or mark it done
+
+```
+agent-slack take [options] <channel> <ts>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+| `--hand-back` | hand it back: it is not this session’s | `false` |
+| `--reason <reason>` | why, with --hand-back: not-mine, wrong-account, needs-the-person, duplicate or other | — |
+| `--note <note>` | at most 200 characters for the person, with --hand-back or --done; no session sees it | — |
+| `--done` | mark it done: other sessions stay refused | `false` |
+
+### `agent-slack taken`
+
+who has these messages, each <channel>/<ts>, in closed words; none: this session’s own
+
+```
+agent-slack taken [options] [messages...]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workspace <name>` | which workspace, as `organisation/slack` | — |
+
 ### `agent-slack edit`
 
 change the words of a message this account posted, through the gate
@@ -668,8 +698,10 @@ agent-slack mcp install [options]
 | `--workspace <name>` | pin the server to one workspace | — |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
-| `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
-| `--print` | only print what would be written | `false` |
+| `--force` | with --standalone: replace this server's own earlier entry — this is how you upgrade | `false` |
+| `--print` | with --standalone: only print what would be written | `false` |
+| `--connection <id>` | the app's connection to put it into, when the app has several | — |
+| `--standalone` | register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
 | `--approval <approvalId>` | register the server this approval was given for | — |
 
 ### `agent-slack mcp prune`

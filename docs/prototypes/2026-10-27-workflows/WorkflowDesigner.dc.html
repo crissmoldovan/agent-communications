@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Workflow designer</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.av{width:28px;height:28px;border-radius:8px;background:var(--accentSoft);color:var(--accent);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11.5px;flex:none}
+.av.lg{width:44px;height:44px;border-radius:12px;font-size:15px}
+.av.out{background:var(--warnSoft);color:var(--warn)}
+.av.n{background:var(--s2);color:var(--text2)}
+.quote{margin:0;border-radius:10px;padding:10px 12px;background:var(--s2);overflow-wrap:anywhere}
+.back{align-self:flex-start;text-decoration:none;color:var(--text2);font-weight:500}
+.back:hover{color:var(--text)}
+.words{display:grid;grid-template-columns:150px minmax(0,1fr);gap:8px 14px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:150px;flex:none;color:var(--text2)}
+.flow{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.arrow{color:var(--text3)}
+.setrow{display:flex;gap:16px;align-items:flex-start;padding:12px 0;border-top:1px solid var(--s2)}
+.setrow.first{border-top:0;padding-top:2px}
+.setrow .grow{display:flex;flex-direction:column;gap:3px}
+.opts{display:flex;flex-direction:column;gap:6px}
+.opt{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-radius:10px;border:0;background:var(--s2);text-align:left;cursor:pointer;width:100%;box-sizing:border-box;transition:background-color 160ms ease}
+.opt:hover{background:var(--s3)}
+.opt[aria-checked="true"]{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.opt .grow{display:flex;flex-direction:column;gap:2px}
+.rb{width:14px;height:14px;border-radius:50%;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .rb{border:4px solid var(--accent)}
+.cb{width:14px;height:14px;border-radius:4px;border:2px solid var(--text3);flex:none;margin-top:2px;box-sizing:border-box}
+.opt[aria-checked="true"] .cb{border:0;background:var(--accent)}
+.sel{height:30px;border-radius:8px;border:0;background:var(--s2);padding:0 8px;cursor:pointer}
+.tl{display:flex;flex-direction:column}
+.ev{display:grid;grid-template-columns:62px 14px minmax(0,1fr);column-gap:10px;position:relative;padding-bottom:13px}
+.ev .t{color:var(--text3);font-size:12px;font-variant-numeric:tabular-nums;padding-top:1px;text-align:right}
+.ev .d{width:10px;height:10px;border-radius:50%;margin-top:4px;position:relative;z-index:1;justify-self:center;box-shadow:0 0 0 3px var(--s1)}
+.ev .ln{position:absolute;left:78px;top:16px;bottom:-2px;width:2px;background:var(--s3)}
+.ev .w{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500}
+.d-grey{background:var(--text3)}
+.d-acc{background:var(--accent)}
+.d-ok{background:var(--ok)}
+.d-warn{background:var(--warn)}
+.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.stat b{font-size:18px;font-weight:600;letter-spacing:-0.01em}
+.note{background:var(--s2);border-radius:10px;padding:10px 12px;color:var(--text2);display:flex;gap:8px;align-items:flex-start}
+.ta{width:100%;box-sizing:border-box;min-height:84px;border-radius:10px;border:0;background:var(--s2);padding:10px 12px;resize:vertical;line-height:1.5}
+.opt:disabled{opacity:.45;cursor:not-allowed}
+.app textarea{font:inherit;color:inherit}
+.app .link{color:var(--accent)}
+.ni.sub{margin-left:14px}
+.t-light{--scrim:rgba(24,24,27,.32);--str:#9A3412}
+.t-dark{--scrim:rgba(0,0,0,.55);--str:#FDBA74}
+.app{position:relative}
+.main.tight{padding:24px 24px 56px}
+.wide{max-width:1000px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.seg{display:inline-flex;background:var(--s2);border-radius:10px;padding:3px;gap:2px;flex:none}
+.sg{height:28px;padding:0 12px;border-radius:8px;display:flex;align-items:center;font-weight:500;color:var(--text2);text-decoration:none}
+.sg:hover{color:var(--text)}
+.sg.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.gl{width:20px;height:20px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;flex:none;line-height:1}
+.k-start{background:var(--accentSoft);color:var(--accent)}
+.k-logic{background:var(--s3);color:var(--text2)}
+.k-act{background:var(--warnSoft);color:var(--warn)}
+.fx{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:11.5px;color:var(--accent)}
+.new.xs{height:15px;font-size:9.5px;padding:0 4px;border-radius:5px;vertical-align:1px;margin-left:4px}
+.tag{display:inline-flex;align-items:center;height:24px;padding:0 8px;border-radius:7px;border:0;background:var(--s2);font-size:12px;font-weight:500;cursor:pointer;color:var(--text2)}
+.tag.on{background:var(--accentSoft);color:var(--accent)}
+.tags{display:flex;flex-wrap:wrap;gap:6px}
+.vp{position:relative;overflow:hidden;border-radius:14px;background-color:var(--s2);background-image:radial-gradient(color-mix(in srgb,var(--text3) 32%,transparent) 1px,transparent 1.2px)}
+.cv{position:absolute;left:0;top:0;transform-origin:0 0}
+.node{position:absolute;box-sizing:border-box;border:0;padding:0;margin:0;text-align:left;background:var(--s1);border-radius:10px;outline:1px solid color-mix(in srgb,var(--text3) 40%,transparent);outline-offset:-1px;box-shadow:var(--shadow);cursor:pointer;display:flex;flex-direction:column;transition:outline-color 160ms ease,opacity 160ms ease}
+.node:hover{outline-color:var(--text3)}
+.node.sel{outline:2px solid var(--text);outline-offset:-2px}
+.node.ghost{background:transparent;box-shadow:none;outline:1.5px dashed var(--text3);outline-offset:-1.5px}
+.node.r-passed{outline:1.5px solid var(--accent);outline-offset:-1.5px}
+.node.r-live{outline:2px solid var(--accent);outline-offset:-2px;animation:wfpulse 1.6s ease-in-out infinite}
+.node.r-skipped{opacity:.45;outline-style:dashed}
+.node.r-pending{opacity:.7;outline-style:dashed}
+.node.r-would{outline:1.5px dashed var(--accent);outline-offset:-1.5px}
+@keyframes wfpulse{0%,100%{box-shadow:0 0 0 0 var(--ring)}50%{box-shadow:0 0 0 6px transparent}}
+.nh{height:30px;box-sizing:border-box;display:flex;align-items:center;gap:7px;padding:0 9px;box-shadow:inset 0 -1px 0 var(--s2);font-weight:600;font-size:12px;white-space:nowrap;overflow:hidden;flex:none}
+.nh .tt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.ntime{font-weight:500;font-size:11px;color:var(--text3);font-variant-numeric:tabular-nums}
+.nb{display:flex;flex-direction:column;padding:8px 10px 10px}
+.nl{display:block;height:17px;line-height:17px;font-size:12px;color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.eg{position:absolute;box-sizing:border-box;pointer-events:none;--ec:color-mix(in srgb,var(--text3) 75%,transparent)}
+.eg.h{height:2px;background:var(--ec)}
+.eg.v{width:2px;background:var(--ec)}
+.eg.c{border:0 solid var(--ec);background:transparent}
+.e-hi{--ec:var(--text)}
+.e-taken{--ec:var(--accent)}
+.e-not{--ec:color-mix(in srgb,var(--text3) 28%,transparent)}
+.e-would{--ec:var(--accent)}
+.e-live{--ec:var(--accent)}
+.eg.h.e-live{background:repeating-linear-gradient(90deg,var(--accent) 0 6px,transparent 6px 11px);animation:wfflowh .7s linear infinite}
+.eg.v.e-live{background:repeating-linear-gradient(180deg,var(--accent) 0 6px,transparent 6px 11px);animation:wfflowv .7s linear infinite}
+.eg.h.e-would,.eg.h.e-stub{background:repeating-linear-gradient(90deg,var(--ec) 0 5px,transparent 5px 9px)}
+.eg.v.e-would,.eg.v.e-stub{background:repeating-linear-gradient(180deg,var(--ec) 0 5px,transparent 5px 9px)}
+@keyframes wfflowh{to{background-position:11px 0}}
+@keyframes wfflowv{to{background-position:0 11px}}
+.pin{position:absolute;width:10px;height:10px;box-sizing:border-box;border-radius:50%;background:color-mix(in srgb,var(--text3) 80%,transparent);box-shadow:0 0 0 2px var(--s2);pointer-events:none}
+.pin.p-hi{background:var(--text)}
+.pin.p-taken,.pin.p-live,.pin.p-would{background:var(--accent)}
+.pin.p-not{background:color-mix(in srgb,var(--text3) 35%,transparent)}
+.pin.p-end{background:var(--s2);border:2px solid color-mix(in srgb,var(--text3) 80%,transparent)}
+.el{position:absolute;height:18px;padding:0 6px;border-radius:6px;background:var(--s1);color:var(--text2);font-size:11px;font-weight:500;display:flex;align-items:center;white-space:nowrap;box-shadow:var(--shadow);pointer-events:none}
+.el.l-hi{color:var(--text)}
+.el.l-taken,.el.l-live,.el.l-would{color:var(--accent)}
+.el.l-not{opacity:.55}
+.node.q{outline:1.5px dashed var(--warn);outline-offset:-1.5px}
+.node.loose{outline:1.5px dashed var(--accent);outline-offset:-1.5px}
+.nl.from{font-style:italic;color:var(--text3)}
+.qmark{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;color:var(--warn);background:var(--warnSoft);flex:none}
+.fport{position:absolute;width:14px;height:14px;box-sizing:border-box;border-radius:50%;border:2px solid var(--text3);background:var(--s1);padding:0;cursor:crosshair;box-shadow:0 0 0 2px var(--s2)}
+.fport:hover{border-color:var(--accent)}
+.fport.glow,.inport{border-color:var(--accent);animation:wfpulse 1.4s ease-in-out infinite}
+.inport{position:absolute;width:16px;height:16px;box-sizing:border-box;border-radius:50%;border:2px solid var(--accent);background:var(--accentSoft);padding:0;cursor:pointer;box-shadow:0 0 0 2px var(--s2)}
+.fpl{position:absolute;height:16px;padding:0 5px;border-radius:5px;background:var(--s1);color:var(--text3);font-size:10.5px;font-weight:500;display:flex;align-items:center;white-space:nowrap;pointer-events:none;box-shadow:var(--shadow)}
+.dh{position:absolute;width:14px;height:14px;box-sizing:border-box;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accentSoft),0 0 0 5px var(--s2);pointer-events:none}
+.slot{position:absolute;box-sizing:border-box;border:0;border-radius:10px;outline:1.5px dashed var(--accent);outline-offset:-1.5px;background:var(--accentSoft);color:var(--accent);font-weight:600;font-size:12px;display:flex;align-items:center;justify-content:center;cursor:copy}
+.dghost{position:absolute;display:flex;align-items:center;gap:8px;height:32px;padding:0 10px 0 7px;border-radius:9px;background:var(--s1);box-shadow:0 8px 24px rgba(0,0,0,.18),0 0 0 1.5px var(--accent);font-weight:600;font-size:12.5px;transform:rotate(-2deg);pointer-events:none;white-space:nowrap}
+.dghost .cur{position:absolute;right:-12px;bottom:-14px;color:var(--text)}
+.mm{position:absolute;right:12px;top:12px;background:var(--s1);border-radius:8px;box-shadow:var(--shadow);overflow:hidden}
+.mmn{position:absolute;border-radius:1.5px;background:color-mix(in srgb,var(--text3) 45%,transparent)}
+.mmn.lit{background:var(--accent)}
+.mmn.dim{opacity:.35}
+.mmn.on{background:var(--text)}
+.mmv{position:absolute;left:0;top:0;box-sizing:border-box;border:1.5px solid var(--accent);border-radius:3px;background:var(--accentSoft)}
+.ctl{position:absolute;right:12px;bottom:12px;display:flex;align-items:center;background:var(--s1);border-radius:10px;box-shadow:var(--shadow);overflow:hidden}
+.cb2{width:30px;height:28px;border:0;background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--text2)}
+.cb2:hover{background:var(--s2);color:var(--text)}
+.cb2[aria-pressed="true"]{color:var(--accent)}
+.zr{min-width:44px;text-align:center;font-size:11.5px;color:var(--text3);font-variant-numeric:tabular-nums}
+@media (prefers-reduced-motion: reduce){.node.r-live,.eg.e-live{animation:none !important}}
+.main.tight{position:relative}
+.dz{display:flex;gap:12px;align-items:flex-start}
+.pal{flex:none;width:172px;background:var(--s1);border-radius:14px;box-shadow:var(--shadow);padding:12px 8px;display:flex;flex-direction:column;gap:10px;box-sizing:border-box}
+.pal .ph{padding:0 6px;display:flex;flex-direction:column;gap:2px}
+.pg{display:flex;flex-direction:column;gap:1px}
+.pg .lbl{padding:0 6px 2px}
+.pi{display:flex;align-items:center;gap:8px;height:30px;padding:0 6px;border:0;background:transparent;border-radius:8px;cursor:grab;text-align:left;width:100%;box-sizing:border-box;font-weight:500;color:var(--text);white-space:nowrap;transition:background-color 160ms ease}
+.kind{display:inline-flex;align-self:flex-start;padding:3px 8px;border-radius:7px;font-size:12px;font-weight:500;line-height:1.35}
+.steps3{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pi:hover{background:var(--s2)}
+.pi.picked{background:var(--accentSoft);box-shadow:inset 0 0 0 1.5px var(--accent)}
+.pi .grip{margin-left:auto;color:var(--text3);font-size:11px;letter-spacing:-1px}
+.pi .new{margin-left:auto}
+.vpw{flex:none;width:536px;display:flex;flex-direction:column;gap:8px}
+.cbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.props{flex:1;min-width:0;gap:10px;padding:14px 14px}
+.prow{display:flex;flex-direction:column;gap:4px;padding:8px 0;border-top:1px solid var(--s2)}
+.prow .pk{color:var(--text3);font-size:12px;font-weight:500}
+.pick{min-height:30px;border-radius:8px;border:0;background:var(--s2);padding:5px 10px;display:flex;align-items:center;gap:8px;cursor:pointer;text-align:left;width:100%;box-sizing:border-box}
+.pick:hover{background:var(--s3)}
+.pick .chev{color:var(--text3);font-size:11px}
+.props .f{width:100%}
+.props .ta{min-height:64px}
+.swr{display:flex;align-items:flex-start;gap:10px}
+.lrow{display:flex;align-items:center;gap:6px;background:var(--s2);border-radius:8px;padding:5px 6px 5px 10px}
+.x{width:24px;height:24px;border:0;border-radius:7px;background:transparent;color:var(--text3);cursor:pointer;flex:none;font-size:14px;line-height:1}
+.x:hover{background:var(--s3);color:var(--text)}
+.wire{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.wire .chip{cursor:pointer;border:0}
+.hint{display:flex;gap:8px;align-items:flex-start;background:var(--accentSoft);border-radius:10px;padding:9px 12px;color:var(--text)}
+.scrim{position:absolute;inset:0;background:var(--scrim);display:flex;justify-content:center;align-items:flex-start;padding:84px 24px;box-sizing:border-box;z-index:5}
+.sheet{width:100%;max-width:1000px;background:var(--s1);border-radius:16px;box-shadow:0 12px 40px rgba(0,0,0,.18);padding:18px 20px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.shg{display:grid;grid-template-columns:230px minmax(0,1fr) 300px;gap:16px;align-items:start}
+.shc{display:flex;flex-direction:column;gap:10px;min-width:0}
+.fld{display:flex;flex-direction:column;gap:1px;align-items:flex-start;border:0;background:var(--s2);border-radius:8px;padding:6px 9px;cursor:pointer;text-align:left;width:100%;box-sizing:border-box}
+.fld:hover{background:var(--s3)}
+.fld .faint{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.part{background:var(--s2);border-radius:10px;padding:9px 10px;display:flex;flex-direction:column;gap:6px}
+.part .ta,.part .f,.part .pick{background:var(--s1)}
+.pt{font-size:11px;font-weight:600;color:var(--text3);letter-spacing:.02em}
+.adds{display:flex;flex-wrap:wrap;gap:4px}
+.lin{background:var(--s2);border-radius:12px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.lin .ttl{font-size:14px;font-weight:600;letter-spacing:-0.01em;overflow-wrap:anywhere}
+.lin .dp{margin:0;color:var(--text2);overflow-wrap:anywhere}
+.lin .dl{font-size:11px;font-weight:600;color:var(--text3)}
+.lin .qt{margin:0;border-left:3px solid var(--s3);padding:2px 0 2px 10px;color:var(--text2);overflow-wrap:anywhere}
+.chk{display:flex;gap:8px;align-items:flex-start}
+.chk .ok{color:var(--ok);font-weight:600;width:14px;flex:none}
+.chk .wn{color:var(--warn);font-weight:600;width:14px;flex:none}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 2040px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="3.5"></circle><path d="M5 20c.9-3.6 3.6-5.5 7-5.5s6.1 1.9 7 5.5"></path></svg><span>People</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5H9l2 2h7.5A2.5 2.5 0 0 1 21 9.5v7a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5z"></path></svg><span>Projects</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni sub on" href="Workflows.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="14" y="3.5" width="7" height="5" rx="1.5"></rect><rect x="8.5" y="15.5" width="7" height="5" rx="1.5"></rect><path d="M6.5 8.5v2a2 2 0 0 0 2 2H12v3M17.5 8.5v2a2 2 0 0 1-2 2H12"></path></svg><span>Workflows</span><span class="new" style="margin-left: auto">new</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main tight">
+<div class="wide">
+  <a class="back" href="Workflows.dc.html">‹ Workflows</a>
+  <div class="row wrap" style="gap: 10px">
+    <h1 class="h1">{{title}}</h1>
+    <sc-for list="{{chips}}" as="c" hint-placeholder-count="2"><span class="chip {{c.cls}}">{{c.t}}</span></sc-for>
+    <span class="new">new</span>
+    <span style="margin-left: auto"><nav class="seg" aria-label="Edit as"><a class="sg on" href="WorkflowDesigner.dc.html" aria-current="page">Visual</a><a class="sg" href="WorkflowText.dc.html">Text</a><a class="sg" href="Describe.dc.html">Describe</a></nav></span>
+  </div>
+  <div class="row wrap">
+    <span class="faint grow">{{headLine}}</span>
+    <button type="button" class="btn" onClick="{{saveDraft}}">Save draft</button>
+    <sc-if value="{{isExample}}" hint-placeholder-val="{{ true }}"><a class="btn" href="WorkflowRun.dc.html?run=test">Test with a recent message</a><a class="btn p" href="WorkflowApprove.dc.html">Review and approve…</a></sc-if>
+    <sc-if value="{{notExample}}" hint-placeholder-val="{{ false }}"><button type="button" class="btn" onClick="{{testOther}}">Test with a recent message</button><button type="button" class="btn p" onClick="{{approveOther}}">Review and approve…</button></sc-if>
+  </div>
+  <sc-if value="{{said}}" hint-placeholder-val="{{ false }}"><p role="status" class="{{saidClass}}">{{said}}</p></sc-if>
+  <sc-if value="{{ruleNote}}" hint-placeholder-val="{{ false }}"><div class="note"><span class="new">new</span><span class="grow">{{ruleNote}}</span></div></sc-if>
+  <div class="dz">
+    <aside class="pal" aria-labelledby="palh">
+      <div class="ph"><h2 id="palh" class="h3">Steps</h2><span class="faint">Drag one onto the canvas, or click it, then click where it goes.</span></div>
+      <sc-for list="{{palette}}" as="grp" hint-placeholder-count="6">
+        <div class="pg">
+          <span class="lbl">{{grp.name}}</span>
+          <sc-for list="{{grp.items}}" as="it" hint-placeholder-count="3">
+            <button type="button" class="{{it.cls}}" draggable="true" aria-pressed="{{it.picked}}" onDragStart="{{it.drag}}" onClick="{{it.pick}}"><span aria-hidden="true" class="{{it.gcls}}">{{it.glyph}}</span><span>{{it.label}}</span><sc-if value="{{it.isNew}}" hint-placeholder-val="{{ false }}"><span class="new xs">new</span></sc-if><sc-if value="{{it.notNew}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" class="grip">⋮⋮</span></sc-if></button>
+          </sc-for>
+        </div>
+      </sc-for>
+    </aside>
+    <div class="vpw">
+      <div class="cbar">
+        <span class="faint grow">{{canvasLine}}</span>
+        <button type="button" class="btn sm q" onClick="{{deselect}}">Workflow settings</button>
+        <button type="button" class="btn sm q" onClick="{{tidy}}">Tidy up</button>
+      </div>
+      <div class="steps3" role="group" aria-label="Try building it"><span class="new">new</span><span class="faint">Try it, step by step:</span><sc-for list="{{tries}}" as="tr" hint-placeholder-count="4"><button type="button" class="{{tr.cls}}" aria-pressed="{{tr.on}}" onClick="{{tr.go}}">{{tr.t}}</button></sc-for></div>
+      <sc-if value="{{hint}}" hint-placeholder-val="{{ false }}"><div class="hint" role="status"><span class="grow">{{hint}}</span></div></sc-if>
+      <div class="vp" style="{{vpStyle}}" onClick="{{canvasClick}}" onDragOver="{{dragOver}}" onDrop="{{dropHere}}">
+      <div class="cv" style="{{g.cvStyle}}{{g.zoomStyle}}">
+        <sc-for list="{{g.pieces}}" as="p" hint-placeholder-count="20"><span aria-hidden="true" class="{{p.cls}}" style="{{p.style}}"></span></sc-for>
+        <sc-for list="{{g.labels}}" as="l" hint-placeholder-count="10"><span aria-hidden="true" class="{{l.cls}}" style="{{l.style}}">{{l.t}}</span></sc-for>
+        <sc-for list="{{g.nodes}}" as="n" hint-placeholder-count="12">
+          <button type="button" class="{{n.cls}}" style="{{n.style}}" aria-pressed="{{n.sel}}" aria-label="{{n.title}}" onClick="{{n.pick}}">
+            <span class="nh"><span aria-hidden="true" class="{{n.gcls}}">{{n.glyph}}</span><span class="tt">{{n.title}}</span><sc-if value="{{n.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if><sc-if value="{{n.isQ}}" hint-placeholder-val="{{ false }}"><span class="qmark" title="A question to answer">?</span></sc-if><sc-if value="{{n.hasTime}}" hint-placeholder-val="{{ false }}"><span class="ntime">{{n.time}}</span></sc-if></span>
+            <span class="nb"><sc-for list="{{n.lines}}" as="ln" hint-placeholder-count="2"><span class="{{ln.lc}}" title="{{ln.full}}"><sc-for list="{{ln.segs}}" as="s" hint-placeholder-count="1"><span class="{{s.c}}">{{s.t}}</span></sc-for><sc-if value="{{ln.isNew}}" hint-placeholder-val="{{ false }}"><span class="new xs">new</span></sc-if></span></sc-for></span>
+          </button>
+        </sc-for>
+        <sc-for list="{{g.pins}}" as="q" hint-placeholder-count="20"><span aria-hidden="true" class="{{q.cls}}" style="{{q.style}}"></span></sc-for>
+        <sc-if value="{{g.hasFreePort}}" hint-placeholder-val="{{ true }}">
+          <button type="button" class="{{g.freePort.cls}}" style="{{g.freePort.style}}" aria-label="Connect from this free port" onClick="{{startWire}}"></button>
+          <sc-if value="{{g.freePort.hasLabel}}" hint-placeholder-val="{{ true }}"><span aria-hidden="true" class="fpl" style="{{g.freePort.lstyle}}">{{g.freePort.label}}</span></sc-if>
+        </sc-if>
+        <sc-if value="{{g.hasDragHandle}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" class="dh" style="{{g.dragHandle.style}}"></span></sc-if>
+        <sc-if value="{{g.hasInport}}" hint-placeholder-val="{{ false }}"><button type="button" class="inport" style="{{g.inport.style}}" aria-label="Connect to this step’s input" onClick="{{finishWire}}"></button></sc-if>
+        <sc-if value="{{g.hasSlot}}" hint-placeholder-val="{{ false }}"><button type="button" class="slot" style="{{g.slot.style}}" onClick="{{dropAtSlot}}">{{g.slot.text}}</button></sc-if>
+        <sc-if value="{{g.hasGhost}}" hint-placeholder-val="{{ false }}"><span aria-hidden="true" class="dghost" style="{{g.ghost.style}}"><span class="{{g.ghost.gcls}}">{{g.ghost.glyph}}</span>{{g.ghost.title}}<svg class="cur" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="var(--s1)" stroke-width="1.5" stroke-linejoin="round"><path d="M5 3l14 8-6 1.5L10 19z"></path></svg></span></sc-if>
+      </div>
+      <div class="mm" style="{{g.mm.style}}" aria-hidden="true">
+        <sc-for list="{{g.mm.nodes}}" as="m" hint-placeholder-count="12"><span class="{{m.cls}}" style="{{m.style}}"></span></sc-for>
+        <span class="mmv" style="{{g.mmView}}"></span>
+      </div>
+      <div class="ctl" role="group" aria-label="Zoom">
+        <button type="button" class="cb2" aria-label="Zoom out" onClick="{{zoomOut}}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14"></path></svg></button>
+        <span class="zr">{{zoomText}}</span>
+        <button type="button" class="cb2" aria-label="Zoom in" onClick="{{zoomIn}}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"></path></svg></button>
+        <button type="button" class="cb2" aria-label="Fit to the window" onClick="{{zoomFit}}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 9V5h4M20 9V5h-4M4 15v4h4M20 15v4h-4"></path></svg></button>
+        <button type="button" class="cb2" aria-label="Lock the steps in place" aria-pressed="{{locked}}" onClick="{{toggleLock}}"><svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2"></rect><path d="M8 11V8a4 4 0 0 1 8 0v3"></path></svg></button>
+      </div>
+      </div>
+      <div class="row wrap" style="gap: 10px"><span class="row"><span aria-hidden="true" class="gl k-act">◇</span><span class="faint">acts outside Agent Comms: each is listed when you approve</span></span><span class="row"><span aria-hidden="true" class="gl k-logic">≡</span><span class="faint">stays in Agent Comms</span></span></div>
+      <p class="faint p0">Drawn as it would be built: React Flow (xyflow) through cue-ui’s Flow components, for the node cards, ports, wires, the minimap and the zoom controls.</p>
+    </div>
+    <aside class="card props" aria-labelledby="pt">
+      <div class="row"><span aria-hidden="true" class="{{panel.gcls}}">{{panel.glyph}}</span><h2 id="pt" class="h2 grow">{{panel.title}}</h2><sc-if value="{{panel.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if><sc-if value="{{panel.hasClose}}" hint-placeholder-val="{{ true }}"><button type="button" class="x" aria-label="Close, and show the workflow’s settings" onClick="{{deselect}}">×</button></sc-if></div>
+      <p class="muted p0">{{panel.what}}</p>
+      <sc-if value="{{panel.hasKind}}" hint-placeholder-val="{{ true }}"><span class="kind {{panel.kindCls}}">{{panel.kind}}</span></sc-if>
+      <div>
+        <sc-for list="{{panel.rows}}" as="r" hint-placeholder-count="5">
+          <div class="prow">
+            <span class="pk">{{r.k}}</span>
+            <sc-if value="{{r.isPick}}" hint-placeholder-val="{{ true }}"><button type="button" class="pick" aria-label="{{r.k}}: {{r.value}}, choose another" onClick="{{r.next}}"><span class="grow">{{r.value}}</span><span aria-hidden="true" class="chev">▾</span></button></sc-if>
+            <sc-if value="{{r.isText}}" hint-placeholder-val="{{ false }}"><input class="{{r.cls}}" value="{{r.value}}" aria-label="{{r.k}}" onChange="{{r.change}}"></sc-if>
+            <sc-if value="{{r.isArea}}" hint-placeholder-val="{{ false }}"><textarea class="ta" aria-label="{{r.k}}" onChange="{{r.change}}">{{r.value}}</textarea></sc-if>
+            <sc-if value="{{r.isSwitch}}" hint-placeholder-val="{{ false }}"><span class="swr"><button type="button" class="sw" role="switch" aria-checked="{{r.on}}" aria-label="{{r.k}}" onClick="{{r.toggle}}"></button><span class="faint grow">{{r.hint}}</span><sc-if value="{{r.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if></span></sc-if>
+            <sc-if value="{{r.isTags}}" hint-placeholder-val="{{ false }}"><span class="tags"><sc-for list="{{r.tags}}" as="t" hint-placeholder-count="3"><button type="button" class="{{t.cls}}" aria-pressed="{{t.on}}" onClick="{{t.toggle}}">{{t.t}}</button></sc-for></span></sc-if>
+            <sc-if value="{{r.isNote}}" hint-placeholder-val="{{ false }}"><span class="muted">{{r.value}}</span></sc-if>
+            <sc-if value="{{r.isRange}}" hint-placeholder-val="{{ false }}"><span class="row"><input type="range" min="50" max="95" value="{{r.value}}" aria-label="{{r.k}}" onChange="{{r.change}}" style="flex: 1; accent-color: var(--accent)"><span style="font-weight: 500">{{r.shown}}</span></span></sc-if>
+            <sc-if value="{{r.isRadio}}" hint-placeholder-val="{{ false }}"><span class="opts" role="radiogroup" aria-label="{{r.k}}"><sc-for list="{{r.opts}}" as="op" hint-placeholder-count="2"><button type="button" class="opt" role="radio" aria-checked="{{op.on}}" onClick="{{op.pick}}"><span aria-hidden="true" class="rb"></span><span class="grow"><span style="font-weight: 500">{{op.t}}</span><span class="faint">{{op.sub}}</span></span></button></sc-for></span></sc-if>
+            <sc-if value="{{r.isList}}" hint-placeholder-val="{{ false }}"><span class="opts"><sc-for list="{{r.items}}" as="li" hint-placeholder-count="3"><span class="lrow"><span class="grow">{{li.t}}</span><button type="button" class="x" aria-label="Remove {{li.t}}" onClick="{{li.remove}}">×</button></span></sc-for><button type="button" class="link" style="align-self: flex-start" onClick="{{r.add}}">+ Add a condition</button></span></sc-if>
+          </div>
+        </sc-for>
+      </div>
+      <sc-if value="{{panel.hasIns}}" hint-placeholder-val="{{ true }}">
+        <div class="prow"><span class="pk">Comes from</span><span class="wire"><sc-for list="{{panel.ins}}" as="w" hint-placeholder-count="2"><button type="button" class="chip c-n" onClick="{{w.go}}">{{w.t}}</button></sc-for></span></div>
+      </sc-if>
+      <sc-if value="{{panel.hasOuts}}" hint-placeholder-val="{{ true }}">
+        <div class="prow"><span class="pk">Goes on to</span><span class="wire"><sc-for list="{{panel.outs}}" as="w" hint-placeholder-count="2"><button type="button" class="chip c-acc" onClick="{{w.go}}">{{w.t}}</button></sc-for></span></div>
+      </sc-if>
+      <sc-if value="{{panel.hasFull}}" hint-placeholder-val="{{ false }}"><button type="button" class="btn p" style="align-self: flex-start" onClick="{{openSheet}}">Edit in full, with a preview…</button></sc-if>
+      <sc-if value="{{panel.hasRemove}}" hint-placeholder-val="{{ true }}"><button type="button" class="btn sm q" style="align-self: flex-start; color: var(--danger)" onClick="{{removeStep}}">Remove this step</button></sc-if>
+    </aside>
+  </div>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+<sc-if value="{{sheetOpen}}" hint-placeholder-val="{{ false }}">
+<div class="scrim">
+  <section class="sheet" role="dialog" aria-modal="true" aria-labelledby="sht">
+    <div class="row wrap" style="gap: 10px">
+      <span aria-hidden="true" class="gl k-act">◇</span><h2 id="sht" class="h2">Create a Linear issue</h2><span class="chip c-n">A step in Client asks → the right session</span>
+      <span class="row" style="margin-left: auto"><button type="button" class="btn q" onClick="{{sheetCancel}}">Cancel</button><button type="button" class="btn p" onClick="{{sheetDone}}">Done</button></span>
+    </div>
+    <div class="shg">
+      <div class="shc">
+        <span class="h3">What this step can use</span>
+        <span class="faint">Click one to add it to the title. Each shows its value in the sample.</span>
+        <sc-for list="{{sh.fields}}" as="fd" hint-placeholder-count="7">
+          <button type="button" class="fld" onClick="{{fd.insert}}"><span class="fx">{{fd.f}}</span><span class="faint">{{fd.sample}}</span></button>
+        </sc-for>
+        <div class="note"><span class="grow">{{sh.notHere}}</span></div>
+      </div>
+      <div class="shc">
+        <div class="fl"><span class="lbl">Team</span><button type="button" class="pick" aria-label="Team: {{sh.team}}, choose another" onClick="{{sh.nextTeam}}"><span class="grow">{{sh.team}}</span><span aria-hidden="true" class="chev">▾</span></button></div>
+        <div class="fl"><label class="lbl" for="ttl">Title</label><input id="ttl" class="f mono" value="{{sh.title}}" onInput="{{sh.typeTitle}}" onChange="{{sh.setTitle}}"><span class="faint">Fields in double braces are filled in from the message. The preview follows when you leave the box.</span></div>
+        <div class="fl">
+          <span class="lbl">Description, in this order</span>
+          <div class="opts">
+            <sc-for list="{{sh.parts}}" as="pa" hint-placeholder-count="4">
+              <div class="part">
+                <div class="row"><span class="pt grow">{{pa.kind}}</span><sc-if value="{{pa.isNew}}" hint-placeholder-val="{{ false }}"><span class="new">new</span></sc-if><button type="button" class="x" aria-label="Remove this part" onClick="{{pa.remove}}">×</button></div>
+                <sc-if value="{{pa.isText}}" hint-placeholder-val="{{ true }}"><textarea class="ta" aria-label="Fixed text" onChange="{{pa.change}}">{{pa.text}}</textarea></sc-if>
+                <sc-if value="{{pa.isModel}}" hint-placeholder-val="{{ false }}">
+                  <button type="button" class="pick" aria-label="Written by: {{pa.model}}, choose another" onClick="{{pa.nextModel}}"><span class="grow">{{pa.model}}</span><span aria-hidden="true" class="chev">▾</span></button>
+                  <textarea class="ta" aria-label="What the model writes" onChange="{{pa.change}}">{{pa.text}}</textarea>
+                  <span class="faint">It reads the message’s text and sender. What it writes is from the sender’s words, so it’s marked as theirs.</span>
+                </sc-if>
+                <sc-if value="{{pa.isQuote}}" hint-placeholder-val="{{ false }}"><span class="muted">{{pa.text}}</span></sc-if>
+                <sc-if value="{{pa.isLinks}}" hint-placeholder-val="{{ false }}"><span class="muted">{{pa.text}}</span></sc-if>
+                <sc-if value="{{pa.isField}}" hint-placeholder-val="{{ false }}"><button type="button" class="pick" aria-label="Field: {{pa.text}}, choose another" onClick="{{pa.nextField}}"><span class="grow fx">{{pa.text}}</span><span aria-hidden="true" class="chev">▾</span></button></sc-if>
+              </div>
+            </sc-for>
+          </div>
+          <div class="adds"><span class="faint" style="align-self: center">Add:</span><button type="button" class="btn sm q" onClick="{{sh.addText}}">Fixed text</button><button type="button" class="btn sm q" onClick="{{sh.addField}}">A field</button><button type="button" class="btn sm q" onClick="{{sh.addModel}}">Written by a model</button><button type="button" class="btn sm q" onClick="{{sh.addLinks}}">Links</button></div>
+        </div>
+        <div class="fl"><span class="lbl">Labels</span><span class="tags"><sc-for list="{{sh.labels}}" as="lb" hint-placeholder-count="4"><button type="button" class="{{lb.cls}}" aria-pressed="{{lb.on}}" onClick="{{lb.toggle}}">{{lb.t}}</button></sc-for></span></div>
+        <div class="row" style="align-items: flex-start">
+          <div class="fl grow"><span class="lbl">Assignee</span><button type="button" class="pick" aria-label="Assignee: {{sh.assignee}}, choose another" onClick="{{sh.nextAssignee}}"><span class="grow">{{sh.assignee}}</span><span aria-hidden="true" class="chev">▾</span></button></div>
+          <div class="fl grow"><span class="lbl">Status when made</span><button type="button" class="pick" aria-label="Status: {{sh.status}}, choose another" onClick="{{sh.nextStatus}}"><span class="grow">{{sh.status}}</span><span aria-hidden="true" class="chev">▾</span></button></div>
+        </div>
+      </div>
+      <div class="shc">
+        <div class="row"><span class="h3 grow">Preview</span><span class="new">new</span></div>
+        <button type="button" class="pick" aria-label="Sample: {{sh.sampleName}}, choose another" onClick="{{sh.nextSample}}"><span class="grow">{{sh.sampleName}}</span><span aria-hidden="true" class="chev">▾</span></button>
+        <div class="lin" aria-label="The issue as it would be made">
+          <div class="row"><span class="faint grow">{{sh.key}} · team {{sh.team}}</span><span class="chip c-n">{{sh.status}}</span></div>
+          <span class="ttl">{{sh.pTitle}}</span>
+          <span class="tags"><sc-for list="{{sh.pLabels}}" as="pl" hint-placeholder-count="2"><span class="chip c-acc">{{pl}}</span></sc-for><span class="chip c-n">{{sh.assigneeShort}}</span></span>
+          <sc-for list="{{sh.pDesc}}" as="d" hint-placeholder-count="4">
+            <sc-if value="{{d.label}}" hint-placeholder-val="{{ true }}"><span class="dl">{{d.label}}</span></sc-if>
+            <sc-if value="{{d.isQuote}}" hint-placeholder-val="{{ false }}"><p class="qt">{{d.text}}</p></sc-if>
+            <sc-if value="{{d.notQuote}}" hint-placeholder-val="{{ true }}"><p class="dp">{{d.text}}</p></sc-if>
+          </sc-for>
+        </div>
+        <div class="opts">
+          <sc-for list="{{sh.checks}}" as="ck" hint-placeholder-count="3"><div class="chk"><span aria-hidden="true" class="{{ck.cls}}">{{ck.mark}}</span><span>{{ck.t}}</span></div></sc-for>
+        </div>
+        <p class="faint p0">What leaves this Mac: the title and description go to Linear; the message’s text and sender go to the model that writes the summary.</p>
+      </div>
+    </div>
+  </section>
+</div>
+</sc-if>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"show":{"editor":"enum","options":["example","rule","blank"],"default":"example"},"rule":{"editor":"enum","options":["client-asks","invoices","mail-subjects"],"default":"client-asks"},"selected":{"editor":"enum","options":["none","trigger","cond","judge","project","queueNone","issue","find","queueFor","another","start","deliver","wait","close","reply","added"],"default":"start"},"stage":{"editor":"enum","options":["none","dragging","added","drawing","connected"],"default":"none"},"sheet":{"editor":"boolean","default":false},"$preview":{"width":1280,"height":2040}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+this.state = { sel: undefined, v: {}, zoom: 1, locked: false, said: null, saidTone: 'n', sheet: undefined, stage: undefined, dropType: undefined, drop: undefined };
+this.drafts = {};
+this.dragType = null;
+}
+wfGraph(o) {
+o = o || {};
+const show = o.show || 'example';
+const SX = 16, SW = 236, BX = 316, BW = 200, LANE = 284, R = 10;
+const cx = SX + SW / 2, sr = SX + SW, bcx = BX + BW / 2;
+const W = 532;
+const TYPES = {
+trigger: ['start', '◉', 'New message', ['choose an account', 'and where in it']],
+condition: ['logic', '≡', 'Condition', ['choose a field', 'and what it should be']],
+judge: ['logic', '?', 'Ask a judge', ['choose a judge', 'and ask it a question']],
+project: ['logic', '◫', 'Which project?', ['of your 3 projects', 'gives the project, and why']],
+branch: ['logic', '⑃', 'Branch', ['if this, one way', 'otherwise the other']],
+find: ['logic', '⌕', 'Find a session', ['in a project or a folder', 'busy, idle or none']],
+start: ['act', '▶', 'Start a session', ['Claude Code or Codex', 'in a folder you choose']],
+worktree: ['act', '⑂', 'Make a worktree', ['in {{project}}’s checkout', 'branch agent/{{ticket}}']],
+deliver: ['act', '→', 'Deliver to a session', ['the message, and what you add', 'to the session found']],
+linCreate: ['act', '◇', 'Create a Linear issue', ['choose a team', 'and what it says']],
+linUpdate: ['act', '◇', 'Update a Linear issue', ['{{ticket}}', 'choose what changes']],
+linComment: ['act', '◇', 'Comment on an issue', ['{{ticket}}', 'choose what it says']],
+linClose: ['act', '✓', 'Close a Linear issue', ['{{ticket}} as Done', 'with a comment, or not']],
+queue: ['logic', '▤', 'Put it in the Queue', ['choose a lane', 'kept 7 days']],
+webhook: ['act', '⇢', 'Send to a webhook', ['choose an address', 'with the fields you map']],
+waitFor: ['logic', '◷', 'Wait for', ['a session’s run to end', 'at most 1 day']],
+reply: ['act', '↩', 'Reply in the thread', ['asks you each time', 'labelled as sent by an agent']],
+notify: ['logic', '◔', 'Notify me', ['in this app, and macOS', '“{{workflow}} needs you”']]
+};
+const nodes = [];
+const edges = [];
+const hOf = (n) => 48 + 17 * n;
+const add = (id, cat, glyph, x, y, w, title, lines, opt) => {
+const op = opt || {};
+nodes.push({ id, cat, glyph, x, y, w, h: hOf(lines.length), title, lines, isNew: op.isNew === true, newLine: op.newLine ?? -1, ghost: op.ghost === true, added: op.added === true });
+};
+const down = (id, from, to, y1, y2, label) => edges.push({ id, from, to, pts: [[cx, y1], [cx, y2]], label: label || null, lx: cx + 8, ly: (y1 + y2) / 2 - 9 });
+const path = (id, from, to, pts, label, lx, ly, opt) => edges.push({ id, from, to, pts, label: label || null, lx, ly, stub: !!(opt && opt.stub), half: !!(opt && opt.half) });
+let H = 400;
+let port = null;
+let slot = null;
+if (show === 'example') {
+const app = o.app || 'Claude Code';
+const wt = o.worktree !== false;
+const thr = o.threshold || '0.70';
+const qwait = o.qwait || '2 hours';
+const v2 = (o.version ?? 2) === 2;
+const none = o.noneMode || 'queue';
+add('trigger', 'start', '◉', SX, 24, SW, o.triggerTitle || 'New Slack message', [o.triggerLine || 'acme/slack · #client-requests', 'not yours, and not a bot’s']);
+add('cond', 'logic', '≡', SX, 144, SW, 'Conditions', ['match any of 3', 'the sender is at acme, or …']);
+add('judge', 'logic', '?', SX, 264, SW, 'Ask a judge', ['“A request for work on one of…”', 'Jev · yes at ' + thr + ' or more']);
+add('project', 'logic', '◫', SX, 384, SW, 'Which project?', ['acme-site, billing or booking-app', 'gives the project, and why'], { isNew: true });
+if (none === 'notify') add('queueNone', 'logic', '◔', BX, 384, BW, 'Notify me', ['you choose what to do', 'in this app, and macOS']);
+else if (none === 'stop') add('queueNone', 'logic', '■', BX, 384, BW, 'Stop here', ['nothing else happens', 'it stays in Messages']);
+else add('queueNone', 'logic', '▤', BX, 384, BW, 'Put it in the Queue', ['lane triage, for you to see', 'kept 7 days']);
+add('issue', 'act', '◇', SX, 504, SW, 'Create a Linear issue', [o.team ? 'team ' + o.team + ', assigned to you' : 'team ?, assigned to you', 'gives {{ticket}} to later steps']);
+add('find', 'logic', '⌕', SX, 624, SW, 'Find a session', ['in {{project}}’s checkout', 'busy, idle or none', 'the most recently active one']);
+add('queueFor', 'logic', '▤', BX, 630, BW, 'Queue for the session', ['until its run ends', 'at most ' + qwait + ', then tell me']);
+add('another', 'logic', '⌕', SX, 762, SW, 'Find another session', ['any idle one in {{project}}', 'found or none'], { isNew: true });
+add('start', 'act', '▶', SX, 882, SW, 'Start a session', [app + ' in {{project}}', o.wtLine || (wt ? 'in a new worktree' : 'in the checkout itself'), wt && !o.wtLine ? 'branch agent/{{ticket}}' : 'it asks before acting'], { newLine: wt || o.wtLine ? 1 : -1 });
+add('deliver', 'act', '→', SX, 1020, SW, 'Deliver to the session', ['the message and {{ticket}}', 'and why it’s for this project']);
+add('wait', 'logic', '◷', SX, 1140, SW, 'Wait for the run to end', ['claude-stream says when', 'at most 1 day'], { isNew: true });
+add('close', 'act', '✓', SX, 1260, SW, 'Close the Linear issue', ['{{ticket}} as Done', o.closeComment === false ? 'with no comment' : 'comment: its last message'], { isNew: true });
+if (v2) add('reply', 'act', '↩', SX, 1380, SW, 'Reply in the thread', [o.replyMode === 'standing' ? 'a short reply you approved' : 'asks you each time', 'labelled as sent by an agent'], { isNew: true });
+down('e1', 'trigger', 'cond', 106, 144);
+down('e2', 'cond', 'judge', 226, 264, 'matches');
+down('e3', 'judge', 'project', 346, 384, 'yes');
+path('eJ', 'judge', null, [[sr, 305], [sr + 24, 305]], 'no: it stops', sr + 30, 296, { stub: true });
+down('e4', 'project', 'issue', 466, 504, 'a project');
+path('e5', 'project', 'queueNone', [[sr, 425], [BX, 425]], 'none', sr + 10, 404);
+down('e6', 'issue', 'find', 586, 624);
+path('e7', 'find', 'queueFor', [[sr, 671], [BX, 671]], 'busy', sr + 10, 650);
+path('e8', 'find', 'deliver', [[sr, 705], [LANE, 705], [LANE, 1061], [sr, 1061]], 'idle', LANE + 6, 714);
+down('e9', 'find', 'another', 723, 762, 'none');
+path('e10', 'another', 'deliver', [[sr, 803], [LANE, 803], [LANE, 1061], [sr, 1061]], 'found', LANE + 6, 792);
+down('e11', 'another', 'start', 844, 882, 'none');
+down('e12', 'start', 'deliver', 981, 1020);
+path('e13', 'queueFor', 'deliver', [[bcx, 712], [bcx, 1061], [sr, 1061]], 'free', bcx + 8, 728);
+down('e14', 'deliver', 'wait', 1102, 1140);
+down('e15', 'wait', 'close', 1222, 1260, 'run ended');
+if (v2) down('e16', 'close', 'reply', 1342, 1380);
+H = v2 ? 1490 : 1370;
+port = { from: 'wait', x: sr, y: 1181, dir: 'right', label: 'timed out', lx: sr + 8, ly: 1160, edgeLabel: 'timed out' };
+slot = { x: BX, y: 1140 };
+} else if (show === 'rule') {
+const RULES = {
+'client-asks': { t: ['New Slack message', ['acme/slack · 3 client channels', 'new messages, not yours']], c: ['match any of 2', 'the sender is at acme'], j: ['“Is someone at acme asking…”', 'Jev · yes at 0.70 or more'], last: ['queue', 'logic', '▤', 'Put it in the Queue', ['lane acme-site, kept 7 days', 'wakes the window bound to it']] },
+'invoices': { t: ['New Slack message', ['acme/slack · #acme-site', 'new messages, not yours']], c: ['match any of 2', 'mentions “invoice” or “payment”'], j: ['“Is this asking me to pay…”', 'Jev · yes at 0.70 or more'], last: ['queue', 'logic', '▤', 'Put it in the Queue', ['lane billing, kept 7 days', 'wakes the window bound to it']] },
+'mail-subjects': { t: ['New email', ['acme/gmail · the inbox', 'new email, not yours']], c: ['match all of 1', 'the subject isn’t empty'], j: null, last: ['dry', 'logic', '▦', 'Write it in the dry-run log', ['sends nothing anywhere', 'kept 24 hours']] }
+};
+const r = RULES[o.rule] || RULES['client-asks'];
+add('trigger', 'start', '◉', SX, 24, SW, r.t[0], r.t[1]);
+add('cond', 'logic', '≡', SX, 144, SW, 'Conditions', r.c);
+down('e1', 'trigger', 'cond', 106, 144);
+let y = 264;
+if (r.j) { add('judge', 'logic', '?', SX, 264, SW, 'Ask a judge', r.j); down('e2', 'cond', 'judge', 226, 264, 'matches'); y = 384; }
+add(r.last[0], r.last[1], r.last[2], SX, y, SW, r.last[3], r.last[4]);
+down('e3', r.j ? 'judge' : 'cond', r.last[0], y - 38, y, r.j ? 'yes' : 'matches');
+H = y + 82 + 28;
+port = { from: r.last[0], x: cx, y: y + 82, dir: 'down', label: null, edgeLabel: null };
+slot = { x: SX, y: y + 120 };
+} else {
+add('trigger', 'start', '◉', SX, 24, SW, 'Choose what starts it', ['a message, an email, a reaction…', 'in one of your accounts'], { ghost: true });
+H = 400;
+port = { from: 'trigger', x: cx, y: 106, dir: 'down', label: null, edgeLabel: null };
+slot = { x: SX, y: 144 };
+}
+const stage = o.stage || 'none';
+const drop = o.drop && TYPES[o.drop.type] ? o.drop : null;
+let inport = null, dragHandle = null, slotOut = null, ghost = null, freePort = null;
+if (o.free && port && (stage === 'added' || stage === 'dragging' || (stage === 'none' && !drop))) {
+freePort = { cls: 'fport' + (stage === 'added' ? ' glow' : ''), style: 'left:' + (port.x - 7) + 'px;top:' + (port.y - 7) + 'px', label: port.label, hasLabel: !!port.label, lstyle: 'left:' + (port.lx || 0) + 'px;top:' + (port.ly || 0) + 'px' };
+}
+if (stage === 'dragging' && TYPES[o.dragType || 'notify']) {
+const t = TYPES[o.dragType || 'notify'];
+slotOut = { style: 'left:' + slot.x + 'px;top:' + slot.y + 'px;width:' + (show === 'example' ? BW : SW) + 'px;height:82px', text: 'Drop ' + t[2] + ' here' };
+ghost = { style: 'left:' + (slot.x + 46) + 'px;top:' + (slot.y + 52) + 'px', title: t[2], glyph: t[1], gcls: 'gl k-' + t[0] };
+}
+if (drop && stage !== 'dragging') {
+const t = TYPES[drop.type];
+const w = show === 'example' && drop.x >= BX - 20 ? BW : SW;
+add('added', t[0], t[1], drop.x, drop.y, w, t[2], t[3], { isNew: true, added: true });
+const n = nodes[nodes.length - 1];
+H = Math.max(H, n.y + n.h + 28);
+const ip = port && port.dir === 'right' ? [n.x, n.y + 41] : [n.x + n.w / 2, n.y];
+let pts;
+if (port.dir === 'right') {
+pts = ip[1] === port.y ? [[port.x, port.y], ip] : [[port.x, port.y], [Math.round((port.x + ip[0]) / 2), port.y], [Math.round((port.x + ip[0]) / 2), ip[1]], ip];
+} else {
+pts = ip[0] === port.x ? [[port.x, port.y], ip] : [[port.x, port.y], [port.x, Math.round((port.y + ip[1]) / 2)], [ip[0], Math.round((port.y + ip[1]) / 2)], ip];
+}
+if (stage === 'connected' || stage === 'none') {
+const lb = port.edgeLabel;
+path('eNew', port.from, 'added', pts, lb, port.x + 8, port.dir === 'right' ? port.y - 21 : (port.y + ip[1]) / 2 - 9);
+} else if (stage === 'drawing') {
+const end = port.dir === 'right' ? [port.x + 40, port.y] : [port.x, port.y + 26];
+path('eHalf', port.from, null, [[port.x, port.y], end], null, 0, 0, { half: true });
+dragHandle = { style: 'left:' + (end[0] - 7) + 'px;top:' + (end[1] - 7) + 'px' };
+inport = { style: 'left:' + (ip[0] - 8) + 'px;top:' + (ip[1] - 8) + 'px' };
+}
+}
+const RUNS = {
+finished: {
+trigger: ['passed', '10:14:02', ['David Park in #client-requests', '“Can we add a download button…”']],
+cond: ['passed', '10:14:03', ['matched: the sender is at acme', 'and it mentions “add”']],
+judge: ['passed', '0.9 s', ['Jev said yes, 0.91', '“asks for a change to a page”']],
+project: ['passed', '1.6 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['passed', '10:14:08', ['ACME-142 created', 'assigned to you']],
+find: ['passed', '10:14:09', ['acme-site · Claude Code', 'busy: a run since 10:02', 'so it queued for it']],
+queueFor: ['passed', '4 min', ['waited 4 min 3 s', 'its run ended at 10:18:12']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['passed', '10:18:13', ['the message and ACME-142', 'to acme-site · Claude Code']],
+wait: ['passed', '38 min', ['its run took 38 min 26 s', 'and ended without an error']],
+close: ['passed', '10:56:41', ['ACME-142 is Done', 'commented: “Added a Download…”']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e7: 'taken', e13: 'taken', e14: 'taken', e15: 'taken' }
+},
+waiting: {
+trigger: ['passed', '10:14:02', ['David Park in #client-requests', '“Can we add a download button…”']],
+cond: ['passed', '10:14:03', ['matched: the sender is at acme', 'and it mentions “add”']],
+judge: ['passed', '0.9 s', ['Jev said yes, 0.91', '“asks for a change to a page”']],
+project: ['passed', '1.6 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['passed', '10:14:08', ['ACME-142 created', 'assigned to you']],
+find: ['passed', '10:14:09', ['acme-site · Claude Code', 'busy: a run since 10:02', 'so it queued for it']],
+queueFor: ['passed', '4 min', ['waited 4 min 3 s', 'its run ended at 10:18:12']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['passed', '10:18:13', ['the message and ACME-142', 'to acme-site · Claude Code']],
+wait: ['live', '13 min', ['waiting for its run to end…', '13 min so far, at most 1 day']],
+close: ['pending', '', ['next, when the run ends', '']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e7: 'taken', e13: 'taken', e14: 'taken', e15: 'live' }
+},
+test: {
+trigger: ['passed', 'sample', ['David’s message from 10:14', 'used as the sample']],
+cond: ['passed', '', ['would match', 'the sender is at acme']],
+judge: ['passed', '0.8 s', ['Jev said yes, 0.91', 'asked for real: it only reads']],
+project: ['passed', '1.4 s', ['acme-site', 'it mentions the account page']],
+queueNone: ['skipped', '', ['not taken: a project fitted', '']],
+issue: ['would', '', ['would create an issue in ACME', 'nothing created: see the preview']],
+find: ['passed', '', ['acme-site · Claude Code', 'idle now', 'so it would deliver at once']],
+queueFor: ['skipped', '', ['not needed: it’s idle', '']],
+another: ['skipped', '', ['not needed', '']],
+start: ['skipped', '', ['not needed: a session was found', '', '']],
+deliver: ['would', '', ['would deliver the message', 'and the issue, to it']],
+wait: ['would', '', ['skipped in a test', 'a test never waits']],
+close: ['would', '', ['would close it as Done', 'with its last message']],
+reply: ['would', '', ['would ask you first', 'nothing is sent in a test']],
+edges: { e1: 'taken', e2: 'taken', e3: 'taken', e4: 'taken', e6: 'taken', e8: 'taken', e14: 'would', e15: 'would', e16: 'would' }
+}
+};
+const run = show === 'example' && o.run ? RUNS[o.run] : null;
+const sel = o.selected || null;
+const annot = o.annot || null;
+const qs = o.qs || {};
+const segs = (t) => String(t).split(/(\{\{[^}]+\}\})/).filter((s) => s !== '').map((s) => ({ t: s, c: /^\{\{/.test(s) ? 'fx' : '' }));
+const outNodes = nodes.map((n) => {
+const ri = run ? run[n.id] : null;
+let src = ri ? ri[2] : n.lines;
+const an = annot ? annot[n.id] : null;
+const lines = src.map((t, i) => ({ segs: segs(t), isNew: !ri && !an && i === n.newLine, lc: 'nl', full: t }));
+if (an) lines[lines.length - 1] = { segs: [{ t: an, c: '' }], isNew: false, lc: 'nl from', full: an };
+let cls = 'node';
+if (n.ghost) cls += ' ghost';
+if (ri) cls += ' r-' + ri[0];
+if (qs[n.id]) cls += ' q';
+if (n.added && (stage === 'added' || stage === 'drawing')) cls += ' loose';
+if (sel === n.id) cls += ' sel';
+return {
+id: n.id, cat: n.cat, title: n.title, glyph: n.glyph, gcls: 'gl k-' + n.cat, isNew: n.isNew && !ri && !qs[n.id], isQ: !!qs[n.id], lines,
+time: ri ? ri[1] : '', hasTime: !!(ri && ri[1]), cls, sel: sel === n.id,
+x: n.x, y: n.y, w: n.w, h: n.h,
+style: 'left:' + n.x + 'px;top:' + n.y + 'px;width:' + n.w + 'px;height:' + n.h + 'px'
+};
+});
+const rank = { not: 0, rest: 1, would: 2, hi: 3, live: 4, taken: 5 };
+const pieces = [];
+const pins = {};
+const labels = [];
+const order = edges.map((e) => {
+let st = 'rest';
+if (run) st = run.edges[e.id] || 'not';
+else if (e.half) st = 'live';
+else if (sel && (e.from === sel || e.to === sel)) st = 'hi';
+return { e, st };
+}).sort((a, b) => rank[a.st] - rank[b.st]);
+const piece = (pts, cls) => {
+const out = [];
+for (let i = 0; i < pts.length - 1; i++) {
+const a = pts[i].slice(), b = pts[i + 1].slice();
+const dx = Math.sign(b[0] - a[0]), dy = Math.sign(b[1] - a[1]);
+if (i > 0) { a[0] += dx * R; a[1] += dy * R; }
+if (i < pts.length - 2) { b[0] -= dx * R; b[1] -= dy * R; }
+if (dy === 0) {
+const x1 = Math.min(a[0], b[0]), x2 = Math.max(a[0], b[0]);
+out.push({ cls: 'eg h ' + cls, style: 'left:' + x1 + 'px;top:' + (a[1] - 1) + 'px;width:' + (x2 - x1) + 'px' });
+} else {
+const y1 = Math.min(a[1], b[1]), y2 = Math.max(a[1], b[1]);
+out.push({ cls: 'eg v ' + cls, style: 'left:' + (a[0] - 1) + 'px;top:' + y1 + 'px;height:' + (y2 - y1) + 'px' });
+}
+}
+for (let j = 1; j < pts.length - 1; j++) {
+const p = pts[j], q = pts[j - 1], s = pts[j + 1];
+const din = [Math.sign(p[0] - q[0]), Math.sign(p[1] - q[1])], dout = [Math.sign(s[0] - p[0]), Math.sign(s[1] - p[1])];
+const A = [p[0] - din[0] * R, p[1] - din[1] * R], B = [p[0] + dout[0] * R, p[1] + dout[1] * R];
+const minX = Math.min(A[0], B[0]), maxX = Math.max(A[0], B[0]), minY = Math.min(A[1], B[1]), maxY = Math.max(A[1], B[1]);
+const right = p[0] === maxX, top = p[1] === minY;
+const l = right ? minX : minX - 1, rr = right ? maxX + 1 : maxX;
+const t = top ? minY - 1 : minY, bt = top ? maxY : maxY + 1;
+const vs = top ? 'top' : 'bottom', hs = right ? 'right' : 'left';
+out.push({ cls: 'eg c ' + cls, style: 'left:' + l + 'px;top:' + t + 'px;width:' + (rr - l) + 'px;height:' + (bt - t) + 'px;border-' + vs + '-width:2px;border-' + hs + '-width:2px;border-' + vs + '-' + hs + '-radius:' + R + 'px' });
+}
+return out;
+};
+const pin = (p, st, end) => {
+const key = p[0] + ',' + p[1];
+if (!pins[key] || rank[st] > rank[pins[key].st]) pins[key] = { st, x: p[0], y: p[1], end: !!end };
+};
+order.forEach(({ e, st }) => {
+const ecls = 'e-' + st + (e.stub ? ' e-stub' : '');
+piece(e.pts, ecls).forEach((pc) => pieces.push(pc));
+pin(e.pts[0], st);
+if (!e.half) pin(e.pts[e.pts.length - 1], st, e.stub);
+if (e.label) labels.push({ t: e.label, cls: 'el l-' + st, style: 'left:' + e.lx + 'px;top:' + e.ly + 'px' });
+});
+const pinList = Object.keys(pins).map((key) => {
+const p = pins[key];
+return { cls: 'pin p-' + p.st + (p.end ? ' p-end' : ''), style: 'left:' + (p.x - 5) + 'px;top:' + (p.y - 5) + 'px' };
+});
+const mmW = 84;
+const sc = mmW / W;
+const mmH = Math.round(H * sc);
+const mm = { w: mmW, h: mmH, style: 'width:' + mmW + 'px;height:' + mmH + 'px', nodes: nodes.map((n) => {
+const ri = run ? run[n.id] : null;
+const c = 'mmn' + (sel === n.id ? ' on' : '') + (ri && (ri[0] === 'passed' || ri[0] === 'live') ? ' lit' : '') + (ri && ri[0] === 'skipped' ? ' dim' : '');
+return { cls: c, style: 'left:' + Math.round(n.x * sc) + 'px;top:' + Math.round(n.y * sc) + 'px;width:' + Math.max(2, Math.round(n.w * sc)) + 'px;height:' + Math.max(2, Math.round(n.h * sc)) + 'px' };
+}) };
+return {
+W, H, nodes: outNodes, pieces, pins: pinList, labels, mm, raw: nodes, edges, types: TYPES,
+cvStyle: 'width:' + W + 'px;height:' + H + 'px',
+freePort, hasFreePort: !!freePort, inport, hasInport: !!inport, dragHandle, hasDragHandle: !!dragHandle,
+slot: slotOut, hasSlot: !!slotOut, ghost, hasGhost: !!ghost, slotAt: slot, portInfo: port
+};
+}
+renderVals() {
+const s = this.state, P = this.props;
+const show = ['example', 'rule', 'blank'].indexOf(P.show) >= 0 ? P.show : 'example';
+const ruleId = ['client-asks', 'invoices', 'mail-subjects'].indexOf(P.rule) >= 0 ? P.rule : 'client-asks';
+const v = s.v;
+const val = (k, d) => (v[k] === undefined ? d : v[k]);
+const setV = (patch, extra) => this.setState(Object.assign({ v: Object.assign({}, this.state.v, patch) }, extra || {}));
+const say = (t, tone) => this.setState({ said: t, saidTone: tone || 'n' });
+const stage = s.stage !== undefined ? s.stage : (['dragging', 'added', 'drawing', 'connected'].indexOf(P.stage) >= 0 ? P.stage : 'none');
+const probe = this.wfGraph({ show, rule: ruleId });
+const slotAt = probe.slotAt;
+const drop = s.drop !== undefined ? s.drop : (['added', 'drawing', 'connected'].indexOf(P.stage) >= 0 ? { type: 'notify', x: slotAt.x, y: slotAt.y } : null);
+const dropType = s.dropType !== undefined ? s.dropType : 'notify';
+const ids = probe.raw.map((n) => n.id);
+let sel = s.sel !== undefined ? s.sel : (P.selected === 'added' ? (drop ? 'added' : null) : (P.selected === 'none' ? null : (P.selected || 'start')));
+if (sel && sel !== 'added' && ids.indexOf(sel) < 0) sel = null;
+if (sel === 'added' && !drop) sel = null;
+const thr = (Number(val('thr', '70')) / 100).toFixed(2);
+const g = this.wfGraph({
+show, rule: ruleId, version: 2, selected: sel, free: true, stage, drop, dragType: dropType,
+worktree: val('worktree', true), app: val('app', 'Claude Code'), qwait: val('qwait', '2 hours'), replyMode: val('replyMode', 'each'),
+closeComment: val('closeComment', true), threshold: thr, triggerLine: val('trAcc', 'acme/slack') + ' · ' + val('trWhere', '#client-requests'), team: val('team', 'ACME')
+});
+const zooms = [0.6, 0.8, 1, 1.2];
+const zi = zooms.indexOf(this.state.zoom) < 0 ? 2 : zooms.indexOf(this.state.zoom);
+const z = zooms[zi];
+const frac = Math.min(1, 1 / z);
+g.zoomStyle = ';transform:scale(' + z + ')';
+g.mmView = 'width:' + Math.round(g.mm.w * frac) + 'px;height:' + Math.round(g.mm.h * frac) + 'px';
+const vpStyle = 'height:' + (g.H + 30) + 'px;background-size:' + (16 * z) + 'px ' + (16 * z) + 'px';
+const zoomVals = {
+vpStyle,
+zoomText: Math.round(z * 100) + '%',
+locked: this.state.locked === true,
+zoomOut: () => this.setState({ zoom: zooms[Math.max(0, zi - 1)] }),
+zoomIn: () => this.setState({ zoom: zooms[Math.min(zooms.length - 1, zi + 1)] }),
+zoomFit: () => this.setState({ zoom: 1, said: 'Fitted: the whole workflow is in view.', saidTone: 'n' }),
+toggleLock: () => this.setState({ locked: !this.state.locked, said: this.state.locked ? 'Unlocked: you can drag steps again.' : 'Locked: the steps stay where they are until you unlock them.', saidTone: 'n' })
+};
+const byId = {};
+g.raw.forEach((n) => { byId[n.id] = n; });
+g.nodes.forEach((n) => { n.pick = () => this.setState({ sel: n.id, said: null }); });
+const TYPES = g.types;
+const typeName = (t) => (TYPES[t] ? TYPES[t][2] : 'the step');
+const place = (x, y) => {
+const w = show === 'example' && x >= 300 ? 200 : 236;
+const nx = Math.max(8, Math.min(g.W - w - 8, Math.round((x - w / 2) / 8) * 8));
+const ny = Math.max(8, Math.round((y - 41) / 8) * 8);
+return { x: nx, y: ny };
+};
+const dropIt = (type, pos) => {
+const at = pos && Number.isFinite(pos.x) && Number.isFinite(pos.y) ? pos : slotAt;
+const t = type && TYPES[type] ? type : dropType;
+this.setState({ drop: { type: t, x: at.x, y: at.y }, stage: 'added', sel: 'added', said: null });
+};
+const portWord = g.portInfo && g.portInfo.label ? '“' + g.portInfo.label + '” on ' + byId[g.portInfo.from].title : 'the free port under ' + (byId[g.portInfo.from] ? byId[g.portInfo.from].title : 'the last step');
+let hint = null;
+if (stage === 'dragging') hint = 'Dragging ' + typeName(dropType) + '. Drop it on a free spot of the canvas; the marked place is free.';
+if (stage === 'added') hint = 'Added ' + typeName(drop ? drop.type : dropType) + '. Now connect it: drag from ' + portWord + ' to its input. Here, click the glowing port.';
+if (stage === 'drawing') hint = 'Drawing a wire from ' + portWord + '. Release it on the input of ' + typeName(drop ? drop.type : dropType) + ': the glowing circle.';
+const startWire = () => {
+if (stage === 'added') this.setState({ stage: 'drawing', said: null });
+else say('A free port: a wire you can draw from it. Drag a step onto the canvas first, then drag from here to its input.');
+};
+const connectedSaid = (t) => 'Connected. ' + typeName(t) + ' now runs ' + (g.portInfo && g.portInfo.label ? 'when ' + byId[g.portInfo.from].title + ' times out, after 1 day' : 'after ' + (byId[g.portInfo.from] ? byId[g.portInfo.from].title : 'the step above')) + '. It’s in the draft, not running.';
+const finishWire = () => this.setState({ stage: 'connected', said: connectedSaid(drop ? drop.type : dropType), saidTone: 'ok' });
+const canvasClick = (e) => {
+const tg = e.target;
+const bg = tg === e.currentTarget || (tg && tg.classList && tg.classList.contains('cv'));
+if (!bg) return;
+if (stage === 'dragging') {
+const r = e.currentTarget.getBoundingClientRect();
+dropIt(dropType, place((e.clientX - r.left) / z, (e.clientY - r.top) / z));
+} else if (this.state.sel !== null) this.setState({ sel: null, said: null });
+};
+const dragOver = (e) => { e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'; };
+const dropHere = (e) => {
+e.preventDefault();
+const t = this.dragType || (e.dataTransfer ? e.dataTransfer.getData('text/plain') : '');
+this.dragType = null;
+if (!TYPES[t]) return;
+const r = e.currentTarget.getBoundingClientRect();
+dropIt(t, place((e.clientX - r.left) / z, (e.clientY - r.top) / z));
+};
+const dropAtSlot = () => dropIt(dropType, slotAt);
+const atSlot = { type: 'notify', x: slotAt.x, y: slotAt.y };
+const TRY = [['dragging', '1 · Drag a step'], ['added', '2 · Drop it'], ['drawing', '3 · Draw a wire'], ['connected', '4 · Connected']];
+const tries = TRY.map(([st, t]) => ({ t, on: stage === st, cls: 'btn sm' + (stage === st ? ' p' : ' q'), go: () => {
+if (st === 'dragging') this.setState({ stage: 'dragging', dropType: 'notify', drop: null, before: 'none', said: null });
+else this.setState({ stage: st, drop: drop && drop.type ? drop : atSlot, sel: 'added', said: st === 'connected' ? connectedSaid(drop && drop.type ? drop.type : 'notify') : null, saidTone: 'ok' });
+} }));
+const GROUPS = [['Start', ['trigger']], ['Decide', ['condition', 'judge', 'project', 'branch']], ['Sessions', ['find', 'start', 'worktree', 'deliver']], ['Linear', ['linCreate', 'linUpdate', 'linComment', 'linClose']], ['Hand over, and tell', ['queue', 'webhook', 'reply', 'notify']], ['Wait', ['waitFor']]];
+const LABEL = { trigger: 'Trigger', condition: 'Condition', judge: 'Judge', project: 'Which project', branch: 'Branch', find: 'Find session', start: 'Start session', worktree: 'Worktree', deliver: 'Deliver', linCreate: 'Create issue', linUpdate: 'Update issue', linComment: 'Comment', linClose: 'Close issue', queue: 'Queue', webhook: 'Webhook', reply: 'Reply', notify: 'Notify me', waitFor: 'Wait for' };
+const NEWT = ['project', 'branch', 'worktree', 'linUpdate', 'linComment', 'linClose', 'reply', 'notify', 'waitFor'];
+const palette = GROUPS.map(([name, list]) => ({ name, items: list.map((t) => {
+const picked = stage === 'dragging' && dropType === t;
+return {
+label: LABEL[t], glyph: TYPES[t][1], gcls: 'gl k-' + TYPES[t][0], isNew: NEWT.indexOf(t) >= 0, notNew: NEWT.indexOf(t) < 0, picked, cls: 'pi' + (picked ? ' picked' : ''),
+drag: (e) => { this.dragType = t; if (e.dataTransfer) { e.dataTransfer.setData('text/plain', t); e.dataTransfer.effectAllowed = 'copy'; } },
+pick: () => (picked ? this.setState({ stage: this.state.before || (drop ? 'connected' : 'none'), said: 'Put back: nothing was added.', saidTone: 'n' }) : this.setState({ stage: 'dragging', dropType: t, said: null, before: stage === 'dragging' ? this.state.before : stage }))
+};
+}) }));
+const rows = [];
+const pick = (k, label, opts, def) => rows.push({ k: label, isPick: true, value: val(k, def), next: () => { const cur = val(k, def); const i = opts.indexOf(cur); setV({ [k]: opts[(i + 1) % opts.length] }); } });
+const text = (k, label, def, mono) => rows.push({ k: label, isText: true, value: val(k, def), cls: mono ? 'f mono' : 'f', change: (e) => setV({ [k]: e.target.value }) });
+const area = (k, label, def) => rows.push({ k: label, isArea: true, value: val(k, def), change: (e) => setV({ [k]: e.target.value }) });
+const sw = (k, label, def, hint, isNew) => rows.push({ k: label, isSwitch: true, on: val(k, def) === true, hint, isNew: isNew === true, toggle: () => setV({ [k]: !(val(k, def) === true) }) });
+const tags = (k, label, all, def) => { const on = val(k, def); rows.push({ k: label, isTags: true, tags: all.map((t) => ({ t, on: on.indexOf(t) >= 0, cls: on.indexOf(t) >= 0 ? 'tag on' : 'tag', toggle: () => setV({ [k]: on.indexOf(t) >= 0 ? on.filter((x) => x !== t) : on.concat([t]) }) })) }); };
+const note = (label, t) => rows.push({ k: label, isNote: true, value: t });
+const range = (k, label, def) => rows.push({ k: label, isRange: true, value: val(k, def), shown: (Number(val(k, def)) / 100).toFixed(2), change: (e) => setV({ [k]: e.target.value }) });
+const radio = (k, label, opts, def) => rows.push({ k: label, isRadio: true, opts: opts.map(([id, t, sub]) => ({ t, sub, on: val(k, def) === id, pick: () => setV({ [k]: id }) })) });
+const list = (k, label, def) => { const items = val(k, def); rows.push({ k: label, isList: true, items: items.map((t) => ({ t, remove: () => setV({ [k]: items.filter((x) => x !== t) }, { said: 'Removed “' + t + '” from the conditions, in the draft.', saidTone: 'n' }) })), add: () => setV({ [k]: items.concat(['it mentions “staging”']) }, { said: 'Added a condition: it mentions “staging”. In the app you choose the field and the words.', saidTone: 'n' }) }); };
+const F = { project: '{{project}}', reason: '{{project.reason}}', checkout: '{{project.checkout}}', ticket: '{{ticket}}', branch: 'agent/{{ticket}}', workflow: '{{workflow}}', titleT: '{{project}}: {{message.subject}}', link: '{{ticket.link}}' };
+let panel;
+const kindOf = (cat) => (cat === 'act' ? ['Acts outside Agent Comms: listed when you approve', 'c-warn'] : cat === 'start' ? ['Starts the workflow', 'c-acc'] : ['Stays in Agent Comms', 'c-n']);
+const sn = sel ? byId[sel] : null;
+if (!sn) {
+{
+text('wfName', 'Name', show === 'rule' ? ruleId : show === 'blank' ? 'New workflow' : 'Client asks → the right session');
+pick('lRuns', 'Runs at most', ['20 an hour', '60 an hour', '5 an hour'], '20 an hour');
+pick('lSess', 'Sessions it may start, at once', ['3', '1', '5'], '3');
+pick('lWt', 'Worktrees it makes', ['removed 7 days after their issue closes', 'kept until you remove them'], 'removed 7 days after their issue closes');
+tags('keep', 'Keeps', ['Sender', 'Text', 'Channel', 'The judge’s answer'], ['Sender', 'Text', 'Channel']);
+pick('keepFor', 'For', ['30 days', '7 days'], '30 days');
+}
+panel = { title: 'Workflow settings', glyph: '⚙', gcls: 'gl k-logic', what: 'For the whole workflow: its name, its limits, and what it keeps. Click a step to see its own.', isNew: true, hasClose: false, hasKind: false };
+} else {
+const id = sn.id;
+const T = { trigger: 'What starts it. The same as a rule’s When.', cond: 'Which messages go on. The same as a rule’s Which messages.', judge: 'An AI yes or no, with a threshold. The same as a rule’s judge.', project: 'Reads the message against your projects’ profiles, and says which one it’s for, and why. Or none.', queueNone: 'Holds the message for you, in a lane of the Queue.', queue: 'Holds the message in a lane, and wakes the window bound to it. As the rule does today.', dry: 'Writes each match in the dry-run log, and sends nothing anywhere.', issue: 'Makes an issue in Linear. Its key, ' + F.ticket + ', goes on to every later step.', find: 'Looks among the sessions your claude-stream runs, for one working in the project’s checkout.', queueFor: 'claude-stream refuses a second prompt while a run is going, so this waits for the run to end.', another: 'Looks for any other idle session working in one of the project’s checkouts or worktrees.', start: 'Asks your claude-stream to start a session, and gives it the message.', deliver: 'Hands the message to the session found or started. The sender’s words go in the untrusted-content envelope.', wait: 'claude-stream says when a session’s run ends. This waits for that.', close: 'Moves the issue to Done in Linear, and leaves a comment.', reply: 'Replies under the message in Slack, labelled as sent by an agent.', added: 'A new step, dropped on the canvas. Connect its input, then choose its settings here.' };
+if (id === 'trigger' && show !== 'blank') { pick('trEvent', 'Event', ['a new message', 'a new message or a thread reply', 'a reaction'], 'a new message'); pick('trAcc', 'Account', ['acme/slack', 'cue/slack'], 'acme/slack'); pick('trWhere', 'Where', ['#client-requests', 'any channel', 'direct messages'], '#client-requests'); note('Leaves out', 'your own messages, and bots’'); }
+if (id === 'trigger' && show === 'blank') { pick('bEvent', 'Event', ['a new message', 'a new email', 'a reaction'], 'a new message'); pick('bAcc', 'Account', ['acme/slack', 'acme/gmail', 'cue/slack'], 'acme/slack'); note('Then', 'drag the next step onto the canvas, and connect it to this one'); }
+if (id === 'cond') { pick('cMatch', 'Match', ['any', 'all'], 'any'); list('cList', 'Of these', ['the sender is at acme', 'it mentions “fix”, “change” or “add”', 'it isn’t in a thread you started']); }
+if (id === 'judge') { pick('jJudge', 'Judge', ['Jev, through OpenRouter', 'A local model server'], 'Jev, through OpenRouter'); area('jQ', 'Question', 'Is this a request for work on one of our projects?'); tags('jLooks', 'It looks at', ['Sender', 'Text', 'Channel', 'The thread so far'], ['Sender', 'Text', 'Channel']); range('thr', 'Yes when at least', '70'); pick('jUnsure', 'If it’s unsure', ['don’t go on', 'hold it for me'], 'don’t go on'); note('No', 'stops here: nothing else happens'); }
+if (id === 'project') { tags('pProj', 'Projects', ['acme-site', 'billing', 'booking-app'], ['acme-site', 'billing', 'booking-app']); pick('pModel', 'Decided by', ['Jev, through OpenRouter', 'A local model server'], 'Jev, through OpenRouter'); pick('pUnsure', 'If it isn’t sure', ['treat it as none', 'ask me'], 'treat it as none'); note('Gives later steps', F.project + ', ' + F.reason + ', ' + F.checkout); note('Sent', 'the message’s text and the projects’ profiles; never the thread'); }
+if (id === 'queueNone' || id === 'queue') { pick('qLane', 'Lane', id === 'queue' ? [ruleId === 'invoices' ? 'billing' : 'acme-site', 'triage'] : ['triage', 'acme-site'], id === 'queue' ? (ruleId === 'invoices' ? 'billing' : 'acme-site') : 'triage'); pick('qKeep', 'Keep it for', ['7 days', '30 days'], '7 days'); note('Then', id === 'queue' ? 'the window bound to the lane is woken' : 'nothing else: you look at it in the Queue'); }
+if (id === 'dry') { note('Kept', '24 hours, on this Mac only'); note('Then', 'nothing: switch it on to send anywhere'); }
+if (id === 'issue') { pick('team', 'Team', ['ACME', 'CUE'], 'ACME'); text('title', 'Title', F.titleT, true); note('Description', '4 parts: fixed text, a summary the model writes, the message, and links'); tags('labels', 'Labels', ['agent', 'from-slack', 'client', 'bug'], ['agent', 'from-slack']); pick('assignee', 'Assignee', ['Me · Chris Moldovan', 'No one'], 'Me · Chris Moldovan'); }
+if (id === 'find') { pick('fFor', 'Find it by', ['the project’s checkout', 'a folder…', 'a lane…'], 'the project’s checkout'); note('If several', 'the most recently active one'); note('Comes out as', 'busy, idle or none: each its own wire'); }
+if (id === 'queueFor') { pick('qwait', 'At most', ['2 hours', '30 minutes', '1 day'], '2 hours'); pick('qThen', 'Then', ['tell me', 'look for another session', 'leave it in the Queue'], 'tell me'); note('Ahead of it', 'whatever else waits for the same session, in order'); }
+if (id === 'another') { pick('aWhich', 'Which', ['any idle one in its checkouts', 'only one in a worktree of it'], 'any idle one in its checkouts'); note('Comes out as', 'found or none'); }
+if (id === 'start') { pick('app', 'With', ['Claude Code', 'Codex'], 'Claude Code'); pick('sIn', 'In', ['the project’s checkout', 'a folder…'], 'the project’s checkout'); sw('worktree', 'In a new worktree', true, 'claude-stream doesn’t make worktrees, so Agent Comms makes one with git, then starts the session in it.', true); if (val('worktree', true)) { text('branch', 'Branch', F.branch, true); pick('sFrom', 'From', ['main', 'the checkout’s current branch'], 'main'); note('Folder', '~/work/acme-site-wt/agent-ACME-142, for example'); } pick('mode', 'Mode', ['asks before acting', 'may edit files without asking'], 'asks before acting'); note('Worktrees', 'removed 7 days after their issue is closed, if nothing in them is uncommitted: see Workflow settings'); }
+if (id === 'deliver') { tags('dGive', 'Gives it', ['The message', 'The issue', 'Why this project', 'Fixed text'], ['The message', 'The issue', 'Why this project', 'Fixed text']); area('dText', 'Fixed text', 'Work in the folder you are in. When you are done, say what you changed in your last message.'); pick('dRefused', 'If it’s refused', ['queue for it', 'tell me'], 'queue for it'); }
+if (id === 'wait') { pick('wUntil', 'Until', ['its run ends', 'it marks the message done'], 'its run ends'); pick('wMax', 'At most', ['1 day', '4 hours', '3 days'], '1 day'); note('Free port', '“timed out”: drag it to a step, such as Notify me'); }
+if (id === 'close') { pick('cTo', 'Move it to', ['Done', 'In Review'], 'Done'); sw('closeComment', 'With a comment', true, 'the session’s last message, cut to 2,000 characters'); pick('cOnly', 'Only if', ['the run ended without an error', 'always'], 'the run ended without an error'); }
+if (id === 'reply') { pick('rSays', 'It says', ['the session’s last message, shortened', '“Done: ' + F.link + '”'], 'the session’s last message, shortened'); radio('replyMode', 'Needs', [['each', 'Your yes, each time', 'You see the reply, and approve it in the app'], ['standing', 'A short reply you approved in advance', 'Only “Done:” with the issue’s link; anything else asks you']], 'each'); }
+if (id === 'added') {
+if (drop && drop.type === 'notify') { area('nSay', 'It says', F.workflow + ': the run for ' + F.ticket + ' has taken more than a day.'); pick('nHow', 'How', ['in this app, and macOS', 'in this app only'], 'in this app, and macOS'); }
+note('Comes from', stage === 'connected' ? (g.portInfo && g.portInfo.label ? byId[g.portInfo.from].title + ', when it times out' : (byId[g.portInfo.from] ? byId[g.portInfo.from].title : 'the step above')) : 'nothing yet: connect its input');
+}
+const kd = kindOf(sn.cat);
+panel = { title: sn.title, glyph: sn.glyph, gcls: 'gl k-' + sn.cat, what: T[id] || T.added, isNew: sn.isNew || sn.added, hasClose: true, hasKind: true, kind: kd[0], kindCls: kd[1], hasFull: id === 'issue' };
+}
+const tOf = (nid) => (byId[nid] ? byId[nid].title : '');
+const ins = sn ? g.edges.filter((e) => e.to === sn.id && e.from).map((e) => ({ t: tOf(e.from) + (e.label ? ' · ' + e.label : ''), go: () => this.setState({ sel: e.from, said: null }) })) : [];
+const outs = sn ? g.edges.filter((e) => e.from === sn.id && e.to).map((e) => ({ t: (e.label ? e.label + ' → ' : '') + tOf(e.to), go: () => this.setState({ sel: e.to, said: null }) })) : [];
+panel.rows = rows;
+panel.ins = ins; panel.outs = outs; panel.hasIns = ins.length > 0; panel.hasOuts = outs.length > 0;
+panel.hasRemove = !!sn;
+const SAMPLES = [
+{ name: 'Sample: David’s message, today 10:14', sender: 'David Park', channel: '#client-requests', project: 'acme-site', subject: 'Can we add a download button for the October invoices on the account page?', text: 'Can we add a download button for the October invoices on the account page? The client wants it before Friday’s review.', reason: 'it mentions the account page and the October invoices, which acme-site’s profile lists', link: 'acme.slack.com/archives/C042/p1761560042', summary: 'David asks for a button on the account page that downloads the October invoices as a PDF, before Friday’s review.', key: 'ACME-142' },
+{ name: 'Sample: David’s message, yesterday 16:02', sender: 'David Park', channel: '#client-requests', project: 'billing', subject: 'The October statement shows the wrong VAT rate for the Berlin office', text: 'The October statement shows the wrong VAT rate for the Berlin office. Can someone fix the template before we send the next batch?', reason: 'it mentions the October statement and VAT, which billing’s profile lists', link: 'acme.slack.com/archives/C042/p1761487320', summary: 'David says the October statement uses the wrong VAT rate for the Berlin office, and asks for the template to be fixed before the next batch goes out.', key: 'ACME-141' }
+];
+const smp = SAMPLES[val('sample', 0)] || SAMPLES[0];
+const FIELDS = [['{{message.subject}}', smp.subject, 'its first line, for a Slack message'], ['{{message.text}}', smp.text], ['{{sender}}', smp.sender + ', at acme'], ['{{channel}}', smp.channel], ['{{project}}', smp.project], ['{{project.reason}}', smp.reason], ['{{message.link}}', smp.link]];
+const known = {};
+FIELDS.forEach(([f, sv]) => { known[f] = sv; });
+known['{{sender}}'] = smp.sender;
+const unknown = [];
+const fill = (t) => String(t).replace(/\{\{[^}]+\}\}/g, (m) => { if (known[m] !== undefined) return known[m]; if (unknown.indexOf(m) < 0) unknown.push(m); return m; });
+const DEF_PARTS = [{ id: 'p1', kind: 'text', text: 'Asked in Slack by {{sender}} in {{channel}}. Agent Comms made this issue; a session works on it.' }, { id: 'p2', kind: 'model', text: 'In two or three lines, say what is asked, for which page or screen, and by when.', model: 'Claude, through your Anthropic key' }, { id: 'p3', kind: 'quote' }, { id: 'p4', kind: 'links' }];
+const parts = val('parts', DEF_PARTS);
+const setParts = (np, extra) => setV({ parts: np }, extra);
+const MODELS = ['Claude, through your Anthropic key', 'Jev, through OpenRouter'];
+const PF = ['{{project.reason}}', '{{sender}}', '{{channel}}'];
+const KIND = { text: 'Fixed text', model: 'Written by a model', quote: 'From the message', links: 'Links', field: 'A field' };
+const partsView = parts.map((p) => ({
+kind: KIND[p.kind], isNew: p.kind === 'links', isText: p.kind === 'text', isModel: p.kind === 'model', isQuote: p.kind === 'quote', isLinks: p.kind === 'links', isField: p.kind === 'field',
+text: p.kind === 'quote' ? 'The message’s text, quoted, and marked as the sender’s words: {{message.text}}' : p.kind === 'links' ? 'The message’s link, {{message.link}}, and the session’s link, added when the message is delivered' : (p.text || ''),
+model: p.model || MODELS[0],
+remove: () => setParts(parts.filter((x) => x.id !== p.id)),
+change: (e) => setParts(parts.map((x) => (x.id === p.id ? Object.assign({}, x, { text: e.target.value }) : x))),
+nextModel: () => setParts(parts.map((x) => (x.id === p.id ? Object.assign({}, x, { model: MODELS[(MODELS.indexOf(x.model || MODELS[0]) + 1) % MODELS.length] }) : x))),
+nextField: () => setParts(parts.map((x) => (x.id === p.id ? Object.assign({}, x, { text: PF[(PF.indexOf(x.text) + 1) % PF.length] }) : x)))
+}));
+const uid = () => 'p' + (parts.length + 1) + '-' + Math.floor(Math.random() * 1e6);
+const pDesc = [];
+parts.forEach((p) => {
+if (p.kind === 'text') pDesc.push({ label: '', text: fill(p.text), isQuote: false, notQuote: true });
+if (p.kind === 'field') pDesc.push({ label: '', text: fill(p.text), isQuote: false, notQuote: true });
+if (p.kind === 'model') pDesc.push({ label: 'Summary, written by ' + (p.model || MODELS[0]).split(',')[0] + ' from the message', text: smp.summary, isQuote: false, notQuote: true });
+if (p.kind === 'quote') pDesc.push({ label: smp.sender + ' wrote', text: smp.text, isQuote: true, notQuote: false });
+if (p.kind === 'links') pDesc.push({ label: 'Links', text: 'Message: ' + smp.link + ' · Session: added when the message is delivered', isQuote: false, notQuote: true });
+});
+const titleT = val('title', F.titleT);
+const pTitle = fill(titleT);
+const teamV = val('team', 'ACME');
+const labelsOn = val('labels', ['agent', 'from-slack']);
+const checks = [];
+if (unknown.length === 0) checks.push({ cls: 'ok', mark: '✓', t: 'Every field is one this step can use.' });
+unknown.forEach((u) => checks.push({ cls: 'wn', mark: '!', t: u + (u === '{{ticket}}' ? ' is made by this step, so it can’t be in its own title.' : u === '{{session.link}}' ? ' isn’t known yet: the session’s link is added when the message is delivered.' : ' isn’t a field this step can use.') }));
+checks.push({ cls: 'ok', mark: '✓', t: 'The summary and the quote are marked as the sender’s words.' });
+checks.push({ cls: 'wn', mark: '!', t: 'The session’s link is added to the issue later, when the message is delivered: that’s an update, listed when you approve.' });
+const ASSIGNEES = ['Me · Chris Moldovan', 'No one'];
+const STATUSES = ['Todo', 'In Progress', 'Backlog'];
+const sh = {
+fields: FIELDS.map(([f, sv, extra]) => ({ f, sample: extra ? sv + ' (' + extra + ')' : sv, insert: () => { const cur = this.drafts.title ?? titleT; this.drafts.title = undefined; setV({ title: (cur + ' ' + f).trim() }); } })),
+notHere: 'Not here: {{ticket}}, which this step makes, and the session’s link, which comes later.',
+team: teamV, nextTeam: () => setV({ team: teamV === 'ACME' ? 'CUE' : 'ACME' }),
+title: titleT, typeTitle: (e) => { this.drafts.title = e.target.value; }, setTitle: (e) => { this.drafts.title = undefined; setV({ title: e.target.value }); },
+parts: partsView,
+addText: () => setParts(parts.concat([{ id: uid(), kind: 'text', text: 'Reply in the thread only through Agent Comms.' }])),
+addField: () => setParts(parts.concat([{ id: uid(), kind: 'field', text: '{{project.reason}}' }])),
+addModel: () => setParts(parts.concat([{ id: uid(), kind: 'model', text: 'List what to check before calling it done.', model: MODELS[0] }])),
+addLinks: () => setParts(parts.concat([{ id: uid(), kind: 'links' }])),
+labels: ['agent', 'from-slack', 'client', 'bug'].map((t) => ({ t, on: labelsOn.indexOf(t) >= 0, cls: labelsOn.indexOf(t) >= 0 ? 'tag on' : 'tag', toggle: () => setV({ labels: labelsOn.indexOf(t) >= 0 ? labelsOn.filter((x) => x !== t) : labelsOn.concat([t]) }) })),
+assignee: val('assignee', ASSIGNEES[0]), nextAssignee: () => setV({ assignee: ASSIGNEES[(ASSIGNEES.indexOf(val('assignee', ASSIGNEES[0])) + 1) % ASSIGNEES.length] }),
+assigneeShort: val('assignee', ASSIGNEES[0]) === 'No one' ? 'No one assigned' : 'Chris Moldovan',
+status: val('status', 'Todo'), nextStatus: () => setV({ status: STATUSES[(STATUSES.indexOf(val('status', 'Todo')) + 1) % STATUSES.length] }),
+sampleName: smp.name, nextSample: () => setV({ sample: (val('sample', 0) + 1) % SAMPLES.length }),
+key: smp.key, pTitle, pLabels: labelsOn, pDesc, checks
+};
+const sheetOpen = (s.sheet !== undefined ? s.sheet : P.sheet === true) && !!byId.issue;
+const chips = show === 'example' ? [{ t: 'Version 2, a draft', cls: 'c-n' }, { t: 'Version 1 is on', cls: 'c-ok' }] : show === 'rule' ? [{ t: 'A rule · ' + (ruleId === 'mail-subjects' ? 'dry-run' : 'on'), cls: ruleId === 'mail-subjects' ? 'c-warn' : 'c-ok' }] : [{ t: 'Not saved', cls: 'c-n' }];
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+title: show === 'example' ? 'Client asks → the right session' : show === 'rule' ? ruleId : 'New workflow',
+chips,
+headLine: show === 'example' ? 'Version 1 keeps running until you approve version 2. Version 2 adds Reply in the thread.' : show === 'rule' ? 'Opened from Events → Rules. It keeps its name, its version and its approval until you approve a new one.' : 'Nothing runs until you approve it.',
+isExample: show === 'example', notExample: show !== 'example',
+ruleNote: show === 'rule' ? ruleId + ' is a rule, drawn as a straight-line workflow: When, Which messages, ' + (ruleId === 'mail-subjects' ? '' : 'Ask a judge, ') + 'Then do. Add a step, or a branch, and its next version is a workflow.' : null,
+canvasLine: show === 'example' ? '14 steps · 4 branches · drag from a port to an input to connect' : show === 'rule' ? 'A rule: one straight line' : 'Start with what starts it, then drag the next step on',
+said: s.said, saidClass: s.saidTone === 'ok' ? 'said' : 'said n', hint,
+saveDraft: () => say(show === 'example' ? 'Saved as a draft: version 2. Version 1 keeps running until you approve this one.' : 'Saved as a draft. Nothing runs until you approve it.', 'ok'),
+testOther: () => say('In the app, this runs the draft on a recent message, changing nothing. The test drawn here is for Client asks → the right session.'),
+approveOther: () => say(show === 'rule' ? 'Nothing to approve yet: change or add a step first.' : 'Add a step after the trigger first: a workflow needs something to do.'),
+tidy: () => say('Tidied: steps lined up on the grid, wires straightened. Nothing about what it does changed.'),
+deselect: () => this.setState({ sel: null, said: null }),
+removeStep: () => say('In the app, this removes ' + (sn ? sn.title : 'the step') + ' and joins the wires around it. Here it stays, so the drawing holds together.'),
+openSheet: () => this.setState({ sheet: true, said: null }),
+sheetCancel: () => this.setState({ sheet: false, said: 'Cancelled: the Linear step is as it was.', saidTone: 'n' }),
+sheetDone: () => this.setState({ sheet: false, sel: 'issue', said: 'Kept in the draft: the Linear step’s title, description and labels.', saidTone: 'ok' }),
+sheetOpen, sh,
+palette, panel, g,
+startWire, finishWire, canvasClick, dragOver, dropHere, dropAtSlot, tries,
+...zoomVals
+};
+}
+}
+</script>
+</body>
+</html>

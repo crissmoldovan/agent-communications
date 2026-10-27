@@ -16,6 +16,9 @@ import { NotInstalled } from './screens/NotInstalled.tsx';
 import { Overview } from './screens/Overview.tsx';
 import { Queue } from './screens/Queue.tsx';
 import { Settings } from './screens/Settings.tsx';
+import { People } from './screens/search/People.tsx';
+import { Search } from './screens/search/Search.tsx';
+import { SearchUpkeep } from './screens/search/upkeep.tsx';
 import { Updates } from './screens/Updates.tsx';
 import { YourAgents } from './screens/YourAgents.tsx';
 
@@ -24,6 +27,8 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
   overview: Overview,
   queue: Queue,
   messages: Messages,
+  people: People,
+  search: Search,
   accounts: Accounts,
   connections: Connections,
   approvals: Approvals,
@@ -85,6 +90,7 @@ function Main({ initialScreen = 'overview' }: { initialScreen?: Screen | undefin
   return (
     <Shell screen={screen} onScreen={setScreen}>
       <Current onScreen={setScreen} />
+      <SearchUpkeep />
     </Shell>
   );
 }

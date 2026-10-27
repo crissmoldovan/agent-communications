@@ -114,6 +114,10 @@ test('one tab per channel, each counting what needs a look, and one channel show
       'behaviour',
       // The events service's own version, which says whether it has the queue (0.30.0).
       'version',
+      // Once core takes messages (0.35.0): the taking settings, here and in the shared read of Not taken.
+      'taking',
+      'takesList',
+      'eventsMessagesList',
     ]).toContain(kind);
   }
   expect((await recorded(page)).map((call) => call.cmd)).not.toContain('open_in_terminal');
