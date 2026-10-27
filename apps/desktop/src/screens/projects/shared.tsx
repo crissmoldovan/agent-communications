@@ -23,6 +23,11 @@ export const PROJECTS_COPY = {
   noSessions: 'No agent window has worked in it today.',
   sessionsUnreadable: 'The agent windows could not be read.',
   lastActive: 'last active',
+  relaySessions: 'In claude-stream now',
+  sessionStates: { busy: 'busy', idle: 'idle', watched: 'watched' },
+  relayUnreadable: (reason: string) => `claude-stream could not be asked (${reason}).`,
+  relayWhere:
+    'The claude-stream sessions working now in one of its folders, or in a worktree a workflow made: busy while a turn runs.',
   sessionsWhere:
     'The agent windows that used Agent Comms in one of its folders in the last 24 hours, as the activity log saw them.',
   profile: 'What Agent Comms knows about it',

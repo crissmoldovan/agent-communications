@@ -291,6 +291,43 @@ function Remove({ project, onChanged }: { project: ProjectV1; onChanged: () => P
   );
 }
 
+/** The relay sessions working in the project now, busy or idle, as `projects list` gives them (0.36). */
+function RelaySessions({ project, home }: { project: ProjectV1; home: string | null }) {
+  if (project.sessions === undefined) return null;
+  return (
+    <>
+      {project.sessions === null ? (
+        <p className="text-fg-muted">{PROJECTS_COPY.relayUnreadable(project.sessionsReason ?? 'RELAY_FAILED')}</p>
+      ) : project.sessions.length === 0 ? null : (
+        <ul aria-label={PROJECTS_COPY.relaySessions} className="flex flex-col gap-(--cue-space-1)">
+          {project.sessions.map((session) => (
+            <li
+              key={session.session}
+              data-session={session.session}
+              data-state={session.state}
+              className="flex flex-wrap items-baseline gap-x-(--cue-space-2)"
+            >
+              <span className="break-all text-fg">
+                <UntrustedText text={shownFolder(session.folder, home)} />
+              </span>
+              <span className="text-fg-muted">{session.provider}</span>
+              <Chip tone={session.state === 'busy' ? 'warn' : 'neutral'} variant="tag">
+                {PROJECTS_COPY.sessionStates[session.state]}
+              </Chip>
+              {session.lastActiveAt === null ? null : (
+                <span className="text-(length:--cue-text-label) text-fg-muted">
+                  {PROJECTS_COPY.lastActive} <Short at={session.lastActiveAt} />
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-(length:--cue-text-label) text-fg-subtle">{PROJECTS_COPY.relayWhere}</p>
+    </>
+  );
+}
+
 function Sessions({
   project,
   sessions,
@@ -300,16 +337,20 @@ function Sessions({
   sessions: { state: 'off' } | { state: 'loading' } | { state: 'error' } | { state: 'ready'; value: SessionView[] };
   home: string | null;
 }) {
-  if (sessions.state === 'off') return null;
+  if (sessions.state === 'off' && project.sessions === undefined) return null;
   const windows = sessions.state === 'ready' ? windowsIn(project, sessions.value, home) : [];
+  const relayWorking = (project.sessions?.length ?? 0) > 0;
   return (
     <Part title={PROJECTS_COPY.sessions}>
-      {sessions.state === 'loading' ? (
+      <RelaySessions project={project} home={home} />
+      {sessions.state === 'off' ? null : sessions.state === 'loading' ? (
         <Spinner size="sm" label={COPY.loading} />
       ) : sessions.state === 'error' ? (
         <p className="text-fg-muted">{PROJECTS_COPY.sessionsUnreadable}</p>
       ) : windows.length === 0 ? (
-        <p className="text-fg-muted">{PROJECTS_COPY.noSessions}</p>
+        relayWorking ? null : (
+          <p className="text-fg-muted">{PROJECTS_COPY.noSessions}</p>
+        )
       ) : (
         <ul className="flex flex-col gap-(--cue-space-1)">
           {windows.map((window) => (
@@ -333,7 +374,9 @@ function Sessions({
           ))}
         </ul>
       )}
-      <p className="text-(length:--cue-text-label) text-fg-subtle">{PROJECTS_COPY.sessionsWhere}</p>
+      {sessions.state === 'off' ? null : (
+        <p className="text-(length:--cue-text-label) text-fg-subtle">{PROJECTS_COPY.sessionsWhere}</p>
+      )}
     </Part>
   );
 }

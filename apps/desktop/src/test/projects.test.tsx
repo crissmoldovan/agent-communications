@@ -16,6 +16,7 @@ import {
   type Fixture,
   RECENT_SESSIONS,
 } from './fake-bridge.ts';
+import projectsFixture from './fixtures/projects-list.v036.json';
 import { renderApp } from './render.tsx';
 
 /** Every product at 0.36.0: core with the activity log, and the event service with projects. */
@@ -73,6 +74,27 @@ describe('Projects', () => {
     // A window in another project's folder, or in the home itself, is not one of acme-site's.
     expect(sessions.querySelector('[data-window="7c1e5b9a0d2f4e68"]')).toBeNull();
     expect(sessions.querySelector('[data-window="0c0ffee000000001"]')).toBeNull();
+  });
+
+  it('the relay sessions working in each project now, busy or idle, and why when the relay could not be asked', async () => {
+    renderApp(bridgeAt('0.36.0'), { screen: 'projects' });
+    const card = await projectCard('acme-site');
+    const relay = await within(card).findByRole('list', { name: 'In claude-stream now' });
+    const busy = relay.querySelector<HTMLElement>('[data-session="sess_7c9e6679-7425-40de-944b-e07fc1f90ae7"]');
+    const idle = relay.querySelector<HTMLElement>('[data-session="sess_0f8fad5b-d9cb-469f-a165-70867728950e"]');
+    expect([busy?.dataset.state, idle?.dataset.state]).toEqual(['busy', 'idle']);
+    expect(busy?.textContent).toContain('~/work/acme-site-wt/ac-acme-123');
+    expect(busy?.textContent).toContain('busy');
+    expect(idle?.textContent).toContain('idle');
+    expect(idle?.textContent).toContain('last active');
+  });
+
+  it("says why when the relay could not be asked for a project's sessions", async () => {
+    const down = JSON.parse(JSON.stringify(projectsFixture)) as typeof projectsFixture;
+    Object.assign(down.projects[0] ?? {}, { sessions: null, sessionsReason: 'RELAY_NOT_FOUND' });
+    renderApp(bridgeAt('0.36.0', { eventsProjectsList: down }), { screen: 'projects' });
+    const card = await projectCard('acme-site');
+    await waitFor(() => expect(card.textContent).toContain('claude-stream could not be asked (RELAY_NOT_FOUND).'));
   });
 
   it('Add a project… scans, groups by repository, and adds the ticked folders', async () => {
