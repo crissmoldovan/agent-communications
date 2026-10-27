@@ -389,3 +389,54 @@ test('§8.1 at a terminal: a Manual connection’s snippet, with its key, is sho
   assert.match(result.snippets?.toml ?? '', /\[mcp_servers\.agentcomms\.env\]/);
   assert.match(result.next, /This is the only time the key is shown/);
 });
+
+test('§8.1: --app-approval covers connection add and change, and is refused inside an MCP server’s process and to an agent', async () => {
+  const m = machine();
+  const words = ['connection', 'add', '--app', 'claude-code', '--name', 'From the app', '--parts', 'core', '--json'];
+  const fake = 'ap_00000000000000000000000000';
+  const inServer = await runMain(
+    [...words, '--app-approval', fake],
+    { ...m.env, AGENTCOMMS_MCP_SERVER: 'gateway' },
+    'darwin',
+  );
+  assert.equal(inServer.code, 10, inServer.stdout);
+  assert.match(inServer.stdout, /an MCP server's process is not the app/);
+  const agent = await runMain([...words, '--app-approval', fake], { ...m.env, CLAUDECODE: '1' }, 'darwin');
+  assert.equal(agent.code, 10, agent.stdout);
+  assert.match(agent.stdout, /only a person can approve a change in the app, not an agent/);
+  // Nothing attests the app here: refused, and said where to approve it instead.
+  const unattested = await runMain([...words, '--app-approval', fake], m.env, 'linux', {
+    appOrigin: async () => ({ ok: false, reason: 'unattested-platform' }) as never,
+  });
+  assert.equal(unattested.code, 10, unattested.stdout);
+  assert.match(unattested.stdout, /ORIGIN_UNATTESTED/);
+  // Commands with no approval take none from the app either.
+  const rename = await runMain(
+    ['connection', 'rename', 'cn_0123456789ABCDEFGHJKMNPQRS', 'X', '--app-approval', fake, '--json'],
+    m.env,
+    'darwin',
+  );
+  assert.equal(rename.code, 64);
+  assert.deepEqual(readConnections(await m.core.config.load()).connections, []);
+});
+
+test('D11 (§7): an audit line written inside a part of a connection names the connection, by id', async () => {
+  const m = machine();
+  const before = process.env.AGENTCOMMS_CONNECTION;
+  process.env.AGENTCOMMS_CONNECTION = 'cn_0123456789ABCDEFGHJKMNPQRS';
+  try {
+    await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
+  } finally {
+    if (before === undefined) delete process.env.AGENTCOMMS_CONNECTION;
+    else process.env.AGENTCOMMS_CONNECTION = before;
+  }
+  await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
+  const lines = auditText(m)
+    .trim()
+    .split('\n')
+    .map((line) => JSON.parse(line) as { connection?: string });
+  assert.deepEqual(
+    lines.map((line) => line.connection ?? null),
+    ['cn_0123456789ABCDEFGHJKMNPQRS', null],
+  );
+});

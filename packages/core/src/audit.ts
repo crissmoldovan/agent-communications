@@ -3,6 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RetainedApproval } from './approval-maintenance.ts';
 import type { SendPolicy } from './config.ts';
+import { CONNECTION_ID_ENV, CONNECTION_ID_PATTERN } from './connections.ts';
 import { appendPrivateLine } from './fs.ts';
 
 /**
@@ -58,6 +59,12 @@ export interface AuditRecord {
   retained?: RetainedApproval;
 }
 
+/** The MCP connection this process is a part of, as its gateway set it: an id, never its key. */
+function connectionOfThisProcess(): string | undefined {
+  const id = process.env[CONNECTION_ID_ENV];
+  return id !== undefined && CONNECTION_ID_PATTERN.test(id) ? id : undefined;
+}
+
 /** Large id lists are condensed so every audit line stays small enough to be appended atomically. */
 export interface CondensedIds {
   count: number;
@@ -100,8 +107,11 @@ export class AuditLog {
     options: { durable?: boolean } = {},
   ): Promise<AuditRecord> {
     const at = record.at ?? this.#now().toISOString();
+    // A line a part of an MCP connection writes names the connection it came through (single-server design §7).
+    const connection = record.connection ?? connectionOfThisProcess();
     const full: AuditRecord = {
       ...record,
+      ...(connection === undefined ? {} : { connection }),
       at,
       ...(record.ids ? { ids: condense(record.ids) as NonNullable<AuditRecord['ids']> } : {}),
     };
