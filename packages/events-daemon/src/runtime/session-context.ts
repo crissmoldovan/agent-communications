@@ -160,6 +160,11 @@ export async function resolveContextParts(input: {
   /** Agent Comms' own configuration, state and data folders: never read, whatever the roots. */
   readonly deniedFolders?: readonly string[] | undefined;
   readonly generate: ContextGenerator;
+  /**
+   * A workflow run's settled step outputs, for a `{ step, field }` part (workflows design §6.4): the closed value, or
+   * undefined when the step has none of that name. Only a flow has steps, so outside one there is nothing to read.
+   */
+  readonly stepOutput?: ((step: string, field: string) => JsonValue | undefined) | undefined;
 }): Promise<readonly ResolvedContextPart[]> {
   const resolved: ResolvedContextPart[] = [];
   for (const part of input.parts) {
@@ -191,6 +196,9 @@ export async function resolveContextParts(input: {
               reason: outcome.reason,
             },
       );
+    } else if ('step' in part) {
+      const value = input.stepOutput?.(part.step, part.field);
+      resolved.push({ kind: 'step', step: part.step, field: part.field, ...(value === undefined ? {} : { value }) });
     } else {
       const file = await readContextFile(part.file, input.fileRoots, input.deniedFolders ?? []);
       resolved.push(

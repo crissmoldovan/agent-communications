@@ -3,63 +3,20 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import type { KeyringModule, SecretStore } from '@agentcomms/core';
+import type { SecretStore } from '@agentcomms/core';
 import { canonicalJson, KeychainSecretStore, sha256Hex } from '@agentcomms/core';
 import { B3SecretControl } from '../src/runtime/b3-secret-control.ts';
 import { WriterQuiescer } from '../src/runtime/writer-quiescer.ts';
 import { openEventDatabase } from '../src/store/database.ts';
 import {
   EventSecretError,
-  type EventSecretStoreKind,
   openEventSecretStore,
   selectEventSecretStore,
   storeEventSecretGeneration,
 } from '../src/store/event-secrets.ts';
 import { EventRecordCipher } from '../src/store/records.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
-
-class MemorySecretStore implements SecretStore {
-  readonly values = new Map<string, string>();
-  readonly kind: EventSecretStoreKind;
-  constructor(kind: EventSecretStoreKind) {
-    this.kind = kind;
-  }
-  async get(ref: string): Promise<string | null> {
-    return this.values.get(ref) ?? null;
-  }
-  async set(ref: string, value: string): Promise<void> {
-    this.values.set(ref, value);
-  }
-  async delete(ref: string): Promise<boolean> {
-    return this.values.delete(ref);
-  }
-  invalidate(): void {}
-}
-
-/**
- * Stands in for the native keyring that core's real keychain store drives. `items` is what the keychain holds;
- * `persist: false` models a keychain that accepts a write and keeps nothing.
- */
-function fakeKeyring(items: Map<string, string>, options: { readonly persist: boolean } = { persist: true }) {
-  const module: KeyringModule = {
-    AsyncEntry: class {
-      readonly #account: string;
-      constructor(_service: string, account: string) {
-        this.#account = account;
-      }
-      async getPassword(): Promise<string | undefined> {
-        return items.get(this.#account);
-      }
-      async setPassword(password: string): Promise<void> {
-        if (options.persist) items.set(this.#account, password);
-      }
-      async deletePassword(): Promise<boolean> {
-        return items.delete(this.#account);
-      }
-    } as unknown as KeyringModule['AsyncEntry'],
-  };
-  return module;
-}
+import { MemorySecretStore, standInKeyring } from './support/stand-ins.ts';
 
 /** One target with a stored webhook-signing generation, its event secrets in the file backend. */
 async function fileBackedTarget(
@@ -121,7 +78,7 @@ test('B3 verifying master and slot reads reach the keychain itself, not their ca
     const opened = await openEventDatabase({ stateDir });
     try {
       const items = new Map<string, string>();
-      const keychain = new KeychainSecretStore(fakeKeyring(items), 'synthetic-ns:events');
+      const keychain = new KeychainSecretStore(standInKeyring(items), 'synthetic-ns:events');
       await selectEventSecretStore(opened.database, 'keychain');
       const secrets = await openEventSecretStore({
         database: opened.database,
@@ -306,7 +263,7 @@ test("B3 event-secret migration read-back reaches the keychain itself, not the s
     const opened = await openEventDatabase({ stateDir });
     try {
       const items = new Map<string, string>();
-      const keychain = new KeychainSecretStore(fakeKeyring(items, { persist: false }), 'synthetic-ns:events');
+      const keychain = new KeychainSecretStore(standInKeyring(items, { persist: false }), 'synthetic-ns:events');
       const { file, control } = await fileBackedTarget(opened, keychain, 'target-readback');
       const before = new Map(file.values);
       await assert.rejects(
@@ -335,7 +292,7 @@ test("B3 event-secret migration retry checks the keychain itself, not the store'
     const opened = await openEventDatabase({ stateDir });
     try {
       const items = new Map<string, string>();
-      const keychain = new KeychainSecretStore(fakeKeyring(items), 'synthetic-ns:events');
+      const keychain = new KeychainSecretStore(standInKeyring(items), 'synthetic-ns:events');
       const { file, control } = await fileBackedTarget(opened, keychain, 'target-retry-cache');
       const deleteSource = file.delete.bind(file);
       file.delete = async () => false;

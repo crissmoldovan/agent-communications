@@ -187,3 +187,14 @@ test('REVIEW: the approval preview says claude-stream keeps each prompt in its o
       ),
   );
 });
+
+test('SESSION-D6: a step output part is a session target’s, but no workflow without a flow may give it (0.36 §6.4)', () => {
+  const stepPart = session({ context: [{ step: 'issue', field: 'identifier' }] });
+  assert.deepEqual((canonicalTarget(stepPart) as { context: unknown }).context, [
+    { step: 'issue', field: 'identifier' },
+  ]);
+  assert.throws(
+    () => canonicalFullRuleDocument(rule([stepPart])),
+    /gives the step issue's identifier, and only a workflow's flow has steps/u,
+  );
+});

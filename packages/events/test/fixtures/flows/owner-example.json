@@ -1,0 +1,307 @@
+{
+  "agentic": {
+    "callsPerRollingHour": 60,
+    "concurrency": 1,
+    "inputTokensPerRolling30Days": 1000000,
+    "inputs": ["/text"],
+    "judge": {
+      "endpoint": "https://api.typesafe.ai/v1/systemone",
+      "judgeId": "jev",
+      "kind": "typesafe",
+      "model": "jev-1.13.0",
+      "promptTemplate": "typesafe-jev-noul-v1",
+      "protocol": "noul",
+      "provider": "typesafe",
+      "version": 2
+    },
+    "maxInputTokens": 2000,
+    "maxOutputTokens": 16,
+    "onUncertain": "no-match",
+    "question": "Is this person asking for a change to one of our sites?",
+    "threshold": 0.7
+  },
+  "condition": {
+    "op": "exists",
+    "path": "/text"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "slack.message.posted",
+    "version": 1
+  },
+  "flow": {
+    "events": {
+      "namespace": "acme",
+      "run": ["failed", "finished"],
+      "workflow": "client-asks"
+    },
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 2,
+      "eventsPerHour": 120,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 6,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "start": "route",
+    "steps": {
+      "another": {
+        "in": {
+          "project": "route"
+        },
+        "kind": "find-session",
+        "next": {
+          "idle": "give",
+          "none": "tree",
+          "otherwise": "tree"
+        },
+        "only": "idle",
+        "provider": "claude"
+      },
+      "find": {
+        "in": {
+          "project": "route"
+        },
+        "kind": "find-session",
+        "next": {
+          "busy": "free",
+          "idle": "give",
+          "none": "another",
+          "otherwise": "free"
+        },
+        "provider": "claude"
+      },
+      "found": {
+        "kind": "raise",
+        "name": "project-found",
+        "next": {
+          "otherwise": "issue"
+        }
+      },
+      "free": {
+        "for": {
+          "sessionIdle": "find"
+        },
+        "kind": "wait",
+        "next": {
+          "free": "give",
+          "otherwise": "tell"
+        },
+        "timeoutMs": 7200000
+      },
+      "give": {
+        "emit": ["given"],
+        "kind": "deliver",
+        "next": {
+          "otherwise": "wait"
+        },
+        "report": ["done", "needs-the-person"],
+        "target": {
+          "targetId": "client-prompt",
+          "version": 2
+        },
+        "to": {
+          "session": ["find", "another", "start"]
+        }
+      },
+      "issue": {
+        "emit": ["created"],
+        "kind": "deliver",
+        "next": {
+          "otherwise": "find"
+        },
+        "target": {
+          "targetId": "client-issues",
+          "version": 1
+        }
+      },
+      "note": {
+        "emit": ["closed"],
+        "kind": "deliver",
+        "next": {
+          "otherwise": "end"
+        },
+        "target": {
+          "targetId": "client-done",
+          "version": 1
+        },
+        "to": {
+          "issue": "issue"
+        }
+      },
+      "route": {
+        "by": ["hints", "judge"],
+        "candidates": [
+          {
+            "folders": ["/example/home/work/acme-site"],
+            "name": "acme-site",
+            "projectId": "acme-site",
+            "worktreeRoot": null
+          },
+          {
+            "folders": ["/example/home/work/billing"],
+            "name": "billing",
+            "projectId": "billing",
+            "worktreeRoot": null
+          }
+        ],
+        "emit": ["matched", "none"],
+        "inputs": ["/text"],
+        "judge": {
+          "callsPerRollingHour": 60,
+          "concurrency": 1,
+          "inputTokensPerRolling30Days": 1000000,
+          "inputs": ["/text"],
+          "judge": {
+            "endpoint": "https://api.typesafe.ai/v1/systemone",
+            "judgeId": "jev",
+            "kind": "typesafe",
+            "model": "jev-1.13.0",
+            "promptTemplate": "typesafe-jev-noul-v1",
+            "protocol": "noul",
+            "provider": "typesafe",
+            "version": 2
+          },
+          "maxInputTokens": 2000,
+          "maxOutputTokens": 16,
+          "onUncertain": "no-match",
+          "question": "Is this message about this project?",
+          "threshold": 0.7
+        },
+        "kind": "route",
+        "next": {
+          "none": "tell",
+          "otherwise": "found"
+        }
+      },
+      "start": {
+        "in": {
+          "worktree": "tree"
+        },
+        "kind": "start-session",
+        "mode": "manual",
+        "next": {
+          "otherwise": "give"
+        },
+        "provider": "claude"
+      },
+      "tell": {
+        "kind": "notify",
+        "next": {},
+        "text": "A message for {{steps.route.project}} needs you"
+      },
+      "tree": {
+        "base": "default",
+        "branch": "ac/{{steps.issue.identifier}}",
+        "cleanup": "keep",
+        "kind": "worktree",
+        "next": {
+          "otherwise": "start",
+          "refused": "tell"
+        },
+        "project": "route"
+      },
+      "wait": {
+        "for": {
+          "turnEnd": "give"
+        },
+        "kind": "wait",
+        "next": {
+          "done": "note",
+          "otherwise": "tell"
+        },
+        "timeoutMs": 86400000
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "author": {
+      "name": {
+        "$path": "/author/name"
+      }
+    },
+    "text": {
+      "$path": "/text"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "queueMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "client-asks",
+  "source": {
+    "accountIds": ["acme/slack"],
+    "channel": "slack",
+    "options": {
+      "channel": "slack",
+      "conversations": ["C0123"]
+    }
+  },
+  "subscribers": [],
+  "targets": [
+    {
+      "assignee": "me",
+      "description": {
+        "text": "{{text}}"
+      },
+      "kind": "linear",
+      "labels": [],
+      "targetId": "client-issues",
+      "team": {
+        "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+        "key": "ACME"
+      },
+      "title": {
+        "text": "{{author.name}} asks about {{steps.route.project}}"
+      },
+      "version": 1
+    },
+    {
+      "context": [
+        {
+          "fields": ["/text", "/author/name"]
+        },
+        {
+          "text": "Do what they ask, on a branch of its own. Don't push."
+        }
+      ],
+      "find": {
+        "flow": true
+      },
+      "ifBusy": "queue",
+      "ifNone": "queue-only",
+      "kind": "session",
+      "mode": "manual",
+      "provider": "claude",
+      "targetId": "client-prompt",
+      "version": 2
+    },
+    {
+      "comment": {
+        "text": "{{steps.wait.summary}}"
+      },
+      "kind": "linear-change",
+      "state": {
+        "id": "5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f",
+        "name": "Done",
+        "type": "completed"
+      },
+      "targetId": "client-done",
+      "team": {
+        "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+        "key": "ACME"
+      },
+      "version": 1
+    }
+  ],
+  "version": 5
+}

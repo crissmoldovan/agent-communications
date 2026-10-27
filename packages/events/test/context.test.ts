@@ -213,3 +213,49 @@ test('context: the preview names each part, quoting rule-author text', () => {
     'the file /example/home/acme/billing/HOW-WE-INVOICE.md, read when the message is passed on (at most 64 KB)',
   ]);
 });
+
+test('context: a step part names a closed output of a flow step, and canonicalises', () => {
+  const parts = [{ fields: ['/subject'] }, { step: 'issue', field: 'identifier' }];
+  assert.deepEqual(canonicalContextParts(parts), { ok: true, value: parts });
+  assert.deepEqual(
+    contextFieldPointers(parts as readonly ContextPart[]),
+    ['/subject'],
+    'a step part reads no mapped field',
+  );
+  assert.equal(
+    describeContextPart({ step: 'issue', field: 'identifier' }),
+    "the step issue's identifier, from Agent Comms",
+  );
+  for (const bad of [
+    [{ step: 'issue' }],
+    [{ step: 'issue', field: 'identifier', extra: 1 }],
+    [{ step: 'Issue', field: 'identifier' }],
+    [{ step: 'run', field: 'identifier' }],
+    [{ step: 'issue', field: 'issue.identifier' }],
+    [{ step: 'issue', field: '' }],
+    [{ step: 7, field: 'identifier' }],
+  ]) {
+    const result = canonicalContextParts(bad);
+    assert.equal(result.ok, false, JSON.stringify(bad));
+    if (!result.ok) assert.equal(result.issues[0]?.code, 'CONTEXT_INVALID');
+  }
+});
+
+test('context: the frame labels a step part "From Agent Comms", outside the envelope', () => {
+  const result = buildSessionPrompt({
+    ruleId: 'client-asks',
+    channel: 'slack',
+    account: 'acme/slack',
+    parts: [
+      { kind: 'fields', fields: ['/text'], values: { '/text': 'Please fix the footer' } },
+      { kind: 'step', step: 'issue', field: 'identifier', value: 'ACME-123' },
+      { kind: 'step', step: 'route', field: 'projectName' },
+    ],
+    envelope,
+  });
+  assert.ok(result.ok);
+  assert.match(result.value, /^From Agent Comms, the step issue’s identifier: "ACME-123"$/mu);
+  assert.match(result.value, /^From Agent Comms, the step route’s projectName: \(none in this run\)$/mu);
+  const at = result.value.indexOf('ACME-123');
+  assert.ok(result.value.lastIndexOf('</untrusted-content>', at) > result.value.lastIndexOf('<untrusted-content', at));
+});

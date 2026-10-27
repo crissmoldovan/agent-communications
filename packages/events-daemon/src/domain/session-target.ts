@@ -171,6 +171,19 @@ export function assertSessionMapping(target: SessionTargetDocument, mapping: Jso
     fail(`the session target ${target.targetId} reads ${unmapped.join(', ')}, which the rule's mapping does not keep`);
 }
 
+/**
+ * Refuses a session target whose context names a step's output (`{ step, field }`) in a workflow without a flow: only
+ * a flow has steps whose closed outputs a part can read (workflows design §6.4).
+ */
+export function assertSessionStepParts(target: SessionTargetDocument, inFlow: boolean): void {
+  if (inFlow) return;
+  const part = target.context.find((entry) => 'step' in entry);
+  if (part !== undefined && 'step' in part)
+    fail(
+      `the session target ${target.targetId} gives the step ${part.step}'s ${part.field}, and only a workflow's flow has steps`,
+    );
+}
+
 /** The files a session target reads, for the activation check that each is under a folder it may be read from. */
 export function sessionTargetFiles(target: SessionTargetDocument): readonly string[] {
   return target.context.flatMap((part) => ('file' in part ? [part.file] : []));
