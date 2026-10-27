@@ -450,6 +450,13 @@ in the background, and the old vectors serve until the new set is complete. Word
   > undone, so it is now the person's alone. It is refused inside an MCP server's process and under an agent's
   > marker, as the person's searches are (S13), and the app's confirm still runs it. `off`, `accounts remove` and
   > `model none` stay anyone's: they stop keeping, or drop vectors that Rebuild makes again.
+
+  > **Note, 2026-10-27 (the re-review of 0.35.0, LOW 4; accepted).** An agent can still erase what Search keeps, at
+  > once, by tightening: `comms_activity_settings` with `retentionDays: 1` over MCP, or `search accounts remove <alias>`
+  > from its shell, deletes the rows past the new days, or the account's, and they cannot be brought back. That is by
+  > design: keeping less is a narrowing, and every narrowing applies at once — one that waited for the person would
+  > make the safe direction the slow one. What goes is Search's own copy; the mail and the Slack messages stay in their
+  > accounts, and nothing is disclosed. Delete everything stays the person's alone, as above.
 - **Who reads what:**
   - the person alone, in the app and at a terminal (S13);
   - no MCP tool reads the index;
