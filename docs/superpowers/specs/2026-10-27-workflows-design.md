@@ -87,10 +87,13 @@ calls a workflow anything else (W22).
 
 ### 0.4 What changed from the draft
 
-- **New sections:** W22–W35, §9 (events, subscribers and chaining), and Appendix W (the step event catalogue).
+- **New sections:** W22–W36, §9 (events, subscribers and chaining), and Appendix W (the step event catalogue).
 - **W19 corrected.** The draft said the new operations would be "B3 control v4". They join B3 control v1 additively,
   as every release from 0.30 to 0.34 did (W19).
 - **Worktrees** move into 0.36 (Q2).
+- **Find by thread** moves into 0.36 (W36, the lead's review of 2026-10-27): it is the owner's step 5, and 0.35's taking,
+  which 0.36 is built on, records who took each conversation. A flow's delivery to a session offers the message, as a
+  session target's does.
 - **Steps added from the prototype:**
   - waiting for a busy session to come free, `wait for: { sessionIdle }`, drawn as "Queue for the session";
   - looking only for an idle session, `find-session` with `only: 'idle'`, drawn as "Find another session".
@@ -151,7 +154,8 @@ The 0.35 prototype draws both (`docs/prototypes/2026-10-26-messages-lifecycle/RE
 - **The owner's thirteen steps can be built:**
   - route to a project;
   - make a Linear issue;
-  - find a session (idle, busy or none), wait for a busy one, or look for another;
+  - find the session that took this conversation (W36), or a session (idle, busy or none) in the project; wait for a
+    busy one, or look for another;
   - start one, optionally in a new worktree;
   - give it the message and wait for its turn to end;
   - comment on and close the issue.
@@ -591,6 +595,35 @@ S).**
   - content only where `content` allows it.
 - **An agent may write either one** — a workflow version, or an inert subscriber version — and approve neither (§10.1).
 
+**W36. Find the session that took this conversation (O, L).**
+- **O:** "5. If it's about that session, it goes there."
+- **L (2026-10-27):** the draft left this for 0.37 ("find by thread"). 0.36 is built on 0.35, whose taking records who
+  took each conversation, so step 5 has a meaning the engine can check, and it ships in 0.36.
+- **The place `{ thread: true }`,** on `find-session` only: the session that took an earlier message in this message's
+  conversation (Gmail's thread id; Slack's `<channel>/<parent ts>`), read from core's take store
+  (`packages/core/src/takes.ts`, `TakeStore`).
+  - It reads the newest take in the run's account whose `thread` is this message's thread, in state `taken` or `done`,
+    held by a session with a Claude Code session id (`TakeHolder.sessionId`). The message's own take doesn't count.
+  - That session is the relay session whose `nativeSessionId` equals that id. The outcomes are the usual ones: `idle`,
+    `busy`, `watched`, or `none` when there is no such take, its holder had no session id, the person holds it, or the
+    relay no longer knows the session.
+  - **Claude only.** A Codex session has no id a take records, so activation refuses `provider: 'codex'` with this place
+    (`FIND_THREAD_NEEDS_CLAUDE`). `start-session` refuses the place (`FLOW_PLACE`): a conversation has no folder.
+  - **What it reads and keeps:** a thread id is the provider's id, not sender text. The output is find's existing
+    `session` and `provider`, so Appendix W doesn't change. The take's folder, client and key never enter the run, its
+    events or its output. A message with no thread finds `none`.
+- **A flow's delivery to a session offers the message** to that session, as a session target's dispatch does (taking
+  design T4): exclusive for 15 minutes after it is handed over, and the session still takes it itself. The flow's
+  delivery goes through the same dispatcher (§6.4), so the offer comes with it. The message's story shows it.
+  - It needs 0.35's offers (the event service writing offers into core's take store, taking design §14) on the base.
+    If those slip, the offer slips with them; find by thread still ships, since it only reads.
+- **The words:**
+  - the text: `find the session that took this conversation, with claude-code`;
+  - the palette's Sessions group gains **Find this conversation's session**;
+  - the approval's line: "If a session already took an earlier message in this conversation, …".
+- **Rejected: matching on the sender alone.** A second, unrelated request from the same person would go to a session
+  busy with the first.
+
 ## 4. Data model
 
 ### 4.1 The flow (`packages/events/src/flow/types.ts`)
@@ -634,7 +667,8 @@ type FlowStep = StepCommon & (
   | { kind: 'split'; branches: readonly StepId[] }                                      // 2–8, never meeting again
   | { kind: 'raise'; name: string; fields?: readonly string[]; next: Arrows<'raised'> });
 
-type Place = { project: StepId } | { worktree: StepId } | { folder: string } | { lane: string };
+type Place = { project: StepId } | { worktree: StepId } | { folder: string } | { lane: string }
+            | { thread: true };                     // find-session only, provider claude (W36)
 interface RouteCandidate { projectId: string; name: string; folders: readonly string[]; worktreeRoot: string | null }
 type WaitOutcome = 'completed' | 'failed' | 'stopped' | 'timed-out' | 'done' | 'needs-the-person' | 'not-mine'
                  | 'blocked' | 'free' | 'elapsed';
@@ -876,6 +910,8 @@ flow, at most 6 runs an hour, 2 at a time, 2 sessions an hour
 - **In a project:** a relay session whose realpath `cwd` is one of the chosen candidate's approved folders, or a worktree
   this run made.
 - **In a worktree, a folder or a lane:** as the session target finds today (`session-dispatcher.ts` 353–389).
+- **In this conversation** (`{ thread: true }`): the session that took an earlier message in the same thread, from
+  core's take store, matched to a relay session by its Claude Code session id (W36).
 - **Which one:** the provider must match. Of several, the most recently active wins. With `only: 'idle'`, busy sessions
   are passed over, so the outcomes are `idle` or `none`. This is the prototype's "Find another session".
 - **Outcomes:**
@@ -1241,7 +1277,8 @@ Every row is in `capabilities.json` and run by `pnpm verify:parity --strict`. B3
 - **The palette** is an app panel beside the canvas, outside React Flow, grouped as the prototype draws it
   (`WorkflowDesigner.dc.html` 850):
   - **Decide:** Condition, Ask a judge, Which project?, Side by side (`split`);
-  - **Sessions:** Find a session, Start a session, Make a worktree, Deliver to a session;
+  - **Sessions:** Find a session, Find this conversation's session (W36), Start a session, Make a worktree, Deliver to a
+    session;
   - **Linear:** Create, Update, Comment, Close;
   - **Hand over, and tell:** Put it in the Queue, Send to a webhook (an existing one), Notify me, **Raise an event**;
   - **Wait:** for a session's turn to end, for a session to be free, for a time.
@@ -1429,13 +1466,13 @@ The loopback seal (`test/helpers/loopback-seal-preload.mjs`) holds. Event-servic
 - chaining, which can slip on its own (W34);
 - the designer, the run view, Projects, Subscribers and the story;
 - Describe it, on all three providers;
-- the one-concept naming.
+- the one-concept naming;
+- find by thread, and a flow's delivery offering the message to its session (W36).
 
 **0.37:**
 - `ask me`, and `acceptEdits` in the person's own checkout after it;
 - Analyse for profiles through claude-stream (Q6, Q7);
 - waiting for a Linear state;
-- find by thread, and offers from flows (with taking, 0.35);
 - adding projects through `gh`, with clone;
 - the prototype's worktree removal 7 days after the issue closes;
 - a command to lower the ceilings of §7.5.
