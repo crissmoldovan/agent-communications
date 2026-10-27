@@ -403,7 +403,8 @@ at most 60 an hour
 - **Limits are written out.** `flow, at most …` sets runs an hour (default 10, at most 60), runs at a time (2, at most
   8), sessions started an hour (2, at most 10), worktrees a day (5, at most 20), Linear writes an hour (30, at most
   120), events an hour (120, at most 600) and a run's deadline (3 days, at most 30). A flow has at most 32 steps and a
-  run at most 64 executed steps.
+  run at most 64 executed steps; a step a limit holds isn't counted again each time it wakes. Runs a limit holds wait
+  their turn, oldest first, and never hold back another workflow's runs.
 - **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
   the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). The
   message's own take doesn't count, and a Codex session can't be found this way.
@@ -453,14 +454,18 @@ It is `runs`, not `run`: `agent-events run` starts the event service.
   - `AUTHORIZATION_REVOKED`: its version's authority ended — `workflow disable`, a tightening, or a target, subscriber
     or judge kind it used removed or turned off;
   - `ACCOUNT_REMOVED`: the account it watches was removed;
-  - `STEP_LIMIT`: it executed 64 steps;
+  - `STEP_LIMIT`: it executed 64 steps (its deliveries still waiting are cancelled, as at a cancel);
   - `STEP_FAILED`: a step ended on a failure outcome (`refused`, `failed`) that no arrow handles;
   - a step's own code, when that step failed (`STEP_THREW`, `OUTCOME_UNKNOWN`, …);
   - the fence's reason, when its version's authority was found gone just before a step (`RULE_REVOKED` and its kin).
 - **Cancel is yours, at once.** `runs cancel` cancels the run's deliveries still waiting and its events not yet
-  delivered, and purges what they kept; drops its waits; purges the run's own record; and says how many it cancelled. A
-  session's turn the run started goes on unless you add `--interrupt`, which asks claude-stream to interrupt it
-  (`interrupted` says whether it did). A run that has ended can't be cancelled. However a run is cancelled — by you, by
+  delivered, and purges what they kept; drops its waits; purges the run's own record; and says how many it cancelled.
+  It applies straight away, even while one of the run's steps is under way: that step's result is dropped, so nothing
+  after it runs. An event of the run being sent is stopped, its dead letters can't be tried again, and the frames a live
+  subscriber was given are deleted, so reconnecting doesn't replay them; the run's own `cancelled` event still goes
+  out. A session's turn the run started goes on unless you add `--interrupt`, which asks claude-stream to interrupt it
+  (`interrupted` says whether it did; with it, the answer waits for the step under way). A run that has ended can't be
+  cancelled. However a run is cancelled — by you, by
   switching collection off, by a revocation or by an account's removal — each step it ran is finished afterwards, as at
   any run's end: a worktree made with `cleanup: remove-if-clean` is removed if it is clean.
 - **Who can do it: you.** Every `runs` command refuses inside the event service's MCP server, in an agent's shell (an

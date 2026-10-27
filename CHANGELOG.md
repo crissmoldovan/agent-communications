@@ -106,6 +106,20 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
   - a subscriber that hangs slows no run;
   - a held message let through into a workflow keeps its thread;
   - a message whose hold ran out or was cancelled can be read, and its story says so in words.
+- **Security review fixes before release** (an independent review of this release, 2026-10-27):
+  - **One workflow's held runs no longer stop another's.** A sender could give one workflow a hundred held runs (its
+    own runs-at-a-time kept them waiting, and a held run is never dropped), and every other workflow's runs then stayed
+    held until they expired. Now each workflow's oldest held runs start as its own limits allow, and a workflow its
+    limits hold is passed over.
+  - **`runs cancel` applies at once.** It waited behind the engine's pass, which could first go on to the run's next
+    steps: start a session, make a worktree, raise a notice. Now the run ends straight away; a step already under way
+    settles nothing, so nothing after it runs, and the cancel answers without waiting for it.
+  - **A cancel stops the run's event being sent, and its frames aren't replayed.** An event between its last check and
+    its send still went out, and a live subscriber reconnecting without `Last-Event-ID` got the cancelled run's frames
+    again. Now the send is stopped and the frames are deleted; the run's own `cancelled` event still goes out.
+  - **A run that ends at its 64th step cancels its deliveries still waiting**, as every other ending does: a prompt
+    queued on another branch could reach a session after the run had failed. And a step a limit holds is no longer
+    counted again each time it wakes, so a limit that stays reached can't end a run at 64.
 
 ## 0.35.0
 
