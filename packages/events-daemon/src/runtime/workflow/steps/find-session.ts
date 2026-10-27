@@ -1,3 +1,4 @@
+import { isTakeChannel, type TakeChannel, type TakeMessageRef } from '@agentcomms/core';
 import { isPromptableSession, type RelayClient, RelayError, type RelaySessionV1 } from '../../relay-client.ts';
 import type { Output, StepContext, StepExecutor, StepResult } from '../contracts.ts';
 import { lastActive, newestFirst, relayRetry, resolvePlace } from './session-place.ts';
@@ -9,7 +10,13 @@ import { lastActive, newestFirst, relayRetry, resolvePlace } from './session-pla
  * only watches, which takes no prompt. It reads only: it starts nothing and prompts nothing. A relay that cannot be
  * used is tried again, 12 times in all, then the step fails with the relay's reason.
  *
- * The output is find's closed one: the relay session's id, or null, and the provider. No folder.
+ * In this conversation (`{ thread: true }`, W36), the session is the one that took an earlier message of the run's
+ * thread, by core's take store: its Claude Code session id, matched to the relay session whose `nativeSessionId` it is.
+ * The thread comes from the run's own record (the provider's ids, never sender text), and the take store is read for
+ * the run's account only. The person holding it, a holder with no session id, a session the relay no longer knows and a
+ * message with no thread all find `none`.
+ *
+ * The output is find's closed one: the relay session's id, or null, and the provider. No folder, and nothing of a take.
  */
 
 /** Snapshots read per find, at most: claude-stream lists no status or cwd filter, so each candidate costs one. */
@@ -29,6 +36,36 @@ export interface SessionStepDeps {
   readonly deniedFolders: () => readonly string[];
   /** The window bound to a lane: its Claude Code session id, and since when; null when none is. */
   readonly laneBinding: (lane: string) => { readonly sessionId: string | null; readonly since: number } | null;
+  /** Core's take store, read for who took a conversation (`TakeStore.threadHolder`); without one, nobody did. */
+  readonly threadHolder?:
+    | ((input: {
+        readonly channel: TakeChannel;
+        readonly accountId: string;
+        readonly thread: string;
+        readonly except: TakeMessageRef;
+      }) => Promise<{ readonly sessionId: string } | null>)
+    | undefined;
+}
+
+/** The Claude Code session id of whoever took an earlier message of this run's conversation, or null. */
+async function threadTaker(ctx: StepContext, deps: SessionStepDeps): Promise<string | null> {
+  const channel = ctx.rule.source.channel;
+  if (deps.threadHolder === undefined || !isTakeChannel(channel)) return null;
+  const message = (await ctx.message?.()) ?? null;
+  if (message === null || message.thread === null) return null;
+  const accountId = ctx.run.accountId;
+  try {
+    const holder = await deps.threadHolder({
+      channel,
+      accountId,
+      thread: message.thread,
+      except: { channel, accountId, id: message.id },
+    });
+    return holder?.sessionId ?? null;
+  } catch {
+    // A take store that cannot be read names no one.
+    return null;
+  }
 }
 
 function found(outcome: 'idle' | 'busy' | 'none' | 'watched', session: string | null, provider: string): StepResult {
@@ -42,13 +79,15 @@ async function find(ctx: StepContext, deps: SessionStepDeps): Promise<StepResult
   const none = () => found('none', null, step.provider);
   const place = await resolvePlace(ctx, step.in);
   if (place.kind === 'nowhere') return none();
-  // The session that took this conversation (W36) comes with 0.35's takes: until then it finds none.
-  if (place.kind === 'thread') return none();
+  const taker = place.kind === 'thread' ? await threadTaker(ctx, deps) : null;
+  if (place.kind === 'thread' && taker === null) return none();
   try {
     const { client } = await deps.relay();
     const sessions = await client.sessions();
     let matching: RelaySessionV1[];
-    if (place.kind === 'lane') {
+    if (place.kind === 'thread') {
+      matching = sessions.filter((session) => session.nativeSessionId === taker && session.provider === step.provider);
+    } else if (place.kind === 'lane') {
       const binding = deps.laneBinding(place.lane);
       // No window, a window with no Claude Code session id, or a run from before the binding: no session.
       if (binding === null || binding.sessionId === null || ctx.run.startedAt < binding.since) return none();

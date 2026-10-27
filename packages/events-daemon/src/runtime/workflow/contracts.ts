@@ -17,6 +17,16 @@ export type WaitKind = 'turn-end' | 'session-idle' | 'time' | 'limit';
 /** A settled step's closed output (plan I5): ids and closed words only, never a sender's text. */
 export type Output = Readonly<Record<string, JsonValue>>;
 
+/**
+ * The message a run is about, as its sealed record keeps it when its flow looks for the session that took the
+ * conversation (W36): the channel's own ids — Gmail's message id, Slack's `<channel>/<ts>`, Resend's email id — and its
+ * thread (Gmail's thread id, Slack's `<channel>/<parent ts>`), or null. Never anything a sender wrote.
+ */
+export interface RunMessage {
+  readonly id: string;
+  readonly thread: string | null;
+}
+
 /** A run as an executor sees it: content-free. */
 export interface RunView {
   id: string;
@@ -49,6 +59,8 @@ export interface StepContext {
   fields(): Promise<Readonly<Record<string, JsonValue>>>;
   /** A chained run's `/trigger`, else null. */
   trigger(): Promise<Output | null>;
+  /** The message this run is about, when its record keeps it (a flow that finds by thread, W36); else null. */
+  message?(): Promise<RunMessage | null>;
   /** A settled step's closed output. */
   output(stepId: StepId): Output | null;
   charge(kind: 'session-start' | 'worktree' | 'linear-write'): { ok: true } | { ok: false; until: number };
