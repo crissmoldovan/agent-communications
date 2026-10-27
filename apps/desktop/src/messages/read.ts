@@ -15,6 +15,7 @@
  * `UntrustedText`.
  */
 import { isLaneName, isSessionKey } from '../grammar.ts';
+import { type RunListEntryV1, type RunShowResultV1, readRunsList } from '../workflows/types.ts';
 
 /** Milliseconds since the epoch. */
 export type Millis = number;
@@ -653,4 +654,35 @@ export function readTaking(value: unknown): TakingRead | null {
       ? value.problems.flatMap((each) => (typeof each === 'string' ? [each] : []))
       : [],
   };
+}
+
+// ── Workflow runs (0.36.0) ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A workflow's run about a message (workflows design §11.2): as `runs list --json` lists it, or as `runs show --json`
+ * shows it with its steps and the events it raised. Its records are content-free: ids, closed words, times, and a
+ * project's name, which is the person's.
+ */
+export type MessageRun = RunListEntryV1 | RunShowResultV1;
+
+/** Whether a run is shown, with its steps, rather than only listed. */
+export function isShownRun(run: MessageRun): run is RunShowResultV1 {
+  return 'steps' in run;
+}
+
+/**
+ * `runs list --json`, read and joined by the event each run is about (§11.2: "read from `runs list --json`, joined by
+ * event id"), oldest run first; null when it is not that answer at all.
+ */
+export function readRunsByEvent(value: unknown): ReadonlyMap<string, readonly RunListEntryV1[]> | null {
+  let runs: readonly RunListEntryV1[];
+  try {
+    runs = readRunsList(value).runs;
+  } catch {
+    return null;
+  }
+  const byEvent = new Map<string, RunListEntryV1[]>();
+  for (const run of [...runs].sort((a, b) => a.startedAt - b.startedAt))
+    byEvent.set(run.eventId, [...(byEvent.get(run.eventId) ?? []), run]);
+  return byEvent;
 }

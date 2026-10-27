@@ -1,13 +1,15 @@
 import { Button, Chip, PageShell, Panel, Spinner, Timeline } from '@cueplusplus/ui';
-import { ChevronLeft, ExternalLink, History } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ExternalLink, History } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { useBridge } from '../bridge-context.tsx';
 import { OutsideText } from '../components/OutsideText.tsx';
 import { SectionPanel } from '../components/SectionPanel.tsx';
+import { UntrustedText } from '../components/UntrustedText.tsx';
 import { COPY, type Screen } from '../copy.ts';
+import { isRunId } from '../grammar.ts';
 import { errorMessage } from '../ipc.ts';
 import { type JoinedMessage, join } from '../messages/join.ts';
-import { type Millis, readMessageShow, slackParts } from '../messages/read.ts';
+import { type MessageRun, type Millis, readMessageShow, slackParts } from '../messages/read.ts';
 import {
   channelWords,
   type EntryTone,
@@ -18,7 +20,10 @@ import {
   whereWords,
   windowsOf,
 } from '../messages/story.ts';
+import { askFor, openRunVia } from '../navigation.tsx';
 import { queueLink } from '../queue.ts';
+import { RUN_STATE_WORDS, runTone } from '../workflows/runs.ts';
+import { readRunShow } from '../workflows/types.ts';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
 import { type AccountsInfo, joinOptionsOf, type MessagesReads } from './Messages.tsx';
 import { WhoHasIt } from './TakeActions.tsx';
@@ -35,7 +40,59 @@ export const STORY_COPY = {
   honest: "Built from what Agent Comms saw. Anything an agent did outside Agent Comms isn't here.",
   gone: 'The event service no longer keeps this message’s details, so this is what the list read.',
   notKept: 'The event service no longer keeps this message.',
+  runs: 'Workflows that ran on it',
+  run: (ruleId: string, version: number) => `${ruleId}, version ${version}`,
+  openRun: 'Open its run',
 } as const;
+
+/** How many of a message's runs the story reads in full: each starts the events CLI. */
+const RUNS_SHOWN = 4;
+
+/**
+ * The message's workflow runs (0.36.0), each read in full with `runs show`, so the story says each step they took; the
+ * listed run alone where a read fails. Read once for the runs the list named.
+ */
+function useRunsShown(message: JoinedMessage, reads: MessagesReads): { message: JoinedMessage; runs: MessageRun[] } {
+  const bridge = useBridge();
+  const eventId = message.event?.eventId ?? null;
+  const listed = useMemo(
+    () =>
+      eventId === null || reads.runs === 'off' || reads.runs.state !== 'ready'
+        ? []
+        : [...(reads.runs.value.get(eventId) ?? [])],
+    [eventId, reads.runs],
+  );
+  const [shown, setShown] = useState<MessageRun[] | null>(null);
+  useEffect(() => {
+    if (listed.length === 0) return;
+    let current = true;
+    void Promise.all(
+      listed.slice(0, RUNS_SHOWN).map(async (run): Promise<MessageRun> => {
+        if (!isRunId(run.runId)) return run;
+        try {
+          const result = await bridge.cli({ kind: 'eventsRunShow', runId: run.runId });
+          return result.status === 'ok' ? readRunShow(result.data) : run;
+        } catch {
+          return run;
+        }
+      }),
+    ).then((runs) => {
+      if (current) setShown([...runs, ...listed.slice(RUNS_SHOWN)]);
+    });
+    return () => {
+      current = false;
+    };
+  }, [bridge, listed]);
+  return useMemo(() => {
+    const event = message.event;
+    if (shown === null || event === null || reads.activity.state !== 'ready') return { message, runs: listed };
+    const options = joinOptionsOf(reads);
+    const runs = new Map(options.runs ?? []);
+    runs.set(event.eventId, shown);
+    const joined = join([event], reads.activity.value, { ...options, runs }).find((each) => each.key === message.key);
+    return { message: joined ?? message, runs: shown };
+  }, [shown, listed, message, reads]);
+}
 
 /** The channels whose messages a session takes (0.35.0): Gmail, Slack and Resend. */
 const TAKING_CHANNELS: ReadonlySet<string> = new Set(['gmail', 'slack', 'resend']);
@@ -190,7 +247,7 @@ export function MessageStory({
 }) {
   const bridge = useBridge();
   const shown = useShown(listed, reads, read);
-  const message = shown.state === 'shown' ? shown.message : listed;
+  const { message, runs } = useRunsShown(shown.state === 'shown' ? shown.message : listed, reads);
   const approvedAt = useApprovedAt(message);
   const storyContext = useMemo(() => ({ ...context, approvedAt }), [context, approvedAt]);
   const [problem, setProblem] = useState<string | null>(null);
@@ -266,6 +323,40 @@ export function MessageStory({
             messages are never taken (T11). */}
         {reads.takes === 'off' || !TAKING_CHANNELS.has(message.channel) ? null : (
           <WhoHasIt message={message} context={storyContext} onChanged={onChanged ?? (async () => undefined)} />
+        )}
+        {runs.length === 0 ? null : (
+          <SectionPanel title={STORY_COPY.runs}>
+            <ul className="flex flex-col gap-(--cue-space-2)">
+              {runs.map((run) => (
+                <li
+                  key={run.runId}
+                  data-story-run={run.runId}
+                  className="flex flex-wrap items-center gap-(--cue-space-3)"
+                >
+                  <span className="font-medium text-fg">
+                    <UntrustedText text={STORY_COPY.run(run.ruleId, run.ruleVersion)} />
+                  </span>
+                  <Chip tone={runTone(run.state)}>{RUN_STATE_WORDS[run.state]}</Chip>
+                  {onScreen === undefined || !isRunId(run.runId) ? null : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      icon={ChevronRight}
+                      className="ml-auto"
+                      onClick={() =>
+                        openRunVia((to) => {
+                          askFor(to);
+                          onScreen(to.screen);
+                        }, run.runId)
+                      }
+                    >
+                      {STORY_COPY.openRun}
+                    </Button>
+                  )}
+                </li>
+              ))}
+            </ul>
+          </SectionPanel>
         )}
         <SectionPanel title={STORY_COPY.happened}>
           <Timeline.Root>

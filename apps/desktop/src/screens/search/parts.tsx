@@ -258,6 +258,8 @@ export function storyReads(stories: JoinedStories, days: number, accounts: Accou
     // A story opened from Search shows what was done, not who has it now: Messages reads the takes.
     takes: 'off',
     taking: 'off',
+    // Nor which workflows ran on it (0.36.0): Messages reads the runs.
+    runs: 'off',
   };
 }
 
