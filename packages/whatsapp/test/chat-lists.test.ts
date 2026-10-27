@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { handoffText } from '@agentcomms/core';
+import { agentMarkerHint, handoffText } from '@agentcomms/core';
 import { allowChat, clearChats, denyChat } from '../src/operations/chat-lists.ts';
 import { ALICE, BOB, ERIN_STATUS, GROUP, HIDDEN } from './support/fixture.ts';
 import { ownInline, ownText } from './support/handoffs.ts';
@@ -193,7 +193,8 @@ test('allow, deny and clear are a person’s: refused to an agent, unchanged by 
     assert.match(String(result.json().error?.message), /only a person changes which chats an agent may see/);
     assert.equal(
       result.json().error?.hint,
-      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal.`,
+      // The refusal names the marker and how a person clears it (0.35.0 re-review, LOW 3).
+      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal. ${agentMarkerHint('CLAUDECODE', process.platform)}`,
     );
   }
   assert.deepEqual(readFileSync(configPath), config, 'nothing was written');
