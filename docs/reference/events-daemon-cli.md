@@ -46,8 +46,8 @@ Scripts should read these rather than parse output.
 | [`catalogue`](#agent-events-catalogue) | inspect the local event catalogue |
 | [`sources`](#agent-events-sources) | inspect configured event sources |
 | [`source`](#agent-events-source) | inspect one configured event source |
-| [`rules`](#agent-events-rules) | inspect immutable local event rule versions |
-| [`rule`](#agent-events-rule) | create, inspect and control immutable event rules |
+| [`workflows\|rules`](#agent-events-workflows) | inspect immutable local workflow versions |
+| [`workflow\|rule`](#agent-events-workflow) | create, inspect and control immutable workflows |
 | [`targets`](#agent-events-targets) | inspect immutable local event target versions |
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
 | [`subscribers`](#agent-events-subscribers) | inspect immutable SSE subscriber versions |
@@ -57,14 +57,14 @@ Scripts should read these rather than parse output.
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
 | [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
 | [`collection`](#agent-events-collection) | the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all |
-| [`integration`](#agent-events-integration) | the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
+| [`integration`](#agent-events-integration) | the services a workflow can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
 | [`session-queue`](#agent-events-session-queue) | the matches waiting for a busy agent session, each passed on when the session’s run ends |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
 | [`held`](#agent-events-held) | inspect typed held decisions |
 | [`dryrun`](#agent-events-dryrun) | read the dry-run log: what a dry-run target would have delivered, kept 24 hours at most |
-| [`queue`](#agent-events-queue) | work through the action queue: what matched your queue rules, and what you have done with it |
-| [`lane`](#agent-events-lane) | bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it |
+| [`queue`](#agent-events-queue) | work through the action queue: what your workflows sent to it, and what you have done with it |
+| [`lane`](#agent-events-lane) | bind a lane — a queue your workflows send to — to the one agent window woken for its items, and unbind it |
 | [`messages`](#agent-events-messages) | what happened to each message the event service observed: matched, judged, delivered, queued, read |
 | [`message`](#agent-events-message) | one message the event service observed, by its event id |
 | [`approve`](#agent-events-approve) | approve a standing disclosure by typing its challenge at this terminal, after optional target tests |
@@ -201,100 +201,100 @@ agent-events source [options] [command]
 agent-events source show [options] <source>
 ```
 
-### `agent-events rules`
+### `agent-events workflows`
 
-inspect immutable local event rule versions
-
-```
-agent-events rules [options] [command]
-```
-
-### `agent-events rules list`
+inspect immutable local workflow versions
 
 ```
-agent-events rules list [options]
+agent-events workflows|rules [options] [command]
 ```
 
-### `agent-events rule`
-
-create, inspect and control immutable event rules
+### `agent-events workflows list`
 
 ```
-agent-events rule [options] [command]
+agent-events workflows list [options]
 ```
 
-### `agent-events rule show`
+### `agent-events workflow`
+
+create, inspect and control immutable workflows
 
 ```
-agent-events rule show [options] <rule-id>
+agent-events workflow|rule [options] [command]
 ```
 
-### `agent-events rule create`
+### `agent-events workflow show`
 
 ```
-agent-events rule create [options] <document>
+agent-events workflow show [options] <workflow-id>
 ```
 
-### `agent-events rule update`
+### `agent-events workflow create`
 
 ```
-agent-events rule update [options] <document>
+agent-events workflow create [options] <document>
 ```
 
-### `agent-events rule enable`
+### `agent-events workflow update`
 
 ```
-agent-events rule enable [options] <rule-id> <version>
+agent-events workflow update [options] <document>
 ```
 
-### `agent-events rule disable`
+### `agent-events workflow enable`
 
 ```
-agent-events rule disable [options] <rule-id>
+agent-events workflow enable [options] <workflow-id> <version>
 ```
 
-### `agent-events rule remove`
+### `agent-events workflow disable`
 
 ```
-agent-events rule remove [options] <rule-id>
+agent-events workflow disable [options] <workflow-id>
 ```
 
-### `agent-events rule test`
+### `agent-events workflow remove`
 
 ```
-agent-events rule test [options] <document> <catalogue-example>
+agent-events workflow remove [options] <workflow-id>
 ```
 
-### `agent-events rule test-retained`
+### `agent-events workflow test`
 
 ```
-agent-events rule test-retained [options] <event-id>
+agent-events workflow test [options] <document> <catalogue-example>
+```
+
+### `agent-events workflow test-retained`
+
+```
+agent-events workflow test-retained [options] <event-id>
 ```
 
 | Option | What it does | Default |
 |---|---|---|
-| `--rule <rule-id>` |  | — |
+| `--workflow <workflow-id>` |  | — |
 | `--version <version>` |  | — |
 
-### `agent-events rule analyse`
+### `agent-events workflow analyse`
 
-suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)
+suggest improvements to a workflow, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)
 
 ```
-agent-events rule analyse [options] <rule-id>
+agent-events workflow analyse [options] <workflow-id>
 ```
 
 | Option | What it does | Default |
 |---|---|---|
-| `--draft <source>` | analyse a draft rule document instead of the stored version: - reads it from stdin | — |
+| `--draft <source>` | analyse a draft workflow document instead of the stored version: - reads it from stdin | — |
 | `--provider <provider>` | the provider Analyse's model runs on: openrouter or anthropic | — |
 
-### `agent-events rule approve`
+### `agent-events workflow approve`
 
-approve a rule's activation from the Agent Comms app, after its preview, as the person
+approve a workflow's activation from the Agent Comms app, after its preview, as the person
 
 ```
-agent-events rule approve [options] <approval-id>
+agent-events workflow approve [options] <approval-id>
 ```
 
 | Option | What it does | Default |
@@ -717,7 +717,7 @@ agent-events collection approve [options] <approval-id>
 
 ### `agent-events integration`
 
-the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)
+the services a workflow can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)
 
 ```
 agent-events integration [options] [command]
@@ -862,7 +862,7 @@ agent-events dryrun show [options] <delivery-id>
 
 ### `agent-events queue`
 
-work through the action queue: what matched your queue rules, and what you have done with it
+work through the action queue: what your workflows sent to it, and what you have done with it
 
 ```
 agent-events queue [options] [command]
@@ -879,7 +879,7 @@ agent-events queue list [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--state <state>` | open (the default), done, dismissed or all | — |
-| `--rule <rule-id>` | only this rule | — |
+| `--workflow <workflow-id>` | only this workflow's items | — |
 | `--channel <channel>` | gmail, slack, resend or whatsapp | — |
 | `--since <when>` | an ISO time, or a span back from now such as 7d or 12h | — |
 | `--limit <n>` | at most this many items (1 to 500, default 50) | — |
@@ -894,7 +894,7 @@ agent-events queue show [options] <item-id>
 
 ### `agent-events queue items`
 
-list queue items without what they say: ids, rules, channels, accounts, states and times
+list queue items without what they say: ids, workflows, channels, accounts, states and times
 
 ```
 agent-events queue items [options]
@@ -903,13 +903,13 @@ agent-events queue items [options]
 | Option | What it does | Default |
 |---|---|---|
 | `--state <state>` | open (the default), done, dismissed or all | — |
-| `--rule <rule-id>` | only this rule | — |
+| `--workflow <workflow-id>` | only this workflow's items | — |
 | `--channel <channel>` | gmail, slack, resend or whatsapp | — |
 | `--limit <n>` | at most this many items (1 to 500, default 50) | — |
 
 ### `agent-events queue counts`
 
-count open, done and dismissed queue items, and each rule’s open items
+count open, done and dismissed queue items, and each workflow’s open items
 
 ```
 agent-events queue counts [options]
@@ -949,7 +949,7 @@ agent-events queue clear [options]
 
 ### `agent-events lane`
 
-bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it
+bind a lane — a queue your workflows send to — to the one agent window woken for its items, and unbind it
 
 ```
 agent-events lane [options] [command]
@@ -957,7 +957,7 @@ agent-events lane [options] [command]
 
 ### `agent-events lane list`
 
-list every lane, its rules, channels and open items, and the agent window bound to it
+list every lane, its workflows, channels and open items, and the agent window bound to it
 
 ```
 agent-events lane list [options]

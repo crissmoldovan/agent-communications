@@ -1,13 +1,13 @@
 # @agentcomms/events-daemon
 
 `agent-events` watches the Gmail, Slack, Resend and WhatsApp accounts you have already connected with
-agent-communications. When an event matches a rule you approved, it delivers that event to the rule's targets:
+agent-communications. When an event matches a workflow you approved, it delivers that event to the workflow's targets:
 - a signed HTTPS webhook;
 - a local live stream (server-sent events) for your own tools;
 - a queue you work through in the desktop app or at your terminal, or a lane of it that wakes one agent window;
 - a dry-run log you read at your terminal or in the desktop app, which keeps each entry 24 hours at most.
 
-Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal.
+Nothing is collected and nothing leaves this machine until you approve the workflow yourself, at your terminal.
 
 ```bash
 npm i -g @agentcomms/events-daemon   # or run any command with: npx -y @agentcomms/events-daemon <command>
@@ -33,26 +33,26 @@ run it for you: it starts it in the background, restarts it after a crash and ke
 or a Windows service). Its state lives in an owner-only directory. A state directory so
 deep that its control socket's path would pass the system limit (103 bytes on macOS, 107 on Linux) is refused, with
 a hint to pin a shorter one. `agent-events --version` (or `-V`) prints the installed daemon version; a subcommand's
-`--version <number>` continues to select an immutable rule, target, subscriber or judge version.
+`--version <number>` continues to select an immutable workflow, target, subscriber or judge version.
 
-## A first rule: Gmail into the dry-run log
+## A first workflow: Gmail into the dry-run log
 
 The dry-run target keeps what matched in an encrypted local log that only you can read, at your terminal or in the
-desktop app. It keeps each entry 24 hours at most, and then deletes it. It is the safe way to see what a rule would send
-before you point it at a webhook.
+desktop app. It keeps each entry 24 hours at most, and then deletes it. It is the safe way to see what a workflow would
+send before you point it at a webhook.
 
 ```bash
 # 1. a target: the local dry-run log, keeping records for a day
 agent-events target add '{"targetId":"log","version":1,"kind":"dry-run","retentionMs":86400000}'
 
-# 2. a rule: every received Gmail message with a subject, mapped to its subject only
-agent-events sources list          # every connected account a rule can name: its source, id and name
-agent-events rule create "$(cat rule.json)"
+# 2. a workflow: every received Gmail message with a subject, mapped to its subject only
+agent-events sources list          # every connected account a workflow can name: its source, id and name
+agent-events workflow create "$(cat workflow.json)"
 
 # 3. turn it on: each step prints an approval, which you approve by typing its challenge
 agent-events enable-all            # the standing approval that starts collection
 agent-events approve <approval-id>
-agent-events rule enable mail-subjects 1
+agent-events workflow enable mail-subjects 1
 agent-events approve <approval-id> # offers to test the target first; answering no is fine
 
 # 4. read what matched: the list gives each record's id, and show prints that record
@@ -67,25 +67,25 @@ envelope: the ones `agentcommsuntrusted` names, every address (From, Reply-To, T
 from a sender, as `queue show --json` gives them.
 Inside the event service's MCP server both refuse, so no agent reads the log through MCP.
 
-Switch collection on before approving the rule: a pending target can be tested only while collection is on. If a test
-cannot run, the approval says why and still asks for its challenge.
+Switch collection on before approving the workflow: a pending target can be tested only while collection is on. If a
+test cannot run, the approval says why and still asks for its challenge.
 
 In the desktop app, **Events → Service → Switch on…** does the first two lines of step 3 for you: it runs `enable-all`, shows you
-the approval's preview — the rules collection starts for — and, when you press Approve, approves exactly that approval
-with `agent-events collection approve <approval-id> --digest <digest>`, the digest its preview showed. That command is
-the app's own: it refuses an agent's shell and the event service's MCP server, and on macOS it first checks that the app
-started it (core's `desktopAppOrigin`), a speed bump against agents, not a boundary against code running as you. On
-Windows and Linux nothing attests the app, so it is refused with `APPROVAL_REQUIRED` (exit 10, reason
+the approval's preview — the workflows collection starts for — and, when you press Approve, approves exactly that
+approval with `agent-events collection approve <approval-id> --digest <digest>`, the digest its preview showed. That
+command is the app's own: it refuses an agent's shell and the event service's MCP server, and on macOS it first checks
+that the app started it (core's `desktopAppOrigin`), a speed bump against agents, not a boundary against code running as
+you. On Windows and Linux nothing attests the app, so it is refused with `APPROVAL_REQUIRED` (exit 10, reason
 `ORIGIN_UNATTESTED`), naming `approve <approval-id>`, and the app offers Do it in Terminal, where you type the challenge
 as above. **Switch off** is `disable-all`: it takes away, so it applies at once, from anywhere, and its result's `said` tells you
 in plain words what it did.
 
-An approval that `rule enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
+An approval that `workflow enable` or `enable-all` prints lasts 30 minutes. If it runs out, or is revoked, before you
 approve it, nothing is turned on. On its next tick, or when it next starts, the service cancels the activation that
-was waiting for it, and `status` stops counting it as pending. Run `rule enable` again for a new approval. An update
-that lapsed this way no longer blocks the rule's next version.
+was waiting for it, and `status` stops counting it as pending. Run `workflow enable` again for a new approval. An update
+that lapsed this way no longer blocks the workflow's next version.
 
-`rule.json`:
+`workflow.json`:
 
 ```json
 {
@@ -115,14 +115,15 @@ that lapsed this way no longer blocks the rule's next version.
 }
 ```
 
-Rules, targets and subscribers are immutable versions. To change one, create its next version and enable it. The
-approval preview then shows exactly what changes.
+Workflows, targets and subscribers are immutable versions. To change one, create its next version and enable it. The
+approval preview then shows exactly what changes. A workflow is what earlier releases called a rule: `workflow` and
+`workflows` also answer to `rule` and `rules`, so scripts keep working, and a workflow's document keeps its `ruleId`.
 
 ## A queue
 
-From 0.30.0 a rule can put each match in a list you work through: a `queue` target. Each item says what arrived (the
-channel, the account, from whom, the subject or first words, when), which rule matched and, when the rule asked a
-judge, what it answered. You mark it **done** or **dismiss** it, and open the message in Gmail or Slack when the item
+From 0.30.0 a workflow can put each match in a list you work through: a `queue` target. Each item says what arrived (the
+channel, the account, from whom, the subject or first words, when), which workflow matched and, when the workflow asked
+a judge, what it answered. You mark it **done** or **dismiss** it, and open the message in Gmail or Slack when the item
 has a link. The desktop app shows the queue in its own screen; at a terminal:
 
 ```bash
@@ -133,17 +134,17 @@ agent-events queue done <item-id>    # or: dismiss, reopen
 agent-events queue clear             # remove done and dismissed items now (yours alone: no MCP tool clears)
 ```
 
-- **What a rule needs:** a queue target, `retention.queueMs` (1 to 30 days; a queue target's own retention is 1 to 30
-  days, 7 by default, and the lesser of the two applies), and a mapping that includes what an item shows. For Gmail,
+- **What a workflow needs:** a queue target, `retention.queueMs` (1 to 30 days; a queue target's own retention is 1 to
+  30 days, 7 by default, and the lesser of the two applies), and a mapping that includes what an item shows. For Gmail,
   that is the sender and the subject; for Slack, the poster's name and the text; for Resend, the sender and the
-  subject or body; for WhatsApp, the sender and the text. A rule without them is refused, and the refusal names
-  what is missing. Nothing is fetched to fill an item: its first words come only from a field the rule maps, and its
-  link only from ids the rule maps.
+  subject or body; for WhatsApp, the sender and the text. A workflow without them is refused, and the refusal names
+  what is missing. Nothing is fetched to fill an item: its first words come only from a field the workflow maps, and its
+  link only from ids the workflow maps.
 - **How long it keeps:** an item's content goes at its retention, whatever you did with it; its content-free row
-  (rule, state, times) stays one retention more, for the counts. Every revocation that removes a rule's dry-run
-  records removes its queue items too: disabling or tightening the rule, removing its target or judge, turning its
+  (workflow, state, times) stays one retention more, for the counts. Every revocation that removes a workflow's dry-run
+  records removes its queue items too: disabling or tightening the workflow, removing its target or judge, turning its
   judge's kind off, `disable-all`, removing the account, or a WhatsApp chat your lists now hide. A tighter version's
-  `rule update` result says how many open items enabling it will remove.
+  `workflow update` result says how many open items enabling it will remove.
 - **Who can read it:** you. `queue list`, `queue show` and `queue clear` refuse inside the event service's MCP server
   (`agent-events mcp`) and every program it starts; core's and the channels' MCP servers don't run the event service's
   CLI. Over MCP an agent gets `events_queue_items` and `events_queue_counts`, which never carry a sender, subject,
@@ -158,13 +159,13 @@ is woken for each new item and may read it. Nothing else changes about the queue
 kept, purged and shown as every queue item is, and each item names its lane.
 
 ```bash
-# 1. a lane is a queue target with a name; a rule sends to it, and you approve the rule as any other
+# 1. a lane is a queue target with a name; a workflow sends to it, and you approve the workflow as any other
 agent-events target add '{"targetId":"lane-david","version":1,"kind":"queue","retentionMs":604800000,"show":"summary","lane":{"name":"david"}}'
 
 # 2. the agent in the window you want tells you its id (events_lane_whoami); you bind it, at your terminal
 agent-events lane bind david --window 25f971a3-0c69-44e3-971c-3a4656afa986
 
-agent-events lane list               # every lane, its rules, channels, open items and the window bound to it
+agent-events lane list               # every lane, its workflows, channels, open items and the window bound to it
 agent-events lane unbind david       # at once; the window's watches end
 ```
 
@@ -184,17 +185,17 @@ agent-events lane unbind david       # at once; the window's watches end
   arrived after its binding. Binding again starts again.
 - **Every other window sees no lane item** over MCP, in any queue tool, and is not told one exists. You, at the
   terminal and in the app, see everything.
-- **A binding ends** when you unbind it (or the window unbinds its own), when no active rule sends to the lane any
+- **A binding ends** when you unbind it (or the window unbinds its own), when no active workflow sends to the lane any
   more, and with `disable-all`. It follows the lane across a new version of its target that you approve. Making a
-  queue a lane, or renaming one, is a new target version, approved through a new rule activation, and the approval
-  says "Items in lane david can be read by the agent window you bind to it." Two different targets of active rules
+  queue a lane, or renaming one, is a new target version, approved through a new workflow activation, and the approval
+  says "Items in lane david can be read by the agent window you bind to it." Two different targets of active workflows
   cannot share a lane's name.
 - **The protocol.** `agent-events mcp` now serves both MCP eras: a client that offers 2026-07-28 negotiates it, and a
   2025-era client connects as before.
 
 ## A Linear issue
 
-From 0.33.0 a rule can add an issue to your Linear workspace. Connect Linear once with a personal API key from your
+From 0.33.0 a workflow can add an issue to your Linear workspace. Connect Linear once with a personal API key from your
 Linear account's settings, in the app's Settings → Integrations or at your terminal:
 
 ```bash
@@ -205,7 +206,7 @@ agent-events provider key set linear
 agent-events --json integration show linear --team CUE
 
 # 3. a target: the team, its labels, who it is assigned to, and the title and description, whose {{field}} slots
-#    name fields the rule keeps
+#    name fields the workflow keeps
 agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear","team":{"id":"<team id>","key":"CUE"},"title":{"text":"Invoice from {{sender}}"},"description":{"text":"{{subject}}"},"labels":[{"id":"<label id>","name":"Billing"}],"assignee":"me"}'
 ```
 
@@ -213,18 +214,18 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   terminal, or in the Agent Comms app — never by an agent, and never shown again. `provider list` and
   `events_provider_list` say whether a Linear key is kept. `integration show linear` is your read too: it refuses
   inside an MCP server's process, and no MCP tool reaches it.
-- **Only what the rule keeps.** Each `{{field}}` in the title and description names one of the rule's mapped fields
-  (`{{subject}}`, `{{sender}}`, or `{{from.address}}` within a mapped `from`); a rule naming any other is refused when
-  you activate it. A model-written title or description comes later. The approval says which team, labels and
-  assignee, and which fields fill the title and the description.
+- **Only what the workflow keeps.** Each `{{field}}` in the title and description names one of the workflow's mapped
+  fields (`{{subject}}`, `{{sender}}`, or `{{from.address}}` within a mapped `from`); a workflow naming any other is
+  refused when you activate it. A model-written title or description comes later. The approval says which team, labels
+  and assignee, and which fields fill the title and the description.
 - **A slot's value stays text.** Linear makes a mention from a person's or an issue's plain address, links bare
   addresses and issue ids, and reads the description as Markdown. So in the description every slot's value is a block
   quote, its text inside a code block, where Linear makes no link, mention or formatting: a value from the message is
-  labelled "From outside: written by the sender, not checked", and a constant the rule's mapping sets "From the rule's
-  mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain text,
-  each is one line. The templates' own words are written as they are, as you approved them, and the description ends
-  with the rule and delivery that added the issue.
-- **Checked against Linear.** When you enable a rule and a Linear key is kept, the event service asks Linear (as
+  labelled "From outside: written by the sender, not checked", and a constant the workflow's mapping sets "From the
+  rule's mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain
+  text, each is one line. The templates' own words are written as they are, as you approved them, and the description
+  ends with the workflow and delivery that added the issue.
+- **Checked against Linear.** When you enable a workflow and a Linear key is kept, the event service asks Linear (as
   `integration show linear --team` does) whether each target's team key is the team its id names, and each label name
   its id's; a mismatch is refused (`LINEAR_TEAM_MISMATCH`, `LINEAR_LABEL_MISMATCH`), and so is a key Linear refuses or a
   Linear that does not answer. With no key kept the check is skipped — nothing is sent until there is one — and
@@ -238,15 +239,15 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
 - **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
   added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
   is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the
-  rule's delivery retention: `deliveries list` and `delivery show` give them as `linear: { identifier, url }`, the
+  workflow's delivery retention: `deliveries list` and `delivery show` give them as `linear: { identifier, url }`, the
   address without the title's words. Nothing the issue says is kept.
 
 ## What happened to a message
 
-From 0.32.0 the event service tells you what became of each message it observed: whether each rule matched it and what
-its judge answered, where each delivery went, the queue item it became, and what happened to that item since — which
-agent window was woken for it and read it, and who marked it done, dismissed it or reopened it. The desktop app reads
-it for its Messages screen; at a terminal:
+From 0.32.0 the event service tells you what became of each message it observed: whether each workflow matched it and
+what its judge answered, where each delivery went, the queue item it became, and what happened to that item since —
+which agent window was woken for it and read it, and who marked it done, dismissed it or reopened it. The desktop app
+reads it for its Messages screen; at a terminal:
 
 ```bash
 agent-events messages list --json                    # the last 30 days, newest first, 100 at a time
@@ -258,7 +259,7 @@ agent-events message show <event-id> --json          # one message, with every l
   - its event id, type, channel, account, and when it happened and was observed;
   - its source's own ids: a Gmail message id, a Slack channel and ts, a WhatsApp chat and message id, a Resend email
     id. These are the ids its link and agent-communications' activity log use;
-  - each rule's decision, with the judge's answer while the decision's record is kept;
+  - each workflow's decision, with the judge's answer while the decision's record is kept;
   - each delivery's target and state;
   - its queue item, with that item's history. `agent-events messages list` gives the newest line of each kind;
     `agent-events message show` gives every line.
@@ -276,31 +277,31 @@ agent-events message show <event-id> --json          # one message, with every l
   did in Gmail or Slack yourself is in neither. `--since` and `--before` take milliseconds since 1970, and `--limit`
   is 1 to 500.
 
-## Analyse a rule
+## Analyse a workflow
 
-From 0.33.0 the event service suggests how to improve a rule, or a draft of it, part by part: each suggestion says what
-the part says now, what it could say, why, and what that rests on. It never applies one. The desktop app puts the one
-you choose into the editor, and you approve the new version as any other. At a terminal:
+From 0.33.0 the event service suggests how to improve a workflow, or a draft of it, part by part: each suggestion says
+what the part says now, what it could say, why, and what that rests on. It never applies one. The desktop app puts the
+one you choose into the editor, and you approve the new version as any other. At a terminal:
 
 ```bash
-agent-events rule analyse invoices --json                        # the rule's active version, else its newest
-agent-events rule analyse invoices --draft - --json < draft.json # a draft: one JSON rule document on stdin
-agent-events rule analyse invoices --provider anthropic --json   # the model on your Anthropic key
+agent-events workflow analyse invoices --json                        # the workflow's active version, else its newest
+agent-events workflow analyse invoices --draft - --json < draft.json # a draft: one JSON workflow document on stdin
+agent-events workflow analyse invoices --provider anthropic --json   # the model on your Anthropic key
 ```
 
-- **What it reads.** The rule, or the draft, and content-free counts of what the rule did on this Mac in the last 30
-  days:
+- **What it reads.** The workflow, or the draft, and content-free counts of what the workflow did on this Mac in the
+  last 30 days:
   - its decisions, and their outcomes;
   - the judge's answers, and their spread;
   - per sending domain, what the judge said;
   - the queue items you marked done or dismissed, against the judge's number for each.
 
   It reads no subject, body, snippet or address. A domain is counted only when a judged decision kept it: from 0.33.0
-  a judged decision keeps its sender's domain (never the address), when the rule tests or keeps `from.address` and the
-  domain is a plain ASCII hostname. It is kept apart from the decision's metadata, encrypted, and only as long as the
-  rule keeps the message's content — its projection's deadline, the ingest retention (7 days by default) — not the 90
-  days of the decision's content-free metadata; it goes sooner with that metadata, and a tightening shortens it. So
-  Analyse's per-domain counts cover the last week or so, the rest of its counts the last 30 days.
+  a judged decision keeps its sender's domain (never the address), when the workflow tests or keeps `from.address` and
+  the domain is a plain ASCII hostname. It is kept apart from the decision's metadata, encrypted, and only as long as
+  the workflow keeps the message's content — its projection's deadline, the ingest retention (7 days by default) — not
+  the 90 days of the decision's content-free metadata; it goes sooner with that metadata, and a tightening shortens it.
+  So Analyse's per-domain counts cover the last week or so, the rest of its counts the last 30 days.
 - **What it suggests from the counts alone:**
   - a sending domain the judge said no to three times or more, and never yes: the condition, with that domain left out
     before the judge is asked;
@@ -310,12 +311,12 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   - the judge's question, as TypeSafe advises for System One questions: one yes-or-no about one fact, naming who asks
     for what;
   - a session's context text, as a task, steps, limits and what to do when unsure;
-  - a Linear issue's title template, using only the rule's mapped fields.
+  - a Linear issue's title template, using only the workflow's mapped fields.
 - **Where the model runs.** On the provider you name, or else the first with a key: OpenRouter
   (`anthropic/claude-sonnet-5.5`, the key Jev may already use), then Anthropic's own API (`claude-sonnet-5-5`, with
   `agent-events provider key set anthropic`). The result's `model` names the provider and the model, or why it did not
   run — `NO_KEY`, with `noKey` listing the providers that have none. The suggestions from the counts come either way.
-- **What it sends.** The rule's own text around each part — its question, a session's text and a Linear title as you
+- **What it sends.** The workflow's own text around each part — its question, a session's text and a Linear title as you
   wrote them, and its condition with each address and domain it names (a person it watches for, a domain an applied
   exclusion left out) replaced by `<address>` or `<domain>` — and the counts without any domain: never a message or
   anything from one, no sender, subject, body or address. The network allows only `https://openrouter.ai/api/v1/chat/completions` and
@@ -323,9 +324,9 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   answer and a 60-second deadline.
 - **What it takes back.** One JSON object, `{ "after": …, "why": … }`, within each part's limit; anything else is
   refused with a closed reason (`MODEL_OUTPUT_NOT_JSON`, `MODEL_OUTPUT_SLOTS`, …), and the provider's own words are
-  never kept. A suggestion you apply is your rule's text from then on, and you approve it with the rule.
+  never kept. A suggestion you apply is your workflow's text from then on, and you approve it with the workflow.
 - **Who can run it: you.** It runs when you press Analyse in the app or run it at an interactive terminal, as
-  `provider key set` does. `rule analyse` refuses inside the event service's MCP server, in an agent's shell (an
+  `provider key set` does. `workflow analyse` refuses inside the event service's MCP server, in an agent's shell (an
   agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
   a boundary against code running as you — and no MCP tool runs it.
 
@@ -339,7 +340,7 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
   
   The event catalogue, `agent-events catalogue list`, gives every event type and field.
 - **Conditions and mapping:** checks on an event's fields, and a mapping that names exactly the fields a target
-  receives. Nothing else leaves. Once you enable a judge, a rule can also ask a model one yes/no question
+  receives. Nothing else leaves. Once you enable a judge, a workflow can also ask a model one yes/no question
   ([Judges](#judges)).
 - **Targets:**
   - **Webhooks:** HTTPS, or plain HTTP to the literal loopback address only. Addresses are pinned, and every attempt
@@ -354,10 +355,11 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
     ([A lane](#a-lane)).
   - **A Linear issue** in your workspace, with your Linear key (0.33.0, [A Linear issue](#a-linear-issue)).
   - **The dry-run log.**
-- **Rules and deliveries you can read (0.32.0):**
-  - `rule show <rule-id>` gives each version with when it was switched on, replaced or revoked, the rule in plain words
-    (its `summary`, as parts; a part of kind `untrusted` is the rule author's own text), and what it did in the last 7
-    days (`counts7d`; over MCP, a window not bound to a lane the rule sends to gets the rule without it). The approval preview prints the same words above the JSON you approve, each piece of the rule
+- **Workflows and deliveries you can read (0.32.0):**
+  - `workflow show <workflow-id>` gives each version with when it was switched on, replaced or revoked, the workflow in
+    plain words (its `summary`, as parts; a part of kind `untrusted` is the workflow author's own text), and what it
+    did in the last 7 days (`counts7d`; over MCP, a window not bound to a lane the workflow sends to gets the workflow
+    without it). The approval preview prints the same words above the JSON you approve, each piece of the workflow
     author's text as one escaped string in double quotes, which nothing it holds can close.
   - `deliveries list` gives each delivery's target kind, its last try's answer, the decision and event it came from,
     when it was delivered where a log keeps that, and when it failed for good. A delivered row has no next try.
@@ -368,14 +370,14 @@ agent-events rule analyse invoices --provider anthropic --json   # the model on 
 - **Control:**
   - `pause` / `resume`;
   - `disable-all`, which stops collection and purges pending work at once, and says so in its result's `said`: your
-    rules are kept; deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are cleared;
-    each lane's window is unbound; and switching on again needs your approval;
+    workflows are kept; deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are
+    cleared; each lane's window is unbound; and switching on again needs your approval;
   - `doctor`, a content-free health report.
   
   Every command takes `--json`. The [CLI reference](../../docs/reference/events-daemon-cli.md) lists them all.
 - **What it delivered:** from 0.29.0, what each delivery came to (delivered, failed, or dropped before it was
   delivered) is a line in agent-communications' private activity log, under the event service's own session. A line
-  names the rule, the account the events came from, how many events, the target and the outcome. It never holds the
+  names the workflow, the account the events came from, how many events, the target and the outcome. It never holds the
   event, its sender or its subject, nor a webhook's URL. `agentcomms activity sessions` lists the session, and
   `agentcomms activity record off` stops the recording
   ([activity](../../README.md#what-your-agents-did-activity)).
@@ -388,9 +390,10 @@ installer — for example, `agentcomms mcp install --server events --client clau
 channel servers applies, and the result tells you to restart the client. The
 [`agentcomms-events` skill](../../skills/agentcomms-events/SKILL.md) tells an agent how to use it.
 
-- **An agent can:** read the catalogue and your rules, propose rules, targets, judges and a judge budget, test a rule
-  against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's enablement,
-  and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and unbind it.
+- **An agent can:** read the catalogue and your workflows, propose workflows, targets, judges and a judge budget, test a
+  workflow against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's
+  enablement, and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and
+  unbind it.
 - **An agent can never:**
   - approve anything. `events_approval_view`, and `approval view` run in a shell that carries an agent's marker or
     inside the event service's MCP server, give an approval's preview without a challenge and issue none (0.34.0), so
@@ -402,7 +405,7 @@ channel servers applies, and the result tells you to restart the client. The
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
-  - analyse a rule (`rule analyse`);
+  - analyse a workflow (`workflow analyse`);
   - resume a target;
   - decide a held event.
 
@@ -411,11 +414,11 @@ channel servers applies, and the result tells you to restart the client. The
 
 ## Judges
 
-A rule can ask a model one yes/no question about an event, after the rule's own conditions on its fields have matched.
-Two kinds of judge are available:
+A workflow can ask a model one yes/no question about an event, after the workflow's own conditions on its fields have
+matched. Two kinds of judge are available:
 - **`typesafe`:** TypeSafe's hosted **Jev**, from one of two providers. From TypeSafe itself (`jev-1.13.0`), through
   its System One API at `https://api.typesafe.ai/v1/systemone`; or through OpenRouter (`typesafe/jev-1.14`), at
-  `https://openrouter.ai/api/v1/systemone`, which passes the request on to TypeSafe's Jev. The fields the rule names
+  `https://openrouter.ai/api/v1/systemone`, which passes the request on to TypeSafe's Jev. The fields the workflow names
   leave this machine for that provider, sent with your key for it.
 - **`local-endpoint`:** a model server you run on this machine, at a plain-HTTP URL whose host is the literal
   `127.0.0.1` or `::1`; hostnames, HTTPS and any other address are refused. It is sent the same System One request
@@ -428,17 +431,17 @@ quality gate on real Gmail and Slack messages, and its worker boundary has been 
 yet, so this release ships no reviewed runtime lock. `agent-events judge kinds list` and
 `agent-events judge model status` show Laya as unavailable with the reason `E2_EXTERNAL_REFERENCE_BLOCKED`,
 and `agent-events judge kind enable laya` refuses before anything is prepared. You can still add a Laya judge, and a
-rule that names it: both are configuration, and a Laya judge answers only once you have enabled Laya and its model is
-ready. Until then `rule enable` refuses that rule with Laya's reason: in this release that is
+workflow that names it: both are configuration, and a Laya judge answers only once you have enabled Laya and its model
+is ready. Until then `workflow enable` refuses that workflow with Laya's reason: in this release that is
 `E2_EXTERNAL_REFERENCE_BLOCKED` on every platform; once a release offers Laya, it is `LAYA_PLATFORM_UNAVAILABLE` on
 Linux and Windows and to a daemon Rosetta translates on an Apple-silicon Mac, and `LAYA_SANDBOX_UNAVAILABLE` on a Mac
 whose sandbox does not apply.
 The first release that offers it will offer it on macOS only, with one prompt template, `laya-noul-v1`: English only, a
 512-token context, on the CPU, one call at a time, in a worker whose `sandbox-exec` profile lets it open no network
 connection (Unix-domain sockets included), start no other process, send no Apple event, look up no system service and
-write nowhere but its own temporary folder, so the worker has no way of its own to send what a rule asks it anywhere.
-Each worker proves, before it loads anything, that a connection and a process start are refused. Linux and Windows
-show Laya as not available. Once you enable it there,
+write nowhere but its own temporary folder, so the worker has no way of its own to send what a workflow asks it
+anywhere. Each worker proves, before it loads anything, that a connection and a process start are refused. Linux and
+Windows show Laya as not available. Once you enable it there,
 the daemon downloads the runtime (about 300 MB) and the model (about 1.69 GB) — ordinary network traffic, and the only
 network traffic Laya has — and checks every file against the release's lock and manifest before each start.
 `judge model status` then reports the runtime and model installation (`idle`, `installing`, `downloading`, `verifying`,
@@ -448,14 +451,14 @@ runtime and model, only while Laya is disabled; and once a newly approved entry'
 files of every entry it replaced.
 
 **A judge's exact document.** `agent-events judge show <judge-id> [--version <n>] --json` (and `events_judge_show` over
-MCP) gives one judge version's canonical document, as a rule embeds it, with its digest and whether it is `live` or
+MCP) gives one judge version's canonical document, as a workflow embeds it, with its digest and whether it is `live` or
 `revoked`: the newest live version unless you name one. It is configuration only — kind, provider, model, endpoint,
 prompt template and protocol. A hosted judge's key is kept apart from its document, so it never appears here.
 
-**Every judge kind is off until you turn it on: in the desktop app, or at your terminal.** Installing, updating, a rule
-or a budget never turns one on. Turning a kind off also cancels any pending global enablement that captured a rule of
-that kind. Removing a judge cancels its pending rule activations, and a rule that embeds that revoked judge cannot later
-become active.
+**Every judge kind is off until you turn it on: in the desktop app, or at your terminal.** Installing, updating, a
+workflow or a budget never turns one on. Turning a kind off also cancels any pending global enablement that captured a
+workflow of that kind. Removing a judge cancels its pending workflow activations, and a workflow that embeds that
+revoked judge cannot later become active.
 
 **Setting up Jev, or a model server on this machine, in one step.** In the desktop app, Settings → AI providers keeps
 your TypeSafe and OpenRouter keys, and Events → Judges → Set up Jev picks the provider and turns Jev on. The app runs
@@ -479,7 +482,7 @@ days and two calls at a time, overall and for that provider — and turns the ki
 approval of those enablements: each is recorded with where you approved it (`approvedVia: app` on its approval from
 the attested Agent Comms app, `terminal` at a terminal), and the audit log says the same — `approvedBy: desktop-app` from
 the app, `terminal` at a terminal. Running it again changes nothing, or makes the next judge version when the
-provider, the URL or the model changed; a rule keeps using the judge version it names until you update it. A local
+provider, the URL or the model changed; a workflow keeps using the judge version it names until you update it. A local
 model server's URL must be `http://127.0.0.1:<port>` or `http://[::1]:<port>`. `provider key set` again replaces a key,
 and every Jev judge of that provider gets the new one at once; `provider key remove` removes it, and theirs, so they
 refuse their calls until you add one. `judge kind disable <kind>` turns a kind off. Each of these commands runs only
@@ -494,8 +497,8 @@ these changes go through a terminal: a command that is neither at an interactive
 refused with
 `APPROVAL_REQUIRED` (exit 10, reason `ORIGIN_UNATTESTED`), naming the words to type at your terminal, and its audit line
 says `desktop-app (unattested)`; the app offers Do it in Terminal instead. The same holds for
-`integration set agent-sessions`, `rule approve` and `collection approve`. `rule analyse` changes nothing and still
-runs from the app there.
+`integration set agent-sessions`, `workflow approve` and `collection approve`. `workflow analyse` changes nothing and
+still runs from the app there.
 The result and the audit line say where you were — `desktop-app`, `desktop-app (test build)` or `terminal` — as the
 CLI tells the event service; that label rides on a same-user control token, so it too is a speed bump. Each
 refuses an agent's shell and the event service's MCP server, and no MCP tool performs them; `events_provider_list`
@@ -516,9 +519,9 @@ agent-events approve <approval-id>
 agent-events judge add "$(cat judge.json)"
 agent-events judge key set jev --version 1
 
-# 4. a rule that asks it; its approval shows the question, the fields the judge sees and where they go
-agent-events rule create "$(cat rule.json)"
-agent-events rule enable mail-asks 1
+# 4. a workflow that asks it; its approval shows the question, the fields the judge sees and where they go
+agent-events workflow create "$(cat workflow.json)"
+agent-events workflow enable mail-asks 1
 agent-events approve <approval-id>
 
 # 5. try the judge on the daemon's own synthetic event, never one of yours
@@ -542,7 +545,7 @@ agent-events judge test jev --version 1
 
 Through OpenRouter, the same judge names `"provider": "openrouter"`, `"model": "typesafe/jev-1.14"` and
 `"endpoint": "https://openrouter.ai/api/v1/systemone"`; the provider fixes both, and the budget needs an `openrouter`
-provider entry. A rule's approval says where its judge sends the fields: to TypeSafe, or to OpenRouter, which passes
+provider entry. A workflow's approval says where its judge sends the fields: to TypeSafe, or to OpenRouter, which passes
 them to TypeSafe's Jev.
 
 `budget.json`, the ceilings for every judge call, overall and per provider:
@@ -558,8 +561,8 @@ them to TypeSafe's Jev.
 }
 ```
 
-`rule.json` is the first rule with `"ruleId": "mail-asks"` and an `agentic` part beside its `condition`. Its `judge`
-is the judge document exactly as you added it:
+`workflow.json` is the first workflow with `"ruleId": "mail-asks"` and an `agentic` part beside its `condition`. Its
+`judge` is the judge document exactly as you added it:
 
 ```json
 "agentic": {
@@ -603,32 +606,32 @@ A Laya judge names the Laya provider, this release's reviewed model as `model` (
 ```
 
 It runs on this Mac, in English only, with a 512-token context, on the CPU and one call at a time, and the approval
-view of a rule that names it says so. Another model is refused (`LAYA_MANIFEST_NOT_REVIEWED`), and so is the two-option
-template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) until where its answer comes from has been reviewed. A budget's
-`laya` provider entry allows at most one call at a time.
+view of a workflow that names it says so. Another model is refused (`LAYA_MANIFEST_NOT_REVIEWED`), and so is the
+two-option template `laya-choice2-v1` (`LAYA_TEMPLATE_BLOCKED`) until where its answer comes from has been reviewed. A
+budget's `laya` provider entry allows at most one call at a time.
 
 **What a judge sees, and what it decides:**
-- Only the fields in `inputs`, sanitised and marked as untrusted inside a fixed prompt. The rule's `condition` must
+- Only the fields in `inputs`, sanitised and marked as untrusted inside a fixed prompt. The workflow's `condition` must
   check a content field too (`/subject` above), so a judge is never asked about every event.
-- It has no tools, secrets or authority. Its answer is one number from 0 to 1, and the rule matches when that number
+- It has no tools, secrets or authority. Its answer is one number from 0 to 1, and the workflow matches when that number
   reaches `threshold`. A message written to talk the judge into a match can move only that number; it cannot change
-  the rule, its fields or its targets.
+  the workflow, its fields or its targets.
 - An answer up to 0.1 below the threshold is uncertain. It is no match or, with `"onUncertain": "hold"`, a held
   decision that waits for you: `agent-events held list` shows them, and `agent-events held decide <decision-id> accept`
   (or `reject`) settles one, at your terminal.
 - A timeout, a malformed answer or a spent budget is no match. Retrying a delivery never asks the judge again.
 
-**Budgets.** Each rule sets its own ceilings: calls per rolling hour, input tokens per rolling 30 days, concurrent
-calls, and the most input and output tokens per call. The daemon-wide budget caps every rule, overall and per
-provider, and a rule cannot raise it. A rule's new version inherits the charges of the versions before it, so a new
-version never resets a budget. `judge test` runs at most ten times an hour per judge version, charged to the overall
+**Budgets.** Each workflow sets its own ceilings: calls per rolling hour, input tokens per rolling 30 days, concurrent
+calls, and the most input and output tokens per call. The daemon-wide budget caps every workflow, overall and per
+provider, and a workflow cannot raise it. A workflow's new version inherits the charges of the versions before it, so a
+new version never resets a budget. `judge test` runs at most ten times an hour per judge version, charged to the overall
 budget. A call is charged once it reaches the network: one refused, out of time or cut short before its first
 connection costs nothing, and a retry is a call of its own.
 
 **Turning a kind off.** `agent-events judge kind disable typesafe` takes effect at once: decisions waiting on its
-judges, and the deliveries, dry-run records and stream entries bound to them, are cancelled and purged. Rules that
-name its judges stay, but cannot call them; turning the kind back on needs a new approval. `disable-all` stops judges
-along with everything else.
+judges, and the deliveries, dry-run records and stream entries bound to them, are cancelled and purged. Workflows
+that name its judges stay, but cannot call them; turning the kind back on needs a new approval. `disable-all` stops
+judges along with everything else.
 
 `doctor` shows each kind's state, the active budget version and its reservations, how many decisions are held and
 when the next one expires, any hosted judge whose key is missing, and Laya's runtime, model and sandbox-boundary state
@@ -657,11 +660,11 @@ unavailable reason and the last update time — and never a path, input, request
 
 [`b3-control-v3.schema.json`](src/operations/contracts/b3-control-v3.schema.json) is v2 with a Laya judge variant: a
 Laya judge document is exactly `judgeId`, `version`, `kind` and `provider` `laya`, the reviewed manifest id as `model`
-and `promptTemplate` `laya-noul-v1`, and v3 accepts one in `judge add` and `judge update` and in the rule documents of
-`rule create`, `rule update` and `rule test`. It replaces the results of `judgesList`, `addJudge`, `updateJudge`,
-`rule-create` and `rule-update`, and the approval view of a rule that names a Laya judge adds `layaJudge`: its template,
-manifest id and D11's limits, and no input text. A refusal is `BAD_DATA` with one of five closed reasons in
-`details.reason`, named in its message too. Its vectors are in
+and `promptTemplate` `laya-noul-v1`, and v3 accepts one in `judge add` and `judge update` and in the workflow documents
+of `workflow create`, `workflow update` and `workflow test`. It replaces the results of `judgesList`, `addJudge`,
+`updateJudge`, `rule-create` and `rule-update`, and the approval view of a workflow that names a Laya judge adds
+`layaJudge`: its template, manifest id and D11's limits, and no input text. A refusal is `BAD_DATA` with one of five
+closed reasons in `details.reason`, named in its message too. Its vectors are in
 [`test/fixtures/b3-control-contract-v3`](test/fixtures/b3-control-contract-v3). An owner without E2's artifact manager
 still answers v1.
 

@@ -1321,7 +1321,7 @@ test('REL-B2: the released daemon keeps its human-only boundary, and the release
     readFile(join(ROOT, 'docs', 'RELEASING.md'), 'utf8'),
   ]);
   const text = readme.replace(/\s+/g, ' ');
-  assert.match(text, /until you approve the rule yourself, at your terminal/i, 'collection waits for a person');
+  assert.match(text, /until you approve the workflow yourself, at your terminal/i, 'collection waits for a person');
   assert.match(text, /An agent can never/i, 'the README states what an agent cannot do');
   assert.match(text, /approve anything/i, 'an agent never approves');
   assert.match(text, /see, set or rotate a webhook secret or stream token/i, 'secrets stay human-only');

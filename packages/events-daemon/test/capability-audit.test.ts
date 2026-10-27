@@ -42,13 +42,13 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.source.show.slack', 'source show', 'events_source_show', 'both', 'sourceShow'],
   ['events-daemon.source.show.resend', 'source show', 'events_source_show', 'both', 'sourceShow'],
   ['events-daemon.source.show.whatsapp', 'source show', 'events_source_show', 'both', 'sourceShow'],
-  ['events-daemon.rules.list', 'rules list', 'events_rules_list', 'both', 'rulesList'],
-  ['events-daemon.rule.show', 'rule show', 'events_rule_show', 'both', 'ruleShow'],
-  ['events-daemon.rule.create', 'rule create', 'events_rule_create', 'both', 'createRule'],
-  ['events-daemon.rule.update', 'rule update', 'events_rule_update', 'both', 'updateRule'],
-  ['events-daemon.rule.enable', 'rule enable', 'events_rule_enable', 'both', 'enableRule'],
-  ['events-daemon.rule.disable', 'rule disable', 'events_rule_disable', 'both', 'disableRule'],
-  ['events-daemon.rule.remove', 'rule remove', 'events_rule_remove', 'both', 'removeRule'],
+  ['events-daemon.rules.list', 'workflows list', 'events_rules_list', 'both', 'rulesList'],
+  ['events-daemon.rule.show', 'workflow show', 'events_rule_show', 'both', 'ruleShow'],
+  ['events-daemon.rule.create', 'workflow create', 'events_rule_create', 'both', 'createRule'],
+  ['events-daemon.rule.update', 'workflow update', 'events_rule_update', 'both', 'updateRule'],
+  ['events-daemon.rule.enable', 'workflow enable', 'events_rule_enable', 'both', 'enableRule'],
+  ['events-daemon.rule.disable', 'workflow disable', 'events_rule_disable', 'both', 'disableRule'],
+  ['events-daemon.rule.remove', 'workflow remove', 'events_rule_remove', 'both', 'removeRule'],
   ['events-daemon.targets.list', 'targets list', 'events_targets_list', 'both', 'targetsList'],
   ['events-daemon.target.add', 'target add', 'events_target_add', 'both', 'addTarget'],
   ['events-daemon.target.update', 'target update', 'events_target_update', 'both', 'updateTarget'],
@@ -62,8 +62,8 @@ const EXPECTED_B1_ROWS = [
 /** Tasks 5–6 register B3's paired rows and its deliberately unpaired terminal exceptions in plan-table order. */
 const EXPECTED_B3_ROWS = [
   ['events-daemon.approval.view', 'approval view', 'events_approval_view', 'both', 'approvalView'],
-  ['events-daemon.rule.test', 'rule test', 'events_rule_test', 'both', 'ruleTest'],
-  ['events-daemon.rule.test-retained', 'rule test-retained', null, 'exception', 'ruleTestRetained'],
+  ['events-daemon.rule.test', 'workflow test', 'events_rule_test', 'both', 'ruleTest'],
+  ['events-daemon.rule.test-retained', 'workflow test-retained', null, 'exception', 'ruleTestRetained'],
   ['events-daemon.target.test', 'target test', 'events_target_test', 'both', 'targetTest'],
   ['events-daemon.target.resume', 'target resume', null, 'exception', 'targetResume'],
   ['events-daemon.subscribers.list', 'subscribers list', 'events_subscribers_list', 'both', 'subscribersList'],
@@ -154,13 +154,13 @@ const EXPECTED_SETUP_ROWS = [
  * service on (0.34.0 design B4) is approved the same way.
  */
 const EXPECTED_RULE_APPROVAL_ROWS = [
-  ['events-daemon.rule.approve', 'rule approve', null, 'exception', 'approveRuleFromApp'],
+  ['events-daemon.rule.approve', 'workflow approve', null, 'exception', 'approveRuleFromApp'],
   ['events-daemon.collection.approve', 'collection approve', null, 'exception', 'approveEnableAllFromApp'],
 ] as const;
 
 /** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
 const EXPECTED_ANALYSE_ROWS = [
-  ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
+  ['events-daemon.rule.analyse', 'workflow analyse', null, 'exception', 'ruleAnalyse'],
 ] as const;
 
 /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
@@ -257,7 +257,7 @@ async function expectStrictParityFailure(root: string, explanation: string): Pro
 const EXPECTED_B3_EXCEPTIONS = [
   [
     'events-daemon.rule.test-retained',
-    'rule test-retained',
+    'workflow test-retained',
     'ruleTestRetained',
     'Retained sender content may be selected only by a person outside model context.',
   ],
@@ -503,7 +503,7 @@ test('PAR-B3: generated daemon references exactly describe the completed registr
   assert.deepEqual([...new Set(cliCommands)].sort(), [...new Set([...daemon.commands, ...daemon.groups])].sort());
   assert.deepEqual(headings(mcpPage).sort(), [...daemon.tools].sort());
 
-  for (const command of ['rule test-retained', 'target resume', 'held decide', 'secrets migrate'])
+  for (const command of ['workflow test-retained', 'target resume', 'held decide', 'secrets migrate'])
     assert.match(cliPage, new RegExp(`\\bagent-events ${command}\\b`, 'u'));
   for (const tool of [
     'events_run',
@@ -549,7 +549,7 @@ test('PAR-B3: paired controls and terminal-only exceptions occupy their delibera
 
   const pairedCommands = [
     'approval view',
-    'rule test',
+    'workflow test',
     'target test',
     'subscriber add',
     'subscriber remove',
@@ -575,7 +575,7 @@ test('PAR-B3: paired controls and terminal-only exceptions occupy their delibera
   for (const tool of pairedTools) assert.ok(daemon.tools.includes(tool), `${tool} is paired in Task 5`);
 
   const humanOnlyCommands = [
-    'rule test-retained',
+    'workflow test-retained',
     'target resume',
     'held decide',
     'target secret create',

@@ -176,10 +176,10 @@ export const B3_CAPABILITIES: readonly B3CapabilityContract[] = Object.freeze([
     'events_approval_view',
     'approvalView',
   ),
-  both('events-daemon.rule.test', 'rule test <document> <catalogue-example>', 'events_rule_test', 'ruleTest'),
+  both('events-daemon.rule.test', 'workflow test <document> <catalogue-example>', 'events_rule_test', 'ruleTest'),
   exception(
     'events-daemon.rule.test-retained',
-    'rule test-retained <event-id> --rule <rule-id> --version <n>',
+    'workflow test-retained <event-id> --workflow <workflow-id> --version <n>',
     'ruleTestRetained',
     'Retained sender content may be selected only by a person outside model context.',
   ),

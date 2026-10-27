@@ -189,7 +189,7 @@ export function parseQueueQuery(
   if (!(QUEUE_STATE_FILTERS as readonly unknown[]).includes(state)) usage('--state is open, done, dismissed or all');
   const ruleId = args.rule;
   if (ruleId !== undefined && (typeof ruleId !== 'string' || ruleId.length === 0 || ruleId.length > 256))
-    usage('--rule takes a rule id');
+    usage('--workflow takes a workflow id');
   const channel = args.channel;
   if (channel !== undefined && !(QUEUE_CHANNELS as readonly unknown[]).includes(channel))
     usage('--channel is gmail, slack, resend or whatsapp');

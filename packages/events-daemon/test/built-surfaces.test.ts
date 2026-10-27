@@ -180,11 +180,11 @@ test('PAR-B3: the production reference generator rejects a fixture copy with a r
   try {
     const page = join(fixture.root, 'docs/reference/events-daemon-cli.md');
     const source = await readFile(page, 'utf8');
-    const commandAt = source.indexOf('### `agent-events rule test`\n');
-    assert.notEqual(commandAt, -1, 'the generated page contains the paired rule-test command');
+    const commandAt = source.indexOf('### `agent-events workflow test`\n');
+    assert.notEqual(commandAt, -1, 'the generated page contains the paired workflow-test command');
     const nextCommandAt = source.indexOf('\n### `', commandAt + 1);
     const changed = source.slice(0, commandAt) + source.slice(nextCommandAt === -1 ? source.length : nextCommandAt + 1);
-    assert.notEqual(changed, source, 'the reference-command mutant removes the generated rule-test section');
+    assert.notEqual(changed, source, 'the reference-command mutant removes the generated workflow-test section');
     await writeFile(page, changed);
     await assert.rejects(
       run(
