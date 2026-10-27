@@ -18,8 +18,12 @@ afterEach(() => {
   platform.mac = true;
 });
 
+// The event service's words for the fixture's crm-hook: its whole URL, the addresses it may reach and its tries (security
+// review of 0.36.0, M4), as the terminal's preview prints them.
 const WORDS =
-  'crm-hook receives acme.client-asks.issue.created in the namespace acme, by signed webhook to https://hooks.example:443. Nothing a sender wrote.';
+  'crm-hook receives acme.client-asks.issue.created in the namespace acme, by signed webhook to ' +
+  'https://hooks.example:443/agentcomms, connecting only to the address 192.0.2.10, each event tried at most 5 times. ' +
+  'Nothing a sender wrote.';
 
 /** The event service at 0.36.0, its subscribers the fixture's, and a subscription's preview as `approval view` gives it. */
 function bridgeAt(events: string, fixtures: Partial<Record<Call['kind'], Fixture>> = {}): FakeBridge {
@@ -186,6 +190,9 @@ describe('Events → Subscribers', () => {
       { kind: 'eventsSubscriberEnable', subscriberId: 'crm-hook', version: 1 },
     ]);
     expect(dialog.querySelector('[data-slot="subscription-words"]')?.textContent).toBe(WORDS);
+    // The words are shown whole: the hook's path, which decides who receives on a shared host, and the address set.
+    expect(dialog.textContent).toContain('https://hooks.example:443/agentcomms');
+    expect(dialog.textContent).toContain('192.0.2.10');
     expect(dialog.textContent).toContain(SUBSCRIPTION_PREPARED.binding.digest);
     const approve = within(dialog).getByRole('button', { name: 'Approve' }) as HTMLButtonElement;
     // Only the subscriber's own name, typed, lets it be approved.

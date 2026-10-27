@@ -7,7 +7,10 @@
  * approval, Approve in Terminal opens `approve <approval>` there. Back, or leaving before the terminal opened, revokes
  * it: nothing is approved.
  *
- * The preview's words are the event service's, built from the subscriber's own closed words; they are shown as text.
+ * The preview's words are the event service's, built from the subscriber's own canonical words, and the terminal's
+ * preview prints the same: for a webhook, its whole URL (a secret one by its authority) — on a shared webhook host the
+ * path decides who receives — the addresses it may connect to and how many times each event is tried (security review
+ * of 0.36.0, M4). They are shown as text, whole.
  */
 import { Button, Dialog, Field, FieldLabel, Input } from '@cueplusplus/ui';
 import { useEffect, useRef, useState } from 'react';

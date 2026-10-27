@@ -106,6 +106,63 @@ test('D1: a subscriber with events is inert until approved; its preview names pa
   });
 });
 
+test('M4: a webhook subscription names its whole URL, the addresses it may reach and its tries; a secret URL, its authority', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Security review of 0.36.0, M4: on a shared webhook host the path decides who receives the events, and the words
+  // named only the host, so an agent could point a subscriber at its own hook and the person would approve
+  // "https://hooks.zapier.com".
+  await withEventsOwner(async (harness) => {
+    const hook = 'https://hooks.zapier.com/hooks/catch/123456/x/';
+    await harness.control.request('addSubscriber', {
+      document: {
+        ...webhookSubscriber({ url: hook, retryLimit: 5 }),
+        approvedAddressSet: ['3.209.24.0/24', '54.86.0.10'],
+      },
+    });
+    const words = async (version: number): Promise<{ agent: string | undefined; terminal: string }> => {
+      const prepared = (await harness.control.request('subscriber-enable', { subscriberId: 'crm-hook', version })) as {
+        approvalId: string;
+        binding: { digest: string };
+      };
+      const agentView = (await harness.control.request('approvalView', {
+        approvalId: prepared.approvalId,
+        digest: prepared.binding.digest,
+        agentView: true,
+      })) as { subscription?: { words: string } };
+      const terminal = await harness.cli(
+        ['approval', 'view', prepared.approvalId, '--digest', prepared.binding.digest],
+        { tty: true, json: false },
+      );
+      assert.equal(terminal.code, 0, terminal.err);
+      return { agent: agentView.subscription?.words, terminal: terminal.out };
+    };
+    const plain = await words(1);
+    const expected =
+      'crm-hook receives acme.*.*.* in the namespace acme, by signed webhook to ' +
+      'https://hooks.zapier.com:443/hooks/catch/123456/x/, connecting only to the addresses 3.209.24.0/24 and ' +
+      '54.86.0.10, each event tried at most 5 times. Nothing a sender wrote.';
+    assert.equal(plain.agent, expected);
+    assert.ok(plain.terminal.includes(`Subscription ${expected}`), plain.terminal);
+
+    // A secret URL is named by its authority alone, and says so; its addresses and tries are named as a plain one's.
+    const set = await harness.cli(['subscriber', 'url', 'set', 'crm-hook', '--version', '2'], {
+      tty: true,
+      json: false,
+      hidden: 'https://hooks.zapier.com/hooks/catch/SENTINEL-ACCOUNT/y/',
+    });
+    assert.equal(set.code, 0, set.err);
+    const secret = await words(2);
+    assert.equal(
+      secret.agent,
+      'crm-hook receives acme.*.*.* in the namespace acme, by signed webhook to https://hooks.zapier.com:443 ' +
+        '(a URL kept secret), connecting only to the addresses 3.209.24.0/24 and 54.86.0.10, each event tried at ' +
+        'most 5 times. Nothing a sender wrote.',
+    );
+    assert.doesNotMatch(`${secret.agent} ${secret.terminal}`, /SENTINEL-ACCOUNT|hooks\/catch/u);
+  });
+});
+
 test('D1: subscriber add and update answer the state subscribers list gives: inert until approved, none without events', {
   skip: WINDOWS_SKIP,
 }, async () => {

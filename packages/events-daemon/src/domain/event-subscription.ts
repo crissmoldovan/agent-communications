@@ -91,16 +91,30 @@ function wordsList(values: readonly string[]): string {
 }
 
 /**
+ * Where a webhook subscriber posts, as its subscription's words name it (security review of 0.36.0, M4): a plain URL
+ * whole — scheme, host, port and path, for on a shared webhook host the path decides who receives — or a secret URL's
+ * authority alone; the addresses it may connect to; and how many times each event is tried.
+ */
+export interface WebhookSubscriptionWhere {
+  readonly kind: 'webhook';
+  readonly address: string;
+  readonly secret: boolean;
+  readonly approvedAddressSet: readonly string[];
+  readonly retryLimit: number;
+}
+
+/**
  * The subscription's approval words (W29): what it receives, in which namespaces, whether it gets what senders wrote,
- * and where it goes. Every value is the document's own closed words: namespaces and patterns are event segments, an
- * address is loopback or the approved URL's public authority, an origin is an exact http(s) origin.
+ * and where it goes. Every value is the document's own canonical words: namespaces and patterns are event segments, an
+ * address is loopback, a plain webhook URL as canonicalised (it has no query, fragment or userinfo) or a secret one's
+ * public authority, the approved addresses are IP literals or CIDRs, and an origin is an exact http(s) origin.
  */
 export function describeSubscription(input: {
   readonly subscriberId: string;
   readonly events: EventSubscriptionV1;
   readonly where:
     | { readonly kind: 'sse'; readonly host: string; readonly port: number; readonly origins: readonly string[] }
-    | { readonly kind: 'webhook'; readonly authority: string; readonly secret: boolean };
+    | WebhookSubscriptionWhere;
 }): string {
   const { events } = input;
   const namespaces = `${events.namespaces.length === 1 ? 'the namespace' : 'the namespaces'} ${wordsList(events.namespaces)}`;
@@ -111,10 +125,16 @@ export function describeSubscription(input: {
             ? 'from no browser page'
             : `from ${input.where.origins.length === 1 ? 'the page at' : 'the pages at'} ${wordsList(input.where.origins)}`
         }`
-      : `by signed webhook to ${input.where.authority}${input.where.secret ? ' (a URL kept secret)' : ''}`;
+      : webhookWhere(input.where);
   const content =
     events.content === 'none'
       ? 'Nothing a sender wrote.'
       : "With what senders wrote, where a workflow's Raise step declares it, inside the untrusted-content envelope.";
   return `${input.subscriberId} receives ${wordsList(events.patterns)} in ${namespaces}, ${where}. ${content}`;
+}
+
+function webhookWhere(where: WebhookSubscriptionWhere): string {
+  const addresses = `${where.approvedAddressSet.length === 1 ? 'the address' : 'the addresses'} ${wordsList(where.approvedAddressSet)}`;
+  const tries = `${where.retryLimit} ${where.retryLimit === 1 ? 'time' : 'times'}`;
+  return `by signed webhook to ${where.address}${where.secret ? ' (a URL kept secret)' : ''}, connecting only to ${addresses}, each event tried at most ${tries}`;
 }

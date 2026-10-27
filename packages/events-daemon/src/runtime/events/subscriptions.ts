@@ -6,7 +6,7 @@ import {
   type SubscriberDocument,
 } from '../../domain/activation-documents.ts';
 import { describeSubscription, type EventSubscriptionV1 } from '../../domain/event-subscription.ts';
-import { webhookSubscriberAuthority } from '../../domain/webhook-subscriber.ts';
+import { webhookSubscriptionWhere } from '../../domain/webhook-subscriber.ts';
 import { cancelEventDeliveriesInTransaction } from './event-ledger.ts';
 
 /**
@@ -165,11 +165,7 @@ export function subscriptionPreviewFor(
     where:
       subscriber.kind === 'sse'
         ? { kind: 'sse', host: subscriber.authority.host, port: subscriber.authority.port, origins: subscriber.origins }
-        : {
-            kind: 'webhook',
-            authority: webhookSubscriberAuthority(subscriber),
-            secret: subscriber.url.kind === 'secret',
-          },
+        : webhookSubscriptionWhere(subscriber),
   });
   return { subscriber, words };
 }
