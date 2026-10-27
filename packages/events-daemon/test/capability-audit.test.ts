@@ -241,11 +241,24 @@ const EXPECTED_WORKFLOW_EVENT_ROWS = [
   ],
 ] as const;
 
+/**
+ * A workflow's runs and its checks (0.36.0 workflows design §7.6, §7.7, plan B6–B7): listing, showing and cancelling a
+ * run are the person's, CLI-only, with no tool. They sit after `workflow test`.
+ */
+const EXPECTED_WORKFLOW_RUN_ROWS = [
+  ['events-daemon.runs.list', 'runs list', null, 'exception', 'runsList'],
+  ['events-daemon.runs.show', 'runs show', null, 'exception', 'runShow'],
+  ['events-daemon.runs.cancel', 'runs cancel', null, 'exception', 'runCancel'],
+] as const;
+
+const ruleTestRows = EXPECTED_B3_ROWS.findIndex((row) => row[0] === 'events-daemon.rule.test') + 1;
 const subscriberTokenRows = EXPECTED_B3_ROWS.findIndex((row) => row[0] === 'events-daemon.subscriber-token.rotate') + 1;
 
 const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
-  ...shapedRows(EXPECTED_B3_ROWS.slice(0, subscriberTokenRows)),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(0, ruleTestRows)),
+  ...shapedRows(EXPECTED_WORKFLOW_RUN_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(ruleTestRows, subscriberTokenRows)),
   ...shapedRows(EXPECTED_WORKFLOW_EVENT_ROWS),
   ...shapedRows(EXPECTED_B3_ROWS.slice(subscriberTokenRows)),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
@@ -417,6 +430,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.session-queue.drop',
     'events-daemon.subscriber.approve',
     ...EXPECTED_PROJECT_ROWS.map(([id]) => id),
+    ...EXPECTED_WORKFLOW_RUN_ROWS.map(([id]) => id),
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

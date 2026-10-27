@@ -712,5 +712,34 @@
         "roots": ["/example/home/work", "/example/home/code"]
       }
     }
+  },
+  {
+    "name": "runs-list-request",
+    "request": {
+      "operation": "runs-list",
+      "args": {
+        "ruleId": "client-asks",
+        "state": "waiting"
+      }
+    }
+  },
+  {
+    "name": "run-show-request",
+    "request": {
+      "operation": "run-show",
+      "args": {
+        "runId": "wfr_0123456789abcdefghjkmnpqrs"
+      }
+    }
+  },
+  {
+    "name": "run-cancel-request",
+    "request": {
+      "operation": "run-cancel",
+      "args": {
+        "runId": "wfr_0123456789abcdefghjkmnpqrs",
+        "interrupt": true
+      }
+    }
   }
 ]

@@ -161,7 +161,8 @@ import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
-import type { WorkflowFailpoint } from './workflow/engine.ts';
+import type { WorkflowEngine, WorkflowFailpoint } from './workflow/engine.ts';
+import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -1557,6 +1558,7 @@ async function startOwnerWithLock(
       notifier: options.workflows?.notifier ?? makeNotifier({ platform: process.platform, env: process.env }),
       writerQuiescer,
       now,
+      interrupt: relayTurnInterrupter({ store: database, relay: () => agentSessions.relay() }),
       failpoint: options.workflows?.failpoint,
     },
     [...(options.workflows?.parts ?? [])],
@@ -1951,6 +1953,7 @@ async function startOwnerWithLock(
           judgeSetup,
           readers,
           { service: agentSessions, queue: sessionQueue },
+          workflows,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -2057,6 +2060,7 @@ async function handleControl(
   judgeSetup?: JudgeSetupService | undefined,
   readers?: OwnerReaders,
   sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
+  workflows?: Pick<WorkflowEngine, 'cancel'>,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -2265,6 +2269,14 @@ async function handleControl(
         requiredText(request.args.source, 'source'),
         await connectedAccounts(),
       );
+    // A workflow's runs (0.36.0 §7.6): the person's alone, from their origin; a cancel is the engine's, at once.
+    case OWNER_CONTROL_WIRES.runsList:
+    case OWNER_CONTROL_WIRES.runShow:
+    case OWNER_CONTROL_WIRES.runCancel:
+      return runControl(
+        { store: database, cancel: (runId, input) => requireWorkflows(workflows).cancel(runId, input) },
+        request,
+      );
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow: {
@@ -2314,6 +2326,11 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requireWorkflows<T>(workflows: T | undefined): T {
+  if (workflows === undefined) throw new CommsError('CONFIG', 'workflows are not composed for this owner');
+  return workflows;
 }
 
 function requireSessions<T>(sessions: T | undefined): T {

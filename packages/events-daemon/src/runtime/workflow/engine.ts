@@ -52,6 +52,7 @@ import {
   startRunInTransaction,
   stepOutput,
   stepStates,
+  takeRunsEndedElsewhere,
 } from './runs.ts';
 import { SPLIT_OUTCOME } from './steps/split.ts';
 
@@ -239,6 +240,7 @@ export class WorkflowEngine {
   }
 
   async #tick(): Promise<number> {
+    await this.#finishEndedElsewhere();
     await this.#expire();
     if (!this.#collecting()) return 0;
     let ran = 0;
@@ -258,6 +260,24 @@ export class WorkflowEngine {
       if (progressed === 0) break;
     }
     return ran;
+  }
+
+  /**
+   * The runs an ending of authority cancelled outside the engine — a revocation, disable-all or an account's removal,
+   * each in its own transaction, raising no event (W10) — finish here, after that commit: each step they ran gets its
+   * executor's `finish`, as a run the engine ends does. Best-effort, whatever the switch: a run still live (its
+   * transaction rolled back) is passed over, and a finish that fails changes nothing about the cancel.
+   */
+  async #finishEndedElsewhere(): Promise<void> {
+    for (const id of takeRunsEndedElsewhere(this.#store.database)) {
+      try {
+        const row = readRun(this.#store.database, id);
+        if (row?.state !== 'cancelled') continue;
+        await this.#ended(row, this.#ruleOf(row), 'cancelled');
+      } catch {
+        // A run whose version cannot be read finishes nothing; it stays cancelled.
+      }
+    }
   }
 
   #collecting(): boolean {

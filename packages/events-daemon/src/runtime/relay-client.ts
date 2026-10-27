@@ -542,6 +542,17 @@ export class RelayClient {
   }
 
   /**
+   * `POST /v1/runs/:id/interrupt` (api-contract, read 2026-10-27): interrupts a session's live turn, only when the person
+   * cancels a workflow's run with `--interrupt` (workflows design §7.6). True when the relay interrupted it (200); false
+   * for a turn it does not know (404), one no longer live (409), or a provider that cannot interrupt (501).
+   */
+  async interruptRun(runId: string): Promise<boolean> {
+    if (!RUN_ID.test(runId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay run id is run_<uuid>');
+    const body = await this.#json('POST', `/v1/runs/${runId}/interrupt`, {}, [200, 404, 409, 501]);
+    return body.status === 200;
+  }
+
+  /**
    * Follows `GET /v1/events?follow=1` until `signal` aborts or the relay ends the stream — with the Authorization header,
    * which an EventSource cannot send — resuming with `Last-Event-ID` when `lastEventId` is given. Each record is told
    * once, by its `id`: delivery is at least once, so a repeat after a resume is dropped. Returns the last cursor read,

@@ -1519,6 +1519,53 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "runs-list" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "ruleId": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$" },
+                "state": { "$ref": "#/$defs/runState" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "run-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["runId"],
+              "properties": { "runId": { "$ref": "#/$defs/runId" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "run-cancel" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["runId"],
+              "properties": { "runId": { "$ref": "#/$defs/runId" }, "interrupt": { "type": "boolean" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -2636,6 +2683,141 @@
         }
       }
     },
+    "runId": { "type": "string", "pattern": "^wfr_[0-9a-hjkmnp-tv-z]{26}$" },
+    "stepId": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+    "runState": { "enum": ["held", "running", "waiting", "done", "failed", "cancelled", "expired"] },
+    "runWaitKind": { "enum": ["turn-end", "session-idle", "time", "limit"] },
+    "closedCode": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$" },
+    "runWaiting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stepId", "kind", "since", "ahead", "needsYouInClaudeStream"],
+      "properties": {
+        "stepId": { "$ref": "#/$defs/stepId" },
+        "kind": { "$ref": "#/$defs/runWaitKind" },
+        "since": { "type": "integer", "minimum": 0 },
+        "ahead": { "$ref": "#/$defs/nullableCount" },
+        "needsYouInClaudeStream": { "type": "boolean" }
+      }
+    },
+    "runListEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runId",
+        "ruleId",
+        "ruleVersion",
+        "state",
+        "startedAt",
+        "updatedAt",
+        "endCode",
+        "eventId",
+        "parentRunId",
+        "depth",
+        "shadow",
+        "waiting"
+      ],
+      "properties": {
+        "runId": { "$ref": "#/$defs/runId" },
+        "ruleId": { "$ref": "#/$defs/id" },
+        "ruleVersion": { "$ref": "#/$defs/positive" },
+        "state": { "$ref": "#/$defs/runState" },
+        "startedAt": { "type": "integer", "minimum": 0 },
+        "updatedAt": { "type": "integer", "minimum": 0 },
+        "endCode": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closedCode" }] },
+        "eventId": { "$ref": "#/$defs/id" },
+        "parentRunId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/runId" }] },
+        "depth": { "type": "integer", "minimum": 0, "maximum": 3 },
+        "shadow": { "type": "boolean" },
+        "waiting": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/runWaiting" }] }
+      }
+    },
+    "runStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "stepId",
+        "kind",
+        "state",
+        "outcome",
+        "attempts",
+        "startedAt",
+        "settledAt",
+        "output",
+        "lastErrorCode",
+        "deliveryId",
+        "wait"
+      ],
+      "properties": {
+        "stepId": { "$ref": "#/$defs/stepId" },
+        "kind": {
+          "enum": [
+            "condition",
+            "judge",
+            "route",
+            "find-session",
+            "start-session",
+            "worktree",
+            "deliver",
+            "wait",
+            "notify",
+            "split",
+            "raise"
+          ]
+        },
+        "state": { "enum": ["ready", "running", "waiting", "done", "failed", "skipped", "cancelled"] },
+        "outcome": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[a-z][a-z-]{0,31}$" }] },
+        "attempts": { "type": "integer", "minimum": 0 },
+        "startedAt": { "$ref": "#/$defs/nullableCount" },
+        "settledAt": { "$ref": "#/$defs/nullableCount" },
+        "output": {
+          "oneOf": [{ "type": "null" }, { "type": "object", "additionalProperties": { "$ref": "#/$defs/json" } }]
+        },
+        "lastErrorCode": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closedCode" }] },
+        "deliveryId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
+        "wait": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["kind", "since", "wakeAt"],
+              "properties": {
+                "kind": { "$ref": "#/$defs/runWaitKind" },
+                "since": { "type": "integer", "minimum": 0 },
+                "wakeAt": { "type": "integer", "minimum": 0 }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "runEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eventId", "type", "raisedAt", "state", "deliveries"],
+      "properties": {
+        "eventId": { "type": "string", "pattern": "^wfe_[0-9a-hjkmnp-tv-z]{26}$" },
+        "type": { "type": "string", "minLength": 7, "maxLength": 131 },
+        "raisedAt": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["open", "done", "expired", "cancelled"] },
+        "deliveries": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["subscriberId", "subscriberVersion", "state"],
+            "properties": {
+              "subscriberId": { "$ref": "#/$defs/id" },
+              "subscriberVersion": { "$ref": "#/$defs/positive" },
+              "state": {
+                "enum": ["queued", "retryable", "disclosing", "delivered", "dead-lettered", "expired", "cancelled"]
+              }
+            }
+          }
+        }
+      }
+    },
     "resultsByOperation": {
       "$defs": {
         "status": {
@@ -3471,6 +3653,64 @@
             }
           }
         },
+        "runs-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runs"],
+          "properties": { "runs": { "type": "array", "maxItems": 200, "items": { "$ref": "#/$defs/runListEntry" } } }
+        },
+        "run-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "runId",
+            "ruleId",
+            "ruleVersion",
+            "state",
+            "startedAt",
+            "updatedAt",
+            "endCode",
+            "eventId",
+            "parentRunId",
+            "depth",
+            "shadow",
+            "waiting",
+            "path",
+            "notRaised",
+            "steps",
+            "events"
+          ],
+          "properties": {
+            "runId": { "$ref": "#/$defs/runId" },
+            "ruleId": { "$ref": "#/$defs/id" },
+            "ruleVersion": { "$ref": "#/$defs/positive" },
+            "state": { "$ref": "#/$defs/runState" },
+            "startedAt": { "type": "integer", "minimum": 0 },
+            "updatedAt": { "type": "integer", "minimum": 0 },
+            "endCode": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closedCode" }] },
+            "eventId": { "$ref": "#/$defs/id" },
+            "parentRunId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/runId" }] },
+            "depth": { "type": "integer", "minimum": 0, "maximum": 3 },
+            "shadow": { "type": "boolean" },
+            "waiting": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/runWaiting" }] },
+            "path": { "type": "array", "items": { "$ref": "#/$defs/stepId" } },
+            "notRaised": { "type": "integer", "minimum": 0 },
+            "steps": { "type": "array", "items": { "$ref": "#/$defs/runStep" } },
+            "events": { "type": "array", "items": { "$ref": "#/$defs/runEvent" } }
+          }
+        },
+        "run-cancel": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["runId", "state", "cancelledDeliveries", "cancelledEvents", "interrupted"],
+          "properties": {
+            "runId": { "$ref": "#/$defs/runId" },
+            "state": { "const": "cancelled" },
+            "cancelledDeliveries": { "type": "integer", "minimum": 0 },
+            "cancelledEvents": { "type": "integer", "minimum": 0 },
+            "interrupted": { "type": "boolean" }
+          }
+        },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -3581,6 +3821,9 @@
                     "provider-key-set",
                     "provider-key-remove",
                     "rule-analyse",
+                    "runs-list",
+                    "run-show",
+                    "run-cancel",
                     "projects-list",
                     "project-show",
                     "project-add",
@@ -3865,6 +4108,18 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-analyse" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-analyse" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "runs-list" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/runs-list" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "run-show" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/run-show" } } }
+            },
+            {
+              "if": { "properties": { "request": { "properties": { "operation": { "const": "run-cancel" } } } } },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/run-cancel" } } }
             },
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-approve" } } } } },

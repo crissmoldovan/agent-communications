@@ -36,6 +36,7 @@ export function assertNotMcpServer(
     | 'relay'
     | 'sessions'
     | 'projects'
+    | 'runs'
     | 'approve'
     | 'secret' = 'read',
 ): void {
@@ -123,6 +124,12 @@ export function assertNotMcpServer(
       message:
         "projects are for a person, at a terminal or in the app — the event service's MCP server cannot read or change them",
       hint: 'An agent can ask the person to add or change a project in the app: Events → Projects.',
+    },
+    // A workflow's runs (0.36.0 §7.6): the person's to list, show and cancel; an agent has no tool for any of them.
+    runs: {
+      message:
+        "a workflow's runs are for a person, at a terminal or in the app — the event service's MCP server cannot read or cancel them",
+      hint: "An agent can ask the person to look at a workflow's runs in the app: Events → Workflows, its Runs.",
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

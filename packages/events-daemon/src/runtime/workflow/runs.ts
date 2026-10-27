@@ -659,8 +659,26 @@ export type RunScope =
   | { readonly all: true };
 
 /**
+ * The runs an ending of authority cancelled outside the engine, by database, until the engine's next tick finishes
+ * them: each step it ran gets its executor's `finish` (a worktree's `remove-if-clean`), after the cancel's commit and
+ * never inside it. Best-effort: a run the transaction did not end after all (it rolled back) is found still live and
+ * passed over, and a restart before the tick leaves the steps as they are, as a crash after any run's end does.
+ */
+const ENDED_ELSEWHERE = new WeakMap<DatabaseSync, Set<string>>();
+
+/** Takes the runs cancelled outside the engine since the last call: each is the engine's to finish, once. */
+export function takeRunsEndedElsewhere(database: DatabaseSync): readonly string[] {
+  const ended = ENDED_ELSEWHERE.get(database);
+  if (ended === undefined || ended.size === 0) return [];
+  const ids = [...ended];
+  ended.clear();
+  return ids;
+}
+
+/**
  * Cancels every live run in `scope` (W10): a version revoked, an account removed, or collection switched off. Called
- * inside the transaction that ends the authority, so no step of such a run can be claimed after it commits.
+ * inside the transaction that ends the authority, so no step of such a run can be claimed after it commits. Raises no
+ * event; the engine's next tick finishes the steps each run ran (`takeRunsEndedElsewhere`).
  */
 export function cancelRunsInTransaction(database: DatabaseSync, scope: RunScope, code: string, now: number): number {
   let ids: Array<{ id: string }>;
@@ -688,6 +706,14 @@ export function cancelRunsInTransaction(database: DatabaseSync, scope: RunScope,
       .all(scope.accountId, scope.source, scope.source) as Array<{ id: string }>;
   let cancelled = 0;
   for (const { id } of ids)
-    if (endRunInTransaction(database, { runId: id, state: 'cancelled', code, now }) !== null) cancelled += 1;
+    if (endRunInTransaction(database, { runId: id, state: 'cancelled', code, now }) !== null) {
+      cancelled += 1;
+      let ended = ENDED_ELSEWHERE.get(database);
+      if (ended === undefined) {
+        ended = new Set();
+        ENDED_ELSEWHERE.set(database, ended);
+      }
+      ended.add(id);
+    }
   return cancelled;
 }

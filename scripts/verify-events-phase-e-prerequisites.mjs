@@ -55,7 +55,7 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '9a56ff368dfa81031a3a448eab6df020fb457ca0d7542a0e5b0b5248f3619eaf',
+    '88e9daa19908577b62a57786719f74180f203e7cc9844231e9fbdd2a8ced1601',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -67,7 +67,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     '0798951f4ca39f40e51435ebd8a9ad99619cfc922f12abe844f31e8c595d1195',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '65ed9174939924b635caf6242b2489496758e3bf9137d1a9d25092b43fbd2c83',
+    'b7ade3a45b55c01f98e6bf064dddebb73a6d829a9dcc27eea8808a4fbaf0b66c',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -85,7 +85,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    'ecf294a45cef399f3101154614103991330caef68ee71925d42dd9bda74f506f',
+    '4fd51142e58ce9922d01c8663ed264660767502f2110fff6ac9d73db74c9302b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':
