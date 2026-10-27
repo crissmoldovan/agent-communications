@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Events, Service</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.dot{width:8px;height:8px;border-radius:50%;flex:none;display:inline-block}
+.d-off{background:var(--text3)}
+.d-on{background:var(--ok)}
+.d-paused{background:var(--warn)}
+.big{padding:20px 22px;gap:10px}
+.bigline{margin:0;font-size:26px;font-weight:600;letter-spacing:-0.02em;line-height:1.2}
+.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.stat{background:var(--s2);border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;gap:2px}
+.kv{display:flex;gap:12px;padding:8px 0;border-top:1px solid var(--s2)}
+.kv > span:first-child{width:120px;flex:none;color:var(--text2)}
+.words{display:grid;grid-template-columns:120px minmax(0,1fr);gap:8px 12px;margin:0}
+.words dt{font-weight:500}
+.words dd{margin:0;color:var(--text2)}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1180px">
+
+<nav aria-label="Sections" class="nav">
+  <div class="brand"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 14px; letter-spacing: -0.01em">Agent Comms</span></div>
+  <div style="display: flex; flex-direction: column; gap: 2px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="2"></rect><rect x="14" y="3" width="7" height="7" rx="2"></rect><rect x="3" y="14" width="7" height="7" rx="2"></rect><rect x="14" y="14" width="7" height="7" rx="2"></rect></svg><span>Overview</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h5l1.5 3h5L16 13h5"></path><path d="M5.5 5h13L21 13v6H3v-6z"></path></svg><span>Queue</span><span class="cnt">5</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16v11H9l-5 4z"></path><path d="M8 9.5h8M8 12.5h5"></path></svg><span>Messages</span></a>
+    <a class="ni" href="AccountSlack.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20c.8-3.4 3.4-5 6.5-5s5.7 1.6 6.5 5"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18.5 15.5c1.6.7 2.6 2.3 3 4.5"></path></svg><span>Accounts</span></a>
+    <a class="ni" href="McpServers.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 3v5M15 3v5"></path><path d="M6 8h12v3a6 6 0 0 1-12 0z"></path><path d="M12 17v4"></path></svg><span>MCP servers</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12.5l4.5 4.5L20 6"></path></svg><span>Approvals</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1"></path><path d="M3.5 4v4.5H8"></path><path d="M12 7.5V12l3 2"></path></svg><span>Activity</span></a>
+    <a class="ni" href="YourAgents.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="7" width="16" height="12" rx="3"></rect><path d="M12 3v4"></path><circle cx="9" cy="13" r="1"></circle><circle cx="15" cy="13" r="1"></circle></svg><span>Your agents</span></a>
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 12a8 8 0 1 1-2.3-5.6"></path><path d="M20 4v5h-5"></path></svg><span>Updates</span></a>
+    <a class="ni on" href="EventsService.dc.html" aria-current="page"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l3-7 4 14 3-7h4"></path></svg><span>Events</span></a>
+    <a class="ni" href="Doctor.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4v6a5 5 0 0 0 10 0V4"></path><path d="M10 15v2a4 4 0 0 0 8 0v-3"></path><circle cx="18" cy="12" r="2"></circle></svg><span>Doctor</span></a>
+  </div>
+  <div style="margin-top: auto; display: flex; flex-direction: column; gap: 8px">
+    <a class="ni" href="Main.dc.html"><svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"></path></svg><span>Settings</span></a>
+    <span class="ver">agentcomms 0.34.0</span>
+  </div>
+</nav>
+
+<main class="main">
+<div class="col">
+  <div>
+    <h1 class="h1">Events</h1>
+    <p class="sub">Rules watch your accounts and pass on what matters.</p>
+  </div>
+  <nav aria-label="Event service" class="tabs">
+    <a class="tab on" href="EventsService.dc.html" aria-current="page">Service <span aria-hidden="true" class="dot {{dotClass}}"></span></a>
+    <a class="tab" href="Main.dc.html">Judges</a>
+    <a class="tab" href="Main.dc.html">Rules <span class="n">2</span></a>
+    <a class="tab" href="Deliveries.dc.html">Deliveries <span class="n">13</span></a>
+  </nav>
+
+  <sc-if value="{{said}}" hint-placeholder-val="{{ false }}">
+    <p role="status" class="{{saidClass}}">{{said}}</p>
+  </sc-if>
+
+  <section class="card big" aria-labelledby="watch">
+    <div class="row"><span aria-hidden="true" class="dot {{dotClass}}"></span><span id="watch" class="lbl">Watching your accounts</span></div>
+
+    <sc-if value="{{isStopped}}" hint-placeholder-val="{{ false }}">
+      <p class="bigline">Not running</p>
+      <p class="muted p0">The event service isn't running on this Mac, so nothing is watched and no rule does anything. Start it below.</p>
+    </sc-if>
+
+    <sc-if value="{{isOff}}" hint-placeholder-val="{{ true }}">
+      <p class="bigline">Switched off</p>
+      <p class="muted p0">The event service is running, but it isn't watching your accounts, so no rule does anything.</p>
+      <div class="row"><button type="button" class="btn p" onClick="{{askOn}}">Switch on…</button><span class="new" title="Today this is approved in Terminal">new</span></div>
+      <sc-if value="{{asking}}" hint-placeholder-val="{{ false }}">
+        <div class="ask" role="group" aria-labelledby="ask-on">
+          <div>
+            <h3 id="ask-on" class="t">Switch on watching? Approve it</h3>
+            <p class="muted p0">Switching on lets your rules watch acme/gmail and acme/slack for new messages. The rules that would start:</p>
+          </div>
+          <div class="pv" style="display: flex; flex-direction: column; gap: 4px">
+            <span><span style="font-weight: 500">mail-subjects</span> <span class="muted">· acme/gmail · writes each match to the dry-run log, for you to read</span></span>
+            <span><span style="font-weight: 500">slack-mentions</span> <span class="muted">· acme/slack · adds each match to the Queue, for an agent to work through</span></span>
+          </div>
+          <div class="row wrap"><button type="button" class="btn p" onClick="{{approveOn}}">Approve</button><button type="button" class="btn q" onClick="{{cancel}}">Cancel</button></div>
+          <span class="faint">On Windows and Linux: Do it in Terminal. There the app can't be sure it's you, so it opens the command for you to run.</span>
+        </div>
+      </sc-if>
+    </sc-if>
+
+    <sc-if value="{{isOn}}" hint-placeholder-val="{{ false }}">
+      <p class="bigline">On</p>
+      <p class="muted p0">Watching acme/gmail and acme/slack. 2 rules active. 43 matches this week.</p>
+      <div class="row wrap"><button type="button" class="btn" onClick="{{pause}}">Pause</button><span class="faint">Stops watching until you resume; nothing is lost.</span></div>
+    </sc-if>
+
+    <sc-if value="{{isPaused}}" hint-placeholder-val="{{ false }}">
+      <p class="bigline">Paused</p>
+      <p class="muted p0">Paused since 14:02 — not watching; nothing new is collected.</p>
+      <div class="row wrap"><button type="button" class="btn p" onClick="{{resume}}">Resume</button><span class="faint">Your rules, the Queue and anything waiting were kept.</span></div>
+    </sc-if>
+  </section>
+
+  <section class="card" aria-labelledby="prog">
+    <div class="row" style="align-items: flex-start; gap: 12px">
+      <div class="grow">
+        <h2 id="prog" class="h2">The event service on this Mac</h2>
+        <p class="faint p0">A program Agent Comms starts and keeps running. It can run while watching is switched off.</p>
+      </div>
+      <span class="faint" style="padding-top: 2px">Run the event service</span>
+      <button type="button" role="switch" class="sw" aria-checked="{{running}}" aria-label="Run the event service" onClick="{{flipRun}}"></button>
+    </div>
+    <div>
+      <div class="kv"><span>Program</span><span>{{runWord}}</span></div>
+      <div class="kv"><span>Version</span><span>0.34.0</span></div>
+      <div class="kv"><span>Started</span><span>{{started}}</span></div>
+    </div>
+  </section>
+
+  <section class="card" aria-labelledby="words">
+    <h2 id="words" class="h2">What the words here mean</h2>
+    <dl class="words">
+      <dt>Running</dt><dd>The program is open on this Mac. On its own, it does nothing with your mail or Slack.</dd>
+      <dt>Watching</dt><dd>It reads new messages in the accounts your rules name, so the rules can act on them.</dd>
+      <dt>Paused</dt><dd>Watching stops for a while. Your rules, the Queue and anything waiting are kept.</dd>
+      <dt>Switched off</dt><dd>No rule acts until you switch watching on again, and approve it.</dd>
+    </dl>
+  </section>
+  <p class="legend"><span class="new">new</span> marks what the app can't do yet. It's drawn here for your feedback, not built.</p>
+</div>
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"state":{"editor":"enum","options":["off","on","paused"],"default":"off"},"$preview":{"width":1280,"height":1180}}'>
+class Component extends DCLogic {
+constructor(props) {
+super(props);
+const start = props.state ?? 'off';
+this.state = { watch: ['off', 'on', 'paused'].includes(start) ? start : 'off', running: true, asking: false, said: null, saidTone: 'ok' };
+}
+renderVals() {
+const s = this.state;
+const done = (patch, text, tone) => this.setState(Object.assign({ asking: false, said: text, saidTone: tone || 'ok' }, patch));
+const shown = s.running ? s.watch : 'stopped';
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+dotClass: shown === 'on' ? 'd-on' : shown === 'paused' ? 'd-paused' : 'd-off',
+isStopped: shown === 'stopped', isOff: shown === 'off', isOn: shown === 'on', isPaused: shown === 'paused',
+asking: s.asking,
+said: s.said, saidClass: s.saidTone === 'ok' ? 'said' : 'said n',
+askOn: () => this.setState({ asking: true, said: null }),
+approveOn: () => done({ watch: 'on' }, 'Approved. Your rules are watching acme/gmail and acme/slack.'),
+cancel: () => done({}, 'Cancelled: nothing was changed. Watching stays off.', 'n'),
+pause: () => done({ watch: 'paused' }, 'Paused at once.'),
+resume: () => done({ watch: 'on' }, 'Resumed at once. Watching acme/gmail and acme/slack again.'),
+running: s.running,
+runWord: s.running ? 'Running' : 'Stopped',
+started: s.running ? 'Today at 09:12, with Agent Comms' : '—',
+flipRun: () => done({ running: !s.running }, s.running ? 'Stopped. No rule can act until you run it again.' : 'Started. Watching is as you left it.')
+};
+}
+}
+</script>
+</body>
+</html>

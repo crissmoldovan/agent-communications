@@ -324,6 +324,7 @@ function RuleCards({
   return (
     <>
       <SegmentedControl
+        indicator
         aria-label={RULES_COPY.show}
         size="sm"
         className="self-start"

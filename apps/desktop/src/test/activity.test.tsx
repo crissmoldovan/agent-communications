@@ -61,7 +61,7 @@ async function choose(name: string, option: string): Promise<void> {
 }
 
 describe('Activity', () => {
-  it('sits between Approvals and Agent, and an older core gets the update line and none of its calls', async () => {
+  it('sits between Approvals and Your agents, and an older core gets the update line and none of its calls', async () => {
     const bridge = createFakeBridge({ installation: async () => ({ ...EXAMPLE_INSTALLATION, version: '0.28.0' }) });
     renderApp(bridge);
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
@@ -69,7 +69,7 @@ describe('Activity', () => {
       .getAllByRole('button')
       .map((button) => button.textContent?.trim());
     const approvals = names.indexOf('Approvals');
-    expect(names.slice(approvals, approvals + 3)).toEqual(['Approvals', 'Activity', 'Agent']);
+    expect(names.slice(approvals, approvals + 3)).toEqual(['Approvals', 'Activity', 'Your agents']);
     fireEvent.click(within(navigation).getByRole('button', { name: 'Activity' }));
     expect(await screen.findByRole('heading', { level: 1, name: 'Activity' })).toBeTruthy();
     await within(main()).findByText(COPY.updateToUse);

@@ -6,6 +6,7 @@ import {
   type ChangeBinding,
   type ChangeTarget,
   changeDigest,
+  changeDrift,
   type RevokeDisposition,
   stricterPolicy,
 } from './approvals.ts';
@@ -405,7 +406,9 @@ export async function finishChangeApproval(
  * change the caller has just planned, from the configuration as it is now, which must be one that needs approval. The
  * approval is checked first — a change approval, still waiting, whose stored digest is this request's — and only then
  * is its code issued and answered, with this request's digest as the live binding, so the store voids it rather than
- * approve anything that moved under its lock. An approval prepared for another change is left as it was.
+ * approve anything that moved under its lock. An approval prepared for another change is voided, as a claim for
+ * another change voids it (`claimForChange`; the security review of 0.34.0, finding 4): nothing is approved, and it is
+ * never left waiting for the change it was shown for after it was handed to another. Only an attested app gets here.
  *
  * The release's security review (2026-10-26): answering first and planning after left an approval approved whenever
  * the plan then refused, for any other change to claim.
@@ -430,10 +433,16 @@ export async function approveChangeInApp(
     record = await changeRecord(core, approvalId);
     const digest = changeDigest(binding);
     if (record.contentDigest !== digest) {
+      // Void, in the claim's own words: the same refusal through --app-approval as through --approval.
+      const drift = changeDrift(record.change, binding);
+      await revokeChange(core, approvalId, drift, { surface: options.surface, disposition: 'integrity' });
       throw new CommsError(
-        'APPROVAL_REQUIRED',
-        'nothing was approved: that approval was prepared for another change, not this one',
-        { hint: 'Prepare this change again, and approve the approval it gives.', details: { approvalId } },
+        'APPROVAL_VOID',
+        `nothing was approved: that approval was prepared for another change — ${drift} — so it is void now`,
+        {
+          hint: 'Prepare this change again, and approve the approval it gives.',
+          details: { approvalId, state: 'revoked' },
+        },
       );
     }
     answering = true;

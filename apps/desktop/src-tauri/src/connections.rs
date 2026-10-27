@@ -1,8 +1,9 @@
 //! Connections (0.32.0, spec 2026-10-26-owner-feedback-0320 §3.3): which apps on this machine have which servers. The
-//! app reads core's `channels`, and adds or takes away one server for one app: `mcp install --client <c> --server <s>`,
-//! a change the person approves in Terminal (DA10), and `mcp uninstall --client <c> --server <s>`, a tightening core
-//! applies at once. The app and the server are each one word of a closed list, so nothing the window sends reaches
-//! core's arguments but those words.
+//! app reads core's `channels`, and adds or takes away servers for one app: `mcp install --client <c> --server <s>` —
+//! or, from core 0.34.0, `--server <a,b,c>`, several in one approval — a change the person approves in the app, and `mcp
+//! uninstall --client <c> --server <s>`, a tightening core applies at once. It reads `update --check` (0.34.0), and
+//! brings everything up to date with `update`, approved in the app. The app and each server are words of a closed
+//! list, so nothing the window sends reaches core's arguments but those words.
 
 use crate::allowlist::{ApprovalId, Call};
 use crate::build_info;
@@ -17,10 +18,20 @@ pub const MCP_UNINSTALL_VERSION: &str = "0.32.0";
 /// Approve in Terminal.
 pub const MCP_APP_APPROVAL_VERSION: &str = "0.32.0";
 
+/// The first core that registers several servers with one app in one approval, `--server <a,b,c>` (0.34.0): an older
+/// one is asked for each server on its own, as before.
+pub const MCP_SEVERAL_VERSION: &str = "0.34.0";
+
+/// The first core whose `update` takes the app's own approval, and whose `update --check` Connections reads to say which
+/// entries start an older Agent Comms (0.34.0), in place of "behind core", which compared them with the core answering.
+pub const UPDATE_APP_APPROVAL_VERSION: &str = "0.34.0";
+
 impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
-    /// `mcpInstall` of the same app and server, and `eventsRuleApprove` the rule activation `eventsRuleEnable` came back
-    /// with, for the same digest (0.33.0). None for every other call.
+    /// `mcpInstall` of the same app and the same servers in the same order, `updateApproved` the `update` the app
+    /// prepared (0.34.0), `eventsRuleApprove` the rule activation `eventsRuleEnable` came back with, for the same digest
+    /// (0.33.0), and `eventsCollectionApprove` the switching on `eventsEnableAll` came back with (0.34.0); and a label
+    /// change with `appApproval` the same change without it (0.34.0, `label`). None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -31,30 +42,77 @@ impl Call {
                 approval_id,
                 Call::McpInstall {
                     client: *client,
-                    server: *server,
+                    server: server.clone(),
                 },
             )),
+            Call::UpdateApproved { approval_id } => Some((approval_id, Call::Update {})),
             // A rule's activation the app prepared with `eventsRuleEnable`, for this very digest (0.33.0): what
             // `Prepared::record` keeps for it is the approval that may answer it.
             Call::EventsRuleApprove { approval_id, .. } => Some((approval_id, self.clone())),
-            _ => None,
+            // Switching the event service on that Events → Service prepared with `eventsEnableAll`, for this very digest
+            // (0.34.0): kept the same way.
+            Call::EventsCollectionApprove { approval_id, .. } => Some((approval_id, self.clone())),
+            // An account page's loosenings (0.34.0): each the very change the app prepared, word for word.
+            Call::BehaviourAllowApproved {
+                account,
+                acts,
+                conversation,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::BehaviourAllow {
+                    account: account.clone(),
+                    acts: acts.clone(),
+                    conversation: conversation.clone(),
+                },
+            )),
+            Call::BehaviourClearApproved {
+                account,
+                conversation,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::BehaviourClear {
+                    account: account.clone(),
+                    conversation: conversation.clone(),
+                },
+            )),
+            Call::LabelStyleApproved {
+                account,
+                style,
+                approval_id,
+            } => Some((
+                approval_id,
+                Call::LabelStyle {
+                    account: account.clone(),
+                    style: *style,
+                },
+            )),
+            // A label change (0.34.0, Your agents): the same change, without the approval the app prepared it for.
+            _ => self.answers_label_approval(),
         }
     }
 }
 
-/// Why the test build edits no app's settings: its core is the test profile's, but the client configs `mcp install` and
-/// `mcp uninstall` write are the person's real ones (`~/.claude.json` and the rest), so a test could register an
-/// unverified local build into their real apps, or take their real servers away.
+/// Why the test build edits no app's settings: its core is the test profile's, but the client configs `mcp install`,
+/// `mcp uninstall` and `update` write are the person's real ones (`~/.claude.json` and the rest), so a test could
+/// register an unverified local build into their real apps, or take their real servers away.
 const TEST_BUILD_REFUSAL: &str =
-    "the test build does not change which apps have which servers: Connections only shows \
-there, because changing it would edit your real apps' settings. Use your own Agent Comms for that";
+    "the test build does not change which apps have which servers, or bring them up to date: \
+Connections only shows there, because changing it would edit your real apps' settings. Use your own Agent Comms for \
+that";
 
 impl Call {
-    /// Whether the call writes a client's own config: adding a server to an app, or taking one away.
+    /// Whether the call writes a client's own config: adding a server to an app, taking one away, or an update, which
+    /// registers servers again (0.34.0).
     pub fn edits_client_configs(&self) -> bool {
         matches!(
             self,
-            Call::McpInstall { .. } | Call::McpInstallApproved { .. } | Call::McpUninstall { .. }
+            Call::McpInstall { .. }
+                | Call::McpInstallApproved { .. }
+                | Call::McpUninstall { .. }
+                | Call::Update {}
+                | Call::UpdateApproved { .. }
         )
     }
 }
@@ -173,6 +231,73 @@ impl McpServer {
             McpServer::Whatsapp => "whatsapp",
             McpServer::Events => "events",
         }
+    }
+
+    /// Its place in core's order.
+    fn place(self) -> usize {
+        McpServer::ALL
+            .iter()
+            .position(|each| *each == self)
+            .unwrap_or(McpServer::ALL.len())
+    }
+}
+
+/// The servers one `mcp install` registers with one app: one, as every core takes it, or several (0.34.0), which
+/// core registers in one approval, in the order given, stopping at the first that fails. One is written on its own
+/// (`"gmail"`), several as a list (`["core", "gmail", "events"]`), so each install has exactly one shape for the
+/// app's record of what it prepared to match.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum McpServers {
+    One(McpServer),
+    Several(ServerList),
+}
+
+/// Two servers or more, in core's order, each once. Closed: every one is an `McpServer`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<McpServer>", into = "Vec<McpServer>")]
+pub struct ServerList(Vec<McpServer>);
+
+impl TryFrom<Vec<McpServer>> for ServerList {
+    type Error = String;
+
+    fn try_from(list: Vec<McpServer>) -> Result<Self, String> {
+        if list.len() < 2 {
+            return Err("a list names two servers or more: one is named on its own".into());
+        }
+        if !list
+            .windows(2)
+            .all(|pair| pair[0].place() < pair[1].place())
+        {
+            return Err("the servers are listed in core's order, each once".into());
+        }
+        Ok(ServerList(list))
+    }
+}
+
+impl From<ServerList> for Vec<McpServer> {
+    fn from(list: ServerList) -> Self {
+        list.0
+    }
+}
+
+impl McpServers {
+    /// `--server`'s word: the one server, or the list joined with commas, as core 0.34.0 takes it.
+    pub fn word(&self) -> String {
+        match self {
+            McpServers::One(server) => server.word().to_string(),
+            McpServers::Several(list) => list
+                .0
+                .iter()
+                .map(|server| server.word())
+                .collect::<Vec<_>>()
+                .join(","),
+        }
+    }
+
+    /// Whether it names more than one server, which needs core 0.34.0 (`MCP_SEVERAL_VERSION`).
+    pub fn several(&self) -> bool {
+        matches!(self, McpServers::Several(_))
     }
 }
 
@@ -647,6 +772,334 @@ mod tests {
         assert!(run_app_approval(&prepared_rule(), &approved("claude-code", "gmail"), ok).is_err());
     }
 
+    /// Several servers in one install (0.34.0): a list of two or more, in core's order, each once, written as one
+    /// comma list after `--server`; one server keeps its own shape and words, and needs no newer core.
+    #[test]
+    fn several_servers_go_to_core_as_one_comma_list_and_need_0_34() {
+        let several = call(
+            json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
+        );
+        let words = several.words().expect("words");
+        assert_eq!(
+            words.words,
+            [
+                "mcp",
+                "install",
+                "--client",
+                "codex",
+                "--server",
+                "core,gmail,events"
+            ]
+        );
+        assert_eq!(words.timeout, Duration::from_secs(90));
+        assert!(several.prepares_change());
+        assert_eq!(several.needs(), Some(MCP_SEVERAL_VERSION));
+        assert_eq!(MCP_SEVERAL_VERSION, "0.34.0");
+        let one = call(json!({ "kind": "mcpInstall", "client": "codex", "server": "gmail" }));
+        assert_eq!(one.needs(), None);
+        assert_eq!(
+            one.words().expect("words").words,
+            ["mcp", "install", "--client", "codex", "--server", "gmail"]
+        );
+        // Each goes back to the JSON it came from: one server as a word, several as a list.
+        for value in [
+            json!({ "kind": "mcpInstall", "client": "codex", "server": "gmail" }),
+            json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "slack"] }),
+            json!({ "kind": "mcpInstall", "client": "cursor", "server": ["core", "gmail", "slack", "resend", "whatsapp", "events"] }),
+        ] {
+            assert_eq!(
+                serde_json::to_value(call(value.clone())).expect("json"),
+                value
+            );
+        }
+        // Approved in the app: the same list, then the app's approval; it needs 0.34.0 too.
+        let approved = call(json!({
+            "kind": "mcpInstallApproved",
+            "client": "codex",
+            "server": ["core", "gmail", "events"],
+            "approvalId": crate::allowlist::ID
+        }));
+        assert_eq!(
+            approved.words().expect("words").words,
+            [
+                "mcp",
+                "install",
+                "--client",
+                "codex",
+                "--server",
+                "core,gmail,events",
+                "--app-approval",
+                crate::allowlist::ID
+            ]
+        );
+        assert_eq!(approved.needs(), Some(MCP_SEVERAL_VERSION));
+        // A list of one, an empty one, one out of core's order or with a server twice, or a word that is not a server:
+        // refused before anything runs. A comma list is never one word the window may send.
+        for bad in [
+            json!([]),
+            json!(["gmail"]),
+            json!(["gmail", "core"]),
+            json!(["core", "core"]),
+            json!(["core", "gmail", "gmail"]),
+            json!(["core", "laya"]),
+            json!(["core", "Gmail"]),
+            json!("core,gmail"),
+            json!(["core,gmail", "events"]),
+            json!([["core"], "gmail"]),
+            json!({ "core": true }),
+        ] {
+            refused(json!({ "kind": "mcpInstall", "client": "codex", "server": bad.clone() }));
+            refused(json!({
+                "kind": "mcpInstallApproved",
+                "client": "codex",
+                "server": bad,
+                "approvalId": crate::allowlist::ID
+            }));
+        }
+        // Opened in the terminal, it is core's own words, the list included.
+        assert_eq!(
+            command_words(&TerminalCommand::Change {
+                call: several,
+                revoke: crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+                    .expect("an id"),
+            })
+            .expect("words")
+            .1,
+            [
+                "mcp",
+                "install",
+                "--client",
+                "codex",
+                "--server",
+                "core,gmail,events"
+            ]
+        );
+    }
+
+    /// The app answers only the approval it prepared for that very list, in that order: not one server of it, not
+    /// another order, and not the list for another app.
+    #[test]
+    fn the_app_approves_a_list_only_for_the_list_it_prepared() {
+        let prepared = crate::terminal::Prepared::default();
+        prepared.record(
+            &call(json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] })),
+            &crate::ipc::CliResult::ApprovalPending {
+                approval_id: crate::allowlist::ID.into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        let answer = |client: &str, server: serde_json::Value| {
+            call(json!({
+                "kind": "mcpInstallApproved",
+                "client": client,
+                "server": server,
+                "approvalId": crate::allowlist::ID
+            }))
+        };
+        let ok = || crate::ipc::CliResult::Ok {
+            exit: 0,
+            data: json!({ "servers": ["core", "gmail", "events"] }),
+        };
+        for (client, server) in [
+            ("codex", json!("gmail")),
+            ("codex", json!(["core", "gmail"])),
+            ("codex", json!(["core", "events"])),
+            ("cursor", json!(["core", "gmail", "events"])),
+        ] {
+            assert!(
+                run_app_approval(&prepared, &answer(client, server.clone()), ok).is_err(),
+                "{client} {server}"
+            );
+        }
+        assert!(run_app_approval(
+            &prepared,
+            &answer("codex", json!(["core", "gmail", "events"])),
+            ok
+        )
+        .is_ok());
+        assert!(run_app_approval(
+            &prepared,
+            &answer("codex", json!(["core", "gmail", "events"])),
+            ok
+        )
+        .is_err());
+    }
+
+    /// Bring everything up to date (0.34.0): `update --check` read, `update` prepared, and `update --app-approval <id>`
+    /// only for the update the app prepared, once; none of them before core 0.34.0, and the two that change refused in
+    /// the test build, whose core would register the person's real apps again.
+    #[test]
+    fn update_calls_read_prepare_and_answer_only_the_update_the_app_prepared() {
+        assert_eq!(UPDATE_APP_APPROVAL_VERSION, "0.34.0");
+        let check = call(json!({ "kind": "updateCheck" }));
+        let words = check.words().expect("words");
+        assert_eq!(words.product, Product::Core);
+        assert_eq!(words.words, ["update", "--check"]);
+        assert_eq!(words.shape, Shape::Envelope);
+        assert!(words.pins && words.quiet_updates);
+        assert_eq!(words.timeout, Duration::from_secs(90));
+        assert!(!check.prepares_change());
+        let update = call(json!({ "kind": "update" }));
+        assert_eq!(update.words().expect("words").words, ["update"]);
+        assert_eq!(
+            update.words().expect("words").timeout,
+            Duration::from_secs(90)
+        );
+        assert!(update.prepares_change());
+        let answered =
+            call(json!({ "kind": "updateApproved", "approvalId": crate::allowlist::ID }));
+        let words = answered.words().expect("words");
+        assert_eq!(
+            words.words,
+            ["update", "--app-approval", crate::allowlist::ID]
+        );
+        assert_eq!(words.timeout, Duration::from_secs(600));
+        assert!(!answered.prepares_change());
+        for each in [&check, &update, &answered] {
+            assert_eq!(each.needs(), Some("0.34.0"), "{each:?}");
+        }
+        // Nothing else rides along: no --check beside the approval, no --no-verify, no other approval.
+        for value in [
+            json!({ "kind": "updateCheck", "json": true }),
+            json!({ "kind": "update", "noVerify": true }),
+            json!({ "kind": "update", "approvalId": crate::allowlist::ID }),
+            json!({ "kind": "updateApproved" }),
+            json!({ "kind": "updateApproved", "approvalId": "ap_short" }),
+            json!({ "kind": "updateApproved", "approvalId": crate::allowlist::ID, "check": true }),
+        ] {
+            refused(value);
+        }
+        // `update` opens in the terminal as itself.
+        assert_eq!(
+            command_words(&TerminalCommand::Change {
+                call: update.clone(),
+                revoke: crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+                    .expect("an id"),
+            })
+            .expect("words")
+            .1,
+            ["update"]
+        );
+        // Answered in the app only for the update the app prepared, once; never an install's approval.
+        let ok = || crate::ipc::CliResult::Ok {
+            exit: 0,
+            data: json!({ "status": "updated", "ok": true }),
+        };
+        assert!(run_app_approval(&crate::terminal::Prepared::default(), &answered, ok).is_err());
+        assert!(run_app_approval(&prepared_install("codex", "gmail"), &answered, ok).is_err());
+        let prepared = crate::terminal::Prepared::default();
+        prepared.record(
+            &update,
+            &crate::ipc::CliResult::ApprovalPending {
+                approval_id: crate::allowlist::ID.into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        assert!(run_app_approval(&prepared, &approved("codex", "gmail"), ok).is_err());
+        assert!(run_app_approval(&prepared, &answered, ok).is_ok());
+        assert!(
+            run_app_approval(&prepared, &answered, ok).is_err(),
+            "never twice"
+        );
+        // The test build reads, and changes nothing.
+        const TEST: &str = "com.cueplusplus.agentcomms.test";
+        assert!(refuse_in_test_build(&check, TEST).is_ok());
+        for each in [&update, &answered] {
+            assert_eq!(
+                refuse_in_test_build(each, TEST).expect_err("refused").code,
+                "APP_REFUSED"
+            );
+            assert!(refuse_in_test_build(each, "com.cueplusplus.agentcomms").is_ok());
+        }
+    }
+
+    /// Switching the event service on that Events → Service prepared (0.34.0 design B4): `enable-all`'s answer is
+    /// recorded, with its digest, as the one `eventsCollectionApprove` that may answer it; another digest, nothing
+    /// prepared, a rule's activation, or the same press twice is refused before anything runs. A run that did not apply
+    /// keeps it for the preview's Cancel.
+    #[test]
+    fn the_app_switches_on_only_the_enable_all_it_prepared_for_that_digest() {
+        use crate::allowlist::{DIGEST, ID};
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approved": true, "approvedBy": "desktop-app" }),
+            }
+        };
+        let prepared_switch = || {
+            let prepared = crate::terminal::Prepared::default();
+            prepared.record(
+                &call(json!({ "kind": "eventsEnableAll" })),
+                &crate::ipc::CliResult::Ok {
+                    exit: 0,
+                    data: json!({
+                        "intentId": "intent-1",
+                        "approvalId": ID,
+                        "binding": { "digest": DIGEST, "activationKind": "enable-all" },
+                        "kind": "enable-all",
+                        "status": "pending"
+                    }),
+                },
+            );
+            prepared
+        };
+        let approve = |digest: &str| {
+            call(json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": digest }))
+        };
+        // Nothing prepared: an enable-all an agent prepared is one the app never recorded.
+        assert_eq!(
+            run_app_approval(&crate::terminal::Prepared::default(), &approve(DIGEST), ok)
+                .expect_err("not prepared")
+                .code,
+            "APP_REFUSED"
+        );
+        // Another digest than the one `enable-all` bound.
+        assert!(run_app_approval(&prepared_switch(), &approve(&"a".repeat(64)), ok).is_err());
+        // A rule's activation is not switching on, and switching on is not a rule's activation.
+        let rule = crate::terminal::Prepared::default();
+        rule.record(
+            &call(json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 })),
+            &crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approvalId": ID, "binding": { "digest": DIGEST } }),
+            },
+        );
+        assert!(run_app_approval(&rule, &approve(DIGEST), ok).is_err());
+        let rule_approve =
+            call(json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }));
+        assert!(run_app_approval(&prepared_switch(), &rule_approve, ok).is_err());
+        assert_eq!(ran.get(), 0);
+        // The one it prepared: it runs once.
+        let prepared = prepared_switch();
+        assert!(matches!(
+            run_app_approval(&prepared, &approve(DIGEST), ok).expect("it runs"),
+            crate::ipc::CliResult::Ok { exit: 0, .. }
+        ));
+        assert_eq!(ran.get(), 1);
+        assert!(run_app_approval(&prepared, &approve(DIGEST), ok).is_err());
+        assert_eq!(ran.get(), 1, "never twice");
+        // Not applied: kept, so the preview's Cancel can revoke it.
+        let prepared = prepared_switch();
+        let failed = run_app_approval(&prepared, &approve(DIGEST), || {
+            crate::ipc::CliResult::Failed {
+                exit: 10,
+                code: "CLI_FAILED".into(),
+                message: "nothing on this platform attests that the Agent Comms app started this"
+                    .into(),
+                hint: None,
+            }
+        })
+        .expect("it ran");
+        assert!(matches!(failed, crate::ipc::CliResult::Failed { .. }));
+        let id = crate::allowlist::ApprovalId::try_from(ID.to_string()).expect("an id");
+        assert!(prepared.take(&id).is_ok(), "kept for Cancel");
+    }
+
     /// In the test build, Connections only shows (0.32.0): the test profile's core would edit the person's real client
     /// configs, so no call that does, and no change opened in a terminal that does, runs there.
     #[test]
@@ -718,5 +1171,206 @@ mod tests {
         assert!(code.contains(
             "connections::refuse_terminal_in_test_build(&command, &app.config().identifier)?;"
         ));
+    }
+
+    /// A recorded account change (0.34.0), as `cli` records it when core answers it waiting for approval `ID`.
+    fn prepared_change(value: serde_json::Value) -> crate::terminal::Prepared {
+        let prepared = crate::terminal::Prepared::default();
+        prepared.record(
+            &call(value),
+            &crate::ipc::CliResult::ApprovalPending {
+                approval_id: crate::allowlist::ID.into(),
+                preview: "p".into(),
+                expires_at: None,
+            },
+        );
+        prepared
+    }
+
+    #[test]
+    fn an_account_change_approved_in_the_app_builds_cores_words_with_the_app_approval() {
+        let id = crate::allowlist::ID;
+        for (value, expected) in [
+            (
+                json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "allow",
+                    "example/slack",
+                    "post,reply",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "behaviourAllowApproved", "account": "example/gmail", "acts": "reply", "conversation": "@example.com", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "allow",
+                    "example/gmail",
+                    "reply",
+                    "--conversation",
+                    "@example.com",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": id }),
+                vec!["behaviour", "clear", "example/slack", "--app-approval", id],
+            ),
+            (
+                json!({ "kind": "behaviourClearApproved", "account": "example/slack", "conversation": "C0123ABCD", "approvalId": id }),
+                vec![
+                    "behaviour",
+                    "clear",
+                    "example/slack",
+                    "--conversation",
+                    "C0123ABCD",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+            (
+                json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+                vec![
+                    "label",
+                    "style",
+                    "example/slack",
+                    "labelled",
+                    "--app-approval",
+                    id,
+                ],
+            ),
+        ] {
+            let approved = call(value.clone());
+            let words = approved.words().expect("words");
+            assert_eq!(words.product, Product::Core, "{value}");
+            assert_eq!(words.words, expected, "{value}");
+            assert_eq!(words.shape, Shape::Envelope, "{value}");
+            assert!(words.pins, "{value}");
+            // It answers an approval the app prepared, prepares none, opens no terminal, and needs core 0.34.0.
+            assert!(!approved.prepares_change(), "{value}");
+            assert_eq!(approved.needs(), Some("0.34.0"), "{value}");
+            assert!(approved.answers_app_approval().is_some(), "{value}");
+            assert!(command_words(&TerminalCommand::Change {
+                call: approved.clone(),
+                revoke: crate::allowlist::ApprovalId::try_from(id.to_string()).expect("an id"),
+            })
+            .is_err());
+            assert_eq!(serde_json::to_value(&approved).expect("json"), value);
+        }
+        // The app's style applies at once: never approved.
+        let refusal = call(
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "app", "approvalId": id }),
+        )
+        .words()
+        .expect_err("a tightening takes no approval");
+        assert_eq!(refusal.code, "APP_REFUSED");
+        // No approval, a bad one, a style that is none, or a field more: refused before anything runs.
+        refused(
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post" }),
+        );
+        refused(
+            json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": "ap_" }),
+        );
+        refused(json!({ "kind": "labelStyle", "account": "example/slack", "style": "bot" }));
+        refused(
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id, "force": true }),
+        );
+    }
+
+    #[test]
+    fn a_slack_style_prepares_only_labelled_and_only_it_opens_in_the_terminal() {
+        let labelled =
+            call(json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }));
+        let app = call(json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }));
+        assert!(labelled.prepares_change());
+        assert!(!app.prepares_change());
+        assert_eq!(labelled.needs(), None);
+        let revoke = crate::allowlist::ApprovalId::try_from(crate::allowlist::ID.to_string())
+            .expect("an id");
+        assert_eq!(
+            command_words(&TerminalCommand::Change {
+                call: labelled,
+                revoke: revoke.clone(),
+            })
+            .expect("words"),
+            (
+                Product::Core,
+                ["label", "style", "example/slack", "labelled"]
+                    .iter()
+                    .map(|word| word.to_string())
+                    .collect::<Vec<_>>()
+            )
+        );
+        assert!(command_words(&TerminalCommand::Change { call: app, revoke }).is_err());
+    }
+
+    #[test]
+    fn the_app_approves_only_the_account_change_it_prepared_word_for_word() {
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "changed": true }),
+            }
+        };
+        let id = crate::allowlist::ID;
+        let allow =
+            json!({ "kind": "behaviourAllow", "account": "example/slack", "acts": "post,reply" });
+        // Other acts, another account, another place, or a removal: refused, and nothing runs.
+        for other in [
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply,file", "approvalId": id }),
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack-two", "acts": "post,reply", "approvalId": id }),
+            json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "conversation": "C0123ABCD", "approvalId": id }),
+            json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": id }),
+            json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+        ] {
+            let refusal =
+                run_app_approval(&prepared_change(allow.clone()), &call(other.clone()), ok)
+                    .expect_err("another change");
+            assert_eq!(refusal.code, "APP_REFUSED", "{other}");
+        }
+        assert_eq!(ran.get(), 0);
+        // The very change prepared: it runs once.
+        for (prepared, approved) in [
+            (
+                allow.clone(),
+                json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": id }),
+            ),
+            (
+                json!({ "kind": "behaviourClear", "account": "example/gmail", "conversation": "@example.com" }),
+                json!({ "kind": "behaviourClearApproved", "account": "example/gmail", "conversation": "@example.com", "approvalId": id }),
+            ),
+            (
+                json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
+                json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id }),
+            ),
+        ] {
+            let before = ran.get();
+            let record = prepared_change(prepared);
+            assert!(
+                run_app_approval(&record, &call(approved.clone()), ok).is_ok(),
+                "{approved}"
+            );
+            assert!(
+                run_app_approval(&record, &call(approved.clone()), ok).is_err(),
+                "never twice"
+            );
+            assert_eq!(ran.get(), before + 1, "{approved}");
+        }
+        // The app's style is never recorded, since it applies at once: nothing answers it.
+        let app = prepared_change(
+            json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }),
+        );
+        assert!(run_app_approval(
+            &app,
+            &call(json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": id })),
+            ok
+        )
+        .is_err());
     }
 }

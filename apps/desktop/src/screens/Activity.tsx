@@ -179,6 +179,7 @@ function ActivityViews() {
         )}
         <span className="ml-auto flex items-center gap-(--cue-space-2)">
           <SegmentedControl
+            indicator
             aria-label={ACTIVITY_COPY.range}
             size="sm"
             items={RANGES.map(({ value, label }) => ({ value, label }))}

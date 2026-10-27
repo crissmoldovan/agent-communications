@@ -1243,7 +1243,7 @@ describe('the licence notices', () => {
 
   it('are checked in, and checked on every desktop leg', () => {
     const notices = readFileSync(join(APP, 'THIRD_PARTY_LICENSES'), 'utf8');
-    for (const key of ['react@19.3.1', '@cueplusplus/ui@0.30.0', '@tauri-apps/api@2.12.4', 'tailwindcss@4.3.3']) {
+    for (const key of ['react@19.3.1', '@cueplusplus/ui@0.34.0', '@tauri-apps/api@2.12.4', 'tailwindcss@4.3.3']) {
       expect(notices).toContain(`\n${key} — `);
     }
     expect(notices).toMatch(/\ntauri@2\.\d+\.\d+ — /);

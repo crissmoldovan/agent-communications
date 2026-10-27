@@ -429,7 +429,8 @@ test('comms_server_install with a misspelt `readOnly` is refused, and nothing is
     assert.equal(error.code, 'USAGE');
     assert.match(error.message, /comms_server_install does not take `readonly`/);
     assert.match(error.hint ?? '', /`readOnly`/, 'the key it does take is named');
-    assert.match(error.hint ?? '', /`channel` \(required\)/);
+    // `channel`, or several as `servers` (0.34.0): one of the two, which the tool checks, so neither is required alone.
+    assert.match(error.hint ?? '', /`channel`, `servers`, `client` \(required\)/);
     assert.deepEqual(error.details?.unknown, ['readonly']);
   } finally {
     await close();

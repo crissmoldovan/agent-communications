@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { CommsError, type DesktopOrigin } from '@agentcomms/core';
@@ -103,7 +104,9 @@ test('PERSON-SHELL: rule analyse is taken only from the app, attested on macOS, 
         },
       ],
     ] as const) {
-      const ran = await cli(stateDir, args, options);
+      // The test build speaks only for its own test profile: its config and state folders together.
+      const folders = what === 'the test build' ? ['--config-dir', join(stateDir, 'config')] : [];
+      const ran = await cli(stateDir, [...folders, ...args], options);
       assert.equal(ran.code, NOT_RUNNING_EXIT, `${what}: ${ran.stderr}`);
     }
     const piped = await cli(stateDir, ['rule', 'analyse', 'invoices', '--draft', '-', '--json'], {

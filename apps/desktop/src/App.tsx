@@ -7,7 +7,6 @@ import { useAppData } from './data.tsx';
 import { Shell } from './Shell.tsx';
 import { Accounts } from './screens/Accounts.tsx';
 import { Activity } from './screens/Activity.tsx';
-import { Agent } from './screens/Agent.tsx';
 import { Approvals } from './screens/Approvals.tsx';
 import { Connections } from './screens/Connections.tsx';
 import { Doctor } from './screens/Doctor.tsx';
@@ -18,6 +17,7 @@ import { Overview } from './screens/Overview.tsx';
 import { Queue } from './screens/Queue.tsx';
 import { Settings } from './screens/Settings.tsx';
 import { Updates } from './screens/Updates.tsx';
+import { YourAgents } from './screens/YourAgents.tsx';
 
 /** A screen may open another, as Overview opens Approvals; the others take nothing. */
 const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void }>> = {
@@ -28,7 +28,7 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
   connections: Connections,
   approvals: Approvals,
   activity: Activity,
-  agent: Agent,
+  agent: YourAgents,
   updates: Updates,
   events: Events,
   doctor: Doctor,

@@ -301,6 +301,7 @@ function QueueViews() {
         <Problem message={queueCounts.message} />
       ) : null}
       <Tabs.Root
+        swipe
         value={view}
         onValueChange={(value) => {
           const next = value as QueueView;
@@ -326,6 +327,7 @@ function QueueViews() {
               {LANES_COPY.tab}
               <QuietCount count={known.length} />
             </Tabs.Tab>
+            <Tabs.Indicator />
           </Tabs.List>
           {view === 'lanes' ? (
             <InfoTip label="About lanes" text={LANES_COPY.about} />

@@ -125,6 +125,15 @@ export type McpClient = (typeof MCP_CLIENTS)[number];
 export const MCP_SERVERS = ['core', 'gmail', 'slack', 'resend', 'whatsapp', 'events'] as const;
 export type McpServer = (typeof MCP_SERVERS)[number];
 
+/**
+ * The servers one `mcp install` registers with one app (`connections.rs`, `McpServers`): one, as every core takes it, or
+ * (core 0.34.0) two or more in core's order, each once, registered in one approval. `installServers` builds it.
+ */
+export type McpServers = McpServer | McpServer[];
+
+/** How an agent's messages look in a Slack workspace (`allowlist.rs`, `SlackStyle`): as the app, or as you, tagged. */
+export type SlackStyle = 'app' | 'labelled';
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -144,6 +153,25 @@ export type QueueListCall = {
   channel?: QueueChannel;
   since?: ActivitySince;
   limit?: number;
+};
+
+/** The word after the person's name, as core lists them (0.34.0, `label.rs`, `LabelWord`). In core's order. */
+export const LABEL_WORDS = ['agent', 'assistant', 'twin', 'minion', 'bot', 'fake', 'AI'] as const;
+export type LabelWord = (typeof LABEL_WORDS)[number];
+
+/**
+ * `label rule add|remove` (0.34.0, Your agents): an exception to the tag on an account, or in one conversation of it,
+ * for some kinds of message (a comma list of core's act kinds) or every kind; `as` says who they appear to come from.
+ * Without `appApproval` it is prepared, or applied at once when it only takes away; with it, the person approved in
+ * the app the change the app prepared.
+ */
+export type LabelRuleCall<K extends 'labelRuleAdd' | 'labelRuleRemove'> = {
+  kind: K;
+  account: string;
+  as: 'agent' | 'me';
+  conversation?: string;
+  kinds?: string;
+  appApproval?: string;
 };
 
 /**
@@ -210,13 +238,13 @@ export type Call =
   | { kind: 'providerList' }
   | { kind: 'providerKeyRemove'; provider: KeyProvider }
   | { kind: 'judgeSetup'; judgeKind: EndpointJudgeKind; provider?: AiProvider; url?: string; model?: string }
-  // Connections (0.32.0): core's channels, read; adding one server to one app, prepared, then approved by the person in
-  // the app with `mcpInstallApproved`, only for the approval the app prepared for that install (DA10's note of
-  // 2026-10-26), and taking one away, a tightening core applies at once.
+  // Connections (0.32.0): core's channels, read; adding servers to one app — one, or from core 0.34.0 several in one
+  // approval — prepared, then approved by the person in the app with `mcpInstallApproved`, only for the approval the app
+  // prepared for that install (DA10's note of 2026-10-26), and taking one away, a tightening core applies at once.
   | { kind: 'channels' }
-  | { kind: 'mcpInstall'; client: McpClient; server: McpServer }
+  | { kind: 'mcpInstall'; client: McpClient; server: McpServers }
   | { kind: 'mcpUninstall'; client: McpClient; server: McpServer }
-  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServer; approvalId: string }
+  | { kind: 'mcpInstallApproved'; client: McpClient; server: McpServers; approvalId: string }
   // The Messages screen (0.32.0, spec §3.6): the event service's messages and one message, and core's activity by
   // message, each the person's read. Times are whole milliseconds, a page's `before` a time or the cursor the last page
   // gave, the event 32 hex digits, each id a Gmail message's or a Slack `<channel>/<ts>`, all checked in Rust.
@@ -240,6 +268,30 @@ export type Call =
   | { kind: 'sessionQueueList' }
   | { kind: 'sessionQueueDrop'; deliveryId: string }
   | { kind: 'judgeShow'; judgeId: string; version?: number }
+  // Your agents (0.34.0, B1): the label's word, name and exceptions. A loosening is prepared without `appApproval`, then
+  // approved by the person's press in the app with it, only for the approval the app prepared for that same change; a
+  // tightening applies at once and never carries one.
+  | { kind: 'labelWord'; word: LabelWord; appApproval?: string }
+  | { kind: 'labelName'; name: string; appApproval?: string }
+  | LabelRuleCall<'labelRuleAdd'>
+  | LabelRuleCall<'labelRuleRemove'>
+  // Connections' Bring everything up to date (0.34.0): what is behind npm's latest release, read; `update` prepared, then
+  // approved by the person in the app with `updateApproved`, only for the approval the app prepared for it.
+  | { kind: 'updateCheck' }
+  | { kind: 'update' }
+  | { kind: 'updateApproved'; approvalId: string }
+  // Events → Service's switch (0.34.0, design B4): switching on prepared, then approved only by the person's press in the
+  // app, for that digest; switching off, a tightening applied at once once the person confirms.
+  | { kind: 'eventsEnableAll' }
+  | { kind: 'eventsCollectionApprove'; approvalId: string; digest: string }
+  | { kind: 'eventsDisableAll' }
+  // Each account's Agents here (0.34.0, spec 2026-10-26-desktop-0340 §B2): a Slack workspace's style, `labelled`
+  // prepared and `app` applied at once by core; and each loosening the account page prepared, approved by the person in
+  // the app with its `…Approved` call, only for the approval the app prepared for that very change, as mcpInstall's is.
+  | { kind: 'labelStyle'; account: string; style: SlackStyle }
+  | { kind: 'labelStyleApproved'; account: string; style: 'labelled'; approvalId: string }
+  | { kind: 'behaviourAllowApproved'; account: string; acts: string; conversation?: string; approvalId: string }
+  | { kind: 'behaviourClearApproved'; account: string; conversation?: string; approvalId: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -295,9 +347,10 @@ export type TerminalCommand =
    */
   | { kind: 'laneBind'; lane: string; window: string }
   /**
-   * Approving a rule's activation the editor prepared, at a terminal (0.33.0), where the app cannot attest the person in
-   * the app (Windows and Linux): the events service's `approve <approval-id>`, which shows its preview and asks for its
-   * challenge there. Rust opens only an approval it recorded for `eventsRuleEnable`; the app never answers it.
+   * Approving a rule's activation the editor prepared (0.33.0), or switching the event service on (0.34.0), at a
+   * terminal, where the app cannot attest the person in the app (Windows and Linux): the events service's `approve
+   * <approval-id>`, which shows its preview and asks for its challenge there. Rust opens only an approval it recorded
+   * for `eventsRuleEnable` or `eventsEnableAll`; the app never answers it.
    */
   | { kind: 'ruleApprove'; approvalId: string }
   /**

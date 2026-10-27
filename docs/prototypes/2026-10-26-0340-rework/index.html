@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Comms 0.34 rework</title>
+<style>
+:root{--bg:#F7F7F8;--s1:#FFFFFF;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10)}
+@media (prefers-color-scheme: dark){:root{--bg:#0E0E10;--s1:#18181B;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16)}}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.5 -apple-system,BlinkMacSystemFont,"SF Pro Text",Inter,system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px 64px}
+h1{font-size:22px;margin:0 0 6px}
+h2{font-size:15px;margin:28px 0 8px}
+p{color:var(--text2);margin:0 0 8px}
+ul{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+li a{display:block;background:var(--s1);border-radius:10px;padding:10px 14px;text-decoration:none;color:var(--text)}
+li a:hover{color:var(--accent)}
+.state{color:var(--text3);font-weight:400;font-size:12px}
+.new{display:inline-block;font-size:10.5px;font-weight:600;color:var(--accent);background:var(--accentSoft);border-radius:6px;padding:0 6px}
+code{font-size:12.5px}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent Comms 0.34 rework prototype</h1>
+<p>The screens the owner found confusing in the 0.34 test build, drawn again on 2026-10-26 for feedback before anything is built. Each one is clickable: every button that changes something opens the step it would in the app. Add <code>?theme=dark</code> to a screen's address for its dark look.</p>
+<p>A small <span class="new">new</span> chip on a screen marks what the app can't do yet. Everything else is there today, reworded or moved.</p>
+
+<h2>1 · Your agents, and what they may do in each account</h2>
+<ul>
+<li><a href="Main.dc.html">Start here: this round’s changes</a> — every board, what to look at, and what to tell the lead</li>
+    <li><a href="YourAgents.dc.html">Your agents: what people see, and the exceptions</a></li>
+<li><a href="AccountSlack.dc.html">Accounts → acme/slack, Agents here</a></li>
+<li><a href="AccountSlack.dc.html?view=about">Accounts → acme/slack, About <span class="state">as the app has it today</span></a></li>
+<li><a href="AccountGmail.dc.html">Accounts → acme/gmail, Agents here</a></li>
+<li><a href="AccountGmail.dc.html?account=personal%2Fgmail">Accounts → personal/gmail, Agents here</a></li>
+</ul>
+
+<h2>2 · MCP servers, in place of Connections</h2>
+<ul>
+<li><a href="McpServers.dc.html">MCP servers <span class="state">one row per AI app</span></a></li>
+<li><a href="McpServers.dc.html?empty=true">MCP servers, the first time <span class="state">no app connected yet</span></a></li>
+<li><a href="McpServers.dc.html?testBuild=true">MCP servers, in the test build <span class="state">changes off</span></a></li>
+</ul>
+
+<h2>3 · Events: the service in plain words, and where a match goes</h2>
+<ul>
+<li><a href="EventsService.dc.html?state=off">Events → Service, switched off</a></li>
+<li><a href="EventsService.dc.html?state=on">Events → Service, on</a></li>
+<li><a href="EventsService.dc.html?state=paused">Events → Service, paused</a></li>
+<li><a href="Deliveries.dc.html">Events → Deliveries, a rule in dry-run</a></li>
+</ul>
+
+<h2>4 · Doctor's fixed layout, and which face</h2>
+<ul>
+<li><a href="Doctor.dc.html">Doctor <span class="state">the layout in the 0.34 test build</span></a></li>
+<li><a href="Doctor.dc.html?layout=before">Doctor, before the fix <span class="state">for comparison</span></a></li>
+<li><a href="Face.dc.html">Which face? Inter beside SF Pro</a></li>
+</ul>
+</main>
+</body>
+</html>

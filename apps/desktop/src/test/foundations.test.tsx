@@ -9,6 +9,7 @@ import { COPY } from '../copy.ts';
 import { AppDataProvider, useAppData } from '../data.tsx';
 import { INSTALL_COMMAND } from '../install.ts';
 import type { Call, CliResult, Installation } from '../ipc.ts';
+import { LOOKS, STORAGE_KEY } from '../theme.ts';
 import { cliKinds, createFakeBridge, EXAMPLE_INSTALLATION } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 
@@ -232,7 +233,7 @@ describe('the shell', () => {
       'Connections',
       'Approvals',
       'Activity',
-      'Agent',
+      'Your agents',
       'Updates',
       'Events',
       'Doctor',
@@ -244,7 +245,7 @@ describe('the shell', () => {
     expect(within(navigation).getByRole('button', { name: 'Doctor' }).getAttribute('aria-current')).toBe('page');
   });
 
-  it('the appearance menu offers soft, cue and terminal, every density and three modes', async () => {
+  it("the appearance menu offers soft, cue and terminal, soft's two typefaces, every density and three modes", async () => {
     renderApp(createFakeBridge());
     const trigger = await screen.findByRole('button', { name: 'Appearance' });
     fireEvent.click(trigger);
@@ -256,6 +257,9 @@ describe('the shell', () => {
       'soft',
       'cue',
       'terminal',
+      // Under soft, its typeface (0.34.0): Inter or SF Pro.
+      'Inter',
+      'SF Pro',
       'ultra-compact',
       'compact',
       'normal',
@@ -265,27 +269,34 @@ describe('the shell', () => {
       'light',
       'system',
     ]);
-    // The defaults are checked: soft, normal, system.
+    // The defaults are checked: soft in Inter, normal, system.
     const checked = within(menu)
       .getAllByRole('menuitemcheckbox')
       .filter((item) => item.getAttribute('aria-checked') === 'true')
       .map((item) => item.textContent?.trim());
-    expect(checked).toEqual(['soft', 'normal', 'system']);
+    expect(checked).toEqual(['soft', 'Inter', 'normal', 'system']);
   });
 
-  it('the app opens on soft, and cue and terminal can still be chosen from the appearance menu', async () => {
+  it('the app opens on the soft look, and cue and terminal can still be chosen, each with its own', async () => {
     renderApp(createFakeBridge());
     await screen.findByRole('button', { name: 'Appearance' });
     const root = document.documentElement;
-    await waitFor(() => expect(root.getAttribute('data-theme')).toBe('soft'));
+    const axes = () => ({
+      theme: root.getAttribute('data-theme'),
+      style: root.getAttribute('data-style'),
+      font: root.getAttribute('data-font'),
+      paint: root.getAttribute('data-paint'),
+    });
+    await waitFor(() => expect(axes()).toEqual({ theme: 'soft', style: 'soft', font: 'inter', paint: 'glaze' }));
     expect(root.getAttribute('data-density')).toBe('normal');
     // A choice keeps the menu open, so each is made from the one menu.
     fireEvent.click(screen.getByRole('button', { name: 'Appearance' }));
     const menu = await screen.findByRole('menu');
-    for (const theme of ['cue', 'terminal', 'soft']) {
+    for (const theme of ['cue', 'terminal', 'soft'] as const) {
       fireEvent.click(within(menu).getByRole('menuitemcheckbox', { name: theme }));
-      await waitFor(() => expect(root.getAttribute('data-theme')).toBe(theme));
-      expect(JSON.parse(window.localStorage.getItem('agent-comms.look') ?? '{}')).toMatchObject({ theme });
+      const { styleSet: style, font, paint } = LOOKS[theme];
+      await waitFor(() => expect(axes()).toEqual({ theme, style, font, paint }));
+      expect(JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? '{}')).toMatchObject({ theme, style, font, paint });
     }
   });
 });

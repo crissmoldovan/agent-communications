@@ -1,0 +1,145 @@
+{
+  "v": 3,
+  "createdOnFiles": {
+    "v": 1,
+    "at": "2026-10-26T18:00:00Z"
+  },
+  "title": "Agent Comms 0.34 rework prototype",
+  "launch": {
+    "view": "focused",
+    "file": "Main.dc.html"
+  },
+  "pages": [],
+  "boards": {
+    "Main.dc.html": {
+      "x": 0,
+      "y": -1500,
+      "w": 1280,
+      "h": 1000,
+      "title": "Start here: this round’s changes",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "YourAgents.dc.html": {
+      "x": 0,
+      "y": 0,
+      "w": 1280,
+      "h": 1560,
+      "title": "Your agents: what people see, and the exceptions",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AccountSlack.dc.html": {
+      "x": 1360,
+      "y": 0,
+      "w": 1280,
+      "h": 1900,
+      "title": "Accounts → acme/slack: Agents here",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "AccountGmail.dc.html": {
+      "x": 2720,
+      "y": 0,
+      "w": 1280,
+      "h": 1180,
+      "title": "Accounts → acme/gmail: Agents here",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "McpServers.dc.html": {
+      "x": 0,
+      "y": 2280,
+      "w": 1280,
+      "h": 1480,
+      "title": "MCP servers: Agent Comms, one row per AI app (empty=true, testBuild=true)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "EventsService.dc.html": {
+      "x": 0,
+      "y": 4140,
+      "w": 1280,
+      "h": 1180,
+      "title": "Events → Service: switched off, on or paused (state=)",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Deliveries.dc.html": {
+      "x": 1360,
+      "y": 4140,
+      "w": 1280,
+      "h": 1460,
+      "title": "Events → Deliveries: a rule in dry-run",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Doctor.dc.html": {
+      "x": 0,
+      "y": 5980,
+      "w": 1280,
+      "h": 1600,
+      "title": "Doctor: a long detail wraps beside the name",
+      "expand": "fill",
+      "is_interactive": true
+    },
+    "Face.dc.html": {
+      "x": 1360,
+      "y": 5980,
+      "w": 1280,
+      "h": 1000,
+      "title": "Which face? Inter beside SF Pro",
+      "expand": "fill",
+      "is_interactive": true
+    }
+  },
+  "order": [
+    "Main.dc.html",
+    "YourAgents.dc.html",
+    "AccountSlack.dc.html",
+    "AccountGmail.dc.html",
+    "McpServers.dc.html",
+    "EventsService.dc.html",
+    "Deliveries.dc.html",
+    "Doctor.dc.html",
+    "Face.dc.html"
+  ],
+  "notes": {
+    "row1": {
+      "x": 0,
+      "y": -260,
+      "text": "1 · Your agents, and what they may do in each account",
+      "kind": "title1",
+      "maxW": 4000
+    },
+    "row2": {
+      "x": 0,
+      "y": 2020,
+      "text": "2 · MCP servers, in place of Connections",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row3": {
+      "x": 0,
+      "y": 3880,
+      "text": "3 · Events: the service in plain words, and where a match goes",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row4": {
+      "x": 0,
+      "y": 5720,
+      "text": "4 · Doctor's fixed layout, and which face",
+      "kind": "title1",
+      "maxW": 2640
+    },
+    "row0": {
+      "x": 0,
+      "y": -1760,
+      "text": "0 · Start here",
+      "kind": "title1",
+      "maxW": 2640
+    }
+  },
+  "designSystems": []
+}

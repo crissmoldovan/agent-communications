@@ -47,6 +47,16 @@ export function isConversation(value: string): boolean {
   return isPlainValue(value) && (SLACK_CONVERSATION.test(value) || MAIL_CONVERSATION.test(value));
 }
 
+/** A Slack channel, DM or person, as Slack shows its id (0.34.0's "In one conversation"). */
+export function isSlackConversation(value: string): boolean {
+  return isPlainValue(value) && SLACK_CONVERSATION.test(value);
+}
+
+/** An address, or `@domain` for everyone there (0.34.0's "For some people"). */
+export function isMailConversation(value: string): boolean {
+  return isPlainValue(value) && MAIL_CONVERSATION.test(value);
+}
+
 /** `none`, or a comma list of known acts, each at most once. */
 export function isActs(value: string): boolean {
   if (!isPlainValue(value)) return false;

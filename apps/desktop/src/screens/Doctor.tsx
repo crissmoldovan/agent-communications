@@ -239,24 +239,36 @@ function IssueItem({ issue }: { issue: Issue }) {
   );
 }
 
-/** A check that passed or was skipped, kept quiet: its mark, its title, and its detail at the far end. */
+/**
+ * A check that passed or was skipped, kept quiet: its mark, its title, and its detail at the far end, then its fix on a
+ * line of its own. The title keeps a third of the line, so a long detail wraps beside it instead of squeezing the title
+ * to a letter a line; and the fix spans the row, so its command is not squeezed between the title and the detail.
+ */
 function QuietCheck({ check }: { check: DoctorView['checks'][number] }) {
   const skipped = check.status === 'skipped';
   return (
-    <Row className="items-center">
-      <Mark status={check.status} spoken={!skipped} />
-      <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-1)">
-        <span className={skipped ? 'text-fg-muted' : 'text-fg'}>
-          <UntrustedText text={check.title} />
-        </span>
+    <Row className="items-start">
+      <span className="flex h-lh items-center">
+        <Mark status={check.status} spoken={!skipped} />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-(--cue-space-2)">
+        <div className="flex items-baseline gap-(--cue-space-4)">
+          <span className={`min-w-1/3 flex-1 break-words ${skipped ? 'text-fg-muted' : 'text-fg'}`}>
+            <UntrustedText text={check.title} />
+          </span>
+          {check.detail === '' ? null : (
+            <span className="min-w-0 break-words text-right text-(length:--cue-text-ui) text-fg-muted">
+              <UntrustedText text={check.detail} />
+            </span>
+          )}
+          {skipped ? (
+            <span className="shrink-0">
+              <Chip variant="tag">{check.status}</Chip>
+            </span>
+          ) : null}
+        </div>
         {check.fix === undefined ? null : <Fix text={check.fix} />}
       </div>
-      {check.detail === '' ? null : (
-        <span className="min-w-0 break-words text-right text-(length:--cue-text-ui) text-fg-muted">
-          <UntrustedText text={check.detail} />
-        </span>
-      )}
-      {skipped ? <Chip variant="tag">{check.status}</Chip> : null}
     </Row>
   );
 }

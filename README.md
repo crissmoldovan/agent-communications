@@ -152,7 +152,9 @@ launcher's runtime is the verified one. [Upgrading](docs/upgrading.md#the-short-
 
 **Agent Comms is a tray app that shows what agent-communications is doing on this machine — and it never sends,
 posts or approves anything.** From 0.28.0 it has a calm look of its own, `soft`: soft panels, one sans-serif face, and
-tab bars where a screen has distinct views. `cue` and `terminal` remain in its appearance menu. It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
+tab bars where a screen has distinct views. It now comes from cue-ui's soft preset; its tab, switch and sidebar marks
+glide, and a two-finger swipe over a tab's content moves to the next tab. `cue` and `terminal` remain in its
+appearance menu. It shows your mailboxes, workspaces, Resend accounts and WhatsApp, with each one's
 policies, label style and what agents may do there; the approvals waiting for you; the agent label, the behaviour
 rules and the standing approvals; updates; the local events service; and every doctor check, with its fix to copy.
 The tray shows how many approvals wait, and closing the window hides it there.
@@ -212,10 +214,12 @@ The Windows and Linux files are built by CI and attached to the same release. A 
 updater key, as these are, has its updater off and says so in Settings: install a newer release over it. Start at
 login is off until you switch it on there.
 
-On Windows and Linux nothing attests that the app started a command, so the app's person-only changes — adding a
-server to an app in Connections, setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent
-sessions, approving a rule — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the
-command to run there.
+On Windows and Linux nothing attests that the app started a command, so the app's person-only changes — adding
+servers to an app, bringing everything up to date, your agents' name, word and exceptions, what agents may do on an
+account, setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent sessions, approving a
+rule — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the command to run there.
+On macOS the app checks that it started the command itself: a speed bump against agents, not a boundary against code
+running as you.
 
 ### Or package by package
 

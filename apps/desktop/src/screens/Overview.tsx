@@ -45,8 +45,8 @@ function Dot({ tone, size }: { tone: StatusTone; size?: number }) {
 function Line({ name, children }: { name: ReactNode; children: ReactNode }) {
   return (
     <Row>
-      <span className="text-fg-muted">{name}</span>
-      <span className="ml-auto text-right text-fg">{children}</span>
+      <span className="shrink-0 text-fg-muted">{name}</span>
+      <span className="ml-auto min-w-0 break-words text-right text-fg">{children}</span>
     </Row>
   );
 }
@@ -211,7 +211,7 @@ function DoctorRows({ present }: { present: readonly DoctorProduct[] }) {
           <Row key={product} data-product={product}>
             <Dot tone={tone} />
             <span className="text-fg">{productLabel(product)}</span>
-            <span className="ml-auto text-right text-fg-muted">{words}</span>
+            <span className="ml-auto min-w-0 break-words text-right text-fg-muted">{words}</span>
           </Row>
         );
       })}
@@ -298,7 +298,7 @@ function StandingRows() {
               <Row key={textOf(standing.id) ?? index}>
                 <span className="text-fg">{textOf(standing.workspace) ?? 'a workspace'}</span>
                 {places}
-                <span className="ml-auto text-right text-fg-muted">
+                <span className="ml-auto min-w-0 break-words text-right text-fg-muted">
                   {expiresAt === null ? null : (
                     <>
                       {'until '}

@@ -2,7 +2,7 @@ import { access, constants, readFile, realpath, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { GatedChange } from '../change-flow.ts';
-import type { ChangeSurface } from '../changes.ts';
+import type { ChangeRequest, ChangeSurface } from '../changes.ts';
 import type { NarrowingOption } from '../channel-manifest.ts';
 import {
   CHANNEL_SERVERS,
@@ -17,11 +17,11 @@ import {
   serverKind,
   serverLabel,
 } from '../channel-servers.ts';
-import { accountNoun, hasNarrowing, narrowingOwner, pinOption } from '../channel-words.ts';
+import { accountNoun, hasNarrowing, listed, narrowingOwner, pinOption } from '../channel-words.ts';
 import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
-import { CommsError } from '../errors.ts';
+import { CommsError, toCommsError } from '../errors.ts';
 import { writeFileAtomic } from '../fs.ts';
 import { handoffSentence, requireHandoffs } from '../handoffs.ts';
 import { launcherCli, launcherName, launcherPaths, readPointer } from '../launcher.ts';
@@ -39,6 +39,7 @@ import {
   type InstallContext,
   type InstallOptions,
   type InstallResult,
+  installFailure,
   installManagedRuntime,
   installRemedyOf,
   isProductServer,
@@ -736,6 +737,208 @@ export function serverInstallChange(
         restart: result.applied
           ? `Restart ${request.client} to load "${result.name}": no MCP client loads a new server into a session that is already running.`
           : null,
+      };
+    },
+  };
+}
+
+// ── Several servers at once ─────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Several declared servers for one client, as one change (design 2026-10-26-desktop-0340, B3): `mcp install --server
+ * core,gmail,events`, and `comms_server_install` with `servers`. Every option is the single install's, but those that
+ * name one server's entry (`ONE_SERVER_OPTIONS`).
+ */
+export interface ServerInstallsRequest extends Omit<ServerInstallRequest, 'channel'> {
+  /** The declared servers, in the order they are registered: two or more, each once. */
+  servers: readonly ServerId[];
+}
+
+/** One server's registration among several: the single install's result, and which server it is. */
+export type ServerInstalled = ServerInstallResult & { server: ServerId };
+
+export interface ServerInstallsResult {
+  client: SupportedClient;
+  /** Every server asked for, in the order they were registered. */
+  servers: ServerId[];
+  /** Each one's result, in that order. */
+  results: ServerInstalled[];
+  /** What the person has to do before their tools appear, or null when nothing was registered. */
+  restart: string | null;
+}
+
+/**
+ * The options that name one server's entry — what it is called, the account it is pinned to, its read-only switch —
+ * which one list of several cannot give each server its own of. Refused there, rather than given to whichever server
+ * happens to have it: register that server on its own to name or pin it.
+ */
+const ONE_SERVER_OPTIONS = ['name', 'account', 'inbox', 'workspace', 'readOnly'] as const;
+
+/** The sentence a list's preview ends with: the order, and what a failure part-way leaves. Bound with the rest. */
+const IN_ORDER =
+  'registers them one after another, in the order above, and stops at the first that fails: those after it are not registered, and this approval is not used again';
+
+/** Refuses a list that is not two or more declared servers, each once, before anything is planned. */
+function checkServers(servers: readonly unknown[]): ServerId[] {
+  if (!Array.isArray(servers) || servers.length < 2) {
+    throw new CommsError('USAGE', 'name two or more servers to register several at once', {
+      hint: 'One server is registered on its own, named as the server.',
+    });
+  }
+  const seen = new Set<string>();
+  for (const server of servers) {
+    if (typeof server !== 'string' || server.trim() === '') {
+      throw new CommsError('USAGE', 'a name in the list of servers is empty', {
+        hint: `Name each server once, separated by commas: one of ${SERVERS.join(', ')}.`,
+      });
+    }
+    if (!isServer(server)) {
+      throw new CommsError('USAGE', `"${server}" is not a server this can register`, {
+        hint: `One of: ${SERVERS.join(', ')}.`,
+      });
+    }
+    if (seen.has(server)) {
+      throw new CommsError('USAGE', `"${server}" is named twice: each server is registered once`);
+    }
+    seen.add(server);
+  }
+  return [...seen];
+}
+
+/**
+ * Registering several declared servers with one client, as one change: one plan, one preview naming every server,
+ * one approval, and then each server registered in turn (design 2026-10-26-desktop-0340, B3).
+ *
+ * It is each server's own registration (`serverInstallChange`), planned together. Every server is planned from the
+ * machine as it is now before anything is written, so one that refuses — someone else's entry under its name, a
+ * release that does not verify — refuses the whole list, and nothing is prepared to approve. The preview is every
+ * server's sentences in order, each under its server's name — what it registers, what it reaches, where it is written
+ * and what it starts — and one more, bound with them, that says the order and what a failure leaves. The approval is
+ * bound to all of it, so it is claimed only for exactly this list, in this order; claiming it spends it. Then each is
+ * applied in order, and the first that fails — it throws, registers nothing although it was asked to, or registers an
+ * entry that does not start — stops the rest: the error says which were registered and which were not, and carries
+ * each finished one's result. The approval was spent on that attempt and is not used again.
+ *
+ * Someone else's entry is never replaced, a replaced entry's pins are kept and `force` replaces only a server's own
+ * earlier entry, as for one: each server's own planning decides it.
+ */
+export function serverInstallsChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ServerInstallsRequest,
+  deps: ServerInstallDeps = {},
+): GatedChange<ServerInstallsResult> {
+  const servers = checkServers(request.servers);
+  const given = ONE_SERVER_OPTIONS.filter((option) =>
+    option === 'readOnly' ? request.readOnly === true : request[option] !== undefined,
+  );
+  if (given.length > 0) {
+    const named = listed(
+      given.map((option) => `\`${option}\``),
+      'and',
+    );
+    throw new CommsError(
+      'USAGE',
+      `${named} ${given.length === 1 ? 'names' : 'name'} one server's entry, and this registers several`,
+      { hint: 'Register that server on its own to name or pin it, before or after the rest. Nothing was prepared.' },
+    );
+  }
+  const { client } = request;
+  const parts = servers.map((server) => ({
+    server,
+    change: serverInstallChange(
+      core,
+      env,
+      {
+        channel: server,
+        client,
+        launcher: request.launcher,
+        force: request.force,
+        print: request.print,
+        noVerify: request.noVerify,
+      },
+      undefined,
+      deps,
+    ),
+    planned: undefined as ChangeRequest | undefined,
+  }));
+  const labels = listed(servers.map(serverLabel), 'and');
+  /** Why the list stopped at `server`, said with what was registered before it and what was not. */
+  const stopped = (
+    index: number,
+    error: unknown,
+    done: readonly ServerInstalled[],
+    registered: boolean,
+  ): CommsError => {
+    const server = servers[index] as ServerId;
+    const cause = toCommsError(error);
+    const installed = done.map((result) => result.server);
+    const notInstalled = servers.slice(index);
+    const said = (ids: readonly ServerId[]) => (ids.length === 0 ? 'none' : listed(ids.map(serverLabel), 'and'));
+    const failed = registered
+      ? `the ${serverLabel(server)} server was registered and did not start`
+      : `the ${serverLabel(server)} server was not registered`;
+    return new CommsError(
+      cause.code,
+      `stopped at the ${serverLabel(server)} server: ${cause.message}. Registered with ${client}: ${said(installed)}; not registered: ${said(notInstalled.slice(registered ? 1 : 0))}`,
+      {
+        hint: `${cause.hint === undefined ? '' : `${cause.hint} `}So ${failed}, and nothing after it was tried. The approval was spent on this attempt and is not used again: once what stopped it is fixed, ask again for ${said(notInstalled)}.`,
+        details: {
+          client,
+          servers,
+          installed,
+          notInstalled: notInstalled.slice(registered ? 1 : 0),
+          failed: { server, registered, code: cause.code, message: cause.message, details: cause.details ?? null },
+          results: done,
+        },
+        cause: error,
+      },
+    );
+  };
+  return {
+    plan: async (config) => {
+      const effects: string[] = [];
+      for (const part of parts) {
+        part.planned = await part.change.plan(config);
+        for (const effect of part.planned.effects ?? []) effects.push(`${serverLabel(part.server)}: ${effect}`);
+      }
+      if (effects.length > 0) effects.push(IN_ORDER);
+      return {
+        before: config,
+        after: config,
+        effects,
+        summary:
+          effects.length > 0
+            ? `Register the ${labels} MCP servers with ${client}`
+            : `Print the ${labels} MCP servers' entries for ${client}`,
+      };
+    },
+    apply: async (consent) => {
+      const results: ServerInstalled[] = [];
+      for (const [index, part] of parts.entries()) {
+        if (part.planned === undefined) {
+          throw new CommsError('UNEXPECTED', 'the registrations were applied before they were planned');
+        }
+        let result: ServerInstallResult;
+        try {
+          result = await part.change.apply(consent, part.planned);
+        } catch (error) {
+          throw stopped(index, error, results, false);
+        }
+        // Registered nothing although asked to, or registered an entry that did not start: a failure, as for one.
+        const failure = installFailure(result);
+        if (failure !== null) throw stopped(index, failure, results, result.applied);
+        results.push({ server: part.server, ...result });
+      }
+      const loaded = results.filter((result) => result.applied).map((result) => `"${result.name}"`);
+      return {
+        client,
+        servers,
+        results,
+        restart:
+          loaded.length > 0
+            ? `Restart ${client} to load ${listed(loaded, 'and')}: no MCP client loads a new server into a session that is already running.`
+            : null,
       };
     },
   };

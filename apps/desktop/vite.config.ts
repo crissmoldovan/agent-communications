@@ -21,7 +21,12 @@ function prepaint(): Plugin {
 export default defineConfig({
   plugins: [react(), tailwindcss(), prepaint()],
   clearScreen: false,
-  build: { target: ['es2022', 'chrome105', 'safari15'] },
+  build: {
+    target: ['es2022', 'chrome105', 'safari15'],
+    // A font is always a file of its own: inlined as a `data:` URI it would be refused, since the content policy has no
+    // `font-src` and its `default-src 'self'` allows no `data:`. Anything else keeps Vite's own limit.
+    assetsInlineLimit: (file) => (/\.(?:woff2?|ttf|otf)$/i.test(file) ? false : undefined),
+  },
   test: {
     environment: 'jsdom',
     setupFiles: ['src/test/setup.ts'],

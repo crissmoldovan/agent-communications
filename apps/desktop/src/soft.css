@@ -1,0 +1,79 @@
+/*
+ * What the soft look needs that cue-ui 0.34.0 does not ship yet. `@cueplusplus/theme-soft` carries the colours and the
+ * corners, cue-ui's `soft` style set the sans control, label, input, nav and display faces, sentence-case labels, the
+ * rimless panels and the movement curve, and the `glaze` pack the one-pixel resting shade (`theme.ts`, `LOOKS`). Each
+ * value below is one the approved mockup needs, that the `soft` set leaves unset, and that a component would otherwise
+ * draw as the console does: each is a gap reported to cue-ui, and goes when its set declares it. Scoped to `soft`, so
+ * cue and terminal are as they were.
+ */
+
+[data-theme="soft"] {
+  /* Faces (D3, D10): values, body copy and titles in the sans face too. Unset, each falls back to mono; mono stays for
+   * literal values, which the screens mark with `font-mono`. */
+  --cue-style-data-face: var(--cue-font-sans);
+  --cue-style-body-face: var(--cue-font-sans);
+  --cue-style-title-face: var(--cue-font-sans);
+  --cue-style-page-title-face: var(--cue-font-sans);
+  --cue-style-empty-title-face: var(--cue-font-sans);
+  /* A tag chip falls back to 0.06em tracking, the set's caps tracking reaching only the other chips. */
+  --cue-style-chip-tracking: normal;
+
+  /* Sizes (D3): body 13px and secondary 12px at the app's rung, headings from 15px to 20px. */
+  --cue-style-body-size: var(--cue-text-body);
+  --cue-style-label-size: var(--cue-text-ui);
+  --cue-style-label-weight: 500;
+  --cue-style-chip-size: var(--cue-text-ui);
+  --cue-style-page-title-size: calc(1.25rem * var(--cue-font-scale, 1));
+  --cue-style-page-title-weight: 600;
+  --cue-style-page-title-tracking: -0.015em;
+  --cue-style-title-size: calc(0.9375rem * var(--cue-font-scale, 1));
+  --cue-style-title-weight: 600;
+
+  /* Surfaces (D3): no section rules or row rules, as the set already takes the panel's; grouping is the change of
+   * ground. A field sits on the second surface rather than sunk below the page. */
+  --cue-style-section-rule: transparent;
+  --cue-style-row-rule-style: none;
+  --cue-style-field-fill: var(--cue-surface-2);
+
+  /* The sidebar's selection is a soft filled pill in the page's ink, not the accent's tint; its gliding ground wears it
+   * too. */
+  --cue-style-nav-active-ground: var(--cue-surface-3);
+  --cue-style-selected-ink: var(--cue-fg);
+
+  /* A segmented control is a quiet track with the chosen segment raised on it, rimless. */
+  --cue-style-segment-track: var(--cue-surface-2);
+  --cue-style-segment-rim: transparent;
+  --cue-style-segment-ground: var(--cue-surface-1);
+  --cue-style-segment-ink: var(--cue-fg);
+  --cue-style-segment-weight: 500;
+
+  /* Tabs are the same quiet track, rounded, with the chosen tab raised on it as a pill: no rule under the list and no
+   * accent underline (the mockup's tab bars). Tabs, and their gliding indicator, read the segment names above for the
+   * track and the raised tab, and these for its shape; a 3px inset leaves the pill inside the track's corners. */
+  --cue-style-segment-inset: 3px;
+  --cue-style-tab-radius: calc(var(--cue-radius-control) * var(--cue-radius-scale) + 3px);
+  --cue-style-tab-rule: 0px;
+  --cue-style-tab-underline: transparent;
+
+  /* The page's measure: about the mockup's 760px column. */
+  --cue-measure-wide: 50rem;
+
+  /* Motion (cue-ui-81): a touch calmer than the console, 165ms colour changes and 220ms glides, against the mockup's
+   * 160ms and 240ms. The set names the curve. */
+  --cue-style-motion-scale: 1.1;
+}
+
+/*
+ * The shell's bar, brand cell and sidebar still draw a hard-coded hairline in 0.34.0: cue-ui-78 gave `Panel` and `Bento`
+ * a style-set edge, not the shell. Under `soft` each is transparent, so grouping is the change of ground; the width
+ * stays, so `forced-colors` still draws an outline.
+ */
+[data-theme="soft"] [data-slot="app-shell-brand"],
+[data-theme="soft"] [data-slot="app-shell-sidebar"] {
+  border-color: transparent;
+}
+
+/* The bar's rule is taken away rather than cleared: a clear one shows the page's ground as a line under the brand. */
+[data-theme="soft"] [data-slot="app-shell-bar"] {
+  border-bottom-style: none;
+}

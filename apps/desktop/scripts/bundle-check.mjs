@@ -10,6 +10,9 @@
  * - **No `http(s)://` in the HTML or the CSS:** nothing remote is loaded. Two kinds of text are not loads and are
  *   left out first: comments (Tailwind's licence banner names its home page) and an XML namespace inside a `data:`
  *   URI (`xmlns='http://www.w3.org/2000/svg'`), which is an identifier the image declares, never fetched.
+ * - **No font inlined as a `data:` URI** in the CSS: the content policy has no `font-src`, and its `default-src 'self'`
+ *   allows no `data:`, so such a face would be refused and its text drawn in the fallback. Each font is a file of its
+ *   own in `assets/` (`vite.config.ts`).
  * - **Nothing of Laya, the events service's local judge** (E2 Task 11, DA16): no model, tokenizer or model
  *   configuration, no native library, none of the events daemon's reviewed Laya assets, no worker, no file that names
  *   its runtime's packages or holds its worker, and no dependency on the Laya runtime, the events daemon or their
@@ -29,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 const APP = fileURLToPath(new URL('..', import.meta.url));
 
 /**
- * The largest file the built app may hold: the app's largest chunk is under 1 MB, and each of the model's three large
+ * The largest file the built app may hold: the app's largest chunk is about 1.2 MB, and each of the model's three large
  * files is over 3 MiB. A file over it is refused by its size, before it is read.
  */
 const BUILT_FILE_LIMIT_BYTES = 3 * 1024 * 1024;
@@ -357,6 +360,11 @@ export function bundleProblems({ app = APP } = {}) {
     );
     for (const match of withoutNamespaces.matchAll(/https?:\/\/[^\s"'<>)]{0,80}/g)) {
       problems.push(`${name} names a remote address: ${match[0]}`);
+    }
+    for (const face of uncommented.matchAll(/@font-face\s*\{[^}]*\}/g)) {
+      if (/url\(\s*["']?data:/i.test(face[0])) {
+        problems.push(`${name} inlines a font as a data: URI, which the content policy refuses: it must be a file`);
+      }
     }
   }
   return problems;

@@ -47,10 +47,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * nothing attests the app, and every person-only change from there is now sent to the terminal, so `judge-setup`'s
  * result `approvedBy` names `desktop-app`, `desktop-app (test build)` or `terminal`, and `rule-approve`'s the first two.
  * Neither ever names `desktop-app (unattested)`. No branch an earlier release shipped changed.
+ *
+ * 0.34.0 (Events → Service, design B4) is another, also only additive: the schema and vectors gain the person's
+ * `enable-all-approve` owner wire, which approves switching the event service on — the activation `enable-all` prepared —
+ * from the app after its preview, its arguments (the approval and the digest the preview showed) and its result, whose
+ * `approvedBy` names `desktop-app` or `desktop-app (test build)`. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'aaff0abf87bba6c9a051fe4270862666d888a57b7c50ed14bd8dcd689e17880b',
+    '6f1dc812742d13462cbb87232c9994430ab12a59d0630285d9979b1f4447d34d',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -62,7 +67,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
     'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '2f4290e1b4dc7b62d11155fb3bc3c3332f30e650137199af4284ba56851e0bee',
+    '039a8dcf654bd8d6a3a3a8a5a1c043c3aeb6a1bde2d34574dc4494032bc5babb',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -80,7 +85,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '08e31bb677163a962ed594b720ad6cf9401a66aa1bc616f2a895acfc70be2bac',
+    '3b827cbc48680989b4cee4fd24f6cc79a1c9872787e7e32bd289e43676fb7dca',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

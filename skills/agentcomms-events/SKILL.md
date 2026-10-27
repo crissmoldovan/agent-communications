@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.33.0"
+compatibility: "@agentcomms/events-daemon@0.34.0"
 metadata:
   group: communications
   lifecycle: release
@@ -164,17 +164,19 @@ labels (`[{ id, name }]`), who it is assigned to (`"me"`, `{ id }` or `null`), a
 
 An approval id, digest and preview mean the proposed activation is still pending. Give the approval id and preview to
 the person. Standing disclosure can be approved only by a person typing the challenge at an interactive terminal. That
-terminal flow may offer the person a fixed synthetic test for each pending target before it asks for the challenge; an
-app approval screen uses only the complete selector returned by `events_approval_view`. Do not approve, claim, repeat
-the call to force activation, reconstruct a selector, or relay a challenge.
+terminal flow may offer the person a fixed synthetic test for each pending target before it asks for the challenge.
+The Agent Comms app is the person's other place: there they approve a rule's activation, or switching the event service
+on, after its preview. `events_approval_view` gives you that preview without a challenge; the app and the terminal each
+get their own. Do not approve, claim, repeat the call to force activation, reconstruct a selector, or relay a
+challenge.
 
 ## Human-only boundaries
 
 Do not invoke dry-run record reads, delivery details, queue item reads, clearing the queue, binding a lane, message
-stories, judge setup, AI provider keys, approving a rule in the app, rule analysis, the Linear integration's read, the
-agent sessions' relay setting, dropping a match waiting for a session, retained rule tests, target resume, held
-decisions, standing approval, or daemon secret operations. State the relevant human-only outcome exactly and hand it to
-the person:
+stories, judge setup, AI provider keys, approving a rule in the app, switching the event service on in the app, rule
+analysis, the Linear integration's read, the agent sessions' relay setting, dropping a match waiting for a session,
+retained rule tests, target resume, held decisions, standing approval, or daemon secret operations. State the relevant
+human-only outcome exactly and hand it to the person:
 
 - Dry-run record list: “Retained sender content may be selected only by a person outside model context at an interactive terminal/app renderer.”
 - Dry-run record show: “Retained sender content may be rendered only for a person at an interactive terminal/app, never in model context.”
@@ -186,6 +188,7 @@ the person:
 - Judge setup: “Judge setup turns a judge kind on, and the judge budget when it has none for the judge's provider: standing disclosure authorisations, which the command approves as the person's own act. So it is the person's, from the attested desktop app or an interactive terminal: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, and no tool performs it (owner decision 2026-10-26; events design D2).”
 - AI provider keys: “An AI provider's key is the person's account, kept in the app's Settings → AI providers or at their terminal: removing one is theirs too, and an agent must never ask for, see, set or remove one; no tool does. On Windows and Linux, which attest nothing, setting or removing one is done at the person's terminal (owner decision 2026-10-26).”
 - Rule approval in the app: “A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either.”
+- Switching on in the app: “Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a rule's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either.”
 - Rule analysis: “Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7).”
 - Linear integration: “What Linear shows the person — their workspace, its teams and a team's labels, fetched with their own Linear key — is for the person choosing a Linear target, in the app's Settings → Integrations or at a terminal (0.33.0 design §3.4). No tool reaches it, and the command refuses inside the event service's MCP server and in an agent's shell, by its marker (a speed bump against agents, not a boundary); events_provider_list tells an agent whether a Linear key is kept.”
 - Agent sessions' relay, shown: “Where Agent Comms finds the person's claude-stream relay — its home folder and its port — is the person's own setting, shown in the app's Settings → Integrations or at their terminal. That folder holds the relay's control token, so an agent cannot read the setting through Agent Comms: no tool shows it, and the command refuses inside the event service's MCP server and in an agent's shell, by its marker (a speed bump against agents, not a boundary) (0.33.0 design §3.5).”

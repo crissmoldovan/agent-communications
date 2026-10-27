@@ -1,156 +1,26 @@
-import { Button, Chip, EmptyState, Panel, SectionHeader, StatusDot, Table, Tabs } from '@cueplusplus/ui';
+import { Button, Chip, EmptyState, Panel, Table } from '@cueplusplus/ui';
 import { type ReactNode, useState } from 'react';
-import type {
-  BehaviourChangeResult,
-  BehaviourReport,
-  LabelReport,
-  StandingReport,
-  StandingView,
-} from '../cli-types.ts';
+import type { BehaviourChangeResult, BehaviourReport, StandingReport, StandingView } from '../cli-types.ts';
 import { ChangePreview } from '../components/ChangePreview.tsx';
 import { Fact, Facts } from '../components/Facts.tsx';
-import { Gated } from '../components/NeedsNewerCli.tsx';
 import { RuleForm } from '../components/RuleForm.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import { COPY } from '../copy.ts';
-import { type Loadable, useAppData } from '../data.tsx';
-import { supports } from '../gates.ts';
+import type { Loadable } from '../data.tsx';
 import { isAccountName, isApprovalId, isConversation } from '../grammar.ts';
-import { useCall } from '../hooks/use-call.ts';
 import { type ChangeOutcome, useChange } from '../hooks/use-change.ts';
-import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import type { Call } from '../ipc.ts';
-import { ScreenFrame } from './Screen.tsx';
 
 type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
 
+/*
+ * The old Agent screen's behaviour rules and standing approvals (0.22.0, 0.23.0), left here for the account pages
+ * (0.34.0, B2) to reuse or replace: the screen itself is Your agents now (`YourAgents.tsx`), which shows only the label.
+ */
+
 /** A read a view shows, and asks again after a change. */
-type Read<T> = { result: Loadable<T>; reload(): Promise<void> };
-
-/** The screen's three views, in the tab bar's order: what every message carries comes first. */
-type View = 'label' | 'rules' | 'standing';
-
-/**
- * What agents are and may do here (DA5.4), in three views (D7): the label they carry, read-only; the behaviour rules
- * (0.22.0), where a tightening applies at once and a loosening shows its preview with Approve in Terminal (DA10); and
- * the standing approvals (0.23.0), each revoked here, or all ended at once.
- *
- * The screen reads all three when it opens, as it did on one page, and keeps every view mounted: a count on a tab says
- * what its view holds — the rules, the standing approvals that hold, and in the warn tone anything to look at — and a
- * preview waiting in one view is not revoked by looking at another. A gated view reads nothing, and its tab is marked
- * "needs an update" in the warn tone, so the line asking for a newer CLI is never behind an unmarked tab.
- */
-export function Agent() {
-  const { installation } = useAppData();
-  const installed = installation.state === 'ready' ? installation.value.version : null;
-  const label = useCall<LabelReport>({ kind: 'label' });
-  const rules = useCall<BehaviourReport>(supports(installed, 'behaviour') ? { kind: 'behaviour' } : null);
-  const standing = useCall<StandingReport>(supports(installed, 'standing') ? { kind: 'standingList' } : null);
-  useReloadOnReturn(label.reload);
-  useReloadOnReturn(rules.reload);
-  useReloadOnReturn(standing.reload);
-  const [view, setView] = useState<View>('label');
-
-  return (
-    <ScreenFrame title="Agent">
-      <Tabs.Root value={view} onValueChange={(value) => setView(value as View)}>
-        {/* A space before each count, which the flex row does not draw, keeps the tab's name two words apart. */}
-        <Tabs.List aria-label="Agent" className="self-start">
-          <Tabs.Tab value="label">
-            Label <LabelCount result={label.result} />
-          </Tabs.Tab>
-          <Tabs.Tab value="rules">
-            Behaviour rules{' '}
-            {supports(installed, 'behaviour') ? <RulesCount result={rules.result} /> : <TabNeedsUpdate />}
-          </Tabs.Tab>
-          <Tabs.Tab value="standing">
-            Standing approvals{' '}
-            {supports(installed, 'standing') ? <StandingCount result={standing.result} /> : <TabNeedsUpdate />}
-          </Tabs.Tab>
-        </Tabs.List>
-        <Tabs.Panel value="label" keepMounted>
-          <section aria-label="The label">
-            <LabelView result={label.result} />
-          </section>
-        </Tabs.Panel>
-        <Tabs.Panel value="rules" keepMounted>
-          <section aria-label="Behaviour rules">
-            <Gated feature="behaviour">
-              <Rules read={rules} />
-            </Gated>
-          </section>
-        </Tabs.Panel>
-        <Tabs.Panel value="standing" keepMounted>
-          <section aria-label="Standing approvals">
-            <Gated feature="standing">
-              <Standing read={standing} />
-            </Gated>
-          </section>
-        </Tabs.Panel>
-      </Tabs.Root>
-    </ScreenFrame>
-  );
-}
-
-/**
- * A tab's count, said in full to a screen reader: what its view holds, or, in the warn tone, how much in it to look
- * at. Nothing when there is nothing.
- */
-function TabCount({ count, tone, says }: { count: number; tone: 'neutral' | 'warn'; says: string }) {
-  if (count === 0) return null;
-  return (
-    <Chip tone={tone} variant={tone === 'warn' ? 'tinted' : 'tag'} data-slot="tab-count" data-tone={tone}>
-      <span aria-hidden="true">{count}</span>
-      <span className="sr-only">{says}</span>
-    </Chip>
-  );
-}
-
-/**
- * A view this CLI is too old for, marked on its tab: its read never runs, so it has nothing to count, and the line that
- * says which version it needs is in the view (DA12), not hidden behind an unmarked tab.
- */
-function TabNeedsUpdate() {
-  return (
-    <span data-slot="tab-gate" data-tone="warn" className="inline-flex">
-      <StatusDot tone="warn" label="needs an update" />
-    </span>
-  );
-}
-
-/** A view whose read failed, marked on its tab: what went wrong is in the view. */
-function TabFailed({ result }: { result: Loadable<unknown> }) {
-  return result.state === 'error' ? <StatusDot tone="danger" label="could not be read" /> : null;
-}
-
-const plural = (count: number, one: string, many: string): string => `${count} ${count === 1 ? one : many}`;
-
-/** The label's tab: its rules that match no account, to look at. */
-function LabelCount({ result }: { result: Loadable<LabelReport> }) {
-  if (result.state !== 'ready') return <TabFailed result={result} />;
-  const none = result.value.rules.filter((rule) => !rule.matches).length;
-  return <TabCount count={none} tone="warn" says={plural(none, 'rule matches no account', 'rules match no account')} />;
-}
-
-/** The rules' tab: any rule this release cannot read or that names no connected account; otherwise how many. */
-function RulesCount({ result }: { result: Loadable<BehaviourReport> }) {
-  if (result.state !== 'ready') return <TabFailed result={result} />;
-  const { rules, unreadable } = result.value;
-  const look = unreadable.length + rules.filter((rule) => rule.orphan).length;
-  return look > 0 ? (
-    <TabCount count={look} tone="warn" says={plural(look, 'rule to look at', 'rules to look at')} />
-  ) : (
-    <TabCount count={rules.length} tone="neutral" says={plural(rules.length, 'rule', 'rules')} />
-  );
-}
-
-/** The standing approvals' tab: those that hold or wait, the ones an agent could act under. */
-function StandingCount({ result }: { result: Loadable<StandingReport> }) {
-  if (result.state !== 'ready') return <TabFailed result={result} />;
-  const live = result.value.approvals.filter((each) => each.state !== 'ended');
-  return <TabCount count={live.length} tone="neutral" says={tally(live)} />;
-}
+export type Read<T> = { result: Loadable<T>; reload(): Promise<void> };
 
 /** A read's loading and error states in a panel of their own; its value as the view lays it out. */
 function Pending<T>({ value, children }: { value: Loadable<T>; children: (value: T) => ReactNode }) {
@@ -189,88 +59,6 @@ function Notice({ children }: { children: ReactNode }) {
   );
 }
 
-/** The label (`label`), shown and never changed here: its word, its name, its rules, and each workspace's style. */
-function LabelView({ result }: { result: Loadable<LabelReport> }) {
-  return (
-    <Pending value={result}>
-      {(report) => {
-        const slack = report.accounts.filter((account) => account.platform === 'slack');
-        return (
-          <div className="flex flex-col gap-(--cue-space-6)">
-            <Panel className="p-(--cue-space-5)">
-              <Facts>
-                <Fact name="Word">{report.word}</Fact>
-                <Fact name="Name">
-                  {report.name === null ? (
-                    <span className="text-fg-muted">Not set</span>
-                  ) : (
-                    <UntrustedText text={report.name} />
-                  )}
-                </Fact>
-                <Fact name="Rules">
-                  {report.rules.length === 0 ? (
-                    <span className="text-fg-muted">None</span>
-                  ) : (
-                    <span className="flex flex-col gap-(--cue-space-2)">
-                      {report.rules.map((rule) => (
-                        <span key={rule.text} className="flex flex-wrap items-center gap-(--cue-space-2)">
-                          <UntrustedText text={rule.text} />
-                          {rule.matches ? null : (
-                            <Chip tone="warn" variant="tag">
-                              matches no account
-                            </Chip>
-                          )}
-                        </span>
-                      ))}
-                    </span>
-                  )}
-                </Fact>
-              </Facts>
-            </Panel>
-            <SectionHeader label="Slack">
-              {slack.length === 0 ? (
-                <p className="text-fg-muted">No Slack workspace is connected.</p>
-              ) : (
-                <Panel>
-                  <Table.Root>
-                    <Table.Caption className="sr-only">Slack style</Table.Caption>
-                    <Table.Header>
-                      <Table.Row>
-                        <Table.Head>Workspace</Table.Head>
-                        <Table.Head>Slack style</Table.Head>
-                        <Table.Head>How an agent's messages go</Table.Head>
-                      </Table.Row>
-                    </Table.Header>
-                    <Table.Body>
-                      {slack.map((account) => (
-                        <Table.Row key={account.account}>
-                          <Table.Cell>{account.account}</Table.Cell>
-                          <Table.Cell>{account.style ?? '—'}</Table.Cell>
-                          <Table.Cell>
-                            <UntrustedText
-                              text={
-                                account.appRoute === false
-                                  ? (account.note ?? 'As you, labelled: the agent app cannot post from here.')
-                                  : account.style === 'labelled'
-                                    ? 'As you, labelled'
-                                    : 'As the agent app, where it can post'
-                              }
-                            />
-                          </Table.Cell>
-                        </Table.Row>
-                      ))}
-                    </Table.Body>
-                  </Table.Root>
-                </Panel>
-              )}
-            </SectionHeader>
-          </div>
-        );
-      }}
-    </Pending>
-  );
-}
-
 /** What an agent may start, as a rule or the report says it. */
 function actsText(acts: readonly string[] | 'all'): string {
   if (acts === 'all') return 'all';
@@ -291,7 +79,7 @@ function appliedLine(data: unknown): string {
  * waiting, and its preview shows under the app's own header, with Approve in Terminal. The app never approves it, and
  * never asks again with the approval.
  */
-function Rules({ read }: { read: Read<BehaviourReport> }) {
+export function Rules({ read }: { read: Read<BehaviourReport> }) {
   const { result, reload } = read;
   const change = useChange();
   const [waiting, setWaiting] = useState<Waiting | null>(null);
@@ -487,7 +275,7 @@ function tally(approvals: readonly StandingView[]): string {
  * often, and until when. Each change here only takes away, so it applies at once: `Revoke` ends one, and `End every
  * standing approval` ends them all. Making one, or allowing more, is Slack's, approved with a code at a terminal.
  */
-function Standing({ read }: { read: Read<StandingReport> }) {
+export function Standing({ read }: { read: Read<StandingReport> }) {
   const { result, reload } = read;
   const change = useChange();
   const [busy, setBusy] = useState<string | null>(null);

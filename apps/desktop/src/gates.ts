@@ -12,6 +12,15 @@
  * rest are core's: `activity` is the first with the activity log (`ACTIVITY_VERSION`). `messages` is both's
  * (`MESSAGES_VERSION`): core's `activity items`, and the events service's `messages list`. `ruleEditor` is the events
  * service's (`RULE_EDITOR_VERSION`, 0.33.0): editing a rule in the app, Analyse and Settings → Integrations.
+ * `labelChanges` is core's (`LABEL_APP_APPROVAL_VERSION`, 0.34.0): Your agents changes the label's word, name and
+ * exceptions, each loosening approved in the app; an older core shows the label read-only.
+ * `severalServers` and `bringUpToDate` are core's (0.34.0, `connections.rs`): several servers added to an app in one
+ * approval (`MCP_SEVERAL_VERSION`), and `update --check` read and `update` approved in the app
+ * (`UPDATE_APP_APPROVAL_VERSION`). `collectionSwitch` is the events service's (`COLLECTION_SWITCH_VERSION`, 0.34.0):
+ * Switch on… approved in the app, and Switch off. An events service with the rule editor but older than that still
+ * prepares Switch on…, which is then approved in Terminal.
+ * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
+ * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -26,6 +35,11 @@ export const GATES = {
   judgeSetup: '0.32.0',
   messages: '0.32.0',
   ruleEditor: '0.33.0',
+  labelChanges: '0.34.0',
+  severalServers: '0.34.0',
+  bringUpToDate: '0.34.0',
+  collectionSwitch: '0.34.0',
+  accountAppApproval: '0.34.0',
 } as const;
 
 export type Feature = keyof typeof GATES;

@@ -45,6 +45,7 @@ import {
   installVerification,
   LAUNCHERS,
   serverInstallChange,
+  serverInstallsChange,
   serverPruneChange,
   serverUninstallChange,
 } from '../operations/servers.ts';
@@ -973,9 +974,19 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         [...accountChannels().map((manifest) => `\`${manifest.channel}\``), '`core` (this one)'],
         'or',
         { oxford: true },
-      )} — with an MCP client, and prove it starts. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. \`print\` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its \`details\`. The new server appears after the client is restarted — tell the person.`,
+      )} — with an MCP client, and prove it starts. Several at once: \`servers\` in place of \`channel\`, one preview naming each, one approval, each registered in that order, and the first that fails stops the rest — the error says which were registered and which were not. A change: the first call returns the preview and an approvalId; call again with it once the person agrees. \`print\` only returns the entry to paste, and asks nobody. An install that registers nothing — the client’s own command cannot be found — or whose server does not start is an error, with the entry to paste in its \`details\`. The new server appears after the client is restarted — tell the person.`,
       inputSchema: {
-        channel: z.enum(SERVERS as [string, ...string[]]).describe('which server'),
+        channel: z
+          .enum(SERVERS as [string, ...string[]])
+          .optional()
+          .describe('which server; or give several as `servers`'),
+        servers: z
+          .array(z.enum(SERVERS as [string, ...string[]]))
+          .min(2)
+          .optional()
+          .describe(
+            'several servers for one client, in the order to register them, each once: in place of `channel`, and with no `name`, `account`, `inbox`, `workspace` or `readOnly`, which are for one server',
+          ),
         client: z.enum(CLIENTS as [string, ...string[]]).describe('which MCP client to register it with'),
         // Checked here, so a client sees the rule in the schema, and again by the change itself: the name is quoted
         // in the preview the person approves, and a name that reads like a pin makes that preview lie.
@@ -1018,6 +1029,44 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     },
     async (args) => {
       try {
+        if ((args.channel === undefined) === (args.servers === undefined)) {
+          throw new CommsError(
+            'USAGE',
+            args.channel === undefined
+              ? 'name the server with `channel`, or several with `servers`'
+              : '`channel` and `servers` both name what to register: give one of them',
+          );
+        }
+        if (args.servers !== undefined) {
+          // Several for one client (0.34.0, design 2026-10-26-desktop-0340 B3): the operation `mcp install --server
+          // a,b,c` runs, which refuses what names one server's entry, in the words the command gets too.
+          const several = serverInstallsChange(
+            core,
+            env,
+            {
+              servers: args.servers,
+              client: args.client as (typeof CLIENTS)[number],
+              name: args.name,
+              account: args.account,
+              inbox: args.inbox,
+              workspace: args.workspace,
+              readOnly: args.readOnly,
+              launcher: args.launcher as (typeof LAUNCHERS)[number] | undefined,
+              force: args.force,
+              print: args.print,
+              noVerify: args.noVerify,
+            },
+            installVerification(updateDeps, npmRegistry(env)),
+          );
+          const outcome = await gatedChange(core, several, {
+            surface: 'mcp',
+            channel: 'core',
+            approvalId: args.approvalId,
+            platform,
+          });
+          // A server that fails stops the rest, and is an error naming which were registered and which were not.
+          return reply(changeToolResult(outcome));
+        }
         const install = serverInstallChange(
           core,
           env,

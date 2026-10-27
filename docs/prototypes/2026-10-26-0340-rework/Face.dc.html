@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Which face?</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;display=swap">
+<style>
+body{margin:0}
+a{color:inherit}a:hover{color:inherit}
+.t-light{--bg:#F7F7F8;--side:#EFEFF1;--s1:#FFFFFF;--s2:#F3F3F5;--s3:#E8E8EC;--text:#18181B;--text2:#52525B;--text3:#686871;--accent:#4C52D3;--accentSoft:rgba(76,82,211,.10);--accentText:#FFFFFF;--ok:#15803D;--okSoft:rgba(21,128,61,.09);--warn:#A15C07;--warnSoft:rgba(161,92,7,.10);--danger:#C2410C;--dangerSoft:rgba(194,65,12,.09);--test:#B4540A;--testText:#FFFFFF;--knob:#FFFFFF;--shadow:0 1px 2px rgba(0,0,0,.06);--ring:rgba(76,82,211,.45)}
+.t-dark{--bg:#0E0E10;--side:#121214;--s1:#18181B;--s2:#1F1F23;--s3:#28282D;--text:#EDEDF0;--text2:#A1A1AA;--text3:#8E8E97;--accent:#8A90F8;--accentSoft:rgba(138,144,248,.16);--accentText:#0E0E10;--ok:#4ADE80;--okSoft:rgba(74,222,128,.12);--warn:#F5B454;--warnSoft:rgba(245,180,84,.12);--danger:#F87171;--dangerSoft:rgba(248,113,113,.12);--test:#F59E3B;--testText:#1A1206;--knob:#EDEDF0;--shadow:0 1px 2px rgba(0,0,0,.4);--ring:rgba(138,144,248,.55)}
+.app{font-family:Inter,-apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45;background:var(--bg);color:var(--text);display:flex;flex-wrap:wrap}
+.app button,.app input,.app select{font:inherit;color:inherit}
+.nav{flex:1 1 220px;max-width:232px;min-width:200px;background:var(--side);padding:14px 10px;box-sizing:border-box;display:flex;flex-direction:column;gap:14px}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 0}
+.mark{width:24px;height:24px;border-radius:7px;background:var(--accent);color:var(--accentText);display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:none}
+.ni{height:32px;display:flex;align-items:center;gap:10px;padding:0 10px;border-radius:8px;text-decoration:none;color:var(--text2);transition:color 160ms ease,background-color 160ms ease}
+.ni:hover{color:var(--text)}
+.ni.on{background:var(--s3);color:var(--text)}
+.ni svg{flex:none}
+.cnt{margin-left:auto;min-width:18px;height:18px;padding:0 5px;box-sizing:border-box;border-radius:9px;background:var(--accentSoft);color:var(--accent);font-size:11px;font-weight:600;display:flex;align-items:center;justify-content:center}
+.ver{padding:0 10px;color:var(--text3);font-size:11.5px}
+.main{flex:999 1 560px;min-width:0;box-sizing:border-box;padding:28px 40px 56px}
+.col{max-width:760px;margin:0 auto;display:flex;flex-direction:column;gap:14px}
+.h1{margin:0;font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.h2{margin:0;font-size:15px;font-weight:600;letter-spacing:-0.01em}
+.h3{margin:0;font-size:13px;font-weight:600}
+.sub{margin:4px 0 0;color:var(--text2)}
+.was{color:var(--text3);font-size:12px}
+.tabs{display:inline-flex;flex-wrap:wrap;align-self:flex-start;background:var(--s2);border-radius:10px;padding:3px;gap:2px}
+.tab{height:30px;padding:0 12px;border-radius:8px;border:0;background:transparent;display:flex;align-items:center;gap:6px;font-weight:500;color:var(--text2);text-decoration:none;cursor:pointer;transition:color 160ms ease,background-color 160ms ease}
+.tab:hover{color:var(--text)}
+.tab.on{background:var(--s1);color:var(--text);box-shadow:var(--shadow)}
+.tab .n{color:var(--text3);font-weight:400}
+.card{background:var(--s1);border-radius:14px;padding:16px 18px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px}
+.chip{display:inline-flex;align-items:center;gap:5px;height:22px;padding:0 8px;border-radius:7px;font-size:12px;font-weight:500;white-space:nowrap;flex:none}
+.c-ok{background:var(--okSoft);color:var(--ok)}
+.c-warn{background:var(--warnSoft);color:var(--warn)}
+.c-danger{background:var(--dangerSoft);color:var(--danger)}
+.c-acc{background:var(--accentSoft);color:var(--accent)}
+.c-n{background:var(--s2);color:var(--text2)}
+.new{display:inline-flex;align-items:center;height:18px;padding:0 6px;border-radius:6px;font-size:10.5px;font-weight:600;letter-spacing:.02em;color:var(--accent);background:var(--accentSoft);white-space:nowrap;flex:none}
+.btn{height:30px;padding:0 12px;border-radius:8px;border:0;background:var(--s2);font-weight:500;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;white-space:nowrap;flex:none;transition:background-color 160ms ease,filter 160ms ease}
+.btn:hover{background:var(--s3)}
+.btn.p{background:var(--accent);color:var(--accentText)}
+.btn.p:hover{filter:brightness(1.08)}
+.btn.q{background:transparent}
+.btn.q:hover{background:var(--s3)}
+.btn.d{background:var(--dangerSoft);color:var(--danger)}
+.btn.sm{height:26px;padding:0 10px;font-size:12.5px}
+.btn:disabled{opacity:.45;cursor:not-allowed;filter:none}
+.link{border:0;background:transparent;padding:0;color:var(--accent);font-weight:500;cursor:pointer;text-decoration:none;white-space:nowrap}
+.link:hover{color:var(--accent);text-decoration:underline}
+.muted{color:var(--text2)}
+.faint{color:var(--text3);font-size:12px}
+.lbl{color:var(--text3);font-size:12px;font-weight:500}
+.mono{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:12px}
+.row{display:flex;align-items:center;gap:8px}
+.wrap{flex-wrap:wrap}
+.grow{flex:1;min-width:0}
+.p0{margin:0}
+.line{display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid var(--s2)}
+.empty{background:var(--s2);border-radius:10px;padding:12px 14px;color:var(--text2)}
+.said{margin:0;border-radius:10px;padding:9px 12px;background:var(--okSoft);color:var(--text)}
+.said.n{background:var(--s2)}
+.ask{background:var(--s2);border-radius:12px;padding:14px 16px;display:flex;flex-direction:column;gap:10px}
+.ask .t{margin:0;font-size:14px;font-weight:600}
+.pv{background:var(--s1);border-radius:8px;padding:10px 12px}
+.err{margin:0;color:var(--danger)}
+.f{height:32px;border-radius:8px;border:0;background:var(--s2);padding:0 10px;box-sizing:border-box;min-width:0}
+.ask .f{background:var(--s1)}
+.fl{display:flex;flex-direction:column;gap:4px}
+.sw{position:relative;width:36px;height:20px;border-radius:10px;border:0;padding:0;background:var(--s3);cursor:pointer;flex:none;transition:background-color 200ms ease}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:var(--knob);box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform 200ms cubic-bezier(.2,.8,.2,1)}
+.sw[aria-checked="true"]{background:var(--accent)}
+.sw[aria-checked="true"]::after{transform:translateX(16px)}
+.sw:disabled{opacity:.45;cursor:not-allowed}
+.legend{margin:6px 0 0;display:flex;align-items:center;gap:8px;color:var(--text3);font-size:12px}
+.app :focus-visible{outline:2px solid var(--ring);outline-offset:2px;border-radius:8px}
+@media (prefers-reduced-motion: reduce){.app *{transition:none !important}}
+.page{flex:1;box-sizing:border-box;padding:28px 32px 48px;display:flex;flex-direction:column;gap:16px;min-width:0}
+.panes{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}
+.pane{display:flex;flex-direction:column;gap:10px;min-width:0}
+.ptitle{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+.frame{display:flex;border-radius:14px;overflow:hidden;box-shadow:var(--shadow),0 0 0 1px var(--s3);background:var(--bg);height:600px;-webkit-font-smoothing:antialiased;font-size:13px;line-height:1.45}
+.inter{font-family:Inter,system-ui,sans-serif}
+.sf{font-family:-apple-system,"SF Pro Text",BlinkMacSystemFont,system-ui,sans-serif}
+.mnav{width:176px;flex:none;background:var(--side);padding:12px 8px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px}
+.mnav .ni{height:28px;padding:0 8px;gap:8px;font-size:12.5px}
+.mmain{flex:1;min-width:0;padding:20px 20px;box-sizing:border-box;display:flex;flex-direction:column;gap:12px;overflow:hidden}
+.tiles{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.tile{background:var(--s1);border-radius:12px;padding:12px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px;min-width:0}
+.tile .v{font-size:22px;font-weight:600;letter-spacing:-0.02em}
+.recent{background:var(--s1);border-radius:12px;padding:4px;box-shadow:var(--shadow);display:flex;flex-direction:column}
+.rr{display:flex;align-items:center;gap:10px;padding:8px 10px}
+.rd{width:7px;height:7px;border-radius:50%;flex:none}
+.spec{background:var(--s1);border-radius:12px;padding:12px 14px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:4px}
+.spec .big{font-size:20px;font-weight:600;letter-spacing:-0.015em}
+.spec .num{font-variant-numeric:tabular-nums}
+</style>
+</helmet>
+<div class="app {{themeClass}}" style="min-height: 1000px">
+
+<div class="page">
+  <div>
+    <a class="link" href="Main.dc.html">‹ This round’s changes</a>
+    <h1 class="h1">Which face?</h1>
+    <p class="sub">The approved design said SF Pro on macOS; cue-ui's Soft Look uses Inter.</p>
+    <p class="faint" style="margin: 6px 0 0">The same Overview and sidebar, twice. Only the face differs: sizes, spacing and colours are the same. cue-ui has both: its Inter pairing, which the app wears today, and an Apple pairing, SF Pro with SF Mono, which works only on macOS. On Windows and Linux the app would keep Inter.</p>
+  </div>
+
+  <div class="panes">
+    <sc-for list="{{panes}}" as="p" hint-placeholder-count="2">
+      <section class="pane" aria-label="{{p.name}}">
+        <div class="ptitle"><h2 class="h2">{{p.name}}</h2><span class="faint mono">{{p.stack}}</span></div>
+        <div class="frame {{p.face}}">
+          <nav aria-label="Sections, in {{p.name}}" class="mnav">
+            <div class="brand" style="padding: 4px 6px 0"><span aria-hidden="true" class="mark">A</span><span style="font-weight: 600; font-size: 13.5px; letter-spacing: -0.01em">Agent Comms</span></div>
+            <div style="display: flex; flex-direction: column; gap: 1px">
+              <span class="ni on">Overview</span><span class="ni">Queue<span class="cnt">5</span></span><span class="ni">Messages</span><span class="ni">Accounts</span><span class="ni">MCP servers</span><span class="ni">Approvals</span><span class="ni">Activity</span><span class="ni">Your agents</span><span class="ni">Updates</span><span class="ni">Events</span><span class="ni">Doctor</span>
+            </div>
+            <div style="margin-top: auto"><span class="ni">Settings</span></div>
+          </nav>
+          <div class="mmain">
+            <div>
+              <div class="h1">Overview</div>
+              <div class="muted" style="margin-top: 2px">Everything is running. 2 approvals wait for you.</div>
+            </div>
+            <div class="tiles">
+              <div class="tile"><span class="faint">Approvals waiting</span><span class="v">2</span><span class="faint">from acme/slack and acme/gmail</span></div>
+              <div class="tile"><span class="faint">Queue</span><span class="v">5</span><span class="faint">3 for billing · 2 for Jo</span></div>
+              <div class="tile"><span class="faint">Event service</span><span class="v">On</span><span class="faint">watching acme/gmail, acme/slack</span></div>
+              <div class="tile"><span class="faint">agent-communications</span><span class="v">0.34.0</span><span class="faint">up to date</span></div>
+            </div>
+            <div class="lbl">Recent</div>
+            <div class="recent">
+              <div class="rr"><span class="rd" style="background: var(--ok)"></span><span class="grow">Reply sent to Jo Example</span><span class="faint">14:02</span></div>
+              <div class="rr"><span class="rd" style="background: var(--accent)"></span><span class="grow">👀 on a new message in #support</span><span class="faint">13:47</span></div>
+              <div class="rr"><span class="rd" style="background: var(--warn)"></span><span class="grow">Post to #general waits for you</span><span class="faint">11:20</span></div>
+              <div class="rr"><span class="rd" style="background: var(--text3)"></span><span class="grow">Doctor: 21 checks pass</span><span class="faint">09:00</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="spec {{p.face}}">
+          <span class="big">Thanks, I'll look at this today.</span>
+          <span class="num">0123456789 · 14:02 · 43 matches · Il1 O0 · acme/gmail</span>
+          <span class="faint">Chris Moldovan (agent) · Approve · Bring up to date · Switch on…</span>
+        </div>
+      </section>
+    </sc-for>
+  </div>
+  <p class="faint p0">If both sides look the same, Inter didn't load (this page needs the network for it), or SF Pro isn't on this computer: it is only on Apple's.</p>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":1000}}'>
+class Component extends DCLogic {
+renderVals() {
+return {
+themeClass: (this.props.theme ?? 'light') === 'dark' ? 't-dark' : 't-light',
+panes: [
+{ name: 'Inter', stack: 'Inter', face: 'inter' },
+{ name: 'SF Pro', stack: '-apple-system, "SF Pro Text"', face: 'sf' }
+]
+};
+}
+}
+</script>
+</body>
+</html>

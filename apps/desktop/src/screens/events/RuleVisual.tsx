@@ -200,6 +200,7 @@ function When({
           <>
             <span>{COPY.whenLine.in}</span>
             <SegmentedControl
+              indicator
               aria-label={COPY.folder}
               size="sm"
               value={view.folder}
@@ -285,6 +286,7 @@ function Which({
           <div className="flex flex-wrap items-center gap-(--cue-space-2)">
             <span>{COPY.passOn}</span>
             <SegmentedControl
+              indicator
               aria-label="Match"
               size="sm"
               value={view.match}
@@ -449,6 +451,7 @@ function Judge({
           )}
           <Line label={COPY.ifUnsure}>
             <SegmentedControl
+              indicator
               aria-label={COPY.ifUnsure}
               size="sm"
               value={view.onUncertain ?? 'no-match'}
@@ -483,6 +486,7 @@ function KeepFor({
   const choices = offered.includes(value) ? offered : [...offered, value];
   return (
     <SegmentedControl
+      indicator
       aria-label={label}
       size="sm"
       value={String(value)}
@@ -687,6 +691,7 @@ function SessionAction({
     <>
       <Line label={COPY.find}>
         <SegmentedControl
+          indicator
           aria-label={COPY.find}
           size="sm"
           value={view.findBy}
@@ -710,6 +715,7 @@ function SessionAction({
         <>
           <Line label={COPY.ifNone}>
             <SegmentedControl
+              indicator
               aria-label={COPY.ifNone}
               size="sm"
               value={view.ifNone}
@@ -720,6 +726,7 @@ function SessionAction({
               onValueChange={(ifNone) => set({ ifNone: ifNone as SessionView['ifNone'] })}
             />
             <SegmentedControl
+              indicator
               aria-label={COPY.with}
               size="sm"
               value={view.provider}
@@ -732,6 +739,7 @@ function SessionAction({
           </Line>
           <Line label={COPY.ifBusy}>
             <SegmentedControl
+              indicator
               aria-label={COPY.ifBusy}
               size="sm"
               value={view.ifBusy}
@@ -744,6 +752,7 @@ function SessionAction({
           </Line>
           <Line label={COPY.mode}>
             <SegmentedControl
+              indicator
               aria-label={COPY.mode}
               size="sm"
               value={view.mode}
@@ -946,6 +955,7 @@ function LinearAction({
           <AsText onEditAsText={onEditAsText} />
         ) : (
           <SegmentedControl
+            indicator
             aria-label={COPY.assignee}
             size="sm"
             value={view.assignee}

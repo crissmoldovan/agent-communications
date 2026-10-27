@@ -1,7 +1,12 @@
 import { isAbsolute, normalize, posix, relative, sep, win32 } from 'node:path';
 import { type AuditLog, CommsError } from '@agentcomms/core';
 import type { CanonicalFullRuleDocument } from '../domain/activation-documents.ts';
-import { changeAtTerminal, personSetupApprover } from '../domain/judge-setup.ts';
+import {
+  changeAtTerminal,
+  personSetupApprover,
+  personSetupSurface,
+  testBuildElsewhere,
+} from '../domain/judge-setup.ts';
 import { EventDomainError } from '../domain/lifecycle.ts';
 import { isSessionFolder, sessionTargetFiles } from '../domain/session-target.ts';
 import type { EventDatabase } from '../store/database.ts';
@@ -110,6 +115,8 @@ export interface AgentSessionServiceOptions {
   readonly deniedFolders?: readonly string[] | undefined;
   readonly audit?: Pick<AuditLog, 'append'> | undefined;
   readonly now?: (() => number) | undefined;
+  /** Whether this event service's own state folder is a test profile's, the only one the test build may change. */
+  readonly testProfile?: (() => boolean) | undefined;
 }
 
 /** A ready client of the person's relay, with what it said about itself. */
@@ -126,6 +133,7 @@ export class AgentSessionService {
   readonly #deniedFolders: readonly string[];
   readonly #audit: Pick<AuditLog, 'append'> | undefined;
   readonly #now: () => number;
+  readonly #testProfile: () => boolean;
 
   constructor(options: AgentSessionServiceOptions) {
     this.#store = options.store;
@@ -134,6 +142,7 @@ export class AgentSessionService {
     this.#deniedFolders = options.deniedFolders ?? [];
     this.#audit = options.audit;
     this.#now = options.now ?? Date.now;
+    this.#testProfile = options.testProfile ?? (() => false);
   }
   /** The home folder, found once, the first time something needs it. */
   #homeFolder(): string {
@@ -305,14 +314,14 @@ export class AgentSessionService {
    */
   async set(args: Readonly<Record<string, unknown>>, origin: string | undefined): Promise<AgentSessionsIntegrationV1> {
     const approver = personSetupApprover(origin);
-    const surface = approver === 'terminal' ? ('cli' as const) : ('app' as const);
+    // `app` only for an attested app, `cli` for a terminal, and none for anyone else (0.34.0 review, finding 2).
+    const surface = personSetupSurface(approver, this.#testProfile);
     const audit = async (outcome: 'ok' | 'refused' | 'failed', reason?: string) =>
       this.#audit?.append({
         inboxId: '',
         operation: 'events.integrationSet',
         outcome,
-        surface,
-        origin: surface,
+        ...(surface === undefined ? {} : { surface, origin: surface }),
         ids: { integration: 'agent-sessions', ...(approver === null ? {} : { approvedBy: approver }) },
         ...(reason === undefined ? {} : { reason }),
       });
@@ -331,6 +340,11 @@ export class AgentSessionService {
         'change where Agent Comms finds your claude-stream relay',
         'integration set agent-sessions, with the same options',
       );
+    }
+    // The local test build changes only its own test profile (security review of 0.34.0, finding 1).
+    if (approver === 'desktop-app (test build)' && !this.#testProfile()) {
+      await audit('refused', 'NOT_A_TEST_PROFILE');
+      throw testBuildElsewhere();
     }
     try {
       const current = this.settings();

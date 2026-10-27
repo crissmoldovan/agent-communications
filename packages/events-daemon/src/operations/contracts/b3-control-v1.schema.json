@@ -1199,6 +1199,24 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "enable-all-approve" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["approvalId", "digest"],
+              "properties": {
+                "approvalId": { "type": "string", "pattern": "^ap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "session-queue-drop" },
             "args": {
               "type": "object",
@@ -2745,6 +2763,35 @@
             }
           }
         },
+        "enable-all-approve": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approvalId", "approved", "approvedBy", "ruleVersions", "completion"],
+          "properties": {
+            "approvalId": { "type": "string", "pattern": "^ap_[0-9A-HJKMNP-TV-Z]{26}$" },
+            "approved": { "const": true },
+            "approvedBy": { "enum": ["desktop-app", "desktop-app (test build)"] },
+            "ruleVersions": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["ruleId", "ruleVersion"],
+                "properties": { "ruleId": { "$ref": "#/$defs/id" }, "ruleVersion": { "$ref": "#/$defs/positive" } }
+              }
+            },
+            "completion": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["intentId", "status", "usedAt"],
+              "properties": {
+                "intentId": { "$ref": "#/$defs/id" },
+                "status": { "const": "completed" },
+                "usedAt": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
         "judge-show": {
           "type": "object",
           "additionalProperties": false,
@@ -3043,6 +3090,7 @@
                     "session-queue-list",
                     "session-queue-drop",
                     "rule-approve",
+                    "enable-all-approve",
                     "judge-show"
                   ]
                 }
@@ -3291,6 +3339,12 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-approve" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-approve" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "enable-all-approve" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/enable-all-approve" } } }
             },
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "judge-show" } } } } },

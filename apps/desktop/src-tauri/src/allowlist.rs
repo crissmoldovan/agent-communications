@@ -4,11 +4,21 @@
 //! person's in the app (0.32.0, DA10's notes of 2026-10-26; 0.33.0): a judge's setup; adding a server to an app, whose
 //! `mcpInstallApproved` answers only an approval the app prepared itself for that same install (`connections`); and a
 //! rule's activation, whose `eventsRuleApprove` (`rule approve`) answers only the one the rule editor prepared with
-//! `eventsRuleEnable`, for its digest (`rule_editor`).
+//! `eventsRuleEnable`, for its digest (`rule_editor`); and since 0.34.0 switching the event service on, whose
+//! `eventsCollectionApprove` (`collection approve`) answers only the one Events → Service prepared with
+//! `eventsEnableAll`, for its digest. Since 0.34.0 the label's changes are too (`label`): a `labelWord`, `labelName`,
+//! `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app prepared for the same call
+//! without it.
 
-use crate::connections::{McpClient, McpServer, MCP_APP_APPROVAL_VERSION, MCP_UNINSTALL_VERSION};
+use crate::connections::{
+    McpClient, McpServer, McpServers, MCP_APP_APPROVAL_VERSION, MCP_SEVERAL_VERSION,
+    MCP_UNINSTALL_VERSION, UPDATE_APP_APPROVAL_VERSION,
+};
 use crate::grammar;
 use crate::ipc::AppError;
+use crate::label::{
+    self, LabelIdentity, LabelKinds, LabelName, LabelWord, LABEL_APP_APPROVAL_VERSION,
+};
 use crate::launchers::Product;
 use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
 use regex::Regex;
@@ -298,6 +308,25 @@ impl UpdateLevel {
             UpdateLevel::Auto => "auto",
             UpdateLevel::Every14Days => "every-14-days",
             UpdateLevel::Never => "never",
+        }
+    }
+}
+
+/// How an agent's messages look in a Slack workspace (`label style <workspace> app|labelled`, 0.34.0's account page):
+/// `app`, as the Agent Comms app with Slack's APP badge, a tightening applied at once; `labelled`, as the person, tagged
+/// in the message's words, a loosening the person approves. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SlackStyle {
+    App,
+    Labelled,
+}
+
+impl SlackStyle {
+    pub fn word(self) -> &'static str {
+        match self {
+            SlackStyle::App => "app",
+            SlackStyle::Labelled => "labelled",
         }
     }
 }
@@ -813,6 +842,37 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         conversation: Option<ConversationId>,
     },
+    /// Core `behaviour allow <account> <acts> [--conversation <id>] --app-approval <id>` (0.34.0's account page): the
+    /// person approved, in the app, the loosening the app prepared with an equal `BehaviourAllow`. Only an approval
+    /// `cli` recorded for that very change is answered (`connections::run_app_approval`), once.
+    BehaviourAllowApproved {
+        account: AccountName,
+        acts: Acts,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        approval_id: ApprovalId,
+    },
+    /// Core `behaviour clear <account> [--conversation <id>] --app-approval <id>` (0.34.0): as `BehaviourAllowApproved`,
+    /// for a removal the app prepared with an equal `BehaviourClear` whose fallback lets agents do more.
+    BehaviourClearApproved {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        approval_id: ApprovalId,
+    },
+    /// Core `label style <workspace> app|labelled` (0.34.0's account page; the command is 0.20.0's): `labelled`
+    /// prepares a change, and `app`, a tightening, applies at once.
+    LabelStyle {
+        account: AccountName,
+        style: SlackStyle,
+    },
+    /// Core `label style <workspace> labelled --app-approval <id>` (0.34.0): the person approved, in the app, the
+    /// `labelled` the app prepared with an equal `LabelStyle`. `app` is refused here: a tightening takes no approval.
+    LabelStyleApproved {
+        account: AccountName,
+        style: SlackStyle,
+        approval_id: ApprovalId,
+    },
     /// Core `profile <account>` (0.22.0).
     ProfileView { account: AccountName },
     /// Core `profile init [<account>] [--conversation <id>]` (0.22.0).
@@ -956,12 +1016,13 @@ pub enum Call {
     /// is installed, each client entry that starts it, and the client configs core could not read. Read-only, and it
     /// never returns an entry's `env`. It takes no argument.
     Channels {},
-    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app.
-    /// It prepares a change: core answers with its preview, and the person approves it in Terminal (DA10). Both words
-    /// are closed (`connections`), and nothing else rides along.
+    /// Core `mcp install --client <client> --server <server>` (0.32.0's Connections): registers one server with one app,
+    /// or from core 0.34.0 several, `--server <a,b,c>`, in one approval (`McpServers`). It prepares a change: core
+    /// answers with its preview, and the person approves it (DA10). Every word is closed (`connections`), and nothing
+    /// else rides along.
     McpInstall {
         client: McpClient,
-        server: McpServer,
+        server: McpServers,
     },
     /// Core `mcp uninstall --client <client> --server <server>` (0.32.0): takes one server away from one app. It gives an
     /// agent nothing, a tightening, which core applies at once.
@@ -975,9 +1036,18 @@ pub enum Call {
     /// (`connections::run_app_approval`), once.
     McpInstallApproved {
         client: McpClient,
-        server: McpServer,
+        server: McpServers,
         approval_id: ApprovalId,
     },
+    /// Core `update --check` (0.34.0's Connections): what is behind npm's latest release on this machine — each entry,
+    /// runtime and global package — by the yardstick `update` itself uses. A read; it takes no argument.
+    UpdateCheck {},
+    /// Core `update` (0.34.0's Bring everything up to date): prepares a change, whose preview the person approves in
+    /// the app (`UpdateApproved`), or in Terminal where nothing attests the app. It takes no argument.
+    Update {},
+    /// Core `update --app-approval <id>` (0.34.0): the person approved, in the app, the update the app prepared with
+    /// `Update`. Only an approval `cli` recorded for it is answered (`connections::run_app_approval`), once.
+    UpdateApproved { approval_id: ApprovalId },
     /// The events service's `messages list --since <ms> [--before <ms|cursor>] [--limit <n>]` (0.32.0, spec §3.6): the
     /// events it observed in the window, newest first, with each rule's decision, each delivery and the queue item. The
     /// person's read, refused inside an MCP server; every argument is a checked number or the cursor the last page
@@ -1027,6 +1097,23 @@ pub enum Call {
         approval_id: ApprovalId,
         digest: Digest,
     },
+    /// The events service's `enable-all` (0.34.0 design B4, Events → Service → Switch on…): prepares the standing
+    /// approval that starts collection, and approves nothing. Rust records the approval it comes back with, and its
+    /// digest, as the app's own (`terminal::Prepared`): only that one `eventsCollectionApprove` answers it, `approve
+    /// <approval-id>` opens for it at a terminal, and the preview's Cancel revokes it. It takes no argument.
+    EventsEnableAll {},
+    /// The events service's `collection approve <approval> --digest <digest>` (0.34.0 design B4): the person pressed
+    /// Approve in the app, after the preview of exactly this digest, and the event service switches collection on. Only
+    /// an approval `eventsEnableAll` recorded for this digest is answered (`connections::run_app_approval`), once; the
+    /// CLI refuses an agent and, on macOS, a process the app did not start.
+    EventsCollectionApprove {
+        approval_id: ApprovalId,
+        digest: Digest,
+    },
+    /// The events service's `disable-all` (0.34.0 design B4, Events → Service → Switch off): switches collection off at
+    /// once. It takes away and gives nothing, a tightening, so the app applies it itself (DA10), once the person
+    /// confirms; its answer's `said` is what it did, in plain words. It takes no argument.
+    EventsDisableAll {},
     /// The events service's `rule analyse <rule> [--draft -] [--provider <openrouter|anthropic>]` (0.33.0, design
     /// §3.3): suggestions for a rule, or for the unsaved draft on stdin, its model on the provider the person picked.
     /// The person's read, refused inside an MCP server and to an agent's shell; it applies nothing.
@@ -1070,6 +1157,49 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         ids: Option<ItemIds>,
     },
+    /// Core `label word <word> [--app-approval <id>]` (0.34.0's Your agents, `label`): the word after the person's
+    /// name. Without `appApproval` it prepares a change — a new word loosens, and core answers with its preview; with
+    /// it, the person approved in the app the change the app prepared (`connections::run_app_approval`), once.
+    LabelWord {
+        word: LabelWord,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label name <name> [--app-approval <id>]` (0.34.0): the person's name, for where a channel has none of its
+    /// own. Prepared and approved as `labelWord` is.
+    LabelName {
+        name: LabelName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label rule add <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--app-approval <id>]`
+    /// (0.34.0): an exception to the tag. `--as me` loosens and is prepared, then approved in the app; `--as agent`
+    /// applies at once, and is never given the app's approval.
+    LabelRuleAdd {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kinds: Option<LabelKinds>,
+        #[serde(rename = "as")]
+        identity: LabelIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `label rule remove <account> [--conversation <id>] [--kinds <kind,…>] --as agent|me [--app-approval <id>]`
+    /// (0.34.0): an exception taken away, as it is listed. Taking away a `me` rule applies at once; an `agent` rule is
+    /// prepared, then approved in the app.
+    LabelRuleRemove {
+        account: AccountName,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        conversation: Option<ConversationId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        kinds: Option<LabelKinds>,
+        #[serde(rename = "as")]
+        identity: LabelIdentity,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -1106,9 +1236,19 @@ pub const JUDGE_SETUP_VERSION: &str = "0.32.0";
 /// one keeps the rule's page as it was, and says "Needs 0.33.0 or later" (DA12).
 pub const RULE_EDITOR_VERSION: &str = "0.33.0";
 
+/// The first release of the events service whose switch the app turns (0.34.0 design B4): `collection approve`, which
+/// the app answers its own `enable-all` with, and `disable-all` that says what it did. Preparing `enable-all` needs only
+/// `RULE_EDITOR_VERSION`, whose approval view and terminal `approve` an older one still has: there Switch on… is
+/// approved in Terminal, and Switch off is not offered.
+pub const COLLECTION_SWITCH_VERSION: &str = "0.34.0";
+
 /// The first release with the Messages screen's reads (spec 2026-10-26-owner-feedback-0320 §3.6): the events service's
 /// `messages list` and `message show`, and core's `activity items`. An older one says "Needs 0.32.0 or later" (DA12).
 pub const MESSAGES_VERSION: &str = "0.32.0";
+
+/// The first core whose `behaviour allow|clear` and `label style` take the app's own approval, `--app-approval` (0.34.0,
+/// spec 2026-10-26-desktop-0340 §B2): an older one keeps Approve in Terminal for each loosening.
+pub const ACCOUNT_APP_APPROVAL_VERSION: &str = "0.34.0";
 
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1137,6 +1277,9 @@ pub struct Words {
 const TIMEOUT: Duration = Duration::from_secs(30);
 /// An install the person approved in the app: it may fetch a runtime and start the server to prove it (0.32.0).
 const INSTALL_TIMEOUT: Duration = Duration::from_secs(300);
+/// An update the person approved in the app (0.34.0): it may fetch and verify a runtime for every server, register
+/// entries again and prove each starts, so it has the longest of any call.
+const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
 /// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
@@ -1170,6 +1313,11 @@ fn conversation(conversation: &Option<ConversationId>) -> Vec<String> {
         .iter()
         .flat_map(|id| ["--conversation".to_string(), id.as_str().to_string()])
         .collect()
+}
+
+/// `--app-approval <id>`: the person's press in the app, answering the approval the app prepared (0.34.0).
+fn app_approval(id: &ApprovalId) -> [String; 2] {
+    ["--app-approval".to_string(), id.as_str().to_string()]
 }
 
 impl Call {
@@ -1257,6 +1405,45 @@ impl Call {
                 core(&["behaviour", "clear", account.as_str()]),
                 conversation(id),
             ),
+            Call::BehaviourAllowApproved {
+                account,
+                acts,
+                conversation: id,
+                approval_id,
+            } => with(
+                core(&["behaviour", "allow", account.as_str(), acts.as_str()]),
+                conversation(id)
+                    .into_iter()
+                    .chain(app_approval(approval_id)),
+            ),
+            Call::BehaviourClearApproved {
+                account,
+                conversation: id,
+                approval_id,
+            } => with(
+                core(&["behaviour", "clear", account.as_str()]),
+                conversation(id)
+                    .into_iter()
+                    .chain(app_approval(approval_id)),
+            ),
+            Call::LabelStyle { account, style } => {
+                core(&["label", "style", account.as_str(), style.word()])
+            }
+            Call::LabelStyleApproved {
+                account,
+                style,
+                approval_id,
+            } => {
+                if *style != SlackStyle::Labelled {
+                    return Err(AppError::refused(
+                        "the app's style applies at once: it takes no approval",
+                    ));
+                }
+                with(
+                    core(&["label", "style", account.as_str(), style.word()]),
+                    app_approval(approval_id),
+                )
+            }
             Call::ProfileView { account } => core(&["profile", account.as_str()]),
             Call::ProfileInit {
                 account,
@@ -1419,14 +1606,10 @@ impl Call {
             // A first install may read the release's document and verify it before it shows its preview.
             Call::McpInstall { client, server } => Words {
                 timeout: DOCTOR_TIMEOUT,
-                ..core(&[
-                    "mcp",
-                    "install",
-                    "--client",
-                    client.word(),
-                    "--server",
-                    server.word(),
-                ])
+                ..with(
+                    core(&["mcp", "install", "--client", client.word(), "--server"]),
+                    [server.word()],
+                )
             },
             Call::McpUninstall { client, server } => core(&[
                 "mcp",
@@ -1443,16 +1626,29 @@ impl Call {
                 approval_id,
             } => Words {
                 timeout: INSTALL_TIMEOUT,
-                ..core(&[
-                    "mcp",
-                    "install",
-                    "--client",
-                    client.word(),
-                    "--server",
-                    server.word(),
-                    "--app-approval",
-                    approval_id.as_str(),
-                ])
+                ..with(
+                    core(&["mcp", "install", "--client", client.word(), "--server"]),
+                    [
+                        server.word(),
+                        "--app-approval".to_string(),
+                        approval_id.as_str().to_string(),
+                    ],
+                )
+            },
+            // It reads npm's registry and verifies the latest release before it answers.
+            Call::UpdateCheck {} => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&["update", "--check"])
+            },
+            // Its preview is planned as `--check` reads, from the registry and the verified release.
+            Call::Update {} => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..core(&["update"])
+            },
+            // It fetches and verifies every runtime behind, registers entries again and switches launchers.
+            Call::UpdateApproved { approval_id } => Words {
+                timeout: UPDATE_TIMEOUT,
+                ..core(&["update", "--app-approval", approval_id.as_str()])
             },
             Call::EventsMessagesList {
                 since,
@@ -1522,6 +1718,22 @@ impl Call {
                     digest.as_str(),
                 ])
             },
+            Call::EventsEnableAll {} => events(&["enable-all"]),
+            // It approves, and completes switching on: as long as a rule's approval.
+            Call::EventsCollectionApprove {
+                approval_id,
+                digest,
+            } => Words {
+                timeout: SETUP_TIMEOUT,
+                ..events(&[
+                    "collection",
+                    "approve",
+                    approval_id.as_str(),
+                    "--digest",
+                    digest.as_str(),
+                ])
+            },
+            Call::EventsDisableAll {} => events(&["disable-all"]),
             // A model may write some of its suggestions: as long as a doctor's.
             Call::EventsRuleAnalyse {
                 rule_id,
@@ -1572,6 +1784,44 @@ impl Call {
             Call::SessionQueueDrop { delivery_id } => {
                 events(&["session-queue", "drop", delivery_id.as_str()])
             }
+            Call::LabelWord { word, app_approval } => with(
+                core(&["label", "word", word.word()]),
+                label::app_approval_words(app_approval),
+            ),
+            Call::LabelName { name, app_approval } => with(
+                core(&["label", "name", name.as_str()]),
+                label::app_approval_words(app_approval),
+            ),
+            Call::LabelRuleAdd {
+                account,
+                conversation,
+                kinds,
+                identity,
+                app_approval,
+            } => with(
+                core(&["label", "rule", "add", account.as_str()]),
+                label::rule_words(
+                    conversation.as_ref().map(ConversationId::as_str),
+                    kinds,
+                    *identity,
+                    app_approval,
+                ),
+            ),
+            Call::LabelRuleRemove {
+                account,
+                conversation,
+                kinds,
+                identity,
+                app_approval,
+            } => with(
+                core(&["label", "rule", "remove", account.as_str()]),
+                label::rule_words(
+                    conversation.as_ref().map(ConversationId::as_str),
+                    kinds,
+                    *identity,
+                    app_approval,
+                ),
+            ),
         })
     }
 
@@ -1593,7 +1843,8 @@ impl Call {
     }
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
-    /// (DA10): the six change shapes, and only those.
+    /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
+    /// and a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1601,8 +1852,29 @@ impl Call {
                 | Call::UpdateRollback {}
                 | Call::UpdateBackgroundJob { on: true }
                 | Call::McpInstall { .. }
+                | Call::Update {}
                 | Call::BehaviourAllow { .. }
                 | Call::BehaviourClear { .. }
+                | Call::LabelWord {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelName {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelRuleAdd {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelRuleRemove {
+                    app_approval: None,
+                    ..
+                }
+                | Call::LabelStyle {
+                    style: SlackStyle::Labelled,
+                    ..
+                }
         )
     }
 
@@ -1642,7 +1914,18 @@ impl Call {
                 Some(JUDGE_SETUP_VERSION)
             }
             Call::McpUninstall { .. } => Some(MCP_UNINSTALL_VERSION),
+            Call::McpInstall { server, .. } | Call::McpInstallApproved { server, .. }
+                if server.several() =>
+            {
+                Some(MCP_SEVERAL_VERSION)
+            }
             Call::McpInstallApproved { .. } => Some(MCP_APP_APPROVAL_VERSION),
+            Call::UpdateCheck {} | Call::Update {} | Call::UpdateApproved { .. } => {
+                Some(UPDATE_APP_APPROVAL_VERSION)
+            }
+            Call::BehaviourAllowApproved { .. }
+            | Call::BehaviourClearApproved { .. }
+            | Call::LabelStyleApproved { .. } => Some(ACCOUNT_APP_APPROVAL_VERSION),
             Call::EventsMessagesList { .. }
             | Call::EventsMessageShow { .. }
             | Call::ActivityItems { .. } => Some(MESSAGES_VERSION),
@@ -1659,7 +1942,15 @@ impl Call {
             | Call::IntegrationSetAgentSessions { .. }
             | Call::JudgeShow { .. }
             | Call::SessionQueueList {}
-            | Call::SessionQueueDrop { .. } => Some(RULE_EDITOR_VERSION),
+            | Call::SessionQueueDrop { .. }
+            | Call::EventsEnableAll {} => Some(RULE_EDITOR_VERSION),
+            Call::EventsCollectionApprove { .. } | Call::EventsDisableAll {} => {
+                Some(COLLECTION_SWITCH_VERSION)
+            }
+            Call::LabelWord { .. }
+            | Call::LabelName { .. }
+            | Call::LabelRuleAdd { .. }
+            | Call::LabelRuleRemove { .. } => Some(LABEL_APP_APPROVAL_VERSION),
             _ => None,
         }
     }
@@ -1720,6 +2011,13 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
         json!({ "kind": "behaviourClear", "account": "example/slack" }),
         json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+        json!({ "kind": "behaviourAllowApproved", "account": "example/slack", "acts": "post,reply", "approvalId": ID }),
+        json!({ "kind": "behaviourAllowApproved", "account": "example/gmail", "acts": "reply", "conversation": "@example.com", "approvalId": ID }),
+        json!({ "kind": "behaviourClearApproved", "account": "example/slack", "approvalId": ID }),
+        json!({ "kind": "behaviourClearApproved", "account": "example/gmail", "conversation": "@example.com", "approvalId": ID }),
+        json!({ "kind": "labelStyle", "account": "example/slack", "style": "app" }),
+        json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
+        json!({ "kind": "labelStyleApproved", "account": "example/slack", "style": "labelled", "approvalId": ID }),
         json!({ "kind": "profileView", "account": "example/gmail-work" }),
         json!({ "kind": "profileInit" }),
         json!({ "kind": "profileInit", "account": "example/gmail", "conversation": "someone@example.com" }),
@@ -1794,6 +2092,11 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
         json!({ "kind": "mcpUninstall", "client": "cursor", "server": "events" }),
         json!({ "kind": "mcpInstallApproved", "client": "claude-code", "server": "gmail", "approvalId": ID }),
+        json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
+        json!({ "kind": "mcpInstallApproved", "client": "codex", "server": ["core", "gmail", "events"], "approvalId": ID }),
+        json!({ "kind": "updateCheck" }),
+        json!({ "kind": "update" }),
+        json!({ "kind": "updateApproved", "approvalId": ID }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": BEFORE_MS, "limit": 100 }),
         json!({ "kind": "eventsMessagesList", "since": SINCE_MS, "before": "1792972800000:0123456789abcdef0123456789abcdef" }),
@@ -1828,6 +2131,17 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "sessionQueueDrop", "deliveryId": DELIVERY }),
         json!({ "kind": "judgeShow", "judgeId": "jev" }),
         json!({ "kind": "judgeShow", "judgeId": "local-model", "version": 2 }),
+        json!({ "kind": "labelWord", "word": "assistant" }),
+        json!({ "kind": "labelWord", "word": "AI", "appApproval": ID }),
+        json!({ "kind": "labelName", "name": "Jo Example" }),
+        json!({ "kind": "labelName", "name": "Jo Example", "appApproval": ID }),
+        json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
+        json!({ "kind": "labelRuleAdd", "account": "example/gmail", "conversation": "@example.com", "as": "me", "appApproval": ID }),
+        json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
+        json!({ "kind": "labelRuleRemove", "account": "example/slack", "conversation": "C0123ABCD", "kinds": "reply,reaction", "as": "agent", "appApproval": ID }),
+        json!({ "kind": "eventsEnableAll" }),
+        json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
+        json!({ "kind": "eventsDisableAll" }),
     ];
     values
         .into_iter()
@@ -2462,9 +2776,14 @@ mod tests {
                 let rule_approve = matches!(call, Call::EventsRuleApprove { .. })
                     && index == 1
                     && words.words[0] == "rule";
+                // `collection approve` (0.34.0) is the same press, for switching on: it answers only the `enable-all`
+                // the app prepared, for its digest.
+                let collection_approve = matches!(call, Call::EventsCollectionApprove { .. })
+                    && index == 1
+                    && words.words[0] == "collection";
                 assert!(
                     !word.starts_with("--approval")
-                        && (word != "approve" || rule_approve)
+                        && (word != "approve" || rule_approve || collection_approve)
                         && word != "--yes",
                     "{value} carries {word}"
                 );
@@ -2610,7 +2929,7 @@ mod tests {
     }
 
     #[test]
-    fn only_the_six_change_shapes_prepare() {
+    fn only_the_seven_change_shapes_prepare() {
         let preparing: Vec<serde_json::Value> = samples()
             .into_iter()
             .filter(|(call, _)| call.prepares_change())
@@ -2628,7 +2947,14 @@ mod tests {
                 json!({ "kind": "behaviourAllow", "account": "example/gmail", "acts": "none", "conversation": "@example.com" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack" }),
                 json!({ "kind": "behaviourClear", "account": "example/slack", "conversation": "C0123ABCD" }),
+                json!({ "kind": "labelStyle", "account": "example/slack", "style": "labelled" }),
                 json!({ "kind": "mcpInstall", "client": "claude-code", "server": "gmail" }),
+                json!({ "kind": "mcpInstall", "client": "codex", "server": ["core", "gmail", "events"] }),
+                json!({ "kind": "update" }),
+                json!({ "kind": "labelWord", "word": "assistant" }),
+                json!({ "kind": "labelName", "name": "Jo Example" }),
+                json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
+                json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
             ]
         );
     }
@@ -4317,6 +4643,80 @@ mod tests {
         ] {
             refused(json!({ "kind": kind }));
         }
+    }
+
+    /// Events → Service's switch (0.34.0 design B4): `enable-all` prepares switching on, `collection approve <approval>
+    /// --digest <digest>` is the person's press in the app, and `disable-all` switches off at once. Each is the events
+    /// service's launcher, its words, `--json` and the pins; none prepares a core change; switching on and off need the
+    /// event service that has them, and preparing needs only the one with the approval view. Nothing else rides along.
+    #[test]
+    fn collection_switch_calls_build_exactly_their_words_and_refuse_anything_else() {
+        let words = |value: serde_json::Value| call(value).words().expect("words");
+        let prepare = words(json!({ "kind": "eventsEnableAll" }));
+        assert_eq!(prepare.product, Product::EventsDaemon);
+        assert_eq!(prepare.words, ["enable-all"]);
+        assert_eq!(prepare.shape, Shape::Bare);
+        assert!(prepare.pins && prepare.quiet_updates);
+        assert_eq!(prepare.timeout, Duration::from_secs(30));
+        let approve =
+            words(json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }));
+        assert_eq!(approve.product, Product::EventsDaemon);
+        assert_eq!(
+            approve.words,
+            ["collection", "approve", ID, "--digest", DIGEST]
+        );
+        assert_eq!(approve.shape, Shape::Bare);
+        assert_eq!(approve.timeout, Duration::from_secs(60));
+        let off = words(json!({ "kind": "eventsDisableAll" }));
+        assert_eq!(off.words, ["disable-all"]);
+        assert_eq!(off.shape, Shape::Bare);
+        assert_eq!(
+            call(json!({ "kind": "eventsEnableAll" })).needs(),
+            Some(RULE_EDITOR_VERSION)
+        );
+        for value in [
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
+            json!({ "kind": "eventsDisableAll" }),
+        ] {
+            assert_eq!(
+                call(value.clone()).needs(),
+                Some(COLLECTION_SWITCH_VERSION),
+                "{value}"
+            );
+            assert!(!call(value).prepares_change());
+        }
+        assert!(!call(json!({ "kind": "eventsEnableAll" })).prepares_change());
+        assert_eq!(COLLECTION_SWITCH_VERSION, "0.34.0");
+        assert!(!crate::version::at_least(
+            "0.33.0",
+            COLLECTION_SWITCH_VERSION
+        ));
+        assert!(crate::version::at_least(
+            "0.34.0-feat-0.34-ui-events",
+            COLLECTION_SWITCH_VERSION
+        ));
+        // The approval and its digest are checked words; no challenge, answer, rule or extra field is taken.
+        refused(json!({ "kind": "eventsCollectionApprove", "approvalId": ID }));
+        refused(json!({ "kind": "eventsCollectionApprove", "digest": DIGEST }));
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": "ap_short", "digest": DIGEST }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": "--json", "digest": DIGEST }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST.to_uppercase() }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": &DIGEST[1..] }),
+        );
+        refused(
+            json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST, "challenge": "fake-challenge" }),
+        );
+        refused(json!({ "kind": "eventsEnableAll", "approvalId": ID }));
+        refused(json!({ "kind": "eventsEnableAll", "ruleId": "invoices" }));
+        refused(json!({ "kind": "eventsDisableAll", "force": true }));
+        refused(json!({ "kind": "eventsCollectionEnable" }));
     }
 
     /// The Messages screen's calls (0.32.0, spec §3.6): the events service's `messages list` and `message show`, and

@@ -78,17 +78,21 @@ describe('the content policy', () => {
     expect(security.csp).not.toMatch(/https?:\/\/(?!ipc\.localhost)/);
   });
 
-  it('the hash pinned is the pre-paint script that opens on soft (0.28.0), not the one before it', () => {
+  it("the hash pinned is the pre-paint script that opens on cue-ui's soft look (0.34.0), not one before it", () => {
     const source = prepaintSource();
     expect(source).toContain('var T=["soft","cue","terminal"]');
+    expect(source).toContain('var k="agent-comms.look.v2"');
+    expect(source).toContain('s.style:"soft"');
     const hash = createHash('sha256').update(source, 'utf8').digest('base64');
     const security = JSON.parse(read('src-tauri/tauri.conf.json')).app.security;
     for (const policy of [security.csp, security.devCsp]) {
       const pinned = [...String(policy).matchAll(/'sha256-([^']+)'/g)].map((match) => match[1]);
       expect(pinned).toEqual([hash]);
     }
-    // The script 0.27 pinned registered cue and terminal and opened on cue.
+    // The script 0.27 pinned registered cue and terminal and opened on cue; 0.28 to 0.33's opened on the app's own soft,
+    // with no style set or pack, under the key `agent-comms.look`.
     expect(hash).not.toBe('wLkmBKemGb0dgFM5hke0n98F0sY24defqs04ByLzfv8=');
+    expect(hash).not.toBe('KJPJ0tKv1rOzFQu+eVuQ/ZCGJAszFoM3ufNE50YXJyQ=');
   });
 
   it('index.html carries no inline script of its own', () => {

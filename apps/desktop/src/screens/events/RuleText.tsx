@@ -13,8 +13,10 @@ import { type JsonObject, prettyJson } from '../../rule-editor/model.ts';
 import { Sentence } from './parts.tsx';
 
 export function RuleTextPane({ text, onText }: { text: string; onText: (text: string) => void }) {
+  // The editor is the person's to drag and scroll in, its bar and edges included: a sideways swipe over it never changes
+  // the Events tab around it (`data-tabs-swipe`, cue-ui 0.34.0), as one over the text itself already does not.
   return (
-    <Panel className="flex flex-col overflow-hidden">
+    <Panel data-tabs-swipe="ignore" className="flex flex-col overflow-hidden">
       <p className="bg-surface-2 px-(--cue-space-3) py-(--cue-space-2) text-(length:--cue-text-label) text-fg-muted">
         {COPY.textBar}
       </p>
@@ -39,8 +41,10 @@ export function RuleJsonPane({ document }: { document: JsonObject }) {
         <p className="bg-surface-2 px-(--cue-space-3) py-(--cue-space-2) text-(length:--cue-text-label) text-fg-muted">
           {COPY.jsonBar}
         </p>
+        {/* A long line scrolls sideways; a swipe that reaches its end stays with it rather than changing the tab. */}
         <pre
           data-slot="rule-json"
+          data-tabs-swipe="ignore"
           className="m-0 overflow-x-auto p-(--cue-space-4) font-mono text-(length:--cue-text-ui) text-fg"
         >
           <UntrustedText text={prettyJson(document)} />

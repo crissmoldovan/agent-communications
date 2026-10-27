@@ -16,10 +16,14 @@ import {
   type Cell,
   type ConnectionsView,
   changePlan,
+  installServers,
   lastUsedByApp,
   readChannels,
+  readUpdateCheck,
   recentWindows,
   SERVER_LABELS,
+  serverNames,
+  type UpdateCheckView,
 } from '../connections.ts';
 import { needsLine, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
@@ -69,21 +73,50 @@ export const CONNECTIONS_COPY = {
   seeActivity: 'See Activity ›',
   noRecent: 'No agent window has used an account here in the last 30 days.',
   notRead: "Core's answer about its servers could not be read.",
-  /** The test build's line: its core is the test profile's, but the configs it would write are the person's real ones. */
-  testBuildOnly: "In the test build, Connections only shows. Changing it would edit your real apps' settings.",
+  /** Bring everything up to date (0.34.0): `update`, approved in the app, for every app at once. */
+  bringUpToDate: 'Bring everything up to date',
+  bringLead:
+    'Updates Agent Comms for every app on this Mac at once. What agents may do in each account stays as it is.',
+  updateTitle: 'Bring Agent Comms up to date for every app? Approve it',
+  approveAndUpdate: 'Approve and update',
+  updated: 'Everything was brought up to date. Restart your apps to use it.',
+  alreadyUpToDate: 'Everything is up to date already.',
+  updateCancelled: 'Cancelled: nothing was changed.',
+  updateConfirm: 'Confirm it in Terminal, then restart your apps to use it.',
+  /** The test build changes nothing, and `update` is refused there: the button is shown, and cannot be pressed. */
+  updateNotHere: 'The test build brings nothing up to date: use your own Agent Comms for that.',
+  prepareAgain: 'That approval could no longer be used, so it was prepared again: approve this one.',
 } as const;
+
+/**
+ * The test build's banner (0.34.0): its core is the test profile's, but the apps start the person's real Agent Comms,
+ * and the configs it would write are the person's real ones.
+ */
+export const testBanner = (version: string | null) =>
+  `Test build: your apps start your real Agent Comms${version === null ? '' : ` (${version})`}, not this test, and nothing can be changed here.`;
+
+/** What `update --check` could not say. */
+const checkFailedLine = (message: string) =>
+  `Whether your apps start the latest Agent Comms could not be checked: ${message}`;
+const notUpdatedLine = (message: string) => `Nothing was brought up to date: ${message}`;
+const unfinishedUpdateLine = (status: string | null) =>
+  `Not everything was brought up to date${status === null ? '' : ` (${status})`}. Doctor says what to do.`;
 
 const whichParts = (app: string) => `${app}: which parts?`;
 const removedLine = (server: string, app: string) =>
   `${server} was taken away from ${app}. Restart ${app} to see the change.`;
 const notRemovedLine = (server: string, app: string) => `${server} was not taken away from ${app}`;
-const addTitle = (server: string, app: string) => `Add ${server} to ${app}`;
-const addedLine = (server: string, app: string) => `${server} was added to ${app}. Restart ${app} to use it.`;
-const notAddedLine = (server: string, app: string) => `${server} was not added to ${app}`;
-const cancelledLine = (server: string, app: string) => `Cancelled: ${server} was not added to ${app}.`;
+/** The lines of an addition: `servers` is one name or several ("Gmail and Slack"), and `several` says which. */
+const addTitle = (servers: string, app: string) => `Add ${servers} to ${app}`;
+const addedLine = (servers: string, app: string, several = false) =>
+  `${servers} ${several ? 'were' : 'was'} added to ${app}. Restart ${app} to use it.`;
+const notAddedLine = (servers: string, app: string, several = false) =>
+  `${servers} ${several ? 'were' : 'was'} not added to ${app}`;
+const cancelledLine = (servers: string, app: string, several = false) =>
+  `Cancelled: ${servers} ${several ? 'were' : 'was'} not added to ${app}.`;
 const confirmLine = (app: string) => `Confirm it in Terminal, then restart ${app} to use it.`;
-const unfinishedLine = (server: string, app: string, why: string | null) =>
-  `${server} was not fully added to ${app}${why === null ? '' : `: ${why}`}. Doctor says what to do.`;
+const unfinishedLine = (servers: string, app: string, why: string | null) =>
+  `${servers} ${servers.includes(' and ') ? 'were' : 'was'} not fully added to ${app}${why === null ? '' : `: ${why}`}. Doctor says what to do.`;
 const removeNeedsLine = (installed: string | null) =>
   `Taking a part away ${needsLine(MCP_UNINSTALL_VERSION, installed).replace(/^Needs/, 'needs')}`;
 
@@ -92,10 +125,13 @@ type Waiting = Extract<ChangeOutcome, { state: 'needsTerminal' }>;
 /** What a save came to, said under the table: a line, or what core refused and its hint. */
 type Said = { tone: 'ok'; text: string } | { tone: 'refused'; text: string; hint: string | null };
 
-/** An addition waiting for the person's approval: its preview, and whether Terminal was opened for it. */
+/**
+ * An addition waiting for the person's approval: its servers — one, or from core 0.34.0 several in one approval — its
+ * preview, and whether Terminal was opened for it.
+ */
 interface Adding {
   client: McpClient;
-  server: McpServer;
+  servers: McpServer[];
   change: Waiting;
   opened: boolean;
 }
@@ -103,9 +139,12 @@ interface Adding {
 /**
  * Connections (0.32.0, spec §3.3): the apps on this machine by the servers each has, from core's `channels`; when each
  * was last used, as its windows reported; who can reach the servers; and the agent windows used recently. Change… (or
- * Add…) ticks an app's servers: one unticked is taken away at once (`mcp uninstall`, a tightening); one ticked is
- * asked for (`mcp install`), and waits for the person's approval in Terminal, as every change the app prepares does
- * (DA10). Nothing is added without it.
+ * Add…) ticks an app's servers: one unticked is taken away at once (`mcp uninstall`, a tightening); the ticked ones are
+ * asked for (`mcp install`, from core 0.34.0 all of them in one approval), and wait for the person's approval, as
+ * every change the app prepares does (DA10). Nothing is added without it.
+ *
+ * From core 0.34.0 the entries that start an older Agent Comms are `update --check`'s answer, said in plain words, and
+ * Bring everything up to date runs `update`, approved in the app. The test build only shows, under its banner.
  */
 export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }) {
   const { installation } = useAppData();
@@ -115,15 +154,27 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
   const activity = supports(version, 'activity');
   const channels = useCall<unknown>({ kind: 'channels' });
   const sessions = useCall<unknown>(activity ? { kind: 'activitySessions', since: '30d' } : null);
+  // What is behind npm's latest release (0.34.0). It asks the registry, so it is read when the screen opens and after a
+  // change here, and not each time the window comes back.
+  const updates = supports(version, 'bringUpToDate');
+  const checked = useCall<unknown>(updates ? { kind: 'updateCheck' } : null);
   useReloadOnReturn(async () => {
     await Promise.all([channels.reload(), sessions.reload()]);
   });
 
+  const check = useMemo((): Loadable<UpdateCheckView> | null => {
+    if (!updates) return null;
+    if (checked.result.state !== 'ready') return checked.result;
+    const read = readUpdateCheck(checked.result.value);
+    return read === null
+      ? { state: 'error', message: 'its answer could not be read' }
+      : { state: 'ready', value: read };
+  }, [updates, checked.result]);
   const view = useMemo((): Loadable<ConnectionsView> => {
     if (channels.result.state !== 'ready') return channels.result;
-    const read = readChannels(channels.result.value, home);
+    const read = readChannels(channels.result.value, home, check?.state === 'ready' ? check.value : null);
     return read === null ? { state: 'error', message: CONNECTIONS_COPY.notRead } : { state: 'ready', value: read };
-  }, [channels.result, home]);
+  }, [channels.result, home, check]);
   const windows = useMemo((): Loadable<SessionView[]> => {
     if (sessions.result.state !== 'ready') return sessions.result;
     const read = readSessions(sessions.result.value);
@@ -151,7 +202,10 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
               approveHere={atLeast(version, MCP_APP_APPROVAL_VERSION) && !setupsAtTerminal()}
               readOnly={readOnly}
               installed={version}
+              several={supports(version, 'severalServers')}
+              check={check}
               reload={channels.reload}
+              recheck={checked.reload}
             />
           )}
         </ScreenState>
@@ -190,7 +244,10 @@ export function Connections({ onScreen }: { onScreen: (screen: Screen) => void }
   );
 }
 
-/** The table, the editor of the app being changed, what the last save came to, and the configs core could not read. */
+/**
+ * The table, the editor of the app being changed, what the last save came to, Bring everything up to date, and the
+ * configs core could not read.
+ */
 function Apps({
   view,
   lastUsed,
@@ -198,7 +255,10 @@ function Apps({
   approveHere,
   readOnly,
   installed,
+  several,
+  check,
   reload,
+  recheck,
 }: {
   view: ConnectionsView;
   lastUsed: Partial<Record<McpClient, string>>;
@@ -208,7 +268,12 @@ function Apps({
   /** The test build: the table only, with nothing to change (0.32.0). */
   readOnly: boolean;
   installed: string | null;
+  /** Whether core adds several servers in one approval (0.34.0); before it, one approval each. */
+  several: boolean;
+  /** `update --check`'s answer (0.34.0), or null before core 0.34.0, which has no such read here. */
+  check: Loadable<UpdateCheckView> | null;
   reload: () => Promise<void>;
+  recheck: () => Promise<void>;
 }) {
   const bridge = useBridge();
   const change = useChange();
@@ -247,18 +312,20 @@ function Apps({
           await bridge.cli({ kind: 'approvalRevoke', approvalId: outcome.approvalId }).catch(() => undefined);
         }
       }
-      // Then each one to add, asked for: core answers with what it lets agents do, for the person to approve.
-      for (const server of plan.add) {
-        const name = SERVER_LABELS[server];
-        const outcome = await change.run({ kind: 'mcpInstall', client: app.client, server });
+      // Then the ones to add, asked for: core answers with what they let agents do, for the person to approve — all of
+      // them in one approval from core 0.34.0, and one approval each before it.
+      const asks = several && plan.add.length > 1 ? [plan.add] : plan.add.map((server) => [server]);
+      for (const servers of asks) {
+        const name = serverNames(servers);
+        const outcome = await change.run({ kind: 'mcpInstall', client: app.client, server: installServers(servers) });
         if (outcome.state === 'needsTerminal') {
-          waiting.push({ client: app.client, server, change: outcome, opened: false });
+          waiting.push({ client: app.client, servers, change: outcome, opened: false });
         } else if (outcome.state === 'applied') {
-          lines.push({ tone: 'ok', text: addedLine(name, app.label) });
+          lines.push({ tone: 'ok', text: addedLine(name, app.label, servers.length > 1) });
         } else {
           lines.push({
             tone: 'refused',
-            text: `${notAddedLine(name, app.label)}: ${outcome.message}`,
+            text: `${notAddedLine(name, app.label, servers.length > 1)}: ${outcome.message}`,
             hint: outcome.hint,
           });
         }
@@ -272,13 +339,27 @@ function Apps({
     await reload();
   };
 
-  const settle = (item: Adding, result: 'cancelled' | 'opened' | { approved: { exit: number; data: unknown } }) => {
+  const settle = (
+    item: Adding,
+    result: 'cancelled' | 'opened' | 'void' | 'refused' | { approved: { exit: number; data: unknown } },
+  ) => {
     const app = APP_LABELS[item.client];
-    const server = SERVER_LABELS[item.server];
+    const server = serverNames(item.servers);
+    const many = item.servers.length > 1;
     const key = item.change.approvalId;
     if (result === 'cancelled') {
       setAdding((current) => current.filter((each) => each.change.approvalId !== key));
-      setSaid((current) => [...current, { tone: 'ok', text: cancelledLine(server, app) }]);
+      setSaid((current) => [...current, { tone: 'ok', text: cancelledLine(server, app, many) }]);
+      return;
+    }
+    if (result === 'refused') {
+      // Said in the preview; what was registered before core stopped shows in the table, read again.
+      void reload();
+      return;
+    }
+    if (result === 'void') {
+      // The approval is void (0.34.0): prepared again, with a preview of its own, for the person to approve.
+      void prepareAgain(item);
       return;
     }
     if (result === 'opened') {
@@ -294,14 +375,43 @@ function Apps({
     setSaid((current) => [
       ...current,
       result.approved.exit === 0
-        ? { tone: 'ok', text: addedLine(server, app) }
+        ? { tone: 'ok', text: addedLine(server, app, many) }
         : { tone: 'refused', text: unfinishedLine(server, app, why), hint: null },
+    ]);
+    void reload();
+    void recheck();
+  };
+
+  const prepareAgain = async (item: Adding) => {
+    const key = item.change.approvalId;
+    const outcome = await change.run({ kind: 'mcpInstall', client: item.client, server: installServers(item.servers) });
+    const app = APP_LABELS[item.client];
+    const server = serverNames(item.servers);
+    const many = item.servers.length > 1;
+    if (outcome.state === 'needsTerminal') {
+      setAdding((current) =>
+        current.map((each) => (each.change.approvalId === key ? { ...item, change: outcome, opened: false } : each)),
+      );
+      setSaid((current) => [...current, { tone: 'ok', text: CONNECTIONS_COPY.prepareAgain }]);
+      return;
+    }
+    setAdding((current) => current.filter((each) => each.change.approvalId !== key));
+    setSaid((current) => [
+      ...current,
+      outcome.state === 'applied'
+        ? { tone: 'ok', text: addedLine(server, app, many) }
+        : { tone: 'refused', text: `${notAddedLine(server, app, many)}: ${outcome.message}`, hint: outcome.hint },
     ]);
     void reload();
   };
 
   return (
     <div className="flex flex-col gap-(--cue-space-4)">
+      {readOnly ? (
+        <p role="note" className="rounded-control bg-warn/10 px-(--cue-space-3) py-(--cue-space-2) text-warn">
+          {testBanner(view.started)}
+        </p>
+      ) : null}
       <Table.Root>
         <Table.Caption className="sr-only">{CONNECTIONS_COPY.tableCaption}</Table.Caption>
         <Table.Header>
@@ -348,7 +458,16 @@ function Apps({
         </Table.Body>
       </Table.Root>
       <p className="text-(length:--cue-text-ui) text-fg-subtle">{CONNECTIONS_COPY.lastUsedNote}</p>
-      {readOnly ? <p className="text-warn">{CONNECTIONS_COPY.testBuildOnly}</p> : null}
+      {check === null ? null : (
+        <UpToDate
+          check={check}
+          readOnly={readOnly}
+          here={approveHere}
+          onChanged={async () => {
+            await Promise.all([reload(), recheck()]);
+          }}
+        />
+      )}
       {row === null || readOnly ? null : (
         <Editor
           key={row.client}
@@ -395,7 +514,10 @@ function Apps({
   );
 }
 
-/** An app's name, and under it where its entries reach and when it was last used, as its windows reported. */
+/**
+ * An app's name, and under it where its entries reach and when it was last used, as its windows reported; and, from
+ * core 0.34.0, whether it starts an older Agent Comms, by `update --check`.
+ */
 function AppName({ app, lastUsed }: { app: AppRow; lastUsed: string | undefined }) {
   const reach =
     app.reach === 'every-folder'
@@ -417,6 +539,11 @@ function AppName({ app, lastUsed }: { app: AppRow; lastUsed: string | undefined 
           </>
         )}
       </span>
+      {app.older === null ? null : (
+        <span data-slot="app-older" className="text-(length:--cue-text-ui) text-warn">
+          {app.older}
+        </span>
+      )}
     </div>
   );
 }
@@ -507,9 +634,10 @@ function Editor({
 }
 
 /**
- * One server to add, waiting: core's preview of what it lets agents do, with its confirm and Cancel. Approved here, in
- * the app (0.32.0, DA10's note of 2026-10-26): only the person's press of Approve and add answers the approval, through
- * core's app channel, for this install alone. On an older core it is Approve in Terminal, as before.
+ * One addition waiting — a server, or from core 0.34.0 several in one approval: core's preview of what they let agents
+ * do, with its confirm and Cancel. Approved here, in the app (0.32.0, DA10's note of 2026-10-26): only the person's
+ * press of Approve and add answers the approval, through core's app channel, for this install alone. On an older core
+ * it is Approve in Terminal, as before. An approval core calls void is prepared again (0.34.0).
  */
 function AddPreview({
   item,
@@ -518,10 +646,11 @@ function AddPreview({
 }: {
   item: Adding;
   here: boolean;
-  onDone: (result: 'cancelled' | 'opened' | { approved: { exit: number; data: unknown } }) => void;
+  onDone: (result: 'cancelled' | 'opened' | 'void' | 'refused' | { approved: { exit: number; data: unknown } }) => void;
 }) {
   const app = APP_LABELS[item.client];
-  const server = SERVER_LABELS[item.server];
+  const server = serverNames(item.servers);
+  const many = item.servers.length > 1;
   return (
     <section aria-label={addTitle(server, app)} className="flex flex-col gap-(--cue-space-2)">
       <p className="font-medium text-fg">{addTitle(server, app)}</p>
@@ -536,16 +665,150 @@ function AddPreview({
                 call: {
                   kind: 'mcpInstallApproved',
                   client: item.client,
-                  server: item.server,
+                  server: installServers(item.servers),
                   approvalId: item.change.approvalId,
                 },
-                failed: (message) => `${notAddedLine(server, app)}: ${message}`,
+                failed: (message) => `${notAddedLine(server, app, many)}: ${message}`,
                 onApproved: (result) => onDone({ approved: result }),
+                onVoid: () => onDone('void'),
+                onRefused: () => onDone('refused'),
               }
             : undefined
         }
       />
       {item.opened ? <p className="text-fg-muted">{confirmLine(app)}</p> : null}
+    </section>
+  );
+}
+
+/**
+ * Bring everything up to date (0.34.0): shown when `update --check` finds anything behind npm's latest release. It
+ * prepares `update`, whose preview the person approves in the app (`updateApproved`), or in Terminal where nothing
+ * attests the app; an approval core calls void is prepared again. The test build shows it and cannot press it: core
+ * refuses it there, since it would register the person's real apps again.
+ */
+function UpToDate({
+  check,
+  readOnly,
+  here,
+  onChanged,
+}: {
+  check: Loadable<UpdateCheckView>;
+  readOnly: boolean;
+  /** Whether the app approves it here (macOS); elsewhere, Approve in Terminal. */
+  here: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const change = useChange();
+  const [busy, setBusy] = useState(false);
+  const [waiting, setWaiting] = useState<Waiting | null>(null);
+  const [opened, setOpened] = useState(false);
+  const [said, setSaid] = useState<Said | null>(null);
+
+  const prepare = async (again = false) => {
+    setBusy(true);
+    setSaid(null);
+    setOpened(false);
+    try {
+      const outcome = await change.run({ kind: 'update' });
+      if (outcome.state === 'needsTerminal') {
+        setWaiting(outcome);
+        if (again) setSaid({ tone: 'ok', text: CONNECTIONS_COPY.prepareAgain });
+        return;
+      }
+      setWaiting(null);
+      setSaid(
+        outcome.state === 'applied'
+          ? { tone: 'ok', text: CONNECTIONS_COPY.alreadyUpToDate }
+          : { tone: 'refused', text: notUpdatedLine(outcome.message), hint: outcome.hint },
+      );
+      if (outcome.state === 'applied') await onChanged();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const approved = (result: { exit: number; data: unknown }) => {
+    setWaiting(null);
+    const data = result.data as { ok?: unknown; status?: unknown } | null;
+    const done = result.exit === 0 && data?.ok !== false;
+    setSaid(
+      done
+        ? { tone: 'ok', text: CONNECTIONS_COPY.updated }
+        : {
+            tone: 'refused',
+            text: unfinishedUpdateLine(typeof data?.status === 'string' ? data.status : null),
+            hint: null,
+          },
+    );
+    void onChanged();
+  };
+
+  if (check.state === 'loading') return null;
+  if (check.state === 'error') {
+    return (
+      <p className="text-(length:--cue-text-ui) text-fg-subtle">
+        <UntrustedText text={checkFailedLine(check.message)} />
+      </p>
+    );
+  }
+  if (!check.value.anyBehind && waiting === null && said === null) return null;
+  return (
+    <section aria-label={CONNECTIONS_COPY.bringUpToDate} className="flex flex-col gap-(--cue-space-2)">
+      {check.value.anyBehind && waiting === null ? (
+        <div className="flex flex-wrap items-center gap-(--cue-space-2) rounded-control bg-warn/10 px-(--cue-space-3) py-(--cue-space-2)">
+          <Button size="sm" variant="primary" loading={busy} disabled={readOnly} onClick={() => void prepare()}>
+            {CONNECTIONS_COPY.bringUpToDate}
+          </Button>
+          <span className="text-fg-muted">
+            {readOnly ? CONNECTIONS_COPY.updateNotHere : CONNECTIONS_COPY.bringLead}
+          </span>
+        </div>
+      ) : null}
+      {waiting === null || readOnly ? null : (
+        <ChangePreview
+          key={waiting.approvalId}
+          change={waiting}
+          onDone={(result) => {
+            if (result === 'cancelled') {
+              setWaiting(null);
+              setSaid({ tone: 'ok', text: CONNECTIONS_COPY.updateCancelled });
+            } else {
+              setOpened(true);
+            }
+          }}
+          inApp={
+            here
+              ? {
+                  title: CONNECTIONS_COPY.updateTitle,
+                  approve: CONNECTIONS_COPY.approveAndUpdate,
+                  call: { kind: 'updateApproved', approvalId: waiting.approvalId },
+                  failed: notUpdatedLine,
+                  onApproved: approved,
+                  onVoid: () => void prepare(true),
+                  onRefused: () => void onChanged(),
+                }
+              : undefined
+          }
+        />
+      )}
+      {opened ? <p className="text-fg-muted">{CONNECTIONS_COPY.updateConfirm}</p> : null}
+      {said === null ? null : said.tone === 'ok' ? (
+        <p role="status" className="text-fg">
+          {said.text}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-(--cue-space-1)">
+          <p role="alert" className="text-danger">
+            <UntrustedText text={said.text} />
+          </p>
+          {said.hint === null ? null : (
+            <p className="text-fg-muted">
+              <UntrustedText text={said.hint} />
+            </p>
+          )}
+        </div>
+      )}
     </section>
   );
 }

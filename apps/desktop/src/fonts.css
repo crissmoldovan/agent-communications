@@ -1,0 +1,16 @@
+/*
+ * The faces of cue-ui's `inter` pairing, which the soft look sets (`theme.ts`, `LOOKS`): Inter, and IBM Plex Mono for
+ * literal values. cue-ui ships no font files, so the app bundles them: Vite copies each file into `assets/`, served from
+ * the app itself, which is all the content policy allows (`default-src 'self'`, and no `font-src`). Both are SIL OFL 1.1.
+ * Every script's subset is declared, each with its `unicode-range`, so a message in Cyrillic, Greek or Vietnamese is
+ * set in the same face, and only the subsets a page uses are read.
+ */
+@import "@fontsource-variable/inter";
+@import "@fontsource/ibm-plex-mono/400";
+@import "@fontsource/ibm-plex-mono/500";
+
+/* Inter's variable build names itself `Inter Variable`; the pairing reads its family from this property (cue-ui's
+ * `FONT_PAIRINGS.inter.faces`). IBM Plex Mono's name is the pairing's own. */
+:root {
+  --cue-face-inter: "Inter Variable";
+}

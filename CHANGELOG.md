@@ -3,6 +3,82 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.34.0
+
+**What.** The desktop app explains itself, and wears cue-ui's soft look:
+- **Your agents** (was Agent): what people see when an agent writes for you, a Slack message and an email From line
+  with your tag, then your name, the word after it and the exceptions, each changed in the app.
+- **Each account has a page,** with **Agents here**: what agents may do there, how their messages look in a Slack
+  workspace, and the replies you approved in advance.
+- **Events → Service in plain words,** with **Switch on…** approved in the app and **Switch off**; **Deliveries** says
+  when a rule is in dry-run, and what can reach an agent.
+- **Connections in plain words:** "starts an older Agent Comms", by the same yardstick as `update`, with **Bring
+  everything up to date**; several servers added to an app in one approval.
+- **The soft look from cue-ui 0.34.0,** with gliding marks, a two-finger swipe between tabs, and a **Typeface** choice:
+  Inter or SF Pro.
+- **Doctor's checks** keep their names readable beside a long result.
+
+The command line and the MCP servers gain what these need: `--app-approval` on `label`, `behaviour` and `update`,
+`mcp install --server <a,b,c>`, `agent-events collection approve`, and `disable-all` saying what it did.
+
+**Why.** The owner tried the 0.34 test build and could not read it: "I don't understand what it says behind
+'core'", "It says it's running, but below it says 'collecting off.' Why?", "the agent itself is not really
+understandable". The screens were redrawn first, as a prototype the owner approved ("the UI looks good"), kept in
+`docs/prototypes/2026-10-26-0340-rework/`. cue-ui shipped the soft look the 0.28.0 redesign had drawn locally (CUE-571).
+The design is `docs/superpowers/specs/2026-10-26-desktop-0340-design.md`.
+
+**Impact.** A minor release. Everything is added; nothing is renamed or removed, and nothing needs migrating.
+- **More is approved in the app, on macOS:** your agents' word, name and exceptions, a Slack workspace's style, what
+  agents may do on an account, switching the event service on, and updating Agent Comms. On Windows and Linux each
+  still goes to the terminal, and anything that only narrows still applies at once.
+- **The test build changes only its own test profile:** it refuses to approve anything that would touch your real
+  folders or apps, and its event service accepts the test build only on the test profile's own state.
+- **Agents see less:** the approval view an agent gets, through its tools or its own terminal, carries no challenge;
+  a refusal is audited as the app's only when the app it really was.
+- **Your look resets once:** a look picked in 0.28 to 0.33 is not carried over; the app opens once on soft at the
+  normal rung. Pick cue or terminal, a density, a mode or a typeface again, and it stays.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients.
+
+**In the desktop app**
+- **Your agents** replaces Agent: the previews, Your name and The word after it (each Change… approved in the app),
+  Exceptions with Add… and Remove, and one line per account opening its page.
+- **Accounts:** each account opens its page, with About and **Agents here**:
+  - **What agents may do here:** a switch per act; off applies at once, on asks you to approve it in the app. Slack
+    adds overrides for one conversation, Gmail for some people.
+  - **How their messages look here** (Slack): as the Agent Comms app, or as you, tagged, each with a preview.
+  - **Replies approved in advance** (Slack): each one's contents, places, limits and end, with End and End all.
+- **Events → Service:** Switched off, On or Paused, each in a sentence that says what it means, with Switch on…,
+  Pause, Resume and Switch off where each does something. **Deliveries:** a dry-run line for a rule in dry-run, a
+  Dry-run log filter, removed records folded, and **Something reached your agent?**.
+- **Connections:** older entries said in plain words, Bring everything up to date, Change… adding several servers in
+  one approval, and the test build's banner.
+- **The look:** cue-ui's soft preset (the `soft` style set and the `glaze` finish) in place of the app's own copy; the
+  chosen tab, segment and sidebar item glide; two fingers swipe between tabs; reduced motion is respected; the palette
+  menu's **Typeface** offers Inter (bundled) and SF Pro (macOS's own face).
+- **Doctor:** a check's name keeps a third of its row beside a long result, and a fix has its own line.
+
+**In detail**
+- **App approval in core** (`@agentcomms/core`): `--app-approval <id>` now works on `label word|name|rule|icon|style`,
+  `behaviour allow|clear` and `update`, as on `mcp install` since 0.32.0. It counts only from the attested app on
+  macOS; elsewhere, or from an agent, the command refuses with `APPROVAL_REQUIRED` (exit 10) and names the words to
+  type. An approval handed another change than the one it previewed is void (`APPROVAL_VOID`). The test build's
+  approval counts only when every folder the command touches is inside its marked test profile, judged from the
+  account's own home, not from the environment.
+- **Several servers in one install** (`@agentcomms/core`): `mcp install --client <c> --server core,gmail,events` and
+  `comms_server_install` with `servers`: one preview, one approval bound to that list and order, registered in order
+  and stopped at the first that fails, naming what was and was not registered.
+- **Switch on, approved in the app** (`@agentcomms/events-daemon`): `agent-events collection approve <approval-id>
+  --digest <digest>` approves the pending `enable-all` from the attested app; the terminal's `approve <id>` still
+  works. `disable-all` returns `said`, a sentence of what it did. The event service accepts a test-build approval only
+  on the test profile's own state folder.
+- **No challenge for an agent** (`@agentcomms/events-daemon`): `events_approval_view`, and `approval view` in an
+  agent's shell, return the preview without a challenge, so nothing an agent holds can approve, and an agent's look no
+  longer replaces the challenge you are typing.
+- **Audit:** a refusal is recorded as the app's only for an attested app; a mismatched digest is `refused`.
+- **cue-ui 0.34.0:** `@cueplusplus/ui` and `@cueplusplus/tokens` 0.34.0, `@cueplusplus/theme-soft` 1.0.0, with
+  `@fontsource-variable/inter` and `@fontsource/ibm-plex-mono` 5.3.0 (OFL-1.1) bundled. The approved mockup is kept in
+  `docs/prototypes/2026-10-24-soft-look/`.
+
 ## 0.33.0
 
 **What.** Rules you can edit, analyse, and have act:
