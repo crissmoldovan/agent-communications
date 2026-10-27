@@ -57,10 +57,24 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `delivery show` and a message's deliveries, gains the value `linear-change` — a workflow's change of the Linear issue
  * its run made — and such a row may carry the optional `linear: { identifier, url }` of that issue. No existing branch
  * changed.
+ *
+ * 0.36.0's one word (design W22) changes no branch, only two example values the seeded vectors carry, as the event
+ * service now writes them: `judge-setup`'s `destination` ("Messages your workflows choose …") and `rule-analyse`'s
+ * `sent` ("The workflow's own text …"). Both stay plain strings in the schema.
+ *
+ * 0.36.0's subscriber state is another, also only additive: `addSubscriber` and `updateSubscriber`'s result `state`,
+ * always `null` before, may also be `inert` — what `subscribers list` says of a version given events until the person
+ * approves its subscription — and the ordinary webhook vector, regenerated from the owner, says so. A version given no
+ * events still answers `null`. No existing branch changed.
+ *
+ * 0.36.0's ended holds are another, also only additive: a message's decision outcome, in `messages list` and `message
+ * show`, gains `hold-expired` and `cancelled`, which holds have always written when a hold ends unanswered — its own
+ * bound passed, or it was cancelled — and a story with one could not be read before. `rule-analyse`'s closed outcome
+ * counts keep their five. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'b515238682e0061e8b9c96d5a77cea01284f313dbd7da0a25f04c22a27e7999b',
+    'acd764bdd1d759ebdca536ae02d60112b837e84f9e12a191989d5a5bf81c369e',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -84,13 +98,13 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
     'cea5d4fb1a36f9c3648e6d2333382ce615c383af88d2632ba2065f12e163d0f3',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
-    '6a53c157ac7d8605b58754e1979f2002223882d821731b79ec547f8e5fc356d4',
+    'd2e11df428e6d660eac8637130a401504930468bcb4fbc7ef68b163c2d72122c',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
     'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '9f07b5ef7c4047af20f7da576d0e59e08ba333600d34233115ec68a1a12960c4',
+    '42b8fae0d8e359f8854935bb07ad6eee7bb68030ce24268d893d77b11285f7bd',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

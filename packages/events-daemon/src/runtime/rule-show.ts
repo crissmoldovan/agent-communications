@@ -84,7 +84,7 @@ export class RuleReader {
            FROM rule_versions WHERE rule_id = ? ORDER BY version`,
       )
       .all(ruleId) as unknown as RuleVersionRow[];
-    if (all.length === 0) throw new CommsError('NOT_FOUND', 'the requested rule does not exist');
+    if (all.length === 0) throw new CommsError('NOT_FOUND', 'the requested workflow does not exist');
     const rows = version === undefined ? all : all.filter((row) => row.version === version);
     if (rows.length === 0)
       throw new CommsError('NOT_FOUND', `the workflow ${ruleId} has no version ${version}`, {

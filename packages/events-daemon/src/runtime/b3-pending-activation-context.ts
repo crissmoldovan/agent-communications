@@ -77,7 +77,7 @@ export async function verifyPendingTargetContext(input: {
     row.kind !== 'rule' ||
     row.approval_id !== input.selector.approvalId
   )
-    return voidApproval('the approval no longer names a pending rule activation');
+    return voidApproval('the approval no longer names a pending workflow activation');
   if (row.digest !== input.selector.digest) return voidApproval('the pending activation digest changed');
   let document: ReturnType<typeof normaliseActivationDocument>;
   try {
@@ -95,7 +95,7 @@ export async function verifyPendingTargetContext(input: {
     document.rule.version !== input.selector.ruleVersion ||
     target === undefined
   )
-    return voidApproval('the pending approval does not bind this exact rule target version');
+    return voidApproval('the pending approval does not bind this exact workflow target version');
   return {
     ruleId: document.rule.ruleId,
     ruleVersion: document.rule.version,

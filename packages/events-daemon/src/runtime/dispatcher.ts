@@ -701,7 +701,7 @@ function sourceOfDelivery(
   ruleVersion: number | undefined,
 ): CanonicalFullRuleDocument['source']['channel'] {
   if (ruleId === undefined || ruleVersion === undefined)
-    throw new CommsError('APPROVAL_VOID', 'the exact rule for this retained delivery is missing');
+    throw new CommsError('APPROVAL_VOID', 'the exact workflow for this retained delivery is missing');
   return ruleFor(store, ruleId, ruleVersion).source.channel;
 }
 
@@ -709,11 +709,11 @@ function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): Can
   const row = store.database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(ruleId, ruleVersion) as { document: string } | undefined;
-  if (!row) throw new CommsError('APPROVAL_VOID', 'the exact rule for this retained delivery is missing');
+  if (!row) throw new CommsError('APPROVAL_VOID', 'the exact workflow for this retained delivery is missing');
   try {
     return JSON.parse(row.document) as CanonicalFullRuleDocument;
   } catch {
-    throw new CommsError('APPROVAL_VOID', 'the exact rule for this retained delivery is invalid');
+    throw new CommsError('APPROVAL_VOID', 'the exact workflow for this retained delivery is invalid');
   }
 }
 

@@ -314,7 +314,7 @@ function canonicalBoundSubscriber(value: unknown): SseSubscriberDocument {
 }
 
 function canonicalRetention(value: unknown): RuleRetentionDocument {
-  const retention = cloneJsonRecord(value, 'rule retention');
+  const retention = cloneJsonRecord(value, 'workflow retention');
   const result = {
     ingestMs: positiveInteger(retention.ingestMs, 'ingest retention'),
     holdMs: positiveInteger(retention.holdMs, 'hold retention'),
@@ -332,10 +332,10 @@ function canonicalRetention(value: unknown): RuleRetentionDocument {
 }
 
 function canonicalRuleSource(value: unknown): CanonicalRuleSource {
-  const source = cloneJsonRecord(value, 'rule source');
+  const source = cloneJsonRecord(value, 'workflow source');
   const options = normaliseSourceOptions(source.options);
-  if (source.channel !== options.channel) return fail('rule source channel and source options channel agree');
-  const accountIds = canonicalStringSet(source.accountIds, 'rule account ids');
+  if (source.channel !== options.channel) return fail('workflow source channel and source options channel agree');
+  const accountIds = canonicalStringSet(source.accountIds, 'workflow account ids');
   switch (options.channel) {
     case 'gmail':
       return { channel: 'gmail', accountIds, options };
@@ -360,7 +360,7 @@ function assertOneTargetPerLane(targets: readonly TargetDocument[]): void {
     const carrier = carriers.get(lane);
     if (carrier !== undefined && carrier !== target.targetId)
       fail(
-        `lane ${lane} is carried by two targets of this rule; a lane is its name, so one target carries it`,
+        `lane ${lane} is carried by two targets of this workflow; a lane is its name, so one target carries it`,
         'LANE_NAME_IN_USE',
       );
     carriers.set(lane, target.targetId);
@@ -369,16 +369,16 @@ function assertOneTargetPerLane(targets: readonly TargetDocument[]): void {
 
 /** Validates a Phase-D full rule shape and returns its canonical data-only form. */
 export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocument {
-  const rule = cloneJsonRecord(value, 'a rule document');
+  const rule = cloneJsonRecord(value, 'a workflow document');
   for (const key of Object.keys(rule))
     if (!RULE_DOCUMENT_KEYS.includes(key)) return fail(`a workflow document has no field ${key}`);
   const inFlow = rule.flow !== undefined;
   const source = canonicalRuleSource(rule.source);
-  const event = cloneJsonRecord(rule.event, 'rule event');
+  const event = cloneJsonRecord(rule.event, 'workflow event');
   const eventType = requiredText(event.type, 'an event type');
   if (eventType === TEST_CLOUD_EVENT.type || eventType === 'io.agentcomms.control.installation-reset.v1') {
     return fail(
-      'operational, test and reset controls are not selectable rule event types',
+      'operational, test and reset controls are not selectable workflow event types',
       'EVENT_TYPE_NOT_SELECTABLE',
     );
   }
@@ -390,26 +390,28 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
       definition.issues[0]?.code as EventDomainError['code'],
     );
   if (!eventType.startsWith(`${source.channel}.`))
-    return fail('a rule event type belongs to its source channel', 'SOURCE_CHANNEL_UNSUPPORTED');
+    return fail('a workflow event type belongs to its source channel', 'SOURCE_CHANNEL_UNSUPPORTED');
   const condition = canonicaliseCondition(definition.value, rule.condition);
-  if (!condition.ok) return fail(condition.issues[0]?.message ?? 'the rule condition is not valid');
+  if (!condition.ok) return fail(condition.issues[0]?.message ?? 'the workflow condition is not valid');
   let agentic: CanonicalAgenticCondition | undefined;
   if (rule.agentic !== undefined) {
     const canonical = canonicaliseAgenticCondition(definition.value, condition.value, rule.agentic);
-    if (!canonical.ok) return fail(canonical.issues[0]?.message ?? 'the rule agentic condition is not valid');
+    if (!canonical.ok) return fail(canonical.issues[0]?.message ?? 'the workflow agentic condition is not valid');
     agentic = { ...canonical.value, judge: canonicalJudge(canonical.value.judge) };
   }
-  const mapping = canonicalJsonValue(rule.mapping, 'rule mapping');
+  const mapping = canonicalJsonValue(rule.mapping, 'workflow mapping');
   const compiledMapping = compileMapping(definition.value, mapping);
-  if (!compiledMapping.ok) return fail(compiledMapping.issues[0]?.message ?? 'the rule mapping is not valid');
+  if (!compiledMapping.ok) return fail(compiledMapping.issues[0]?.message ?? 'the workflow mapping is not valid');
 
-  const targets = Array.isArray(rule.targets) ? rule.targets.map(canonicalTarget) : fail('rule targets are an array');
+  const targets = Array.isArray(rule.targets)
+    ? rule.targets.map(canonicalTarget)
+    : fail('workflow targets are an array');
   // A workflow with a flow names the targets its steps deliver to, which may be none (a flow that only notifies).
-  if (targets.length === 0 && !inFlow) return fail('a B1 rule has at least one dry-run target');
+  if (targets.length === 0 && !inFlow) return fail('a B1 workflow has at least one dry-run target');
   assertOneTargetPerLane(targets);
   const subscribers = Array.isArray(rule.subscribers)
     ? rule.subscribers.map(canonicalBoundSubscriber)
-    : fail('rule subscribers are an array');
+    : fail('workflow subscribers are an array');
   for (const target of targets) {
     if (target.kind !== 'sse') continue;
     const bound = subscribers.find(
@@ -419,8 +421,8 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     if (bound === undefined) return fail('an SSE target embeds its exact subscriber version');
   }
   /* Phase D carried an empty compatibility array. Agentic authority is now exclusively rule.agentic. */
-  const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('rule judges are an array');
-  if (judges.length !== 0) return fail('rule judges are represented only by the optional agentic sibling');
+  const judges = Array.isArray(rule.judges) ? rule.judges.map(canonicalJudge) : fail('workflow judges are an array');
+  if (judges.length !== 0) return fail('workflow judges are represented only by the optional agentic sibling');
   const retention = canonicalRetention(rule.retention);
   // Q2 and Q4: a queue target needs its own retention on the rule and a mapping that includes what its items show; so
   // does a session target that can leave an item in the Queue (0.33.0 §3.5), and `targetQueues` is the one test.
@@ -431,9 +433,9 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   for (const target of targets) if (target.kind === 'session') assertSessionStepParts(target, inFlow);
   // The session the flow chose, and a Linear change, exist only inside a flow (W5).
   if (!inFlow) assertNoFlowOnlyTargets(targets);
-  if (queued && retention.queueMs === undefined) return fail('a rule with a queue target sets retention.queueMs');
+  if (queued && retention.queueMs === undefined) return fail('a workflow with a queue target sets retention.queueMs');
   if (!queued && retention.queueMs !== undefined)
-    return fail('retention.queueMs applies only to a rule with a queue target');
+    return fail('retention.queueMs applies only to a workflow with a queue target');
   if (queued) assertQueueMapping(eventType, mapping);
   // A Linear target's slots name the rule's mapped fields only (0.33.0 design §3.4): nothing else reaches Linear. In a
   // flow a slot may also name the run's own values — its id, a step's closed output — which the flow's checks hold.
@@ -445,12 +447,12 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   let cloudEventType: string | undefined;
   if (rule.cloudEventType !== undefined) {
     const chosen = validateCloudEventType(rule.cloudEventType);
-    if (!chosen.ok) return fail(chosen.issues[0]?.message ?? 'the rule cloudEventType is not valid');
+    if (!chosen.ok) return fail(chosen.issues[0]?.message ?? 'the workflow cloudEventType is not valid');
     cloudEventType = chosen.value;
   }
   const canonical: RuleWithoutFlow = {
-    ruleId: requiredText(rule.ruleId, 'a rule id'),
-    version: positiveInteger(rule.version, 'a rule version'),
+    ruleId: requiredText(rule.ruleId, 'a workflow id'),
+    version: positiveInteger(rule.version, 'a workflow version'),
     source,
     event: { type: eventType, version: eventVersion },
     condition: condition.value,
@@ -460,7 +462,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
     targets,
     subscribers,
     judges,
-    deliveryRateCap: positiveInteger(rule.deliveryRateCap, 'rule delivery rate cap'),
+    deliveryRateCap: positiveInteger(rule.deliveryRateCap, 'workflow delivery rate cap'),
     retention,
   };
   // W1, W2: `flow` only when the workflow has one, so every document stored before 0.36 keeps its bytes.
@@ -493,12 +495,12 @@ function assertLinearChangeSlotsMapped(
 
 function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kind: 'enable-all' }> {
   const document = cloneJsonRecord(value, 'an enable-all document');
-  if (!Array.isArray(document.ruleVersions)) return fail('enable-all rule versions are an array');
+  if (!Array.isArray(document.ruleVersions)) return fail('enable-all workflow versions are an array');
   const ruleVersions = document.ruleVersions.map((entry) => {
-    const row = cloneJsonRecord(entry, 'an enable-all rule version');
+    const row = cloneJsonRecord(entry, 'an enable-all workflow version');
     return {
-      ruleId: requiredText(row.ruleId, 'an enable-all rule id'),
-      ruleVersion: positiveInteger(row.ruleVersion, 'an enable-all rule version'),
+      ruleId: requiredText(row.ruleId, 'an enable-all workflow id'),
+      ruleVersion: positiveInteger(row.ruleVersion, 'an enable-all workflow version'),
     };
   });
   const sorted = [...ruleVersions].sort(
@@ -508,7 +510,7 @@ function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kin
     const previous = sorted[index - 1] as (typeof sorted)[number];
     const current = sorted[index] as (typeof sorted)[number];
     if (previous.ruleId === current.ruleId && previous.ruleVersion === current.ruleVersion)
-      return fail('enable-all rule versions are duplicate-free');
+      return fail('enable-all workflow versions are duplicate-free');
   }
   return {
     documentVersion: 1,

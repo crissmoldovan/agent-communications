@@ -94,8 +94,8 @@ export function assertNotMcpServer(
     // Analyse (0.33.0 §3.3): what a rule did and the suggestions for it are the person's, when they ask for them.
     analyse: {
       message:
-        "analysing a rule is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
-      hint: 'An agent can ask the person to press Analyse on the rule in the app: Events → Rules.',
+        "analysing a workflow is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to press Analyse on the workflow in the app: Events → Workflows.',
     },
     // Agent sessions (0.33.0 §3.5): where the person's claude-stream relay is, and its token's home, are the person's.
     relay: {
@@ -148,7 +148,7 @@ export function assertNotMcpServer(
 function judgeLine(judge: QueueJudgeV1): string {
   switch (judge.state) {
     case 'none':
-      return 'Judge: none — the rule matched without one';
+      return 'Judge: none — the workflow matched without one';
     case 'released':
       return `Judge: you let it through (${judge.kind ?? 'judge'} ${judge.id ?? ''})`.trimEnd();
     case 'expired':
@@ -164,7 +164,7 @@ function judgeLine(judge: QueueJudgeV1): string {
 export function renderQueueItem(item: QueueItemV1): string {
   const lines = [
     `Queue item ${item.id} — ${item.state} since ${item.stateAt}`,
-    `Rule ${item.rule.id}@${item.rule.version} · ${item.channel} · ${item.account.alias ?? item.account.id} · arrived ${item.arrivedAt} · content kept until ${item.expiresAt}`,
+    `Workflow ${item.rule.id}@${item.rule.version} · ${item.channel} · ${item.account.alias ?? item.account.id} · arrived ${item.arrivedAt} · content kept until ${item.expiresAt}`,
   ];
   if (item.lane !== null) lines.push(`Lane: ${item.lane}`);
   if (item.from.name !== undefined) lines.push(`From (name): ${item.from.name}`);
@@ -182,6 +182,6 @@ export function renderQueueItem(item: QueueItemV1): string {
 export function renderQueueList(result: QueueListResultV1): string {
   if (result.items.length === 0) return 'No queue items.';
   const blocks = result.items.map(renderQueueItem);
-  if (result.more) blocks.push('More items are kept: narrow the list with --state, --rule, --channel or --since.');
+  if (result.more) blocks.push('More items are kept: narrow the list with --state, --workflow, --channel or --since.');
   return blocks.join('\n\n');
 }

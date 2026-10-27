@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { canonicalJson, sha256Hex } from '@agentcomms/core';
 import { canonicalSubscriber } from '../src/domain/activation-documents.ts';
+import { assertB3ControlContractVectorV1 } from '../src/operations/b3-contract.ts';
 import { activeSubscriptions } from '../src/runtime/events/subscriptions.ts';
 import { ATTESTED_APP, sseSubscriber, webhookSubscriber, withEventsOwner } from './support/events-owner.ts';
 import { WINDOWS_SKIP } from './support/short-temp.ts';
@@ -102,6 +103,44 @@ test('D1: a subscriber with events is inert until approved; its preview names pa
     assert.equal(terminal.code, 0, terminal.err);
     assert.match(terminal.out, /events-dashboard receives \*\.\*\.\*\.failed and acme\.client-asks\.\*\.\*/u);
     assert.deepEqual(activeSubscriptions(harness.database), [], 'still nothing before the approval completes');
+  });
+});
+
+test('D1: subscriber add and update answer the state subscribers list gives: inert until approved, none without events', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withEventsOwner(async (harness) => {
+    const listed = async (subscriberId: string, version: number): Promise<unknown> =>
+      ((await harness.control.request('subscribersList', {})) as Record<string, unknown>[]).find(
+        (entry) => entry.subscriberId === subscriberId && entry.version === version,
+      )?.state;
+    const first = sseSubscriber({});
+    const added = json(await harness.cli(['subscriber', 'add', '-'], { stdin: JSON.stringify(first) }));
+    assert.equal(added.state, 'inert', 'a version given events is inert until its subscription is approved');
+    assert.equal(added.state, await listed('events-dashboard', 1), 'add says what the list says');
+    const second = sseSubscriber({ version: 2 });
+    const updated = json(await harness.cli(['subscriber', 'update', '-'], { stdin: JSON.stringify(second) }));
+    assert.equal(updated.state, 'inert');
+    assert.equal(updated.state, await listed('events-dashboard', 2), 'update says what the list says');
+    const legacy = (await harness.control.request('addSubscriber', { document: LEGACY })) as Record<string, unknown>;
+    assert.equal(legacy.state, null, 'a version given no events has no subscription state');
+    assert.equal(legacy.state, await listed('browser-feed', 1));
+    // Each is the result B3 v1 gives its operation; a version given events never answers with no state.
+    for (const [operation, document, result] of [
+      ['addSubscriber', first, added],
+      ['updateSubscriber', second, updated],
+      ['addSubscriber', LEGACY, legacy],
+    ] as const)
+      assertB3ControlContractVectorV1({ name: 'subscriber-state', request: { operation, args: { document } }, result });
+    assert.throws(
+      () =>
+        assertB3ControlContractVectorV1({
+          name: 'subscriber-state',
+          request: { operation: 'addSubscriber', args: { document: first } },
+          result: { ...added, state: null },
+        }),
+      /inert/u,
+    );
   });
 });
 

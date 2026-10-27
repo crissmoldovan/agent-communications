@@ -49,6 +49,12 @@ export interface PendingVersion {
   readonly state: null;
 }
 
+/**
+ * A subscriber version as it is created: inert in name too when it is given events, as `subscribers list` says it is,
+ * since it receives none until the person approves its subscription (0.36.0, W29); one given none has no state.
+ */
+export type SubscriberVersion = Omit<PendingVersion, 'state'> & { readonly state: null | 'inert' };
+
 function versionId(objectId: string, version: number): string {
   return `${objectId}@${version}`;
 }
@@ -103,13 +109,14 @@ export class ImmutableVersions {
     return this.insert('target_versions', 'target', document.targetId, document.version, document);
   }
 
-  createSubscriber(input: SubscriberDocument): PendingVersion {
+  createSubscriber(input: SubscriberDocument): SubscriberVersion {
     const document = canonicalSubscriber(input);
     const created = this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
-    // A version given events receives none until the person approves its subscription (0.36.0, W29).
-    if (document.events !== undefined)
-      this.#database.prepare("UPDATE subscriber_versions SET state = 'inert' WHERE id = ?").run(created.id);
-    return created;
+    // A version given events receives none until the person approves its subscription (0.36.0, W29), and its answer
+    // says so, as the list does.
+    if (document.events === undefined) return created;
+    this.#database.prepare("UPDATE subscriber_versions SET state = 'inert' WHERE id = ?").run(created.id);
+    return { ...created, state: 'inert' };
   }
 
   /**
@@ -238,7 +245,7 @@ export class ImmutableVersions {
       .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
       .get(ruleId, version) as { document: string } | undefined;
     if (row === undefined)
-      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested rule version does not exist');
+      throw new EventDomainError('VERSION_DOCUMENT_INVALID', 'the requested workflow version does not exist');
     const rule = canonicalFullRuleDocument(JSON.parse(row.document));
     this.assertEmbeddedVersions(rule);
     if (rule.agentic !== undefined) {
@@ -292,7 +299,7 @@ export class ImmutableVersions {
       if (mine !== undefined && mine !== other.target_id)
         throw new EventDomainError(
           'LANE_NAME_IN_USE',
-          `lane ${other.lane} is already carried by another active rule's target; a lane is its name, so one target carries it`,
+          `lane ${other.lane} is already carried by another active workflow's target; a lane is its name, so one target carries it`,
         );
     }
   }
@@ -356,19 +363,19 @@ export class ImmutableVersions {
       if (row === undefined) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule names ${entry.id} version ${entry.version}, which is not a stored version`,
+          `the workflow names ${entry.id} version ${entry.version}, which is not a stored version`,
         );
       }
       if (row.document !== canonicalJson(entry.document)) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule carries a copy of ${entry.id} version ${entry.version} that differs from the stored version`,
+          `the workflow carries a copy of ${entry.id} version ${entry.version} that differs from the stored version`,
         );
       }
       if (entry.kind === 'judge' && this.#embeddedJudgeIsRevoked(entry.id, entry.version)) {
         throw new EventDomainError(
           'VERSION_DOCUMENT_INVALID',
-          `the rule names revoked judge ${entry.id} version ${entry.version}`,
+          `the workflow names revoked judge ${entry.id} version ${entry.version}`,
         );
       }
     }

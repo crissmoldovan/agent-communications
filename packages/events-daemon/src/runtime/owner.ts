@@ -492,7 +492,7 @@ function sourceOfDeliveryRule(document: string): SourceOptions['channel'] {
   try {
     return normaliseSourceOptions((JSON.parse(document) as { source?: { options?: unknown } }).source?.options).channel;
   } catch {
-    throw new CommsError('APPROVAL_VOID', 'the delivery rule source is no longer valid');
+    throw new CommsError('APPROVAL_VOID', 'the workflow source of this delivery is no longer valid');
   }
 }
 
@@ -646,7 +646,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
           });
         case 'ruleTestRetained':
           if (options.retainedRuleTest === undefined)
-            throw new CommsError('CONFIG', 'the owner has no retained rule-test reader');
+            throw new CommsError('CONFIG', 'the owner has no retained workflow-test reader');
           return options.retainedRuleTest.test(request.args);
         case 'targetTest': {
           const pendingOrigin = pendingTargetOrigin(request.origin);
@@ -671,7 +671,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
           if (pendingOrigin === undefined)
             throw new CommsError(
               'APPROVAL_VOID',
-              'a pending rule judge test is available only from the terminal approval flow or app approval screen',
+              'a pending workflow judge test is available only from the terminal approval flow or app approval screen',
             );
           const authority = await verifyPendingRuleJudgeTestContext({
             database: options.store.database,
@@ -2308,13 +2308,13 @@ async function handleControl(
       if (readers === undefined) throw new CommsError('USAGE', 'judge show is not available');
       return readers.judges.show(request.args);
     case OWNER_CONTROL_WIRES.ruleAnalyse:
-      if (readers === undefined) throw new CommsError('USAGE', 'rule analyse is not available');
-      return readers.analyse.analyse(personOnly(request.args, 'rule analyse'), request.signal);
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow analyse is not available');
+      return readers.analyse.analyse(personOnly(request.args, 'workflow analyse'), request.signal);
     // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
     case OWNER_CONTROL_WIRES.judgeSetup:
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
     case OWNER_CONTROL_WIRES.approveRuleFromApp:
-      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
+      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'workflow approve'), request.origin);
     // Switching the event service on from the app, after its preview (0.34.0 design B4): the person's, as a rule's is.
     case OWNER_CONTROL_WIRES.approveEnableAllFromApp:
       return requireJudgeSetup(judgeSetup).approveEnableAll(
@@ -2399,13 +2399,13 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow: {
-      if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow show is not available');
       // An agent window's call names the window: it gets no counts of a lane it is not bound to (review 0.32.0, 8).
       const { caller, args } = splitCaller(request.args);
       const { ruleId, version } = args;
       if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1))
         throw new CommsError('USAGE', 'a workflow version is a positive integer');
-      const entries = await readers.rules.show(requiredText(ruleId, 'rule id'), version as number | undefined);
+      const entries = await readers.rules.show(requiredText(ruleId, 'workflow id'), version as number | undefined);
       return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);
     }
     case OWNER_CONTROL_WIRES.createRule:
@@ -2416,13 +2416,13 @@ async function handleControl(
       // refused with that fixed reason, as rule create's documents are.
       return domainAwaited(() =>
         activations.prepareRule({
-          ruleId: requiredText(request.args.ruleId, 'rule id'),
-          version: requiredVersion(request.args.version, 'rule version'),
+          ruleId: requiredText(request.args.ruleId, 'workflow id'),
+          version: requiredVersion(request.args.version, 'workflow version'),
         }),
       );
     case OWNER_CONTROL_WIRES.disableRule:
     case OWNER_CONTROL_WIRES.removeRule:
-      return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
+      return disableRule(database, activations, requiredText(request.args.ruleId, 'workflow id'));
     case OWNER_CONTROL_WIRES.targetsList:
       return targetRows(database);
     case OWNER_CONTROL_WIRES.addTarget:

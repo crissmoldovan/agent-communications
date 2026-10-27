@@ -212,11 +212,11 @@ test('0.32 B6: rule show entries keep their fields and gain their times, their s
 
 test('0.32 B6: an unknown rule is still not found', { skip: WINDOWS_SKIP }, async () => {
   await withReader(async (reader) => {
-    await assert.rejects(() => reader.show('nothing-here'), /the requested rule does not exist/u);
+    await assert.rejects(() => reader.show('nothing-here'), /the requested workflow does not exist/u);
   });
 });
 
-const PLAIN_WORDS = 'In plain words (the rule author\'s own text is in "double quotes"): ';
+const PLAIN_WORDS = 'In plain words (the workflow author\'s own text is in "double quotes"): ';
 
 const ready = (preview: unknown) => ({
   kind: 'READY',

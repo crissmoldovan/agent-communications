@@ -287,7 +287,7 @@ export function missingQueueFields(eventType: string, mapping: JsonValue): reado
 export function assertQueueMapping(eventType: string, mapping: JsonValue): void {
   const missing = missingQueueFields(eventType, mapping);
   if (missing.length > 0)
-    fail(`a queue target needs the rule's mapping to include ${missing.join(', ')}`, 'QUEUE_MAPPING_INCOMPLETE');
+    fail(`a queue target needs the workflow's mapping to include ${missing.join(', ')}`, 'QUEUE_MAPPING_INCOMPLETE');
 }
 
 /** An item's encrypted content: sender-written text as the source sanitised it, never wrapped, never fetched. */

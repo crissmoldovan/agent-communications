@@ -251,7 +251,10 @@ test('LANE-B: the person binds a reported window by either id; one window per la
     });
     assert.throws(() => lanes.bind('david', OTHER.sessionId), refused('BAD_DATA', /lane david is already bound/u));
     assert.throws(() => lanes.bind('billing', DAVID.sessionId), refused('BAD_DATA', /already bound to lane david/u));
-    assert.throws(() => lanes.bind('nobody', OTHER.sessionId), refused('NOT_FOUND', /no active rule.*lane nobody/u));
+    assert.throws(
+      () => lanes.bind('nobody', OTHER.sessionId),
+      refused('NOT_FOUND', /no active workflow.*lane nobody/u),
+    );
     assert.throws(() => lanes.bind('Not A Lane', OTHER.sessionId), refused('USAGE', /lane name/u));
     assert.throws(() => lanes.bind('billing', 'window-1'), refused('USAGE', /session id.*activity session key/u));
     assert.throws(

@@ -712,14 +712,14 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
         WHERE deliveries.id = ?`,
     )
     .get(deliveryId) as { document: string } | undefined;
-  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the Linear delivery has no exact rule version');
+  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the Linear delivery has no exact workflow version');
   try {
     const source = (JSON.parse(row.document) as { source?: { channel?: unknown } }).source?.channel;
     if (source === 'gmail' || source === 'slack' || source === 'resend' || source === 'whatsapp') return source;
   } catch {
     // The closed refusal below is the safe result for a damaged immutable rule row.
   }
-  throw new CommsError('APPROVAL_VOID', 'the Linear delivery rule has no recognised event source');
+  throw new CommsError('APPROVAL_VOID', 'the workflow of this Linear delivery has no recognised event source');
 }
 
 function delivery(store: EventDatabase, id: string): DeliveryRow | undefined {

@@ -103,7 +103,7 @@ function activeRuleAuthority(
       maxOutputTokens: agentic.maxOutputTokens,
     };
   }
-  throw new JudgeBudgetError('JUDGE_AUTHORITY_CHANGED', 'no active rule grants this exact judge test');
+  throw new JudgeBudgetError('JUDGE_AUTHORITY_CHANGED', 'no active workflow grants this exact judge test');
 }
 
 /**
@@ -363,7 +363,7 @@ export class JudgeTestControl {
           )
             throw new JudgeBudgetError(
               'JUDGE_AUTHORITY_CHANGED',
-              'the pending rule authority changed before judge test admission',
+              'the pending workflow authority changed before judge test admission',
             );
           return;
         }
@@ -371,7 +371,7 @@ export class JudgeTestControl {
         if (current.ruleId !== authority.ruleId || current.ruleVersion !== authority.ruleVersion)
           throw new JudgeBudgetError(
             'JUDGE_AUTHORITY_CHANGED',
-            'the active rule authority changed before judge test admission',
+            'the active workflow authority changed before judge test admission',
           );
       },
     });

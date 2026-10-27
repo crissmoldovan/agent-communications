@@ -179,7 +179,9 @@ export function canonicalSessionTarget(target: Record<string, unknown>): Session
 export function assertSessionMapping(target: SessionTargetDocument, mapping: JsonValue): void {
   const unmapped = unmappedContextFields(target.context, mapping);
   if (unmapped.length > 0)
-    fail(`the session target ${target.targetId} reads ${unmapped.join(', ')}, which the rule's mapping does not keep`);
+    fail(
+      `the session target ${target.targetId} reads ${unmapped.join(', ')}, which the workflow's mapping does not keep`,
+    );
 }
 
 /**

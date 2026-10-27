@@ -98,14 +98,15 @@ export function parseRuleAnalyseArguments(args: Readonly<Record<string, unknown>
   readonly provider: AnalyseProvider | undefined;
 } {
   for (const key of Object.keys(args))
-    if (!['ruleId', 'draft', 'provider'].includes(key)) usage(`rule analyse takes no ${key.slice(0, 40)}`);
+    if (!['ruleId', 'draft', 'provider'].includes(key)) usage(`workflow analyse takes no ${key.slice(0, 40)}`);
   const { ruleId, draft, provider } = args;
-  if (typeof ruleId !== 'string' || !RULE_ID.test(ruleId)) usage('a rule id is a word of letters, digits and . _ : -');
+  if (typeof ruleId !== 'string' || !RULE_ID.test(ruleId))
+    usage('a workflow id is a word of letters, digits and . _ : -');
   if (provider !== undefined && !isAnalyseProvider(provider))
     usage(`Analyse's provider is ${ANALYSE_PROVIDERS.join(' or ')}`);
   if (draft === undefined) return { ruleId, draft: undefined, provider };
   const document = record(draft);
-  if (document === null) usage('a draft is one JSON object: a rule document');
+  if (document === null) usage('a draft is one JSON object: a workflow document');
   let bytes: number;
   try {
     bytes = Buffer.byteLength(canonicalJson(document as JsonValue));
@@ -113,7 +114,7 @@ export function parseRuleAnalyseArguments(args: Readonly<Record<string, unknown>
     usage('a draft is plain JSON');
   }
   if (bytes > ANALYSE_DRAFT_MAX_BYTES) usage(`a draft is at most ${ANALYSE_DRAFT_MAX_BYTES} bytes of JSON`);
-  if (document.ruleId !== undefined && document.ruleId !== ruleId) usage('the draft is a version of another rule');
+  if (document.ruleId !== undefined && document.ruleId !== ruleId) usage('the draft is a version of another workflow');
   return { ruleId, draft: document, provider };
 }
 
@@ -138,8 +139,8 @@ export class RuleAnalyseService {
     const { ruleId, draft, provider: named } = parseRuleAnalyseArguments(args);
     const stored = this.#stored(ruleId);
     if (stored === null && draft === undefined)
-      throw new CommsError('NOT_FOUND', 'the requested rule does not exist', {
-        hint: 'rules list gives every rule; a new rule is analysed as a draft, with --draft -.',
+      throw new CommsError('NOT_FOUND', 'the requested workflow does not exist', {
+        hint: 'workflows list gives every workflow; a new workflow is analysed as a draft, with --draft -.',
       });
     const document = draft ?? (stored?.document as Readonly<Record<string, unknown>>);
     const facts = await this.#facts(ruleId, document);

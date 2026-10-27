@@ -537,7 +537,7 @@ function sourceOfStreamRow(
   const stored = store.database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(row.rule_id, row.rule_version) as { document: string } | undefined;
-  if (stored === undefined) throw new Error('the stream row has no exact rule version');
+  if (stored === undefined) throw new Error('the stream row has no exact workflow version');
   const document = JSON.parse(stored.document) as { source?: { channel?: unknown } };
   // Source-less B2 documents were Gmail-only before D introduced this union. Present malformed values are not legacy.
   if (document.source === undefined) return 'gmail';

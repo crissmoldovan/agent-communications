@@ -202,9 +202,9 @@ function assertPendingVersion(value: unknown, kind: 'judge' | 'rule'): void {
   try {
     rule = canonicalFullRuleDocument(value.document);
   } catch {
-    throw new TypeError('a pending rule document is not canonical');
+    throw new TypeError('a pending workflow document is not canonical');
   }
-  if (rule.agentic !== undefined) assertCarriedJudge(rule.agentic.judge, 'a pending rule judge');
+  if (rule.agentic !== undefined) assertCarriedJudge(rule.agentic.judge, 'a pending workflow judge');
 }
 
 function assertInventoryEntry(value: unknown): void {
@@ -269,7 +269,7 @@ export function assertB3ControlV3LayaJudgeResult(operation: B3ControlV3LayaJudge
         preview?.kind === 'rule' &&
         (preview as { readonly rule?: CanonicalFullRuleDocument }).rule?.agentic?.judge.kind === JUDGE_KIND_LAYA;
       if (names !== Object.hasOwn(value, 'layaJudge'))
-        throw new TypeError('a ready approval view carries Laya limits exactly when its rule names a Laya judge');
+        throw new TypeError('a ready approval view carries Laya limits exactly when its workflow names a Laya judge');
       if (names) assertLayaJudgePreviewV3(value.layaJudge);
       return;
     }

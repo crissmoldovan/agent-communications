@@ -52,6 +52,7 @@ import { linearChangeTargetDisclosure } from '../domain/linear-change-target.ts'
 import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
   CHAIN_DECISION_OUTCOMES,
+  HOLD_ENDED_DECISION_OUTCOMES,
   isEventId,
   isMessagesCursor,
   MESSAGE_DECISION_OUTCOMES,
@@ -544,6 +545,9 @@ type B3VersionResultV1<Kind extends 'rule' | 'target' | 'subscriber', Document> 
   digest: string;
   state: null;
 }>;
+/** A created subscriber version: `inert` when it is given events, as `subscribers list` says (0.36.0, W29). */
+type B3SubscriberVersionResultV1 = Omit<B3VersionResultV1<'subscriber', SubscriberDocument>, 'state'> &
+  Readonly<{ state: null | 'inert' }>;
 /** A created rule version; one that narrows the active version carries its tightening's preview (action queue Q6). */
 type B3RuleVersionResultV1 = B3VersionResultV1<'rule', CanonicalFullRuleDocument> &
   Readonly<{ tightening?: TighteningPreview }>;
@@ -627,8 +631,8 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly targetTest: B3TargetTestResultV1;
   readonly targetResume: B3TargetResumeResultV1;
   readonly subscribersList: readonly JsonValue[];
-  readonly addSubscriber: B3VersionResultV1<'subscriber', SubscriberDocument>;
-  readonly updateSubscriber: B3VersionResultV1<'subscriber', SubscriberDocument>;
+  readonly addSubscriber: B3SubscriberVersionResultV1;
+  readonly updateSubscriber: B3SubscriberVersionResultV1;
   readonly removeSubscriber: Readonly<{ subscriberId: string; removed: true }>;
   readonly deliveriesList: readonly JsonValue[];
   readonly retryDelivery: B3DeliveryRetryResultV1;
@@ -1085,10 +1089,10 @@ function assertQueueItemSummary(value: unknown, name: string, extra: readonly st
   if (!isQueueItemId(value.id)) throw new TypeError(`${name} has a malformed item id`);
   if (!QUEUE_STATES.includes(value.state as never)) throw new TypeError(`${name} has an unknown state`);
   for (const field of ['stateAt', 'arrivedAt', 'expiresAt']) assertIsoTime(value[field], `${name} ${field}`);
-  assertClosedRecord(value.rule, ['id', 'version', 'name'], `${name} rule`);
-  assertText(value.rule.id, `${name} rule id`);
-  assertPositiveInteger(value.rule.version, `${name} rule version`);
-  assertText(value.rule.name, `${name} rule name`);
+  assertClosedRecord(value.rule, ['id', 'version', 'name'], `${name} workflow`);
+  assertText(value.rule.id, `${name} workflow id`);
+  assertPositiveInteger(value.rule.version, `${name} workflow version`);
+  assertText(value.rule.name, `${name} workflow name`);
   if (!QUEUE_CHANNELS.includes(value.channel as never)) throw new TypeError(`${name} has an unknown channel`);
   assertClosedRecord(value.account, ['id', 'alias'], `${name} account`);
   assertText(value.account.id, `${name} account id`);
@@ -1712,10 +1716,11 @@ function assertMessageEntry(value: unknown, name: string): void {
   if (!Array.isArray(value.decisions)) throw new TypeError(`${name} needs its decisions`);
   for (const decision of value.decisions) {
     assertClosedRecord(decision, ['ruleId', 'ruleVersion', 'outcome', 'judge'], `${name} decision`);
-    assertText(decision.ruleId, `${name} decision rule id`);
-    assertPositiveInteger(decision.ruleVersion, `${name} decision rule version`);
+    assertText(decision.ruleId, `${name} decision workflow id`);
+    assertPositiveInteger(decision.ruleVersion, `${name} decision workflow version`);
     if (
       !MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never) &&
+      !HOLD_ENDED_DECISION_OUTCOMES.includes(decision.outcome as never) &&
       !CHAIN_DECISION_OUTCOMES.includes(decision.outcome as never)
     )
       throw new TypeError(`${name} decision has an unknown outcome`);
@@ -1930,7 +1935,7 @@ function assertWorkflowDescribeResult(value: Readonly<Record<string, unknown>>):
 }
 
 function assertRuleAnalyseResult(value: Readonly<Record<string, unknown>>): void {
-  assertText(value.ruleId, 'an analysed rule id');
+  assertText(value.ruleId, 'an analysed workflow id');
   if (!isRecord(value.analysed)) throw new TypeError('an analysis says what it analysed');
   if (value.analysed.source === 'stored') {
     assertClosedRecord(value.analysed, ['source', 'version'], 'an analysed stored version');
@@ -1976,7 +1981,7 @@ function assertRuleAnalyseResult(value: Readonly<Record<string, unknown>>): void
   for (const suggestion of value.suggestions) {
     assertClosedRecord(suggestion, ['part', 'before', 'after', 'why', 'evidence'], 'a suggestion');
     if (!(RULE_ANALYSE_PARTS as readonly unknown[]).includes(suggestion.part))
-      throw new TypeError('a suggestion names a part of the rule');
+      throw new TypeError('a suggestion names a part of the workflow');
     for (const field of ['before', 'after'])
       if (suggestion[field] !== null && typeof suggestion[field] !== 'string')
         throw new TypeError(`a suggestion's ${field} is text or null`);
@@ -2026,7 +2031,7 @@ function assertPendingTargetSelector(value: unknown, name: string): asserts valu
   if (value.kind !== 'pending-activation') throw new TypeError(`${name} has an unknown selector kind`);
   for (const field of ['activationId', 'ruleId', 'targetId', 'approvalId', 'digest', 'challenge'])
     assertText(value[field], `${name} ${field}`);
-  assertPositiveInteger(value.ruleVersion, `${name} rule version`);
+  assertPositiveInteger(value.ruleVersion, `${name} workflow version`);
   assertPositiveInteger(value.targetVersion, `${name} target version`);
 }
 
@@ -2081,17 +2086,26 @@ function assertB3PendingVersion(value: Record<string, unknown>, kind: 'rule' | '
   if (value.id !== `${value.objectId}@${value.version}`)
     throw new TypeError(`a pending ${kind} version id does not name its object version`);
   assertText(value.digest, `a pending ${kind} digest`);
-  if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
   switch (kind) {
     case 'rule':
+      if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
       canonicalFullRuleDocument(value.document);
       return;
     case 'target':
+      if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
       canonicalTarget(value.document);
       return;
-    case 'subscriber':
-      canonicalSubscriber(value.document);
+    case 'subscriber': {
+      // Inert by name exactly when it is given events (0.36.0, W29), as `subscribers list` says; otherwise no state.
+      const inert = canonicalSubscriber(value.document).events !== undefined;
+      if (value.state !== (inert ? 'inert' : null))
+        throw new TypeError(
+          inert
+            ? 'a subscriber version given events is inert until its subscription is approved'
+            : 'a subscriber version given no events has no state',
+        );
       return;
+    }
   }
 }
 
@@ -2175,8 +2189,8 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       return;
     case 'rule-remove':
     case 'rule-disable':
-      assertText(value.ruleId, `a ${operation} rule id`);
-      if (value.disabled !== true) throw new TypeError(`a ${operation} result must disable the rule`);
+      assertText(value.ruleId, `a ${operation} workflow id`);
+      if (value.disabled !== true) throw new TypeError(`a ${operation} result must disable the workflow`);
       return;
     case 'approve':
       assertText(value.intentId, 'an approval intent id');
@@ -2186,7 +2200,7 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'ruleTest':
     case 'ruleTestRetained':
       if (value.agentic !== 'not-evaluated' || !B3_RULE_TEST_OUTCOMES.includes(value.outcome as B3RuleTestOutcome))
-        throw new TypeError(`a ${operation} result has an unknown rule-test outcome`);
+        throw new TypeError(`a ${operation} result has an unknown workflow-test outcome`);
       assertText(value.rendered, `a ${operation} rendered result`);
       return;
     case 'targetTest':
@@ -2222,12 +2236,12 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'queue-counts': {
       for (const field of ['open', 'done', 'dismissed'])
         assertNonNegativeInteger(value[field], `a queue ${field} count`);
-      if (!Array.isArray(value.byRule)) throw new TypeError('a queue counts result needs its per-rule counts');
+      if (!Array.isArray(value.byRule)) throw new TypeError('a queue counts result needs its per-workflow counts');
       for (const entry of value.byRule) {
-        assertClosedRecord(entry, ['ruleId', 'name', 'open'], 'a per-rule queue count');
-        assertText(entry.ruleId, 'a per-rule queue count rule id');
-        assertText(entry.name, 'a per-rule queue count name');
-        assertNonNegativeInteger(entry.open, 'a per-rule open count');
+        assertClosedRecord(entry, ['ruleId', 'name', 'open'], 'a per-workflow queue count');
+        assertText(entry.ruleId, 'a per-workflow queue count workflow id');
+        assertText(entry.name, 'a per-workflow queue count name');
+        assertNonNegativeInteger(entry.open, 'a per-workflow open count');
       }
       return;
     }
@@ -2244,10 +2258,10 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       for (const lane of value.lanes) {
         assertClosedRecord(lane, ['name', 'rules', 'channels', 'open', 'binding'], 'a listed lane');
         if (!isLaneName(lane.name)) throw new TypeError('a listed lane has a malformed name');
-        if (!Array.isArray(lane.rules)) throw new TypeError('a listed lane needs its rules');
+        if (!Array.isArray(lane.rules)) throw new TypeError('a listed lane needs its workflows');
         for (const rule of lane.rules) {
-          assertClosedRecord(rule, ['id'], 'a listed lane rule');
-          assertText(rule.id, 'a listed lane rule id');
+          assertClosedRecord(rule, ['id'], 'a listed lane workflow');
+          assertText(rule.id, 'a listed lane workflow id');
         }
         if (!Array.isArray(lane.channels) || lane.channels.some((channel) => !QUEUE_CHANNELS.includes(channel)))
           throw new TypeError('a listed lane has an unknown channel');
@@ -2282,16 +2296,16 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       return;
     case 'rule-approve':
       assertText(value.approvalId, 'an approved approval id');
-      assertText(value.ruleId, 'an approved rule id');
-      assertPositiveInteger(value.version, 'an approved rule version');
-      if (value.approved !== true) throw new TypeError('a rule approval says it approved');
+      assertText(value.ruleId, 'an approved workflow id');
+      assertPositiveInteger(value.version, 'an approved workflow version');
+      if (value.approved !== true) throw new TypeError('a workflow approval says it approved');
       if (
         typeof value.approvedBy !== 'string' ||
         value.approvedBy === 'terminal' ||
         !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
       )
-        throw new TypeError('a rule approval names the app it came from');
-      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a rule approval's completion");
+        throw new TypeError('a workflow approval names the app it came from');
+      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a workflow approval's completion");
       assertText(value.completion.intentId, 'a completed activation');
       if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
       assertText(value.completion.usedAt, 'when the approval was used');
@@ -2332,11 +2346,11 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
         !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
       )
         throw new TypeError('switching on names the app it came from');
-      if (!Array.isArray(value.ruleVersions)) throw new TypeError('switching on lists the rule versions it covers');
+      if (!Array.isArray(value.ruleVersions)) throw new TypeError('switching on lists the workflow versions it covers');
       for (const entry of value.ruleVersions) {
-        assertClosedRecord(entry, ['ruleId', 'ruleVersion'], 'a rule version switching on covers');
-        assertText(entry.ruleId, 'a covered rule id');
-        assertPositiveInteger(entry.ruleVersion, 'a covered rule version');
+        assertClosedRecord(entry, ['ruleId', 'ruleVersion'], 'a workflow version switching on covers');
+        assertText(entry.ruleId, 'a covered workflow id');
+        assertPositiveInteger(entry.ruleVersion, 'a covered workflow version');
       }
       assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "switching on's completion");
       assertText(value.completion.intentId, 'a completed activation');
@@ -2707,7 +2721,7 @@ function authorLiteral(text: string): string {
   );
 }
 
-const RULE_SUMMARY_PREFIX = 'In plain words (the rule author\'s own text is in "double quotes"): ';
+const RULE_SUMMARY_PREFIX = 'In plain words (the workflow author\'s own text is in "double quotes"): ';
 
 /**
  * A rule's preview in plain words (0.32.0, owner feedback §3.4), above the canonical JSON, which stays: the JSON is what
@@ -2850,7 +2864,7 @@ function linearTargetLines(document: ActivationDocumentV1, linearConnected?: boo
   // With no Linear key, activation could not ask Linear whether each team key and label name match their ids.
   if (lines.length > 0 && linearConnected === false)
     lines.push(
-      'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the rule again.',
+      'Linear is not connected, so these teams and labels were not checked against Linear: check the ids yourself, or connect Linear and enable the workflow again.',
     );
   return lines;
 }

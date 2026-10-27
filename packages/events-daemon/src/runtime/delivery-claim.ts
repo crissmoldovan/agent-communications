@@ -329,7 +329,7 @@ function deliveryRateCap(database: DatabaseSync, row: DeliveryClaimRow): number 
   const stored = database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(row.rule_id, row.rule_version) as { document: string } | undefined;
-  if (stored === undefined) throw new Error('a claim has no exact rule version');
+  if (stored === undefined) throw new Error('a claim has no exact workflow version');
   const cap = rateCapFromDocument(stored.document);
   const active = database
     .prepare(
@@ -344,7 +344,7 @@ function deliveryRateCap(database: DatabaseSync, row: DeliveryClaimRow): number 
 function rateCapFromDocument(document: string): number {
   const value = (JSON.parse(document) as { deliveryRateCap?: unknown }).deliveryRateCap;
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1)
-    throw new Error('a claim rule has no valid delivery rate cap');
+    throw new Error('the workflow of a claim has no valid delivery rate cap');
   return value;
 }
 

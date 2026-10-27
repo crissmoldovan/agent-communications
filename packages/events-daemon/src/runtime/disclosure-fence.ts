@@ -235,9 +235,9 @@ function versionRow(database: DatabaseSync, ruleId: string, version: number): Ru
     )
     .get(ruleId, version) as RuleLineageRow | undefined;
   if (!row || row.revoked_at !== null || row.state === 'revoked')
-    return refuse('RULE_REVOKED', 'the exact rule version is no longer authorised');
+    return refuse('RULE_REVOKED', 'the exact workflow version is no longer authorised');
   if (!['active', 'superseded'].includes(row.state ?? ''))
-    return refuse('RULE_LIFECYCLE', 'the exact rule version is not active or retained superseded work');
+    return refuse('RULE_LIFECYCLE', 'the exact workflow version is not active or retained superseded work');
   return row;
 }
 
@@ -246,13 +246,13 @@ function ruleDocument(row: RuleLineageRow): CanonicalFullRuleDocument {
   try {
     const document = normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule: JSON.parse(row.document) });
     if (document.kind !== 'rule')
-      return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact rule version is not a rule document');
+      return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact workflow version is not a workflow document');
     rule = document.rule;
   } catch {
-    return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact rule version is not a canonical document');
+    return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact workflow version is not a canonical document');
   }
   if (sha256Hex(row.document) !== row.digest)
-    return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact rule version digest is invalid');
+    return refuse('IMMUTABLE_VERSION_DRIFT', 'the exact workflow version digest is invalid');
   return rule;
 }
 
@@ -265,7 +265,7 @@ function completedIntent(database: DatabaseSync, row: RuleLineageRow): IntentRow
     .get(row.authorization_activation_id) as IntentRow | undefined;
   if (!activation) return null;
   if (activation.approval_id !== row.approval_id || activation.status !== 'completed')
-    return refuse('ACTIVATION_LINEAGE_MISSING', 'the rule does not match its completed activation');
+    return refuse('ACTIVATION_LINEAGE_MISSING', 'the workflow does not match its completed activation');
   return activation;
 }
 
@@ -451,23 +451,23 @@ export async function validateRuleLineage(
     if (direct) {
       const used = await usedBinding(approvals, direct);
       if (used.document.kind !== 'rule' || !sameJson(used.document.rule, rule))
-        return refuse('ACTIVATION_LINEAGE_MISMATCH', 'the activation does not name this exact rule version');
+        return refuse('ACTIVATION_LINEAGE_MISMATCH', 'the activation does not name this exact workflow version');
       return { valid: true, root: direct, approvalId: used.approvalId, usedAt: used.usedAt, rule, derivation: [] };
     }
     if (!initial.approval_id || !initial.authorization_activation_id)
-      return refuse('RULE_LINEAGE_MISSING', 'the rule version has no immutable disclosure lineage');
+      return refuse('RULE_LINEAGE_MISSING', 'the workflow version has no immutable disclosure lineage');
     const visited = new Set<string>();
     const derivation: ValidatedDerivationEdge[] = [];
     let child = initial;
     let childRule = rule;
     for (;;) {
-      if (visited.has(child.id)) return refuse('DERIVATION_CYCLE', 'the rule derivation lineage contains a cycle');
+      if (visited.has(child.id)) return refuse('DERIVATION_CYCLE', 'the workflow derivation lineage contains a cycle');
       visited.add(child.id);
       // D2: a derived version is its own authorisation-activation id, and carries the root approval unchanged.
       if (child.authorization_activation_id !== child.id || child.approval_id !== initial.approval_id)
         return refuse(
           'DERIVATION_EDGE_INVALID',
-          'a derived rule version does not carry its own lineage id and root approval',
+          'a derived workflow version does not carry its own lineage id and root approval',
         );
       const edge = database
         .prepare(
@@ -475,20 +475,20 @@ export async function validateRuleLineage(
         )
         .get(child.id) as { parent_approval_id: string; parent_version_id: string; edit_kind: string } | undefined;
       if (!edge || edge.parent_approval_id !== initial.approval_id)
-        return refuse('DERIVATION_EDGE_INVALID', 'the rule derivation edge is missing or has the wrong approval');
+        return refuse('DERIVATION_EDGE_INVALID', 'the workflow derivation edge is missing or has the wrong approval');
       const parent = database
         .prepare(
           'SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at FROM rule_versions WHERE id = ?',
         )
         .get(edge.parent_version_id) as RuleLineageRow | undefined;
       if (parent !== undefined && visited.has(parent.id))
-        return refuse('DERIVATION_CYCLE', 'the rule derivation lineage contains a cycle');
+        return refuse('DERIVATION_CYCLE', 'the workflow derivation lineage contains a cycle');
       if (!parent || parent.rule_id !== initial.rule_id || parent.version >= child.version)
-        return refuse('DERIVATION_PARENT_INVALID', 'the rule derivation edge names an invalid parent version');
+        return refuse('DERIVATION_PARENT_INVALID', 'the workflow derivation edge names an invalid parent version');
       const parentRule = ruleDocument(parent);
       verifyRuleVersions(database, parentRule);
       if (!isWhitelistedTightening(parentRule, childRule, edge.edit_kind))
-        return refuse('DERIVATION_NOT_TIGHTENING', 'the rule derivation is not an allowed narrowing');
+        return refuse('DERIVATION_NOT_TIGHTENING', 'the workflow derivation is not an allowed narrowing');
       derivation.push({
         versionId: child.id,
         parentApprovalId: edge.parent_approval_id,
@@ -503,7 +503,7 @@ export async function validateRuleLineage(
           used.document.kind !== 'rule' ||
           !sameJson(used.document.rule, parentRule)
         )
-          return refuse('DERIVATION_ROOT_INVALID', 'the rule derivation does not terminate at its used approval');
+          return refuse('DERIVATION_ROOT_INVALID', 'the workflow derivation does not terminate at its used approval');
         return {
           valid: true,
           root,
@@ -563,7 +563,7 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
     if (used.document.kind === 'rule') {
       if (!used.document.rule.source.accountIds.includes(request.accountId)) {
         if (!pending.replacement_of_version)
-          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact rule version');
+          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact workflow version');
         const old = request.database
           .prepare(
             `SELECT id, rule_id, version, document, digest, state, approval_id, authorization_activation_id, revoked_at
@@ -571,10 +571,10 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
           )
           .get(pending.replacement_of_version) as RuleLineageRow | undefined;
         if (old?.state !== 'active' || old.revoked_at !== null)
-          return refuse('REPLACEMENT_PARENT_INVALID', 'the old replacement rule is no longer eligible to drain');
+          return refuse('REPLACEMENT_PARENT_INVALID', 'the old replacement workflow is no longer eligible to drain');
         const oldLineage = await resolveLineage(request.database, request.approvals, old);
         if (!oldLineage.rule.source.accountIds.includes(request.accountId))
-          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into the old replacement rule');
+          return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into the old replacement workflow');
       }
       verifyRuleVersions(request.database, used.document.rule);
     } else if (used.document.kind === 'enable-all') {
@@ -614,7 +614,7 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
   const row = versionRow(request.database, request.ruleId, request.ruleVersion);
   const lineage = await resolveLineage(request.database, request.approvals, row);
   if (!lineage.rule.source.accountIds.includes(request.accountId))
-    return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact rule version');
+    return refuse('ACCOUNT_NOT_BOUND', 'the account is not bound into this exact workflow version');
   if ((request.targetId === undefined) !== (request.targetVersion === undefined))
     return refuse('BOUND_OBJECT_REVOKED', 'a disclosure target boundary needs its exact id and version');
   if (
@@ -623,7 +623,7 @@ export async function assertDisclosable(request: DisclosableRequest): Promise<Di
       (target) => target.targetId === request.targetId && target.version === request.targetVersion,
     )
   )
-    return refuse('BOUND_OBJECT_REVOKED', 'the exact target version is not bound into this rule');
+    return refuse('BOUND_OBJECT_REVOKED', 'the exact target version is not bound into this workflow');
   await assertLiveEventAccount(request.config, {
     source: lineage.rule.source.channel,
     accountId: request.accountId,

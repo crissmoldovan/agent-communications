@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { CommsError, canonicalJson, sha256Hex } from '@agentcomms/core';
+import Ajv2020Runtime, { type Ajv2020 as Ajv2020Class, type Options } from 'ajv/dist/2020.js';
 import { run } from '../src/cli/program.ts';
-import type { MessageEntryV1, MessagesListResultV1 } from '../src/domain/messages.ts';
+import { MESSAGE_DECISION_OUTCOMES, type MessageEntryV1, type MessagesListResultV1 } from '../src/domain/messages.ts';
+import { assertB3ControlContractVectorV1 } from '../src/operations/b3-contract.ts';
 import { MessagesStore } from '../src/runtime/messages.ts';
 import { QueueStore } from '../src/runtime/queue.ts';
 import { recordQueueHistory } from '../src/runtime/queue-history.ts';
@@ -445,6 +447,50 @@ test('MSG: kept is filled only from a show: summary item that still keeps its co
     assert.equal(purged?.queueItem?.state, 'done');
     assert.equal(purged?.decisions[0]?.judge, null, 'the judge’s answer is no longer kept');
     assert.ok(!JSON.stringify(listed).includes('Quiet Sender'), 'a minimal item’s sender never appears');
+  });
+});
+
+test('MSG: a hold that ran out or was cancelled is told as such, and B3 v1 takes both outcomes, which Analyse does not count', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withMessages(async ({ store, messages }) => {
+    // What holds write when a hold ends with no answer: its own bound passed, ingest retention passed, or it was
+    // cancelled (its account removed, the person's drop, a WhatsApp message no longer visible).
+    const ended = seedEvent(store, {
+      observedAt: NOW - 60_000,
+      decisions: [
+        { ruleId: 'invoices', outcome: 'hold-expired' },
+        { ruleId: 'mail-subject', outcome: 'cancelled' },
+      ],
+    });
+    const result = await messages.list({});
+    const entry = result.messages.find((message) => message.eventId === ended.eventId);
+    assert.deepEqual(
+      entry?.decisions.map((decision) => decision.outcome),
+      ['hold-expired', 'cancelled'],
+    );
+    const vector = { name: 'messages-list-hold-ended', request: { operation: 'messages-list', args: {} }, result };
+    assertB3ControlContractVectorV1(JSON.parse(JSON.stringify(vector)));
+    const read = async (name: string) =>
+      JSON.parse(
+        await readFile(new URL(`../src/operations/contracts/${name}.schema.json`, import.meta.url), 'utf8'),
+      ) as Record<string, unknown>;
+    const Ajv2020 = Ajv2020Runtime as unknown as new (options?: Options) => Ajv2020Class;
+    const ajv = new Ajv2020({ allErrors: true, strict: false });
+    ajv.addSchema(await read('doctor-v1'));
+    const schema = await read('b3-control-v1');
+    ajv.addSchema(schema);
+    const validate = ajv.getSchema(`${schema.$id as string}#/$defs/vector`);
+    assert.ok(validate);
+    assert.equal(validate(JSON.parse(JSON.stringify(vector))), true, JSON.stringify(validate.errors));
+    // Analyse's counts stay the five it has always closed over: an ended hold is a decision it counts in total only.
+    assert.deepEqual(MESSAGE_DECISION_OUTCOMES, [
+      'matched',
+      'no-match',
+      'mapping-rejected',
+      'retention-expired',
+      'hold',
+    ]);
   });
 });
 

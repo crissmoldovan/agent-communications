@@ -67,7 +67,7 @@ test('SEC-3: on Windows and Linux an agent-prepared rule activation is never app
     );
     assert.equal(ran.code, APPROVAL_EXIT, ran.err);
     assert.ok(
-      ran.err.includes(`approve a rule at your terminal, with the event service's approve ${planned.approvalId}`),
+      ran.err.includes(`approve a workflow at your terminal, with the event service's approve ${planned.approvalId}`),
       'the exact words to type, with the approval id',
     );
     assert.match(ran.err, /nothing on this platform attests that the Agent Comms app started this/u);

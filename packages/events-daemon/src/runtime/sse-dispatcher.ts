@@ -479,7 +479,7 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
         WHERE deliveries.id = ?`,
     )
     .get(deliveryId) as { document: string } | undefined;
-  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the SSE delivery has no exact rule version');
+  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the SSE delivery has no exact workflow version');
   try {
     const document = JSON.parse(row.document) as { source?: { channel?: unknown } };
     // B2's Gmail-only immutable documents predate the source field.  Absence means that durable Gmail binding;
@@ -490,5 +490,5 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
   } catch {
     // The closed refusal below is the safe result for a damaged immutable rule row.
   }
-  throw new CommsError('APPROVAL_VOID', 'the SSE delivery rule has no recognised event source');
+  throw new CommsError('APPROVAL_VOID', 'the workflow of this SSE delivery has no recognised event source');
 }

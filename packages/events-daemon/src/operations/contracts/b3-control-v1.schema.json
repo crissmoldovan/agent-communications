@@ -2565,6 +2565,8 @@
                   "mapping-rejected",
                   "retention-expired",
                   "hold",
+                  "hold-expired",
+                  "cancelled",
                   "awaiting-chain",
                   "not-chained"
                 ]
@@ -3253,7 +3255,7 @@
             "version": { "$ref": "#/$defs/positive" },
             "document": { "$ref": "#/$defs/subscriberDocument" },
             "digest": { "$ref": "#/$defs/id" },
-            "state": { "type": "null" }
+            "state": { "enum": [null, "inert"] }
           }
         },
         "updateSubscriber": {
@@ -3267,7 +3269,7 @@
             "version": { "$ref": "#/$defs/positive" },
             "document": { "$ref": "#/$defs/subscriberDocument" },
             "digest": { "$ref": "#/$defs/id" },
-            "state": { "type": "null" }
+            "state": { "enum": [null, "inert"] }
           }
         },
         "removeSubscriber": {

@@ -237,7 +237,7 @@ async function prepareLinearDelivery(
   );
   if (document?.kind !== 'linear') throw new Error('a Linear delivery has no approved Linear target');
   const compiled = compileMapping(input.definition, input.rule.mapping);
-  if (!compiled.ok) throw new Error("the rule's approved mapping no longer compiles");
+  if (!compiled.ok) throw new Error("the workflow's approved mapping no longer compiles");
   const issue = renderLinearIssue({
     target: document,
     ruleId: input.rule.ruleId,

@@ -875,7 +875,8 @@ export async function applyDerivedTightening(input: {
   readonly accountLive?: ((accountId: string) => Promise<void>) | undefined;
 }): Promise<{ readonly editKind: TighteningKind; readonly versionId: string }> {
   const editKind = tighteningKind(input.parent, input.child);
-  if (editKind === null) throw new CommsError('APPROVAL_VOID', 'the requested rule edit is not an allowed tightening');
+  if (editKind === null)
+    throw new CommsError('APPROVAL_VOID', 'the requested workflow edit is not an allowed tightening');
   const database = input.database;
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
@@ -966,11 +967,11 @@ export async function applyDerivedTightening(input: {
     if (parent?.state !== 'active' || !parent.approval_id || !child || child.state !== null || !pointer) {
       throw new CommsError(
         'APPROVAL_VOID',
-        'the parent and child rule versions are not eligible for a derived tightening',
+        'the parent and child workflow versions are not eligible for a derived tightening',
       );
     }
     if (pointer.version !== input.parent.version || pointer.current_cutover_id === null) {
-      throw new CommsError('APPROVAL_VOID', 'the active rule pointer no longer names the tightening parent');
+      throw new CommsError('APPROVAL_VOID', 'the active workflow pointer no longer names the tightening parent');
     }
     database
       .prepare(

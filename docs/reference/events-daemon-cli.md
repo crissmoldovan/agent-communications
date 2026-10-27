@@ -287,7 +287,7 @@ agent-events workflow test-retained [options] <event-id>
 
 | Option | What it does | Default |
 |---|---|---|
-| `--workflow <workflow-id>` |  | — |
+| `--workflow <workflow-id>` | the workflow to try on the retained event, at the version --version names (required) | — |
 | `--version <version>` |  | — |
 
 ### `agent-events workflow check`

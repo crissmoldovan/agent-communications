@@ -590,7 +590,7 @@ export class EventScheduler {
           const rule = rules().find(
             (candidate) => candidate.ruleId === request.ruleId && candidate.ruleVersion === request.ruleVersion,
           );
-          if (!rule) throw new CommsError('APPROVAL_VOID', 'a lazy Gmail projection no longer has its exact rule');
+          if (!rule) throw new CommsError('APPROVAL_VOID', 'a lazy Gmail projection no longer has its exact workflow');
           await fence(rule);
         }
         return materialiser.materialiseAll(requests);

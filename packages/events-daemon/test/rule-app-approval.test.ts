@@ -81,7 +81,8 @@ test('rule approve refuses an agent, the MCP server and a pipe the app did not s
     for (const marker of ['CLAUDECODE', 'CLAUDE_CODE_ENTRYPOINT', 'CODEX_SANDBOX', 'CURSOR_AGENT']) {
       const ran = await cli(stateDir, args, { env: { [marker]: '1' } });
       assert.equal(ran.code, APPROVAL_EXIT, `under ${marker}: ${ran.stderr}`);
-      assert.match(ran.stderr, /only a person can approve a rule, in the app or at their terminal, not an agent/u);
+      assert.match(ran.stderr, /only a person can approve a workflow, in the app or at their terminal, not an agent/u);
+      assert.match(ran.stderr, /Ask the person to do it in the app: Events → Workflows, Review and approve\./u);
       assert.equal(ran.stdout, '', 'nothing reached the owner');
     }
     const mcp = await cli(stateDir, args, { env: { AGENTCOMMS_MCP_SERVER: 'events' } });
@@ -158,7 +159,7 @@ test('the app approves only the rule activation it was shown, for its digest, an
     // Another digest than the one shown: nothing is approved.
     const stale = await cli(stateDir, ['rule', 'approve', approvalId, '--digest', ZEROES]);
     assert.equal(stale.code, VOID_EXIT, stale.stderr);
-    assert.match(stale.stderr, /the rule changed after you saw its preview/u);
+    assert.match(stale.stderr, /the workflow changed after you saw its preview/u);
     assert.deepEqual(await states(), ['1:null']);
 
     // The person's press: approved on the app channel, and on.
@@ -224,7 +225,7 @@ test('the app approves only the rule activation it was shown, for its digest, an
       },
     });
     assert.equal(typed.code, APPROVAL_EXIT, typed.stderr);
-    assert.match(typed.stderr, /approve a rule with approve <approval-id>, which asks for its challenge/u);
+    assert.match(typed.stderr, /approve a workflow with approve <approval-id>, which asks for its challenge/u);
 
     // Anything but a rule's activation is approved elsewhere.
     const kind = await json(['judge', 'kind', 'enable', JUDGE_KIND_LOCAL_ENDPOINT]);
@@ -236,6 +237,6 @@ test('the app approves only the rule activation it was shown, for its digest, an
       (kind.binding as { digest: string }).digest,
     ]);
     assert.equal(refused.code, APPROVAL_EXIT, refused.stderr);
-    assert.match(refused.stderr, /only a rule's activation is approved here/u);
+    assert.match(refused.stderr, /only a workflow's activation is approved here/u);
   });
 });
