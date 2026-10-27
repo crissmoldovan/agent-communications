@@ -45,10 +45,10 @@ applies a change it did not plan itself.
 | [`comms_connections_list`](#comms_connections_list) | Every MCP connection on this machine — each place an app uses Agent Comms: its id, name, app and where its entry is; its parts, each with the account it is kept to, read-only, and whether it can start; whether its entry is in its app and carries its key; when its key was issued; and when it was last used. |
 | [`comms_connection_show`](#comms_connection_show) | One MCP connection, as comms_connections_list gives it, and the Agent Comms running for it now, part by part. |
 | [`comms_connection_add`](#comms_connection_add) | Add a connection for an app — its own key, and one entry in that app that starts Agent Comms with its parts — and register it. |
-| [`comms_connection_change`](#comms_connection_change) | Every part a connection has from now on. |
-| [`comms_connection_rename`](#comms_connection_rename) | Rename a connection. |
-| [`comms_connection_key_replace`](#comms_connection_key_replace) | Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. |
-| [`comms_connection_remove`](#comms_connection_remove) | Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. |
+| [`comms_connection_change`](#comms_connection_change) | Every part a connection has from now on, with `id` and `parts` — of the connection this server is a part of: another’s parts are the person’s, at their terminal or in the app, and are refused here. |
+| [`comms_connection_rename`](#comms_connection_rename) | Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. |
+| [`comms_connection_key_replace`](#comms_connection_key_replace) | Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. |
+| [`comms_connection_remove`](#comms_connection_remove) | Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. |
 | [`comms_connection_migrate`](#comms_connection_migrate) | Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. |
 | [`comms_update`](#comms_update) | Bring this machine to the latest published release. |
 | [`comms_names_migrate`](#comms_names_migrate) | Rename every mailbox and workspace to `organisation/platform`. |
@@ -206,7 +206,7 @@ Report or change which acts an agent may start at all — post, reply, reaction,
 
 ### `comms_taking`
 
-Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true` and `acknowledge: "nothing"` apply at once, and so do `afterMinutes` and `notify`. `required: false` and `acknowledge: "eyes"` (Slack only) are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.
+Report or change, per account, whether a session must take a message before it acts on it — replying, reacting, acknowledging — so two sessions never answer the same message; what a take says to the sender; and when a message nobody takes counts as not taken. With no change it only reports, every account or `account`'s. Otherwise `account` and exactly one of `required`, `acknowledge`, `afterMinutes` or `notify`. `required: true`, `acknowledge: "nothing"`, a shorter `afterMinutes` and `notify: true` apply at once. `required: false`, `acknowledge: "eyes"` (Slack only), a longer `afterMinutes` and `notify: false` are changes the person approves: the first call returns the preview and an approvalId; call again with it once they agree. Change it only when the person asked.
 
 *writes*
 
@@ -373,7 +373,7 @@ Add a connection for an app — its own key, and one entry in that app that star
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `app` | `claude-code` \\| `claude-desktop` \\| `codex` \\| `cursor` \\| `gemini` \\| `vscode` | **yes** | the app it is for |
-| `name` | string | **yes** | what the person calls it: shown in previews and in Activity, 1 to 64 characters |
+| `name` | string | **yes** | what the person calls it: shown in previews and in Activity, 1 to 64 characters, with no quotation marks, brackets or “…” |
 | `parts` | object[] | no | every part, each server once |
 | `folder` | string | no | Claude Code only: the one project folder it is for |
 | `profile` | string | no | another Claude profile’s folder, or another Codex home |
@@ -382,30 +382,32 @@ Add a connection for an app — its own key, and one entry in that app that star
 
 ### `comms_connection_change`
 
-Every part a connection has from now on. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits. Giving more — a part added, an account let go or moved, read-only off — returns `approvalRequired` with a preview and an approvalId: call again with it once the person agrees. A running app sees the change through tools/list_changed where it supports it.
+Every part a connection has from now on, with `id` and `parts` — of the connection this server is a part of: another’s parts are the person’s, at their terminal or in the app, and are refused here. Or, with `add`, one part put into an app’s connection — what a channel’s own `mcp install` does: `app` names the app, and its connection for every folder takes the part, kept to the account and read-only `add` names; an app with none gets a connection made for it, with Agent Comms itself and that part; one with several needs `id` to say which. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits, and the preview marks it done; `add` takes away only in this server’s own connection. Giving more — a part added, an account let go or moved, read-only off, a connection made — returns `approvalRequired` with a preview naming the connection and an approvalId: call again with it once the person agrees. A running app sees a change of parts through tools/list_changed where it supports it; a connection made needs the app restarted — tell the person.
 
 *writes*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
-| `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
-| `parts` | object[] | **yes** | every part, each server once |
+| `id` | string | no | the connection, by its id: cn_ and 26 letters and digits |
+| `parts` | object[] | no | every part, each server once |
+| `add` | object | no | one part to put into the app’s connection, in place of the one of that server it has |
+| `app` | `claude-code` \\| `claude-desktop` \\| `codex` \\| `cursor` \\| `gemini` \\| `vscode` | no | with `add`: the app whose connection takes the part |
 | `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_connection_rename`
 
-Rename a connection. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.
+Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.
 
 *writes · idempotent*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
-| `name` | string | **yes** | its new name, 1 to 64 characters |
+| `name` | string | **yes** | its new name, 1 to 64 characters, with no quotation marks, brackets or “…” |
 
 ### `comms_connection_key_replace`
 
-Give a connection a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.
+Give the connection this server is a part of a new key, written into its app’s entry and never shown; the old key stops working at once, so the app needs a restart. Another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId. A Manual connection’s new key is a snippet to paste, shown only to the person: not here.
 
 *writes · destructive*
 
@@ -415,13 +417,14 @@ Give a connection a new key, written into its app’s entry and never shown; the
 
 ### `comms_connection_remove`
 
-Remove a connection: its entry is taken out of its app, saved first, and its key stops working at once. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.
+Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
+| `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_connection_migrate`
 

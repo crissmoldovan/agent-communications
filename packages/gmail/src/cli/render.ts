@@ -1,5 +1,6 @@
 import {
   type CliHandoffs,
+  type ConnectionPartResult,
   type Handoff,
   handoffSentence,
   handoffSentenceToFill,
@@ -7,6 +8,7 @@ import {
   handoffTextToFill,
   type InstallResult,
   paint,
+  renderConnectionPart,
   renderInstall,
   type ServerInstallResult,
   sizeOf,
@@ -139,9 +141,19 @@ export function renderSignInStarted(
  * outcome says which it is, and only `registered` carries an install that wrote an entry.
  */
 export type FinishRegistration =
-  /** The client's entry of ours under the name `setup` registers already serves this mailbox: `clientServesInbox`. */
-  | { client: string; status: 'already-registered' }
+  /**
+   * The client's entry of ours under the name `setup` registers already serves this mailbox (`clientServesInbox`) —
+   * or, from 0.35.0, its MCP connection's Gmail part reaches it (`connectionServesInbox`), and `connection` names it.
+   */
+  | { client: string; status: 'already-registered'; connection?: string | undefined }
+  /**
+   * The app's connection's Gmail part is kept to another mailbox, or read-only: setup's every mailbox would loosen it,
+   * so it was left as it is and nothing prepared (`gmailPartLeftAlone`) — `next` says so, with the command that would.
+   */
+  | { client: string; status: 'left-alone'; connection: string; part: string; next: string }
   | { client: string; status: 'registered'; install: ServerInstallResult }
+  /** Gmail put into the app's MCP connection, or a connection made for it (single-server design D17). */
+  | { client: string; status: 'registered'; connection: ConnectionPartResult }
   | {
       client: string;
       status: 'approval-required';
@@ -171,12 +183,21 @@ function renderFinishRegistration(registration: FinishRegistration, color: boole
   const { client } = registration;
   switch (registration.status) {
     case 'already-registered':
-      return `Setup asked for the Gmail server to be registered with ${client}; its entry there already serves this mailbox, so nothing was changed.`;
+      return registration.connection === undefined
+        ? `Setup asked for the Gmail server to be registered with ${client}; its entry there already serves this mailbox, so nothing was changed.`
+        : `Setup asked for Gmail to be put into ${client}'s MCP connection; its connection "${registration.connection}" already reaches this mailbox, so nothing was changed.`;
+    case 'left-alone':
+      return registration.next;
     case 'registered':
-      return [
-        `Setup asked for the Gmail server to be registered with ${client}:`,
-        renderInstall(registration.install, color),
-      ].join('\n');
+      return 'connection' in registration
+        ? [
+            `Setup asked for Gmail to be put into ${client}'s MCP connection:`,
+            renderConnectionPart(registration.connection, color),
+          ].join('\n')
+        : [
+            `Setup asked for the Gmail server to be registered with ${client}:`,
+            renderInstall(registration.install, color),
+          ].join('\n');
     case 'approval-required':
       return [
         paint(
@@ -974,7 +995,9 @@ export function renderSetupPlan(
     // Said here because this is the step that stops before it: `--mcp-client` is not forgotten, it moves to the finish.
     if (state.handoff.registerWith) {
       lines.push(
-        `Finishing it will also register the Gmail server with ${state.handoff.registerWith.client}, after the person approves the registration.`,
+        state.handoff.registerWith.standalone === true || state.handoff.registerWith.replace === true
+          ? `Finishing it will also register the Gmail server with ${state.handoff.registerWith.client}, after the person approves the registration.`
+          : `Finishing it will also put Gmail into the MCP connection of ${state.handoff.registerWith.client}, after the person approves it.`,
       );
     }
     return lines.join('\n');

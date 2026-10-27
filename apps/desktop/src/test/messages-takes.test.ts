@@ -380,6 +380,56 @@ describe('nobody took it (§8)', () => {
   });
 });
 
+describe('a lane offer its window is never woken for (security review of 0.35.0, M5)', () => {
+  const arrived = event({ eventId: 'w' });
+  const window = { key: '3f9a1c2e7b4d5a60', sessionId: null, folder: null, client: null };
+  const offeredLine = {
+    at: at('2026-10-25T10:00:00Z'),
+    kind: 'offered' as const,
+    by: 'service' as const,
+    window,
+    terminal: null,
+    reason: null,
+    note: null,
+    ack: null,
+  };
+
+  it('lapses at the account’s window after it was made, and the message counts as not taken from then', () => {
+    // It waited for its window with no end time, and stopped Not taken for as long as the queue kept its item.
+    const waiting = take({
+      state: 'offered',
+      offer: { to: window, until: null, rule: 'david-by-mail', byPerson: false },
+      history: [offeredLine],
+    });
+    expect(notTakenOf(arrived, waiting, SETTING, at('2026-10-25T10:14:59Z'))).toBeNull();
+    expect(notTakenOf(arrived, waiting, SETTING, at('2026-10-25T10:15:00Z'))).toEqual({
+      since: at('2026-10-25T10:00:00Z'),
+      due: at('2026-10-25T10:15:00Z'),
+      why: 'waited',
+    });
+  });
+
+  it('written down as lapsed, it counts from when it was offered, not from when it ran out', () => {
+    const lapsed = take({
+      state: 'open',
+      history: [offeredLine, { ...offeredLine, at: at('2026-10-25T10:15:00Z'), kind: 'expired' }],
+    });
+    expect(notTakenOf(arrived, lapsed, SETTING, at('2026-10-25T10:15:00Z'))).toEqual({
+      since: at('2026-10-25T10:00:00Z'),
+      due: at('2026-10-25T10:15:00Z'),
+      why: 'waited',
+    });
+    // A take that lapsed still starts the clock again from its end.
+    const taken = { ...offeredLine, at: at('2026-10-25T10:01:00Z'), kind: 'taken' as const, by: 'window' as const };
+    const leased = take({
+      state: 'open',
+      history: [offeredLine, taken, { ...offeredLine, at: at('2026-10-25T11:01:00Z'), kind: 'expired' }],
+    });
+    expect(notTakenOf(arrived, leased, SETTING, at('2026-10-25T11:15:59Z'))).toBeNull();
+    expect(notTakenOf(arrived, leased, SETTING, at('2026-10-25T11:16:00Z'))?.since).toBe(at('2026-10-25T11:01:00Z'));
+  });
+});
+
 describe('the 👀 on taking names the standing approval it would use', () => {
   const approval = {
     id: 'ap_5S6T7V8W9X0Y1Z2A3B4C5D6E7F',

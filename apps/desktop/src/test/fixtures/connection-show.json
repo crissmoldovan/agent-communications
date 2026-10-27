@@ -1,0 +1,121 @@
+{
+  "id": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D",
+  "readable": true,
+  "name": "Work — Claude Code",
+  "app": "claude-code",
+  "appLabel": "Claude Code",
+  "where": {
+    "scope": "user",
+    "folder": null,
+    "configDir": null
+  },
+  "launcher": "managed",
+  "parts": [
+    {
+      "server": "core",
+      "label": "Agent Comms itself",
+      "account": null,
+      "readOnly": false,
+      "available": true,
+      "why": null,
+      "text": "Agent Comms itself"
+    },
+    {
+      "server": "gmail",
+      "label": "Gmail",
+      "account": "acme/gmail",
+      "readOnly": false,
+      "available": true,
+      "why": null,
+      "text": "Gmail, the mailbox acme/gmail"
+    },
+    {
+      "server": "slack",
+      "label": "Slack",
+      "account": null,
+      "readOnly": false,
+      "available": true,
+      "why": null,
+      "text": "Slack"
+    },
+    {
+      "server": "events",
+      "label": "Events",
+      "account": null,
+      "readOnly": false,
+      "available": true,
+      "why": null,
+      "text": "Events"
+    }
+  ],
+  "entry": {
+    "name": "agentcomms",
+    "path": "/example/home/.claude.json",
+    "present": true,
+    "keyMatches": true
+  },
+  "key": {
+    "issuedAt": "2026-10-12T09:00:00.000Z",
+    "revoked": false
+  },
+  "createdAt": "2026-10-12T09:00:00.000Z",
+  "lastUsed": "2026-10-26T10:42:00.000Z",
+  "problems": [],
+  "running": [
+    {
+      "connection": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D",
+      "pid": 4242,
+      "startedAt": "2026-10-26T10:30:00.000Z",
+      "client": {
+        "name": "claude-code",
+        "version": "2.3.0"
+      },
+      "refused": null,
+      "parts": [
+        {
+          "server": "core",
+          "label": "Agent Comms itself",
+          "state": "running",
+          "pid": 4243,
+          "version": "0.35.0",
+          "since": "2026-10-26T10:30:01.000Z",
+          "why": null,
+          "exit": null
+        },
+        {
+          "server": "gmail",
+          "label": "Gmail",
+          "state": "running",
+          "pid": 4244,
+          "version": "0.35.0",
+          "since": "2026-10-26T10:30:01.000Z",
+          "why": null,
+          "exit": null
+        },
+        {
+          "server": "slack",
+          "label": "Slack",
+          "state": "restarting",
+          "pid": null,
+          "version": "0.35.0",
+          "since": "2026-10-26T10:41:00.000Z",
+          "why": "Slack stopped; Agent Comms is starting it again",
+          "exit": {
+            "code": 1,
+            "signal": null
+          }
+        },
+        {
+          "server": "events",
+          "label": "Events",
+          "state": "running",
+          "pid": 4246,
+          "version": "0.35.0",
+          "since": "2026-10-26T10:30:01.000Z",
+          "why": null,
+          "exit": null
+        }
+      ]
+    }
+  ]
+}

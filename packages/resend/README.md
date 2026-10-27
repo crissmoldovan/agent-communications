@@ -67,7 +67,9 @@ email carry the same as `taken`.
   person turned **taking on** for the account (core's `agentcomms taking acme/resend --require on`, or
   `comms_taking`), a session that has not taken it is refused with `TAKE_REQUIRED` (exit `10`). Both are asked at
   prepare, before any preview or approval, and again before the send — so a take released in between sends nothing.
-  A new email, with no In-Reply-To, answers nobody and is not held to it.
+  A new email, with no In-Reply-To, answers nobody and is not held to it. When several received emails carry that
+  Message-ID — the sender writes it, so a forged copy can carry another's — the reply answers each, and is refused
+  while another session has any of them.
 - **An In-Reply-To nobody has taken**, with taking on, is refused too: Resend cannot be asked which received email has
   a given Message-ID, so one naming the account's own earlier email cannot be told apart. Leave In-Reply-To out for a
   follow-up to your own mail, or let the person send it.
@@ -142,7 +144,8 @@ terminal), `approve` (under `confirm`, a person at a terminal) and `mcp` (it sta
 | `agent-resend scheduled cancel <id>` | `resend_scheduled_cancel` |
 | `agent-resend approve <approvalId>` | — a person at a terminal, with the command the result gives |
 | `agent-resend mcp` | — it starts the server |
-| `agent-resend mcp install --client <client>` | `comms_server_install` (core) |
+| `agent-resend mcp install --client <client>` | `comms_connection_change` with `add` and `app` (core): Resend into the app's connection |
+| `agent-resend mcp install --client <client> --standalone` | `comms_server_install` (core): an entry of its own |
 | `agent-resend mcp prune` | `comms_server_prune` (core) |
 
 Every command that reads or changes an account — all but `account`, `doctor`, `send wait`, `approve` and `mcp` — is

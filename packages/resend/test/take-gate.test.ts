@@ -200,6 +200,44 @@ test('without a take required nothing is demanded, but another session’s take 
   assert.equal(harness.fake.sends().length, 0);
 });
 
+test('two received emails with one Message-ID: a reply answers both, so it passes only where its session may act on each', async () => {
+  // Security review of 0.35.0 (LOW): the reply's take was found by Message-ID alone, and the first record found decided —
+  // so a session holding a forged copy that carries David's Message-ID could reply into David's thread, which another
+  // session held. Each copy is now asked by its own account and id.
+  await ready();
+  const FORGED = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  harness.fake.received.push({
+    id: FORGED,
+    from: 'Someone <someone@elsewhere.test>',
+    to: ['hello@acme.test'],
+    subject: 'Re: Invoice 7',
+    text: 'Reply here instead.',
+    message_id: `<${MESSAGE_ID}>`,
+  });
+  const alice = as(ALICE);
+  const bob = as(BOB);
+  await takeMessage(alice, 'acme/resend', RECEIVED, { step: 'take' });
+  await takeMessage(bob, 'acme/resend', FORGED, { step: 'take' });
+  for (const required of [false, true]) {
+    await requireTaking(required);
+    for (const [who, context] of [
+      ['Bob', bob],
+      ['Alice', alice],
+    ] as const) {
+      const refused = await refusal(prepareSend(context, 'acme/resend', reply()));
+      assert.equal(refused.code, 'TAKEN_ELSEWHERE', `${who}, required ${required}: ${refused.message}`);
+      assert.equal(refused.details?.reason, 'HELD');
+    }
+  }
+  assert.equal(harness.fake.sends().length, 0);
+  // Once one session holds every copy, its reply goes.
+  await takeMessage(bob, 'acme/resend', FORGED, { step: 'hand-back', reason: 'duplicate' });
+  await takeMessage(alice, 'acme/resend', FORGED, { step: 'take' });
+  const prepared = await prepareSend(alice, 'acme/resend', reply());
+  assert.match(prepared.preview, /^Taken by this session at \d\d:\d\d\.$/m);
+  await assert.rejects(prepareSend(bob, 'acme/resend', reply()), { code: 'TAKEN_ELSEWHERE' });
+});
+
 test('a new email answers nobody, and is not gated; the person at a terminal is never held to taking', async () => {
   await ready();
   await requireTaking(true);

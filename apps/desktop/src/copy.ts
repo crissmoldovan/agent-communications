@@ -36,7 +36,7 @@ export const SECTIONS: readonly { screen: Exclude<Screen, 'settings' | 'search'>
   { screen: 'people', label: 'People', isNew: true },
   { screen: 'projects', label: 'Projects', isNew: true },
   { screen: 'accounts', label: 'Accounts' },
-  { screen: 'connections', label: 'Connections', isNew: true },
+  { screen: 'connections', label: 'MCP connections', isNew: true },
   { screen: 'approvals', label: 'Approvals' },
   { screen: 'activity', label: 'Activity' },
   { screen: 'agent', label: 'Your agents' },

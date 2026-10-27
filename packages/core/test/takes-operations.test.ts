@@ -154,11 +154,31 @@ test('taking and comms_taking show the same report; requiring a take applies at 
         },
       ],
     });
-    // Reminders apply at once, whichever way.
+    // Security review of 0.35.0 (LOW): an agent could quiet the reminder — a longer wait, or none — at once over MCP.
+    // Each loosens the person's oversight of messages nobody took, so each waits for them; the claim applies it.
     const later = await call({ account: 'acme/slack', afterMinutes: 240 });
-    assert.equal(later.structuredContent?.applied, true, JSON.stringify(later.structuredContent));
+    assert.equal(later.structuredContent?.approvalRequired, true, JSON.stringify(later.structuredContent));
+    assert.match(String(later.structuredContent?.preview), /within 240 minutes/);
+    const silent = await call({ account: 'acme/slack', notify: false });
+    assert.equal(silent.structuredContent?.approvalRequired, true, JSON.stringify(silent.structuredContent));
     const quiet = await runMain(['taking', 'acme/slack', '--notify', 'off', '--json'], m.env, process.platform);
-    assert.equal(quiet.code, 0, quiet.stdout + quiet.stderr);
+    assert.equal(quiet.code, 10, quiet.stdout + quiet.stderr);
+    assert.equal((quiet.json() as { error: { code: string } }).error.code, 'APPROVAL_PENDING');
+    const slack = () =>
+      (stored(m) as { accounts: { account: string; unclaimed: unknown }[] }).accounts.find(
+        (each) => each.account === 'acme/slack',
+      )?.unclaimed;
+    assert.deepEqual(slack(), { afterMinutes: 15, notify: true }, 'nothing written before the person agrees');
+    const claimed = await call({
+      account: 'acme/slack',
+      afterMinutes: 240,
+      approvalId: later.structuredContent?.approvalId,
+    });
+    assert.equal(claimed.structuredContent?.applied, true, JSON.stringify(claimed.structuredContent));
+    assert.deepEqual(slack(), { afterMinutes: 240, notify: true });
+    // A shorter wait, and a reminder again, apply at once.
+    assert.equal((await call({ account: 'acme/slack', afterMinutes: 30 })).structuredContent?.applied, true);
+    assert.deepEqual(slack(), { afterMinutes: 30, notify: true });
   } finally {
     await close();
   }

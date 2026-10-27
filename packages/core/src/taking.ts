@@ -11,9 +11,11 @@
  * counts as the stricter one — `required: true`, `acknowledge: 'nothing'`, the soonest reminder, a reminder on — and
  * `doctor` says so. So a hand edit or a later release's word can only make this release demand more.
  *
- * Two changes loosen, and a person approves them (`classifyChange`): `required` from true to false, and `acknowledge`
- * from `nothing` to `eyes`. Everything else applies at once — `required` on, `acknowledge: 'nothing'`, and any change to
- * when a message nobody took is reminded of, which only decides when the person hears of it.
+ * Four changes loosen, and a person approves them (`classifyChange`): `required` from true to false, `acknowledge` from
+ * `nothing` to `eyes`, a longer `unclaimed.afterMinutes`, and `unclaimed.notify` from true to false — the last two let a
+ * message nobody took go unnoticed for longer, or for good, so an agent cannot quiet the person's oversight at once
+ * (security review of 0.35.0). Everything else applies at once — `required` on, `acknowledge: 'nothing'`, a shorter
+ * wait, and a reminder on.
  *
  * `config.ts` imports this module to judge a change, so this one imports from it only types.
  */
@@ -297,18 +299,30 @@ export function takingFor(
   return found ?? DEFAULT_TAKING;
 }
 
+/**
+ * How long a delivery's offer waits for its window to be handed it in an account, in milliseconds (security review of
+ * 0.35.0, M5): the account's reminder window, `unclaimed.afterMinutes`, as it applies. An offer its window was never
+ * handed lapses then, and the message counts as not taken. Never throws.
+ */
+export function offerWaitMs(
+  config: Pick<Config, 'inboxes' | 'accounts'> & { readonly taking?: unknown },
+  accountId: string,
+): number {
+  return takingFor(config, accountId).unclaimed.afterMinutes * 60_000;
+}
+
 /** One loosening a change to the settings makes: its path, by the account's name, the values, and the account's id. */
 export interface TakingLoosening {
   readonly path: string;
-  readonly was: boolean | TakingAcknowledgement;
-  readonly now: boolean | TakingAcknowledgement;
+  readonly was: boolean | TakingAcknowledgement | number;
+  readonly now: boolean | TakingAcknowledgement | number;
   readonly id: string;
 }
 
 /**
  * The loosenings a change from `before` to `after` makes, judged per account by its id, by the settings in force on
- * each side: `required` from true to false, and `acknowledge` from `nothing` to `eyes`. An account new in `after` is
- * judged against the defaults.
+ * each side: `required` from true to false, `acknowledge` from `nothing` to `eyes`, a longer `unclaimed.afterMinutes`,
+ * and `unclaimed.notify` from true to false. An account new in `after` is judged against the defaults.
  */
 export function classifyTakingChange(
   before: Pick<Config, 'inboxes' | 'accounts'> & { readonly taking?: unknown },
@@ -323,6 +337,17 @@ export function classifyTakingChange(
     }
     if (then.acknowledge === 'nothing' && now.acknowledge === 'eyes') {
       loosenings.push({ path: `taking.${now.account}.acknowledge`, was: 'nothing', now: 'eyes', id: now.accountId });
+    }
+    if (now.unclaimed.afterMinutes > then.unclaimed.afterMinutes) {
+      loosenings.push({
+        path: `taking.${now.account}.unclaimed.afterMinutes`,
+        was: then.unclaimed.afterMinutes,
+        now: now.unclaimed.afterMinutes,
+        id: now.accountId,
+      });
+    }
+    if (then.unclaimed.notify && !now.unclaimed.notify) {
+      loosenings.push({ path: `taking.${now.account}.unclaimed.notify`, was: true, now: false, id: now.accountId });
     }
   }
   return loosenings;

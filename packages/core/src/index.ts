@@ -151,6 +151,18 @@ export {
   type WaitProgress,
   waitForApproval,
 } from './operations/approval-wait.ts';
+/*
+ * A channel's own `mcp install` (single-server design D17): that channel put into the app's MCP connection, or a
+ * connection made for it — the change comms_connection_change makes with `add`.
+ */
+export {
+  type AppPartAsIs,
+  appConnectionPart,
+  type ConnectionPartRequest,
+  type ConnectionPartResult,
+  connectionPartChange,
+  narrowedAppPart,
+} from './operations/connections.ts';
 export {
   type OrgAddRequest,
   type OrgChangeResult,

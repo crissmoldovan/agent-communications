@@ -4,10 +4,10 @@ import type { GatedChange } from '../change-flow.ts';
 import type { ChangeRequest, ChangeSurface } from '../changes.ts';
 import { channelManifest, serverFacts, serverLabel } from '../channel-servers.ts';
 import { agentMarker } from '../cli-runtime.ts';
-import { type Config, connectedAccounts } from '../config.ts';
+import { type Config, classifyChange, connectedAccounts } from '../config.ts';
 import {
+  CONNECTION_APP_LABELS,
   CONNECTION_APPS,
-  CONNECTION_ID_ENV,
   CONNECTION_ID_PATTERN,
   CONNECTION_KEY_ENV,
   CONNECTION_LAUNCHERS,
@@ -19,31 +19,39 @@ import {
   connectionById,
   connectionKeyHash,
   connectionKeyMatches,
-  connectionNameProblem,
+  connectionLabel,
+  connectionOfThisProcess,
   connectionReach,
   newConnectionId,
   newConnectionKey,
+  newConnectionNameProblem,
   PART_FACTS,
   partFacts,
   partText,
   readConnections,
   withConnection,
+  withRemovalBehind,
 } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
 import { connectionLastUsed, type GatewayStatus, runningGateways } from '../gateway/status.ts';
+import { handoffSentence } from '../handoff-text.ts';
+import { requireHandoffs } from '../handoffs.ts';
 import { launcherName, readPointer } from '../launcher.ts';
-import { scanRegisteredServers } from '../mcp-clients.ts';
+import { knownClientConfigs, scanRegisteredServers } from '../mcp-clients.ts';
 import {
   connectionOfEntry,
   type InstallContext,
+  isProductServer,
   managedRuntimeDir,
   removeConnectionEntry,
+  reusableRuntime,
   type SupportedClient,
 } from '../mcp-install.ts';
 import { mcpServerOf } from '../mcp-marker.ts';
 import { findById, lookupName } from '../names.ts';
 import { homeDirectory, shortenHome } from '../paths.ts';
+import { unverifiedRelease } from '../update-release.ts';
 import { VERSION } from '../version.ts';
 import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange } from './servers.ts';
 
@@ -57,10 +65,14 @@ import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange }
  *   environment, never shown — installing any part's runtime this machine lacks. A Manual connection is a snippet with
  *   its key in it, shown once, so it is added only at the person's own terminal or in the app, never over MCP: the key
  *   would stay in the chat's transcript.
- * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest.
+ * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest. An
+ *   agent changes the parts of only its own connection, and narrows only its own (`refuseAnotherConnection`).
  * - **Renaming it, and replacing its key**, give an agent nothing more, so they apply at once and are audited. A
- *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is.
- * - **Removing it** applies at once: its entry is taken out of its app, and its key stops working with the record.
+ *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is. An agent
+ *   renames, re-keys and removes only its own connection (`refuseAnotherConnection`).
+ * - **Removing it** applies at once: its entry is taken out of its app, and its key stops working with the record —
+ *   unless its entry shadows a wider one for every folder, which the agents there would use instead: then it is
+ *   prepared and approved (`widerBehind`).
  */
 
 /**
@@ -78,6 +90,32 @@ function refuseKeyToAgent(env: NodeJS.ProcessEnv, surface: ChangeSurface): void 
   });
 }
 
+/**
+ * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key,
+ * removing it and changing its parts — narrowing included — act only on the caller's own connection: the one whose part
+ * this is, as its gateway reports it (`connectionOfThisProcess`). Another connection is the person's, at their terminal
+ * or in the app (0.35.0 security review, M1: an agent renamed two others so that a later preview named the wrong one,
+ * and could cut any app off; the re-review's LOW 2: narrowing another at once cut the person's other apps off Gmail
+ * and Events). A speed bump against agents, as every person-only act here is: a shell runs as the person.
+ */
+function refuseAnotherConnection(env: NodeJS.ProcessEnv, surface: ChangeSurface, id: unknown, act: string): void {
+  const marker =
+    surface === 'mcp' ? 'MCP' : (agentMarker(env) ?? (mcpServerOf(env) === undefined ? null : 'MCP_SERVER_PROCESS'));
+  if (marker === null) return;
+  const own = connectionOfThisProcess(env);
+  if (own !== undefined && own === id) return;
+  throw new CommsError(
+    'APPROVAL_REQUIRED',
+    own === undefined
+      ? `an agent can ${act} only the connection it is a part of, and this one is a part of no connection: nothing was changed`
+      : `an agent can ${act} only the connection it is a part of, and ${String(id).slice(0, 40)} is another: nothing was changed`,
+    {
+      hint: `Another connection is the person’s to ${act}: at your terminal, or in the app.`,
+      details: { reason: 'NOT_OWN_CONNECTION', marker },
+    },
+  );
+}
+
 /** The app each connection type registers with, as `mcp install` names it; Manual registers with none. */
 const APP_CLIENT: Readonly<Record<Exclude<ConnectionApp, 'manual'>, SupportedClient>> = Object.freeze({
   'claude-code': 'claude-code',
@@ -89,15 +127,7 @@ const APP_CLIENT: Readonly<Record<Exclude<ConnectionApp, 'manual'>, SupportedCli
 });
 
 /** How a person names an app in a sentence. */
-const APP_LABELS: Readonly<Record<ConnectionApp, string>> = Object.freeze({
-  'claude-code': 'Claude Code',
-  'claude-desktop': 'Claude Desktop',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  gemini: 'Gemini',
-  vscode: 'VS Code',
-  manual: 'the app you paste it into',
-});
+const APP_LABELS: Readonly<Record<ConnectionApp, string>> = CONNECTION_APP_LABELS;
 
 /** One part as a request names it: a server, the account it is kept to, and read-only. */
 export interface PartRequest {
@@ -236,6 +266,15 @@ export interface ConnectionView {
   readonly key: { readonly issuedAt: string | null; readonly revoked: boolean };
   readonly createdAt: string | null;
   readonly lastUsed: string | null;
+  /**
+   * Whether `connection migrate` made it (D16), and the entries of their own it replaced, by server and entry name —
+   * what `connection migrate --undo` registers again; null for a connection made any other way, which has nothing to
+   * undo. Never where those entries were saved.
+   */
+  readonly migratedFrom: {
+    readonly at: string;
+    readonly entries: readonly { readonly server: string; readonly name: string }[];
+  } | null;
   readonly problems: readonly string[];
 }
 
@@ -312,6 +351,7 @@ async function viewOf(
       key: { issuedAt: null, revoked: false },
       createdAt: null,
       lastUsed: null,
+      migratedFrom: null,
       problems: read.problems,
     };
   }
@@ -333,6 +373,13 @@ async function viewOf(
     key: { issuedAt: record.keyIssuedAt, revoked: record.revokedAt !== null },
     createdAt: record.createdAt,
     lastUsed: await connectionLastUsed(core.paths.stateDir, record.id),
+    migratedFrom:
+      record.migratedFrom === undefined
+        ? null
+        : {
+            at: record.migratedFrom.at,
+            entries: record.migratedFrom.entries.map((entry) => ({ server: entry.server, name: entry.name })),
+          },
     problems: read.problems,
   };
 }
@@ -359,7 +406,7 @@ export async function connectionShow(
   env: NodeJS.ProcessEnv,
   request: { id?: string | undefined },
 ): Promise<ConnectionShown> {
-  const id = request.id ?? env[CONNECTION_ID_ENV];
+  const id = request.id ?? connectionOfThisProcess(env);
   if (id === undefined || id === '') {
     throw new CommsError('USAGE', 'name the connection by its id: this is not one of a connection’s parts', {
       hint: 'connection list gives every connection’s id.',
@@ -501,8 +548,8 @@ export function connectionAddChange(
     });
   }
   if (request.app === 'manual') refuseKeyToAgent(env, surface);
-  const nameProblem = connectionNameProblem(request.name);
-  if (nameProblem !== null) throw new CommsError('USAGE', nameProblem);
+  const nameProblem = newConnectionNameProblem(request.name);
+  if (nameProblem !== null) throw new CommsError('USAGE', `${nameProblem}: nothing was changed`);
   if (request.launcher !== undefined && !CONNECTION_LAUNCHERS.includes(request.launcher)) {
     throw new CommsError('USAGE', `"${String(request.launcher)}" is not a launcher`, {
       hint: `One of: ${CONNECTION_LAUNCHERS.join(', ')}.`,
@@ -587,7 +634,21 @@ export function connectionAddChange(
             name,
             launcher,
             ...(request.noVerify ? { noVerify: true } : {}),
-            connection: { id, name: request.name, key, scope, ...(folder === undefined ? {} : { folder }) },
+            connection: {
+              id,
+              name: request.name,
+              label: connectionLabel(
+                {
+                  name: request.name,
+                  app: request.app,
+                  where: { scope, folder: folder ?? null, configDir: request.profile ?? null },
+                },
+                null,
+              ),
+              key,
+              scope,
+              ...(folder === undefined ? {} : { folder }),
+            },
           },
           undefined,
           deps,
@@ -603,7 +664,8 @@ export function connectionAddChange(
         before: config,
         after: { ...config, connections: withConnection(config, { put: record }) } as Config,
         effects,
-        summary: `Add the connection "${request.name}" for ${APP_LABELS[request.app]}`,
+        // Named as every preview line names a connection; this one's id is made fresh on each plan, so "new".
+        summary: `Add the connection ${connectionLabel(record, null)}`,
       };
     },
     apply: async (consent): Promise<ConnectionAddResult> => {
@@ -754,11 +816,19 @@ export interface ConnectionChangeRequest {
   readonly id: string;
   /** Every part it should have from now on. */
   readonly parts: readonly PartRequest[];
+  /**
+   * The approval this call claims, when it claims one — `--approval`, `--app-approval`, a tool's `approvalId`: what its
+   * preparation narrowed at once is read from it, so a claim planned from a record narrowed already binds the same.
+   */
+  readonly approvalId?: string | undefined;
 }
 
 export interface ConnectionChangeResult {
   readonly connection: ConnectionView;
-  /** What was applied at once, before anything waited: the narrowings. */
+  /**
+   * What was applied at once, before anything waited: the narrowings — this call's, and, on a claim, those its
+   * preparation made, which the approval it claims records.
+   */
   readonly appliedAtOnce: readonly string[];
   readonly next: string;
 }
@@ -777,10 +847,63 @@ function narrowing(from: readonly ConnectionPart[], to: readonly ConnectionPart[
   return kept;
 }
 
+/** What the change approval `approvalId` says its preparation did at once: none for anything but a valid change. */
+async function approvalDoneAtOnce(core: Core, approvalId: string | undefined): Promise<readonly string[]> {
+  if (approvalId === undefined) return [];
+  const stored = await core.approvals.get(approvalId).catch(() => null);
+  return stored?.form === 'v2' && stored.record.kind === 'change' ? (stored.record.change?.doneAtOnce ?? []) : [];
+}
+
+/**
+ * Of the narrowings an approval says its preparation made, those the record still shows made, in the approval's order
+ * — a part taken out that is not there, one kept to the account the line names, one read-only — so a claim says only
+ * what is true of the record it plans from. A line the record does not bear out is left out: the claim then binds
+ * otherwise than the approval, and is refused — prepare it again.
+ */
+function stillNarrowed(config: Config, lines: readonly string[], parts: readonly ConnectionPart[]): string[] {
+  return lines.filter((line) =>
+    PART_FACTS.some((facts) => {
+      const part = parts.find((each) => each.server === facts.server);
+      if (line === `${facts.label} taken out`) return part === undefined;
+      if (line === `${facts.label} read-only`) return part?.readOnly === true;
+      if (!line.startsWith(`${facts.label} kept to `) || part?.pin === undefined) return false;
+      const alias =
+        facts.accounts === 'inboxes'
+          ? (findById(config, 'inbox', part.pin.id)?.alias ?? part.pin.alias)
+          : (findById(config, 'account', part.pin.id)?.alias ?? part.pin.alias);
+      return line === `${facts.label} kept to ${alias}`;
+    }),
+  );
+}
+
+/**
+ * A refusal raised after this call narrowed at once, saying so: its "nothing was changed" made true, and what was done
+ * in `details.appliedAtOnce`, as `org update` says a narrowing done before a refusal. Its own code, hint and details.
+ */
+function saidNarrowed(error: unknown, done: readonly string[]): unknown {
+  if (!(error instanceof CommsError) || done.length === 0) return error;
+  return new CommsError(
+    error.code,
+    error.message.replace('nothing was changed', `${done.join('; ')} at once; nothing else was changed`),
+    {
+      ...(error.hint === undefined ? {} : { hint: error.hint }),
+      details: { ...(error.details ?? {}), appliedAtOnce: [...done] },
+      cause: error,
+    },
+  );
+}
+
 /**
  * Changing a connection's parts (§6.2): every narrowing applies at once — a part taken out, a pin added, read-only on —
  * even beside a change that waits, as `comms_org_update` narrows; what reaches more — a part added, a pin taken away or
  * moved, read-only off — is prepared, shown and approved. A part added on a managed connection installs its runtime.
+ *
+ * What narrowed at once while the rest waits is the waiting preview's to say (the lead's call for 0.35.0, as `org
+ * update` marks a tightening done): bound into the approval as `doneAtOnce`, so the preview lists it apart, done
+ * already, and its header says the rest is what waits. A claim plans from a record narrowed already, and learns what
+ * was done from this change's own earlier call at a terminal, or — from a chat, where each call builds the change
+ * afresh — from the approval it claims, each line held to the record it says it left (`stillNarrowed`). The result and
+ * the audit say it again.
  */
 export function connectionChangeChange(
   core: Core,
@@ -789,42 +912,89 @@ export function connectionChangeChange(
   surface: ChangeSurface,
   deps: ServerInstallDeps = {},
 ): GatedChange<ConnectionChangeResult> {
-  const appliedAtOnce: string[] = [];
+  const change = partsChange(
+    core,
+    env,
+    { id: request.id, approvalId: request.approvalId, target: (config) => partsOf(config, request.parts) },
+    surface,
+    deps,
+  );
+  return {
+    ...change,
+    // Before anything narrows at once: an agent's change to another connection's parts is refused whole (LOW 2).
+    plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'change the parts of');
+      return change.plan(config);
+    },
+  };
+}
+
+/**
+ * The change of a connection's parts to what `target` says, from the configuration and the record as they are now:
+ * `connection change`'s every part, or one part put in by a channel's `mcp install` (`connectionPartChange`).
+ */
+function partsChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: {
+    readonly id: string;
+    readonly approvalId?: string | undefined;
+    readonly target: (config: Config, record: ConnectionRecord) => ConnectionPart[];
+  },
+  surface: ChangeSurface,
+  deps: ServerInstallDeps,
+): GatedChange<ConnectionChangeResult> {
+  /** What this change narrowed at once on an earlier call of its own: a terminal's prepare, before its claim. */
+  let doneEarlier: string[] = [];
+  let doneAtOnce: string[] = [];
   let subs: GatedChange<ServerInstallResult>[] = [];
   let target: ConnectionPart[] = [];
   return {
-    plan: async (config): Promise<ChangeRequest> => {
+    plan: async (given): Promise<ChangeRequest> => {
+      let config = given;
       let record = requireReadable(config, request.id);
-      target = partsOf(config, request.parts);
-      const narrowed = narrowing(record.parts, target);
-      if (JSON.stringify(narrowed) !== JSON.stringify(record.parts)) {
-        const before = record;
-        await core.config.update((now) => {
-          const read = connectionById(now, before.id);
-          if (read === undefined || !read.readable) return now;
-          return {
-            ...now,
-            connections: withConnection(now, { put: { ...read.record, parts: narrowing(read.record.parts, target) } }),
-          } as Config;
-        });
-        const lines = describeNarrowing(config, before.parts, narrowed);
-        appliedAtOnce.push(...lines);
-        await audit(core, surface, 'connection.update', before.id, `narrowed at once: ${lines.join('; ')}`);
-        config = await core.config.load();
-        record = requireReadable(config, request.id);
+      target = request.target(config, record);
+      let doneNow: string[] = [];
+      try {
+        const narrowed = narrowing(record.parts, target);
+        if (JSON.stringify(narrowed) !== JSON.stringify(record.parts)) {
+          const before = record;
+          await core.config.update((now) => {
+            const read = connectionById(now, before.id);
+            if (read === undefined || !read.readable) return now;
+            return {
+              ...now,
+              connections: withConnection(now, {
+                put: { ...read.record, parts: narrowing(read.record.parts, target) },
+              }),
+            } as Config;
+          });
+          doneNow = describeNarrowing(config, before.parts, narrowed);
+          await audit(core, surface, 'connection.update', before.id, `narrowed at once: ${doneNow.join('; ')}`);
+          config = await core.config.load();
+          record = requireReadable(config, request.id);
+        }
+        const doneBefore =
+          doneEarlier.length > 0
+            ? doneEarlier
+            : stillNarrowed(config, await approvalDoneAtOnce(core, request.approvalId), record.parts);
+        doneAtOnce = [...doneBefore, ...doneNow.filter((line) => !doneBefore.includes(line))];
+        doneEarlier = doneAtOnce;
+        const added = target.filter((part) => !record.parts.some((had) => had.server === part.server));
+        subs = record.launcher === 'managed' ? await runtimeInstalls(core, env, added, deps) : [];
+        const effects: string[] = [];
+        for (const sub of subs) effects.push(...((await sub.plan(config)).effects ?? []));
+        return {
+          before: config,
+          after: { ...config, connections: withConnection(config, { put: { ...record, parts: target } }) } as Config,
+          effects,
+          // What narrowed at once is bound beside what waits, and the preview lists it apart, done already.
+          ...(doneAtOnce.length > 0 ? { doneAtOnce } : {}),
+          summary: `Let agents in ${connectionLabel(record, record.id)} reach more${doneAtOnce.length > 0 ? '; what narrows was applied at once' : ''}`,
+        };
+      } catch (error) {
+        throw saidNarrowed(error, doneNow);
       }
-      const added = target.filter((part) => !record.parts.some((had) => had.server === part.server));
-      subs = record.launcher === 'managed' ? await runtimeInstalls(core, env, added, deps) : [];
-      const effects: string[] = [];
-      for (const sub of subs) effects.push(...((await sub.plan(config)).effects ?? []));
-      return {
-        before: config,
-        after: { ...config, connections: withConnection(config, { put: { ...record, parts: target } }) } as Config,
-        effects,
-        // What was narrowed at once is in the result and the audit, not in what the approval binds: a claim plans from
-        // a record already narrowed, and would otherwise bind something else.
-        summary: `Let agents in "${record.name}" reach more`,
-      };
     },
     apply: async (consent): Promise<ConnectionChangeResult> => {
       for (const sub of subs) await sub.apply(undefined, await sub.plan(await core.config.load()));
@@ -846,14 +1016,14 @@ export function connectionChangeChange(
           surface,
           'connection.update',
           request.id,
-          `parts: ${target.map((part) => part.server).join(', ')}`,
+          `parts: ${target.map((part) => part.server).join(', ')}${doneAtOnce.length > 0 ? `; narrowed at once as this was prepared: ${doneAtOnce.join('; ')}` : ''}`,
         );
       const config = await core.config.load();
       const read = connectionById(config, request.id) as ConnectionRead;
       const view = await viewOf(core, env, config, read);
       return {
         connection: view,
-        appliedAtOnce,
+        appliedAtOnce: [...doneAtOnce],
         next: 'A running app sees the new parts at once, through tools/list_changed, where it supports it; otherwise restart it.',
       };
     },
@@ -890,6 +1060,433 @@ function describeNarrowing(config: Config, from: readonly ConnectionPart[], to: 
   return lines;
 }
 
+// ── One part, from a channel's own `mcp install` (D17) ──────────────────────────────────────────────────────
+
+export interface ConnectionPartRequest {
+  /** The part: a declared server — the channel whose own `mcp install` asks for it. */
+  readonly server: string;
+  /** The app whose connection it goes into, by the word `mcp install --client` names it. */
+  readonly app: string;
+  /** The connection, by its id: needed when the app has several, and held to be the app's. */
+  readonly id?: string | undefined;
+  /** The account it is kept to, `organisation/platform`; left out, every account. */
+  readonly account?: string | undefined;
+  readonly readOnly?: boolean | undefined;
+  /** How a connection this makes starts its parts — managed, the default. One that is there keeps its own. */
+  readonly launcher?: ConnectionLauncher | undefined;
+  /** For a connection this makes: register its entry without starting it once. */
+  readonly noVerify?: boolean | undefined;
+  /** The approval this call claims, when it claims one: see `ConnectionChangeRequest.approvalId`. */
+  readonly approvalId?: string | undefined;
+}
+
+export interface ConnectionPartResult {
+  readonly connection: ConnectionView;
+  /** Whether this made the connection: the app had none, so it was made with Agent Comms itself and this part. */
+  readonly created: boolean;
+  /** Whether anything changed: false when the part was there already, as asked. */
+  readonly changed: boolean;
+  /** What was applied at once, before anything waited: see `ConnectionChangeResult.appliedAtOnce`. */
+  readonly appliedAtOnce: readonly string[];
+  readonly next: string;
+  /** How a connection this made first started, for every type but Manual. */
+  readonly verification?: ServerInstallResult['verification'] | undefined;
+  readonly verifyDetail?: string | undefined;
+}
+
+/** The profile folder `env` gives an app — Claude Code's `CLAUDE_CONFIG_DIR`, Codex's `CODEX_HOME` — or null. */
+function profileOf(env: NodeJS.ProcessEnv, app: ConnectionApp): string | null {
+  const dir = app === 'claude-code' ? env.CLAUDE_CONFIG_DIR : app === 'codex' ? env.CODEX_HOME : undefined;
+  return dir === undefined || dir === '' ? null : resolve(dir);
+}
+
+/**
+ * What `mcp install --client <app>` means by the app's connection: the app's, serving, for every folder — user scope,
+ * where `mcp install` has always registered — in the profile this environment gives the app. One for one project, or
+ * for another profile, is another place the app uses Agent Comms, never this one.
+ */
+function appConnections(config: Config, env: NodeJS.ProcessEnv, app: ConnectionApp): ConnectionRecord[] {
+  const profile = profileOf(env, app);
+  return readConnections(config).connections.flatMap((read) => {
+    if (!read.readable) return [];
+    const { record } = read;
+    const here =
+      record.where.configDir === null
+        ? profile === null
+        : profile !== null && resolve(record.where.configDir) === profile;
+    return record.revokedAt === null && record.app === app && record.where.scope === 'user' && here ? [record] : [];
+  });
+}
+
+/**
+ * The app's connection a channel's own `mcp install --client <app>` puts its part into (`appConnections`), with that
+ * part, when the connection has it: what a finish checks before it puts the part in again — Gmail's `setup` hands its
+ * registration to the finish of a sign-in. Null when the app has no such connection, has several (`mcp install` then
+ * names none), or the connection has no part of `server`.
+ */
+export function appConnectionPart(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  app: string,
+  server: string,
+): { readonly connection: ConnectionRecord; readonly part: ConnectionPart } | null {
+  if (app === 'manual' || !(CONNECTION_APPS as readonly unknown[]).includes(app)) return null;
+  const mine = appConnections(config, env, app as ConnectionApp);
+  if (mine.length !== 1) return null;
+  const connection = mine[0] as ConnectionRecord;
+  const part = connection.parts.find((each) => each.server === server);
+  return part === undefined ? null : { connection, part };
+}
+
+/** The app's connection's part of a server as it is, when it is narrower than every account and every tool. */
+export interface AppPartAsIs {
+  readonly connection: { readonly id: string; readonly name: string; readonly label: string };
+  /** The part in a sentence: "Gmail, the mailbox cue/gmail, read-only". */
+  readonly text: string;
+  /** The account it is kept to, by the name it has now; null for every account. */
+  readonly account: string | null;
+  readonly readOnly: boolean;
+  /** Core's `connection change` words that let it reach every account, its read-only kept; null when it does. */
+  readonly everyAccount: readonly string[] | null;
+  /** Core's `connection change` words that let it do more than read, its account kept; null when it is not read-only. */
+  readonly everyTool: readonly string[] | null;
+}
+
+/**
+ * The app's connection's part of `server` (`appConnectionPart`) when it is kept to one account, or read-only — what a
+ * setup that asks for every account, with every tool, would loosen (decision 5 of the 0.35.0 security review's fixes:
+ * Gmail's `setup --mcp-client` and the finish of its sign-in leave such a part as it is, prepare nothing, and say so).
+ * With the words of core's own `connection change` that would let it reach every account, or do more than read, each
+ * keeping the rest of what the person chose. Null when the app has no such connection or part, or the part reaches
+ * every account with every tool already.
+ */
+export function narrowedAppPart(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  app: string,
+  server: string,
+): AppPartAsIs | null {
+  const found = appConnectionPart(config, env, app, server);
+  if (found === null) return null;
+  const { connection, part } = found;
+  if (part.pin === undefined && part.readOnly !== true) return null;
+  const facts = partFacts(server);
+  const account =
+    part.pin === undefined
+      ? null
+      : facts?.accounts === 'inboxes'
+        ? (findById(config, 'inbox', part.pin.id)?.alias ?? part.pin.alias)
+        : (findById(config, 'account', part.pin.id)?.alias ?? part.pin.alias);
+  const words = (next: ConnectionPart) => [
+    'connection',
+    'change',
+    connection.id,
+    '--parts',
+    partsWords(config, putPart(connection.parts, next)),
+  ];
+  return {
+    connection: { id: connection.id, name: connection.name, label: connectionLabel(connection, connection.id) },
+    text: partText(server, {
+      pin: part.pin === undefined ? null : { id: part.pin.id, alias: account ?? part.pin.alias },
+      readOnly: part.readOnly === true,
+    }),
+    account,
+    readOnly: part.readOnly === true,
+    everyAccount:
+      part.pin === undefined ? null : words({ server: part.server, ...(part.readOnly ? { readOnly: true } : {}) }),
+    everyTool:
+      part.readOnly === true
+        ? words({ server: part.server, ...(part.pin === undefined ? {} : { pin: part.pin }) })
+        : null,
+  };
+}
+
+/** A name no connection here has, ignoring case: `Claude Code`, then `Claude Code 2`, and so on. */
+function freeConnectionName(config: Config, base: string): string {
+  const taken = new Set(
+    readConnections(config).connections.map((read) =>
+      (read.readable ? read.record.name : (read.name ?? '')).toLowerCase(),
+    ),
+  );
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let index = 2; index < 100; index += 1) {
+    const name = `${base} ${index}`;
+    if (!taken.has(name.toLowerCase())) return name;
+  }
+  throw new CommsError('CONFIG', `you have a connection under every name this would give one for ${base}`);
+}
+
+/** `parts` with `part` in its place — the part of the same server replaced, or a new one put last. */
+function putPart(parts: readonly ConnectionPart[], part: ConnectionPart): ConnectionPart[] {
+  return parts.some((had) => had.server === part.server)
+    ? parts.map((had) => (had.server === part.server ? part : had))
+    : [...parts, part];
+}
+
+/** Parts as `--parts` names them — `core,gmail:cue/gmail:read-only` — each account by the name it has now. */
+function partsWords(config: Config, parts: readonly ConnectionPart[]): string {
+  return parts
+    .map((part) => {
+      const facts = partFacts(part.server);
+      const alias =
+        part.pin === undefined
+          ? undefined
+          : facts?.accounts === 'inboxes'
+            ? (findById(config, 'inbox', part.pin.id)?.alias ?? part.pin.alias)
+            : (findById(config, 'account', part.pin.id)?.alias ?? part.pin.alias);
+      return [part.server, ...(alias === undefined ? [] : [alias]), ...(part.readOnly ? ['read-only'] : [])].join(':');
+    })
+    .join(',');
+}
+
+/**
+ * Refuses, before anything is written or prepared, a change from a process that cannot verify a release — a channel's
+ * own `mcp install`, which carries no Sigstore — that would install the runtime of another release than the one it is
+ * running (owner's decision, 2026-10-17): a connection it makes starts Agent Comms itself, whose runtime may not be here
+ * yet. Core's own command, located, does the same change and verifies what it installs.
+ */
+async function refuseUnverifiable(
+  core: Core,
+  servers: readonly string[],
+  deps: ServerInstallDeps,
+  coreWords: readonly string[],
+): Promise<void> {
+  if (deps.verifyRelease !== undefined) return;
+  for (const server of servers) {
+    const facts = serverFacts(server);
+    if (deps.running?.packageName === facts.packageName) continue;
+    const { dataDir } = core.paths;
+    const pointer = await readPointer(dataDir, launcherName(facts.packageName)).catch(() => undefined);
+    if (pointer?.current === managedRuntimeDir(dataDir, facts.packageName, VERSION)) continue;
+    if ((await reusableRuntime(dataDir, facts.packageName, VERSION)) !== null) continue;
+    const instead = `Agent Comms verifies a release before it installs it: run its own connection command in your own terminal, or call comms_connection_change from a chat. Nothing was prepared to approve.`;
+    let hint = instead;
+    try {
+      hint = handoffSentence(
+        requireHandoffs(core, deps.platform).core(coreWords),
+        (command) =>
+          `Agent Comms verifies a release before it installs it: run ${command} in your own terminal, or call comms_connection_change from a chat. Nothing was prepared to approve.`,
+        { instead },
+      );
+    } catch {
+      // A core opened with no caller names no command: the words alone.
+    }
+    throw unverifiedRelease(
+      facts.packageName,
+      VERSION,
+      'this command cannot check provenance, and the connection would install it',
+      'verifier',
+      'install',
+      hint,
+    );
+  }
+}
+
+/**
+ * What the app reaches already through an entry of its own, beside the connection — the part's server, and Agent Comms
+ * itself for a connection this makes: said in the preview, never refused (§14, "Two Agent Comms in one app"), since
+ * the agent would see those tools twice. An app's config that cannot be read says nothing here.
+ */
+async function alreadyOnTheirOwn(
+  env: NodeJS.ProcessEnv,
+  app: Exclude<ConnectionApp, 'manual'>,
+  servers: readonly string[],
+): Promise<string[]> {
+  const scan = await scanRegisteredServers(env).catch(() => null);
+  if (scan === null) return [];
+  const lines: string[] = [];
+  for (const server of servers) {
+    for (const entry of scan.servers) {
+      if (entry.client !== APP_CLIENT[app] || entry.scope === 'project' || connectionOfEntry(entry.args) !== null) {
+        continue;
+      }
+      if (!isProductServer(entry, serverFacts(server))) continue;
+      lines.push(
+        `${APP_LABELS[app]} reaches ${partLabel(server)} through its own entry "${entry.name}" already: as a part of the connection too, the agent sees the same tools twice — connection migrate moves that entry into the connection`,
+      );
+    }
+  }
+  return lines;
+}
+
+/**
+ * A channel's own `mcp install` (single-server design D17, §9.2): that channel put into the app's connection, as one
+ * part — kept to the account and read-only the command names — or, when the app has none, a connection made for it with
+ * Agent Comms itself and that channel. `--standalone` keeps the separate entry of before (`serverInstallChange`), as a
+ * way back for 0.35.
+ *
+ * - **Approved as every change to a connection is** (§6.2, §8.1): a part added, an account let go or moved, and
+ *   read-only off are loosenings, prepared and shown — the preview names the connection — and approved; a pin added or
+ *   read-only on narrows at once, said done in the waiting preview (`connectionChangeChange`). A connection made is a
+ *   loosening as `connection add` is, and registers its one entry.
+ * - **The app's connection** is the one for every folder, in the profile the environment gives the app
+ *   (`appConnections`). Where it has several, the design is silent, and this does the narrowest thing: nothing, naming
+ *   each by its id — `id` says which.
+ * - **A connection that is there keeps how it starts its parts**: a `launcher` other than its own is refused.
+ * - **A channel's own process cannot verify a release**, so one that would install another release's runtime — Agent
+ *   Comms itself, for a connection it makes — is refused, naming core's own command (`refuseUnverifiable`).
+ */
+export function connectionPartChange(
+  core: Core,
+  env: NodeJS.ProcessEnv,
+  request: ConnectionPartRequest,
+  surface: ChangeSurface,
+  deps: ServerInstallDeps = {},
+): GatedChange<ConnectionPartResult> {
+  if (request.app === 'manual' || !(CONNECTION_APPS as readonly unknown[]).includes(request.app)) {
+    throw new CommsError('USAGE', `"${String(request.app).slice(0, 40)}" is not an app a connection's part goes into`, {
+      hint: `One of: ${CONNECTION_APPS.filter((app) => app !== 'manual').join(', ')}.`,
+    });
+  }
+  const app = request.app as Exclude<ConnectionApp, 'manual'>;
+  const facts = partFacts(request.server);
+  if (facts === undefined) {
+    throw new CommsError('USAGE', `"${String(request.server).slice(0, 40)}" is not a part a connection can have`, {
+      hint: `One of: ${PART_FACTS.map((each) => each.server).join(', ')}.`,
+    });
+  }
+  if (request.launcher !== undefined && !CONNECTION_LAUNCHERS.includes(request.launcher)) {
+    throw new CommsError('USAGE', `"${String(request.launcher)}" is not a launcher`, {
+      hint: `One of: ${CONNECTION_LAUNCHERS.join(', ')}.`,
+    });
+  }
+  const asked: PartRequest = {
+    server: facts.server,
+    ...(request.account === undefined ? {} : { account: request.account }),
+    ...(request.readOnly ? { readOnly: true } : {}),
+  };
+  let planned:
+    | { kind: 'create'; change: GatedChange<ConnectionAddResult> }
+    | { kind: 'add'; change: GatedChange<ConnectionChangeResult>; name: string; unchanged: boolean }
+    | undefined;
+  /** The connection the part goes into: the one named, the app's only one, or none — one to make. */
+  const chosen = (config: Config): ConnectionRecord | null => {
+    if (request.id !== undefined) {
+      const record = requireReadable(config, request.id);
+      if (record.app !== app) {
+        throw new CommsError(
+          'USAGE',
+          `"${record.name}" is a connection for ${APP_LABELS[record.app]}, not ${APP_LABELS[app]}`,
+        );
+      }
+      if (record.revokedAt !== null) throw new CommsError('USAGE', `"${record.name}" was cut off: it serves nothing`);
+      return record;
+    }
+    const mine = appConnections(config, env, app);
+    if (mine.length <= 1) return mine[0] ?? null;
+    throw new CommsError(
+      'USAGE',
+      `${APP_LABELS[app]} has ${mine.length} connections for every folder, so ${facts.label} was put into none: say which`,
+      {
+        hint: `Name it by its id — ${mine.map((record) => `${record.id} ("${record.name}")`).join(', ')}: mcp install --connection <id>, or comms_connection_change with that id.`,
+      },
+    );
+  };
+  return {
+    plan: async (config): Promise<ChangeRequest> => {
+      const into = chosen(config);
+      let request_: ChangeRequest;
+      let servers: string[];
+      if (into === null) {
+        // None: a connection made for the app, with Agent Comms itself and this part (D17), named after the app.
+        const name = freeConnectionName(config, APP_LABELS[app]);
+        const parts: PartRequest[] = facts.server === 'core' ? [asked] : [{ server: 'core' }, asked];
+        const launcher = request.launcher ?? 'managed';
+        servers = parts.map((part) => part.server);
+        if (launcher === 'managed') {
+          const words = [
+            'connection',
+            'add',
+            '--app',
+            app,
+            '--name',
+            name,
+            '--parts',
+            partsWords(config, partsOf(config, parts)),
+          ];
+          await refuseUnverifiable(core, servers, deps, words);
+        }
+        const change = connectionAddChange(
+          core,
+          env,
+          { app, name, parts, launcher, ...(request.noVerify ? { noVerify: true } : {}) },
+          surface,
+          deps,
+        );
+        planned = { kind: 'create', change };
+        request_ = await change.plan(config);
+      } else {
+        if (request.launcher !== undefined && request.launcher !== into.launcher) {
+          throw new CommsError(
+            'USAGE',
+            `"${into.name}" starts its parts ${into.launcher === 'managed' ? 'from managed runtimes' : `with ${into.launcher}`}, and a part is started as the others are: nothing was changed`,
+            { hint: 'Leave out --launcher: the part is started the way the connection starts every part.' },
+          );
+        }
+        servers = [facts.server];
+        const target = (now: Config, record: ConnectionRecord) =>
+          putPart(record.parts, partsOf(now, [asked])[0] as ConnectionPart);
+        // What narrows here applies at once, so an agent narrows only its own connection (LOW 2). What only reaches
+        // more waits for the person, as Gmail's setup hands it to an agent, whichever connection it goes into.
+        const narrowed = narrowing(into.parts, target(config, into));
+        if (JSON.stringify(narrowed) !== JSON.stringify(into.parts))
+          refuseAnotherConnection(env, surface, into.id, 'narrow the parts of');
+        if (into.launcher === 'managed' && !into.parts.some((part) => part.server === facts.server)) {
+          const words = ['connection', 'change', into.id, '--parts', partsWords(config, target(config, into))];
+          await refuseUnverifiable(core, servers, deps, words);
+        }
+        const change = partsChange(core, env, { id: into.id, approvalId: request.approvalId, target }, surface, deps);
+        request_ = await change.plan(config);
+        // As asked already: nothing narrows, nothing reaches more, nothing is installed.
+        const before = connectionById(request_.before, into.id);
+        const after = connectionById(request_.after, into.id);
+        const unchanged =
+          before?.readable === true &&
+          after?.readable === true &&
+          JSON.stringify(before.record.parts) === JSON.stringify(after.record.parts) &&
+          (request_.doneAtOnce ?? []).length === 0 &&
+          (request_.effects ?? []).length === 0;
+        planned = { kind: 'add', change, name: into.name, unchanged };
+      }
+      // What waits is said beside the tools the app reaches on their own already; what applies at once says nothing.
+      const waits =
+        classifyChange(request_.before, request_.after).loosened.length > 0 || (request_.effects ?? []).length > 0;
+      const twice = waits ? await alreadyOnTheirOwn(env, app, servers) : [];
+      return twice.length === 0 ? request_ : { ...request_, effects: [...(request_.effects ?? []), ...twice] };
+    },
+    apply: async (consent, request_): Promise<ConnectionPartResult> => {
+      if (planned === undefined) throw new CommsError('UNEXPECTED', 'the part was added before it was planned');
+      if (planned.kind === 'create') {
+        const added = await planned.change.apply(consent, request_);
+        return {
+          connection: added.connection,
+          created: true,
+          changed: true,
+          appliedAtOnce: [],
+          next: added.next,
+          ...(added.verification === undefined ? {} : { verification: added.verification }),
+          ...(added.verifyDetail === undefined ? {} : { verifyDetail: added.verifyDetail }),
+        };
+      }
+      const done = await planned.change.apply(consent, request_);
+      return {
+        connection: done.connection,
+        created: false,
+        changed: !planned.unchanged,
+        appliedAtOnce: done.appliedAtOnce,
+        next: planned.unchanged
+          ? `${facts.label} is a part of "${planned.name}" already, as asked: nothing was changed.`
+          : done.next,
+      };
+    },
+    refuseApproval: (approvalId) =>
+      planned?.change.refuseApproval?.(approvalId) ??
+      new CommsError('USAGE', 'nothing was changed: as things stand this change needs no approval, so it takes none', {
+        hint: 'Make the same call again without the approval: it applies at once.',
+      }),
+  };
+}
+
 // ── Rename, key, remove ─────────────────────────────────────────────────────────────────────────────────────────
 
 /** Renaming a connection: neutral, so applied at once and audited (§6.2). Activity names it so from then on. */
@@ -902,8 +1499,9 @@ export function connectionRenameChange(
   let before = '';
   return {
     plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'rename');
       const record = requireReadable(config, request.id);
-      const problem = connectionNameProblem(request.name);
+      const problem = newConnectionNameProblem(request.name);
       if (problem !== null) throw new CommsError('USAGE', `${problem}: nothing was changed`);
       if (request.name === record.name) throw new CommsError('USAGE', 'nothing was changed: that is its name already');
       const clash = readConnections(config).connections.some(
@@ -917,7 +1515,7 @@ export function connectionRenameChange(
       return {
         before: config,
         after: { ...config, connections: withConnection(config, { put: { ...record, name: request.name } }) } as Config,
-        summary: `Rename the connection "${record.name}" to "${request.name}"`,
+        summary: `Rename the connection ${connectionLabel(record, record.id)} to "${request.name}"`,
       };
     },
     apply: async (_consent, planned) => {
@@ -932,6 +1530,33 @@ export function connectionRenameChange(
   };
 }
 
+/**
+ * Refuses a new key for a connection whose entry is not in its app any more — the person took it out by hand — or whose
+ * app's config cannot be read to find it, before anything is written (0.35.0 security review, LOW): writing the new
+ * key would put back an entry the person removed. They add the connection again, or remove it.
+ */
+async function refuseEntryGone(env: NodeJS.ProcessEnv, record: ConnectionRecord): Promise<void> {
+  if (record.entry === null) return;
+  const state = await entryState(env, record);
+  if (state.present === true) return;
+  const file = shortenHome(
+    state.path ??
+      (record.app === 'claude-code'
+        ? join(claudeDir(env, record), '.claude.json')
+        : `${APP_LABELS[record.app]}’s settings`),
+    homeDirectory(env),
+  );
+  throw new CommsError(
+    'CONFIG',
+    state.present === false
+      ? `${connectionLabel(record, record.id)}’s entry isn’t in ${file} any more, so its key was not replaced: nothing was changed`
+      : `${file} could not be read to find the entry of ${connectionLabel(record, record.id)}, so its key was not replaced: nothing was changed`,
+    {
+      hint: 'Add the connection again — connection add at your terminal, or in the app — or remove it. A new key is never written into an entry that is not there.',
+    },
+  );
+}
+
 export interface ConnectionKeyResult {
   readonly connection: ConnectionView;
   readonly next: string;
@@ -942,8 +1567,9 @@ export interface ConnectionKeyResult {
 /**
  * Replacing a connection's key (§6.2): neutral — a new key gives an agent nothing more — so applied at once and audited.
  * The old key stops working at once: a gateway checks it again when the record changes. For every type but Manual the
- * new key is written into the app's entry and never shown; a Manual connection's is a snippet shown once, at the
- * person's terminal or in the app only, never over MCP.
+ * new key is written into the app's entry and never shown — only an entry that is there: one the person took out is
+ * not written back (`refuseEntryGone`). A Manual connection's is a snippet shown once, at the person's terminal or in
+ * the app only, never over MCP.
  */
 export function connectionKeyReplaceChange(
   core: Core,
@@ -954,9 +1580,11 @@ export function connectionKeyReplaceChange(
 ): GatedChange<ConnectionKeyResult> {
   let key = '';
   return {
-    plan: (config) => {
+    plan: async (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'replace the key of');
       const record = requireReadable(config, request.id);
       if (record.app === 'manual') refuseKeyToAgent(env, surface);
+      else await refuseEntryGone(env, record);
       key = newConnectionKey();
       return {
         before: config,
@@ -966,7 +1594,7 @@ export function connectionKeyReplaceChange(
             put: { ...record, keyHash: connectionKeyHash(key), keyIssuedAt: new Date().toISOString() },
           }),
         } as Config,
-        summary: `Replace the key of the connection "${record.name}"`,
+        summary: `Replace the key of the connection ${connectionLabel(record, record.id)}`,
       };
     },
     apply: async (_consent, planned) => {
@@ -1014,6 +1642,80 @@ export function connectionKeyReplaceChange(
   };
 }
 
+/** Whether `wider` reaches anything `than` does not: a part it lacks, an account it is not kept to, or more than reading. */
+function reachesMore(wider: ConnectionRecord, than: ConnectionRecord): boolean {
+  const held = connectionReach({ readable: true, record: than, problems: [] });
+  for (const [server, reach] of connectionReach({ readable: true, record: wider, problems: [] })) {
+    const mine = held.get(server);
+    if (mine === undefined) return true;
+    if (mine.pin !== null && (reach.pin === null || reach.pin.id !== mine.pin.id)) return true;
+    if (mine.readOnly && !reach.readOnly) return true;
+  }
+  return false;
+}
+
+/**
+ * What agents in a connection's place would use once its entry is gone, when that reaches more (0.35.0 security review,
+ * H1): the words its loosening moves to — `removed: agents in ~/work/acme use the connection "Everywhere" (…): …` — or
+ * null when nothing wider is left behind.
+ *
+ * A one-project connection's entry is Claude Code's local scope, under core's name (`entryName`), so it shadows an
+ * entry of the same name for every folder — the app's own Agent Comms. Taking it out hands the agents there that one.
+ * It reaches more when it is a connection with a part, an account or a switch this one does not have, or an entry of
+ * its own (whatever it starts, nothing here can show it reaches less). An app's config that cannot be read says so
+ * too: what is left behind cannot be shown to reach less. A connection for every folder shadows nothing.
+ */
+async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: ConnectionRecord): Promise<string | null> {
+  if (record.app === 'manual' || record.entry === null || record.where.scope !== 'local') return null;
+  const home = homeDirectory(env);
+  const place = `${shortenHome(record.where.folder ?? '', home)}${record.where.configDir === null ? '' : ` (profile ${shortenHome(record.where.configDir, home)})`}`;
+  const client = APP_CLIENT[record.app];
+  const appEnv = envFor(env, record);
+  const scan = await scanRegisteredServers(appEnv).catch(() => null);
+  // A scan lists a file it could not parse rather than throwing (0.35.0 re-review, LOW 1): this app's own file among
+  // them is a config that cannot be read, never one with nothing wider in it — a write in flight would let the remove
+  // through at once, and the entry for every folder would serve the folder.
+  if (scan === null || unreadableAppConfig(appEnv, client, scan.unreadable)) {
+    return `removed: agents in ${place} use whatever ${APP_LABELS[record.app]} calls "${record.entry.name}" for every folder — its settings could not be read to say what that reaches`;
+  }
+  const behind = scan.servers.find(
+    (server) =>
+      server.client === client &&
+      server.name === record.entry?.name &&
+      server.scope !== 'project' &&
+      connectionOfEntry(server.args) !== record.id,
+  );
+  if (behind === undefined) return null;
+  const id = connectionOfEntry(behind.args);
+  if (id !== null) {
+    const read = connectionById(config, id);
+    // One that cannot be read, is cut off or is gone serves nothing: what is left behind reaches less.
+    if (read === undefined || !read.readable || read.record.revokedAt !== null) return null;
+    if (!reachesMore(read.record, record)) return null;
+    const parts = [...connectionReach(read)].map(([server, reach]) => partText(server, reach));
+    return `removed: agents in ${place} use the connection ${connectionLabel(read.record, read.record.id)}: ${parts.join('; ')}`;
+  }
+  const own = PART_FACTS.find((facts) => isProductServer(behind, serverFacts(facts.server)));
+  return `removed: agents in ${place} use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`}`;
+}
+
+/** Whether the scan could not read `client`'s own config file — the one an entry for every folder is kept in. */
+function unreadableAppConfig(
+  env: NodeJS.ProcessEnv,
+  client: SupportedClient,
+  unreadable: readonly { client: string; path: string }[],
+): boolean {
+  let files: string[];
+  try {
+    files = knownClientConfigs(env)
+      .filter((file) => file.client === client)
+      .map((file) => file.path);
+  } catch {
+    return true;
+  }
+  return unreadable.some((each) => each.client === client && files.includes(each.path));
+}
+
 export interface ConnectionRemoveResult {
   readonly id: string;
   readonly name: string | null;
@@ -1028,6 +1730,12 @@ export interface ConnectionRemoveResult {
  * Removing a connection (§6.2): a tightening, applied at once and audited. Its record goes — so its key stops working
  * at once, everywhere a copy of it is — and its entry is taken out of its app, saved first. A Manual snippet is the
  * person's to take out of their app; until then it serves nothing.
+ *
+ * Except where taking its entry out widens what agents there reach (0.35.0 security review, H1; the lead's decision):
+ * a one-project connection over the app's Agent Comms for every folder, which its entry shadows. That remove is a
+ * loosening, classified as one (`withRemovalBehind`): prepared, its preview's loosening line saying what the agents there
+ * will use instead (`widerBehind`), bound by the approval, and approved under the change policy, in the app or at the
+ * terminal. A remove that leaves nothing wider behind stays at once.
  */
 export function connectionRemoveChange(
   core: Core,
@@ -1037,12 +1745,16 @@ export function connectionRemoveChange(
 ): GatedChange<ConnectionRemoveResult> {
   let held: ConnectionRead | undefined;
   return {
-    plan: (config) => {
+    plan: async (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'remove');
       held = requireConnection(config, request.id);
+      const behind = held.readable ? await widerBehind(env, config, held.record) : null;
       return {
-        before: config,
+        // Marked on the before side only, so `classifyChange` reads it as the loosening it is: the preview's loosening
+        // line says what the agents there would use instead, and the approval binds it (the lead's call, H1).
+        before: behind === null ? config : withRemovalBehind(config, request.id, behind),
         after: { ...config, connections: withConnection(config, { remove: request.id }) } as Config,
-        summary: `Remove the connection ${held.readable ? `"${held.record.name}"` : request.id}`,
+        summary: `Remove the connection ${held.readable ? connectionLabel(held.record, held.record.id) : request.id}`,
       };
     },
     apply: async () => {

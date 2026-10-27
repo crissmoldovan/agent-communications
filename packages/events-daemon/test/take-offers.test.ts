@@ -274,6 +274,78 @@ test('TAKE-O1: a lane delivery offers the message to the bound window — exclus
   );
 });
 
+test('TAKE-L1: events_lane_item says who has the message in closed words — you, another session, the person, or none — and never names the other session', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  await withLaneOwner(
+    async (harness) => {
+      await setUp(harness, [lane(1)]);
+      const david = await harness.window(DAVID);
+      await bindDavid(harness, david);
+      const read = async (id: string) =>
+        (
+          structured(await tool(david, 'events_lane_item', { item: itemOf(harness, id) })) as {
+            item: { id: string; taken: unknown };
+          }
+        ).item;
+
+      // Nobody has it: null, and the item is as `queue show` gives it, enveloped.
+      const nobody = await deliver(harness, 'Nobody has this one');
+      const plain = await read(nobody);
+      assert.equal(plain.taken, null);
+      assert.equal(plain.id, itemOf(harness, nobody));
+
+      // Another session took it: "another session", since when, and nothing that names it.
+      const theirs = await deliver(harness, 'Another session has this one');
+      const taken = await takesOf(harness).take(gmailMessage(theirs), holderOf(OTHER, 'c3c3c3c3c3c3'));
+      const seen = await read(theirs);
+      assert.deepEqual(seen.taken, { state: 'taken', by: 'another session', since: taken.record.takenAt });
+      const said = JSON.stringify(seen);
+      for (const named of [OTHER.folder, OTHER.activityKey, OTHER.sessionId, 'c3c3c3c3c3c3', 'other-project']) {
+        assert.equal(said.includes(String(named)), false, `the item names the other session: ${named}`);
+      }
+
+      // This window took it: "you", with when its own take lapses.
+      const mine = await deliver(harness, 'David has this one');
+      const held = await takesOf(harness).take(gmailMessage(mine), holderOf(DAVID, 'd4d4d4d4d4d4'));
+      const own = (await read(mine)).taken as { state: string; by: string; since: string; leaseUntil: string };
+      assert.deepEqual(own, {
+        state: 'taken',
+        by: 'you',
+        since: held.record.takenAt,
+        leaseUntil: held.view?.leaseUntil,
+      });
+      // Handed back: open again, with the closed reason and never the note.
+      await takesOf(harness).handBack(
+        gmailMessage(mine),
+        holderOf(DAVID, 'd4d4d4d4d4d4'),
+        'not-mine',
+        'Sender text here',
+        {
+          account: ALIAS,
+          shown: mine,
+          act: 'gmail.take.hand-back',
+          takeWith: 'gmail_take (step "take")',
+        },
+      );
+      const back = await read(mine);
+      assert.deepEqual(back.taken, { state: 'open', handedBack: ['not-mine'] });
+      assert.equal(JSON.stringify(back).includes('Sender text here'), false, 'a hand-back’s note is the person’s only');
+
+      // The person said they will handle it: "the person".
+      const person = await deliver(harness, 'The person has this one');
+      await takesOf(harness).keep(gmailMessage(person), { folder: null, ancestors: [] });
+      assert.deepEqual(((await read(person)).taken as { by: string; state: string }).by, 'the person');
+
+      // Offered by a delivery: to this window, while the item waits for it.
+      await setTaking(harness, { required: true });
+      const offered = await deliver(harness, 'Offered to David');
+      assert.deepEqual((await read(offered)).taken, { state: 'offered', offered: { to: 'you', until: null } });
+    },
+    { takes: { notify: null } } satisfies Partial<EventOwnerOptions>,
+  );
+});
+
 // ── A session target ──────────────────────────────────────────────────────────────────────────────────────────
 
 const SESSION_RETENTION = {
@@ -492,6 +564,71 @@ test('TAKE-O3: the sweep reminds once per message, in content-free words; a hand
       await setTaking(harness, null);
       await harness.sweepTakes();
       assert.equal(notices.length, 3);
+    },
+    { now: clock, takes: { notify, sweepMs: 3_600_000 } },
+  );
+});
+
+test('TAKE-O4: a lane offer whose window is never woken lapses at the account’s reminder window, and counts as not taken then', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Security review of 0.35.0, M5: the offer had no end time until its window was woken, so a window that had gone kept
+  // every other session off the message for as long as the queue kept its item, and the sweep never reminded of it.
+  let skew = 0;
+  const notices: Array<{ title: string; body: string }> = [];
+  const notify: Notifier = async (notice) => {
+    notices.push(notice);
+    return { raised: true };
+  };
+  const clock = () => Date.now() + skew;
+  await withLaneOwner(
+    async (harness) => {
+      await setUp(harness, [lane(1)]);
+      const david = await harness.window(DAVID);
+      await bindDavid(harness, david);
+      await setTaking(harness, { required: true, unclaimed: { afterMinutes: 15, notify: true } });
+      const offered = await deliver(harness, 'Please call me back');
+      const waiting = await recordOf(harness, offered, clock);
+      assert.equal(waiting?.state, 'offered');
+      assert.equal(waiting?.offer?.until, null, 'waiting for its window');
+      const offeredAt = Date.parse(waiting?.history.at(-1)?.at as string);
+      const other = holderOf(OTHER, 'c3c3c3c3c3c3');
+
+      // The window is never woken. Within the account's fifteen minutes the offer holds, and nobody is reminded.
+      skew += 14 * 60_000;
+      assert.deepEqual((await harness.sweepTakes()).notices, []);
+      await assert.rejects(
+        takesOf(harness, clock).take(gmailMessage(offered), other),
+        (error: { details?: unknown }) => {
+          assert.deepEqual(error.details, { reason: 'OFFERED', until: null });
+          return true;
+        },
+      );
+
+      // Past them it lapses by itself, the history saying when, and counts as not taken at once.
+      skew += 2 * 60_000;
+      await harness.sweepTakes();
+      assert.deepEqual(notices, [
+        {
+          title: 'agent-communications',
+          body: '1 message in events/gmail has waited 15 minutes and no session took it.',
+        },
+      ]);
+      const lapsed = await recordOf(harness, offered, clock);
+      assert.equal(lapsed?.state, 'open');
+      assert.deepEqual(lapsed?.history.at(-1), {
+        at: new Date(offeredAt + 15 * 60_000).toISOString(),
+        kind: 'expired',
+        by: 'service',
+        windowKey: DAVID.activityKey,
+      });
+      // A wake after it lapsed names no offer, and moves nothing.
+      const pointer = await wake(david);
+      assert.equal(pointer.item, itemOf(harness, offered));
+      assert.doesNotMatch(pointer.text, OFFER_LINE);
+      assert.equal((await recordOf(harness, offered, clock))?.state, 'open');
+      // Any session may take it now.
+      assert.equal((await takesOf(harness, clock).take(gmailMessage(offered), other)).view?.by, 'you');
     },
     { now: clock, takes: { notify, sweepMs: 3_600_000 } },
   );

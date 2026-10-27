@@ -470,3 +470,22 @@ folder. Nothing reads the real relay token or config.
 - capabilities rows, the skills' "take before you act" step, docs, and a CHANGELOG entry with What, Why and Impact.
 
 No migration is asked of anyone, and nothing changes until the person turns taking on.
+
+## 15. After the security review (2026-10-27)
+
+An independent review of 0.35 before its release found that this design, as built, let an agent's own shell act as the
+person and let a dead window hold a message for days. These amend the decisions above; where they differ, this section
+is the later word.
+- **T2 — an agent is never the person.** A CLI call that joined no window and has no Claude Code session id is the
+  person only when no agent marker is set and it is not inside an MCP server's process. Otherwise it is an unmatched
+  caller (`TakeUnmatched`): it holds nothing, is offered nothing, is refused wherever anyone has the message, and where
+  a take is required it is refused `TAKE_REQUIRED` with reason `NO_SESSION` and a hint naming the take tools.
+- **T4 — an offer waiting for its window lapses.** A lane offer whose window is never woken lapses at the account's
+  `afterMinutes` (or 60 minutes where no setting can be read), enforced by core's store, and the message counts as not
+  taken from when the offer was made. A woken offer still lasts 15 minutes.
+- **T3 — a `done` (and the person's keep) lapses** after the 30 days a take is kept, wherever a record is read.
+- **§5, §8 — quieting the reminder is a loosening.** `notify` off and a longer wait are approved like the other
+  loosenings; notify on and a shorter wait apply at once.
+- **T5 — one Message-ID on two copies** is checked against every received copy; while two sessions each hold one, a
+  reply is refused to both until one lets go (fail closed). **A reply to the mailbox's own sent mail** still needs the
+  take of the newest message the mailbox received in that thread.

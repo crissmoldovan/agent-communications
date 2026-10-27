@@ -198,10 +198,7 @@ for (const mode of ['legacy', 'auto'] as const) {
     assert.ok(names.every((name) => /^(comms|gmail|events)_/.test(name)));
     const instructions = client.getInstructions() ?? '';
     assert.ok(Buffer.byteLength(instructions) <= INSTRUCTIONS_MAX_BYTES, `${Buffer.byteLength(instructions)} bytes`);
-    assert.match(
-      instructions,
-      /^Agent Comms, the connection "Checkout — Claude Code": Agent Comms itself, Gmail and Events\./,
-    );
+    assert.match(instructions, /^Agent Comms, for Claude Code in every folder: Agent Comms itself, Gmail and Events\./);
     // Each part that was ready at the handshake gave its brief; one that was not is named as starting.
     for (const [label, brief] of [
       ['Agent Comms itself', /Agent Comms itself: Every change here comes with a preview/],

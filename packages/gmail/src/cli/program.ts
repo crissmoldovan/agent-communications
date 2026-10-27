@@ -5,11 +5,14 @@ import {
   approveChangeAtTerminal,
   approveRefusedHint,
   CommsError,
+  type ConnectionPartResult,
   type CoreHandOff,
   canPrompt,
   cliHandoffs,
   colorEnabled,
   commandPathOf,
+  connectionPartChange,
+  connectionPartExitStatus,
   describeFenceReport,
   downloadAtTerminal,
   EXIT_CODES,
@@ -35,8 +38,10 @@ import {
   pathOverridesFromCliOptions,
   profileSourcePath,
   refuseRetiredOut,
+  refuseStandaloneOptions,
   refuseUnclaimedApproval,
   renderApprovalWait,
+  renderConnectionPart,
   resolvePaths,
   runCommand,
   runUpdateCheckChild,
@@ -445,12 +450,39 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     });
 
   /**
-   * The agent connection as a change: the one `mcp install` and `comms_server_install` make, for this package's own
-   * server, with what `setup` has always registered — the default name, pinned to nothing. `setup --mcp-client` makes
-   * it, and so does `inbox add --finish` for a sign-in `setup` handed off with that flag: one change, written once, so
-   * an approval any of them prepared is claimed by the others, `mcp install --approval` among them.
+   * The agent connection as a change, from 0.35.0 (single-server design D17): Gmail put into the app's MCP connection —
+   * or a connection made for the app with Agent Comms itself and Gmail — the change `mcp install` and
+   * comms_connection_change with `add` make, for every mailbox, as `setup` has always registered. `setup --mcp-client`
+   * makes it, and so does `inbox add --finish` for a sign-in `setup` handed off with that flag: one change, written
+   * once, so an approval any of them prepared is claimed by the others, `mcp install --approval` among them.
+   * `--standalone` keeps the entry of Gmail's own, as before (`standaloneRegistration`).
    */
-  const setupRegistration = async (
+  const connectionRegistration = async (
+    context: GmailContext,
+    request: { client: string; launcher?: string | undefined; approvalId?: string | undefined },
+  ): Promise<GatedChange<ConnectionPartResult>> => {
+    const { GMAIL_MCP } = await import('../mcp/install.ts');
+    return connectionPartChange(
+      context.core,
+      env,
+      {
+        server: 'gmail',
+        app: request.client,
+        ...(request.launcher ? { launcher: request.launcher as Launcher } : {}),
+        ...(request.approvalId === undefined ? {} : { approvalId: request.approvalId }),
+      },
+      'cli',
+      // This command cannot verify a release: it may install the one it is running, as `mcp install` does.
+      { running: { packageName: GMAIL_MCP.packageName, version: GMAIL_MCP.version } },
+    );
+  };
+
+  /**
+   * The entry of Gmail's own, as before 0.35.0 — `setup --standalone`: the change `mcp install --standalone` and
+   * `comms_server_install` make, for this package's own server, with what `setup` has always registered — the default
+   * name, pinned to nothing. An approval any of them prepared is claimed by the others.
+   */
+  const standaloneRegistration = async (
     context: GmailContext,
     request: {
       client: string;
@@ -473,6 +505,16 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       },
       GMAIL_MCP,
     );
+  };
+
+  /** What a run that put Gmail into the app's connection did, in the words of `setup`'s report. */
+  const connectionDid = (result: ConnectionPartResult, client: string): string => {
+    const name = result.connection.name ?? result.connection.id;
+    return result.created
+      ? `made the connection "${name}" for ${client}, with Agent Comms itself and Gmail`
+      : result.changed
+        ? `put Gmail into the connection "${name}" for ${client}`
+        : `Gmail is a part of the connection "${name}" for ${client} already`;
   };
 
   /**
@@ -506,6 +548,10 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
   ): Promise<FinishRegistration> => {
     const { client } = intent;
     const replace = intent.replace === true;
+    // `--replace-server` names an entry of Gmail's own, so a flow that carries it finishes as one (refused otherwise).
+    if (intent.standalone !== true && !replace) {
+      return connectionForFinish(context, globalOptions, intent, connected);
+    }
     if (!replace) {
       const { clientServesInbox } = await import('../mcp/install.ts');
       if (await clientServesInbox(env, { client, inbox: connected.alias })) {
@@ -513,12 +559,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       }
     }
     const pin = await pinFor(client, connected.alias);
-    // `mcp install` with what `setup` was given: the request `setupRegistration` makes, and so the same change.
+    // `mcp install --standalone` with what `setup` was given: the request `standaloneRegistration` makes, the same change.
     const install = [
       'mcp',
       'install',
       '--client',
       client,
+      '--standalone',
       ...(intent.launcher ? ['--launcher', intent.launcher] : []),
       ...(pin ? ['--inbox', pin] : []),
       // Without it the claim's own preflight refuses the entry the prepared change replaces: not the same change.
@@ -528,7 +575,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       agentMarker(env) === null &&
       canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput });
     try {
-      const change = await setupRegistration(context, {
+      const change = await standaloneRegistration(context, {
         client,
         ...(intent.launcher ? { launcher: intent.launcher } : {}),
         force: replace,
@@ -576,6 +623,98 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
       return result.applied
         ? { client, status: 'registered', install: result }
         : { client, status: 'not-registered', reason: result.notApplied ?? 'nothing was written', install: result };
+    } catch (error) {
+      // Refused, or declined at the terminal: the registration did not happen, and the mailbox still did.
+      const failure = toCommsError(error);
+      softExit = failure.exitCode;
+      return { client, status: 'not-registered', reason: failure.message, hint: failure.hint };
+    }
+  };
+
+  /**
+   * `registerForFinish` for the registration from 0.35.0: Gmail put into the app's MCP connection (D17), as `mcp install`
+   * puts it. A connection whose Gmail part reaches this mailbox already — every mailbox, or kept to this one — is left
+   * alone (`connectionServesInbox`). Otherwise it is the change `setup` makes, asked the same way: a person here reads
+   * the preview and approves it there and then; an agent, or anything without a terminal, gets the preview, the
+   * approval id and the `mcp install` command that claims it — the same change — and the command exits 10.
+   */
+  const connectionForFinish = async (
+    context: GmailContext,
+    globalOptions: GlobalOptions,
+    intent: RegistrationIntent,
+    connected: { alias: string; inbox: { email: string } },
+  ): Promise<FinishRegistration> => {
+    const { client } = intent;
+    const { connectionServesInbox } = await import('../mcp/install.ts');
+    const serving = connectionServesInbox(await context.core.config.load(), env, {
+      client,
+      inbox: connected.alias,
+    });
+    if (serving !== null) return { client, status: 'already-registered', connection: serving.name };
+    // Kept to another mailbox, or read-only: every mailbox would loosen it, which setup never asks for (decision 5).
+    const { gmailPartLeftAlone } = await import('../mcp/install.ts');
+    const leftAlone = gmailPartLeftAlone(await context.core.config.load(), env, context.handoffs, {
+      client,
+      inbox: connected.alias,
+    });
+    if (leftAlone !== null) {
+      return {
+        client,
+        status: 'left-alone',
+        connection: leftAlone.connection.label,
+        part: leftAlone.part,
+        next: leftAlone.next,
+      };
+    }
+    // `mcp install` with what `setup` was given: the request `connectionRegistration` makes, the same change.
+    const install = ['mcp', 'install', '--client', client, ...(intent.launcher ? ['--launcher', intent.launcher] : [])];
+    const person =
+      agentMarker(env) === null &&
+      canPrompt(env, streams, { json: globalOptions.json, noInput: globalOptions.noInput });
+    try {
+      const change = await connectionRegistration(context, {
+        client,
+        ...(intent.launcher ? { launcher: intent.launcher } : {}),
+      });
+      let result: ConnectionPartResult;
+      if (person) {
+        // Said before the preview, so the person deciding knows the mailbox is in whatever they answer.
+        streams.stderr.write(
+          `Connected ${connected.inbox.email} as "${connected.alias}". Setup also asked to put Gmail into ${client}'s MCP connection.\n\n`,
+        );
+        result = await gatedChangeAtTerminal(context.core, change, {
+          channel: 'gmail',
+          env,
+          output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color, platform },
+          rerun: install,
+          streams,
+        });
+      } else {
+        const outcome = await gatedChange(context.core, change, { channel: 'gmail', surface: 'cli', platform });
+        if (outcome.status === 'approval-required') {
+          const { prepared } = outcome;
+          // This installation's own `mcp install`, located, carrying the approval: a result field, not in the digest.
+          const claimCommand = context.handoffs.own(
+            insertWordsBeforeSentinel(install, '--approval', prepared.approvalId),
+          );
+          softExit = EXIT_CODES.APPROVAL;
+          return {
+            client,
+            status: 'approval-required',
+            approvalId: prepared.approvalId,
+            policy: prepared.policy,
+            summary: prepared.summary,
+            preview: prepared.preview,
+            expiresAt: prepared.expiresAt,
+            claim: claimCommand,
+            hint: approvalHint(prepared, claimCommand, context.handoffs),
+          };
+        }
+        result = outcome.result;
+      }
+      const status = connectionPartExitStatus(result);
+      if (status !== EXIT_CODES.OK) softExit = status;
+      return { client, status: 'registered', connection: result };
     } catch (error) {
       // Refused, or declined at the terminal: the registration did not happen, and the mailbox still did.
       const failure = toCommsError(error);
@@ -1802,8 +1941,14 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--read-only', 'leave out every tool that changes the mailbox', false)
     .addOption(new Option('--launcher <launcher>', 'how the server is started').choices(['managed', 'npx', 'local']))
     .option('--no-verify', 'do not start the server to check the entry works')
-    .option('--force', "replace this server's own earlier entry — this is how you upgrade", false)
-    .option('--print', 'only print what would be written', false)
+    .option('--force', "with --standalone: replace this server's own earlier entry — this is how you upgrade", false)
+    .option('--print', 'with --standalone: only print what would be written', false)
+    .option('--connection <id>', "the app's connection to put it into, when the app has several")
+    .option(
+      '--standalone',
+      "register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection",
+      false,
+    )
     .option('--approval <id>', 'register the server this approval was given for')
     .action(
       act(async (context, globalOptions, options: Options) => {
@@ -1825,6 +1970,51 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
          * the flag is for. Shipped that way in 0.4.0.
          */
         const pinned = options.inbox ?? mcp.opts().inbox;
+        const { GMAIL_MCP } = await import('../mcp/install.ts');
+        /*
+         * From 0.35.0 this puts Gmail into the app's MCP connection (single-server design D17), or makes the app one
+         * with Agent Comms itself and Gmail: the change comms_connection_change makes with `add`, approved the same
+         * way — so an approval either prepared is claimed by the other. What names an entry of Gmail's own is
+         * refused here, never taken as asking for one; `--standalone` registers that entry, as before.
+         */
+        if (options.standalone !== true) {
+          refuseStandaloneOptions({
+            client: String(options.client),
+            name: options.name === undefined ? undefined : String(options.name),
+            defaultName: GMAIL_MCP.defaultServerName,
+            force: Boolean(options.force),
+            print: options.print === true,
+          });
+          const added = await changed(
+            context,
+            globalOptions,
+            connectionPartChange(
+              context.core,
+              env,
+              {
+                server: 'gmail',
+                app: String(options.client),
+                ...(options.connection === undefined ? {} : { id: String(options.connection) }),
+                ...(pinned ? { account: String(pinned) } : {}),
+                ...(options.readOnly || mcp.opts().readOnly ? { readOnly: true } : {}),
+                ...(options.launcher === undefined ? {} : { launcher: options.launcher as Launcher }),
+                ...(options.verify === false ? { noVerify: true } : {}),
+                ...(typeof options.approval === 'string' ? { approvalId: options.approval } : {}),
+              },
+              'cli',
+              // This command cannot verify a release: it may install the one it is running, as its entry did.
+              { running: { packageName: GMAIL_MCP.packageName, version: GMAIL_MCP.version } },
+            ),
+            options.approval,
+          );
+          const status = connectionPartExitStatus(added);
+          if (status !== EXIT_CODES.OK) softExit = status;
+          writeResult(added, output(), (data) => renderConnectionPart(data, globalOptions.color), streams);
+          return;
+        }
+        if (options.connection !== undefined) {
+          throw new CommsError('USAGE', '--connection names the connection to put Gmail into: not with --standalone');
+        }
         /*
          * Registering a server is a change a person approves (design §3.1), and this is the change
          * `comms_server_install` makes, with this package's own product for its version and its code. It
@@ -1833,7 +2023,6 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
          * approval an agent got from the tool is claimed here with `--approval`, and one from here by the tool.
          * `--print` and `--client json` write nothing, and so ask nobody.
          */
-        const { GMAIL_MCP } = await import('../mcp/install.ts');
         const result = await changed(
           context,
           globalOptions,
@@ -1910,16 +2099,17 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .option('--profile <file>', 'add this organisation profile before continuing setup')
     .option('--org-approval <id>', 'add the organisation profile this approval was given for')
     .addOption(
-      new Option('--mcp-client <client>', 'register with this MCP client when the mailbox is connected').choices([
-        'claude-code',
-        'claude-desktop',
-        'codex',
-        'cursor',
-        'gemini',
-        'vscode',
-      ]),
+      new Option(
+        '--mcp-client <client>',
+        "put Gmail into this MCP client's connection when the mailbox is connected",
+      ).choices(['claude-code', 'claude-desktop', 'codex', 'cursor', 'gemini', 'vscode']),
     )
-    .option('--replace-server', 'replace an MCP entry of the same name that is already there', false)
+    .option(
+      '--standalone',
+      "register the server as an entry of its own, as before 0.35.0, rather than as a part of the app's connection",
+      false,
+    )
+    .option('--replace-server', 'with --standalone: replace an MCP entry of the same name that is already there', false)
     /*
      * `--store` exists here because without it this command dead-ends on a machine with no keychain.
      *
@@ -1956,15 +2146,39 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const bold = (text: string) => paint(globalOptions.color, 'bold', text);
         const dim = (text: string) => paint(globalOptions.color, 'dim', text);
 
-        /**
-         * The agent connection as a change: `setupRegistration`, the one `mcp install` and `comms_server_install`
-         * make. An approval for it from either of those is claimed here with `--mcp-approval`, and one from here by
-         * them.
+        const mcpApproval = typeof options.mcpApproval === 'string' ? options.mcpApproval : undefined;
+        /*
+         * From 0.35.0 the agent connection puts Gmail into the app's MCP connection, as `mcp install` does (D17), and
+         * `--standalone` registers an entry of Gmail's own, as before. What only an entry of its own takes is refused
+         * without it, before anything is done — never taken as asking for one: `--replace-server` is `--force`.
          */
-        const registration = async (client: string) => {
+        const standalone = options.standalone === true;
+        if (!standalone) {
+          refuseStandaloneOptions({
+            client: options.mcpClient === undefined ? '' : String(options.mcpClient),
+            defaultName: 'gmail',
+            replaceServer: options.replaceServer === true,
+          });
+        }
+        /**
+         * The agent connection as a change: `connectionRegistration`, the one `mcp install` and
+         * comms_connection_change with `add` make — or, with `--standalone`, `standaloneRegistration`, the one
+         * `mcp install --standalone` and `comms_server_install` make. An approval for it from any of those is claimed
+         * here with `--mcp-approval`, and one from here by them.
+         */
+        const registration = async (
+          client: string,
+        ): Promise<GatedChange<ServerInstallResult> | GatedChange<ConnectionPartResult>> => {
+          if (!standalone) {
+            return connectionRegistration(context, {
+              client,
+              ...(options.launcher ? { launcher: String(options.launcher) } : {}),
+              ...(mcpApproval === undefined ? {} : { approvalId: mcpApproval }),
+            });
+          }
           // The mailbox this run connected with `--inbox`, when the entry in its place serves another: see `pinFor`.
           const pin = options.inbox ? await pinFor(client, String(options.inbox)) : undefined;
-          return setupRegistration(context, {
+          return standaloneRegistration(context, {
             client,
             ...(options.launcher ? { launcher: String(options.launcher) } : {}),
             // `force` removes an existing entry before adding its replacement. Doing that silently, from a
@@ -1974,7 +2188,19 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
             ...(pin ? { inbox: pin } : {}),
           });
         };
-        const mcpApproval = typeof options.mcpApproval === 'string' ? options.mcpApproval : undefined;
+        /** The app's connection's Gmail part setup leaves as it is, and why (`gmailPartLeftAlone`), or null. */
+        const partLeftAlone = async (client: string) => {
+          const { gmailPartLeftAlone } = await import('../mcp/install.ts');
+          return gmailPartLeftAlone(await context.core.config.load(), env, context.handoffs, {
+            client,
+            ...(options.inbox ? { inbox: String(options.inbox) } : {}),
+          });
+        };
+        /** What the registration step asks a person for, in the report's words. */
+        const asksFor = (client: string) =>
+          standalone
+            ? `a person's approval to register the server with ${client}`
+            : `a person's approval to put Gmail into ${client}'s MCP connection`;
         // This command again, without the approvals it carried: the OAuth client's is spent by the time the
         // registration is reached, and the registration's is the one to put back.
         const againForMcp = () => again(['--approval', '--mcp-approval']);
@@ -2216,6 +2442,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                     ...(options.launcher ? { launcher: String(options.launcher) } : {}),
                     // `--replace-server` too: the finish makes the registration this run would have, not a narrower one.
                     ...(options.replaceServer === true ? { replace: true } : {}),
+                    // And which: an entry of Gmail's own, or — without it — Gmail put into the app's connection.
+                    ...(standalone ? { standalone: true } : {}),
                   }
                 : undefined;
               const started = await startSetupSignIn({
@@ -2243,7 +2471,7 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 step: 'inbox',
                 needs: 'the link opened and approved in a browser',
                 hint: registerWith
-                  ? `This command does not open browsers or grant consent. Give the user the link, then run the finish command: it also registers the server with ${registerWith.client}, and stops for the person's approval of that.`
+                  ? `This command does not open browsers or grant consent. Give the user the link, then run the finish command: it also ${standalone ? 'registers the server with' : 'puts Gmail into the MCP connection of'} ${registerWith.client}, and stops for the person's approval of that.`
                   : 'This command does not open browsers or grant consent. Give the user the link, then run the finish command.',
               };
             } else {
@@ -2253,7 +2481,13 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
 
           if (!blocked && (state.next === 'mcp' || options.mcpClient)) {
             const which = options.mcpClient ? String(options.mcpClient) : '';
-            if (which) {
+            // Kept to one mailbox, or read-only: setup's every mailbox would loosen it, so it is left as it is and said
+            // (decision 5) — unless the person approved that very change already, which `--mcp-approval` carries.
+            const leftAlone = which && !standalone && mcpApproval === undefined ? await partLeftAlone(which) : null;
+            if (leftAlone !== null) {
+              warnings.push(leftAlone.next);
+              state = await setupState(context, setupStateOptions());
+            } else if (which) {
               /*
                * Registered through the change flow, as `mcp install` is — this step registered with nobody's
                * approval while `mcp install` asked, so an agent could hand a client a new set of tools by calling
@@ -2262,17 +2496,21 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                * `--mcp-approval <id>` once the person has agreed claims it. Reported rather than thrown, like every
                * other step that waits for a person, so what this run did is still in `did`.
                */
-              const outcome = await gatedChange(context.core, await registration(which), {
-                channel: 'gmail',
-                surface: 'cli',
-                approvalId: mcpApproval,
-                platform,
-              });
+              const outcome = await gatedChange<ServerInstallResult | ConnectionPartResult>(
+                context.core,
+                await registration(which),
+                {
+                  channel: 'gmail',
+                  surface: 'cli',
+                  approvalId: mcpApproval,
+                  platform,
+                },
+              );
               if (outcome.status === 'approval-required') {
                 const { prepared } = outcome;
                 blocked = {
                   step: 'mcp',
-                  needs: `a person's approval to register the server with ${which}`,
+                  needs: asksFor(which),
                   hint: approvalHint(
                     prepared,
                     context.handoffs.own(
@@ -2288,8 +2526,19 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
                 // Exit 10, which every command here means as "waiting for an approval": a script that reads only
                 // the status must not take a registration nobody has approved for one that happened.
                 softExit = EXIT_CODES.APPROVAL;
+              } else if (!standalone) {
+                // Into the app's connection: only what happened — a connection made that did not start is no agent
+                // connection, and the `did` list says nothing it did not do.
+                const result = outcome.result as ConnectionPartResult;
+                if (result.verification === 'failed')
+                  blocked = {
+                    step: 'mcp',
+                    needs: 'a connection that starts',
+                    ...(result.verifyDetail ? { hint: result.verifyDetail } : {}),
+                  };
+                else did.push(connectionDid(result, which));
               } else {
-                const result = outcome.result;
+                const result = outcome.result as ServerInstallResult;
                 warnings.push(...result.warnings);
                 // Only what happened. Reporting "registered" for an install that did not apply, or that failed its
                 // own start-up check, is the kind of claim the `did` list exists to make impossible.
@@ -2582,19 +2831,37 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
              * anything with an agent's marker gets the preview and the approval id, to run this again with
              * `--mcp-approval` once the person agrees.
              */
-            const result = await gatedChangeAtTerminal(context.core, await registration(which), {
-              channel: 'gmail',
-              approvalId: mcpApproval,
-              env,
-              output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
-              // The client picked from the list is named in the command to run again: `--mcp-approval` is claimed
-              // only for a client named with `--mcp-client`, and refused without one.
-              rerun: named ? againForMcp() : insertWordsBeforeSentinel(againForMcp(), '--mcp-client', which),
-              approvalFlag: '--mcp-approval',
-              answered: named === '',
-              streams,
-            });
-            out.write(`\n${renderInstall(result, globalOptions.color)}\n`);
+            const leftAlone = !standalone && mcpApproval === undefined ? await partLeftAlone(which) : null;
+            if (leftAlone !== null) {
+              out.write(`\n${leftAlone.next}\n`);
+            } else {
+              const result = await gatedChangeAtTerminal<ServerInstallResult | ConnectionPartResult>(
+                context.core,
+                await registration(which),
+                {
+                  channel: 'gmail',
+                  approvalId: mcpApproval,
+                  env,
+                  output: { json: globalOptions.json || globalOptions.noInput, color: globalOptions.color },
+                  // The client picked from the list is named in the command to run again: `--mcp-approval` is claimed
+                  // only for a client named with `--mcp-client`, and refused without one.
+                  rerun: named ? againForMcp() : insertWordsBeforeSentinel(againForMcp(), '--mcp-client', which),
+                  approvalFlag: '--mcp-approval',
+                  answered: named === '',
+                  streams,
+                },
+              );
+              out.write(
+                `\n${
+                  standalone
+                    ? renderInstall(result as ServerInstallResult, globalOptions.color)
+                    : renderConnectionPart(result as ConnectionPartResult, globalOptions.color)
+                }\n`,
+              );
+              if (!standalone && connectionPartExitStatus(result as ConnectionPartResult) !== EXIT_CODES.OK) {
+                softExit = connectionPartExitStatus(result as ConnectionPartResult);
+              }
+            }
           }
         }
 

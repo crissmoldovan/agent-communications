@@ -51,6 +51,9 @@ test('search on is a loosening: shown first, approved in the app, and the folder
   const { preview, second } = await fromTheApp(machine, ['search', 'on']);
   assert.match(preview, /keeping the words of messages on this machine/u);
   assert.match(preview, /Activity keeps no message’s words, and this does/u);
+  // What is encrypted, said as it is (review 2026-10-27, M2): no "encrypted" for what was not.
+  assert.match(preview, /the text encrypted, the words index as keyed hashes/u);
+  assert.match(preview, /the text encrypted, the words as keyed hashes/u);
   assert.equal(second.code, 0, second.stdout);
   assert.equal((second.envelope.data as { on: boolean }).on, true);
   assert.equal(config(machine).search?.enabled, 'on');
@@ -80,6 +83,7 @@ test('accounts add and model set are loosenings; accounts remove and model none 
     assert.deepEqual(config(machine).search?.accounts, [MAIL.id]);
     const model = await fromTheApp(machine, ['search', 'model', 'set', ollama.address]);
     assert.match(model.preview, /not set → qwen3-embedding:0\.6b at http:\/\/127\.0\.0\.1:/u);
+    assert.match(model.preview, /the vectors it makes are kept unencrypted/u);
     assert.equal(model.second.code, 0, model.second.stdout);
     assert.equal((model.second.envelope.data as { next: string }).next, 'ollama pull qwen3-embedding:0.6b');
     const removed = await cli(machine, ['search', 'accounts', 'remove', MAIL.alias]);

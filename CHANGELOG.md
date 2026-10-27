@@ -3,6 +3,93 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.35.0
+
+**What.** Three things, each in the command line, the agents' tools and the desktop app:
+- **Sessions take a message before they act on it.** When you turn it on for an account, one session takes a message
+  and no other can act on it; it can hand it back ("not mine", with a reason) or mark it done, and you see who has
+  each message. A rule's delivery offers the message to the window or session it names, which must still take it, and
+  a message nobody takes within the time you set can remind you.
+- **Search on this Mac.** What your agents read in Gmail and Slack, and the replies Agent Comms sent, kept on this Mac
+  and searchable by words and, with a local model through Ollama, by meaning; a page per person. Off until you turn it
+  on.
+- **One MCP connection per app.** An app (Claude Code, Codex, Cursor, VS Code, Claude Desktop, or Manual) gets one
+  entry, `agentcomms`, that brings every part you choose — Agent Comms itself, Gmail, Slack, Resend, WhatsApp, Events —
+  through one gateway, with its own key. Several connections per app (one per project or profile), each changed later.
+
+**Why.** The owner, 2026-10-26: "David messages me, the session checks and acknowledges it… The acknowledgement should
+be mandatory so no other sessions are getting it… the session got the message and it determined this is not for me, so
+it was just handed back"; "where can I find the place where I can see things like David messages me", with a local
+vector database; and on the MCP screen, "I honestly thought I would have one single MCP server… what I want is
+instances… add a new connection… choose the type… give it a name… generate a token… I could have multiple instances".
+The screens were drawn first and approved (`docs/prototypes/2026-10-26-messages-lifecycle/`, and the connection boards in
+`docs/prototypes/2026-10-26-0340-rework/`). The designs are `docs/superpowers/specs/2026-10-26-taking-messages-design.md`,
+`2026-10-26-local-search-design.md` and `2026-10-26-single-server-design.md`.
+
+**Impact.** A minor release. Nothing changes until you turn it on, except one default:
+- **A channel's own `mcp install` now joins the app's connection** (`agent-gmail mcp install --client claude-code`
+  adds Gmail to Claude Code's connection, or makes one with Agent Comms itself and Gmail). `--standalone` keeps the
+  old separate entry; `--force`, `--print`, `--name` and `--client json` now need it.
+- **Your existing MCP entries keep working.** `agentcomms connection migrate` moves an app's separate entries into one
+  connection, when you ask, and `--undo` puts them back.
+- **Taking is off for every account** until you turn it on (Settings → Taking messages, or `agentcomms taking`). Turning
+  "must take" off again, a 👀 on taking, quieting the reminder and making it wait longer are approved like any
+  loosening.
+- **Search is off** until you turn it on; what it keeps follows Activity's days, and Delete everything removes it and
+  its key. Its text is encrypted at rest; its words index holds keyed hashes of words, never the words; the vectors are
+  not encrypted, and the screens say so.
+- **Approvals say which connection asked** (`preparedBy`); 0.34 reads these records unchanged.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients. To move an
+  app to one connection: the app's MCP connections → Move to one entry…, or `agentcomms connection migrate`.
+
+**In the desktop app**
+- **Messages:** who has each message — Taken by an agent, Handed back, Nobody took it — with the story's **Who has it**:
+  Take back, Give to… and I'll handle it, applied at once; filters for Nobody took it and Handed back.
+- **Queue:** a **Not taken** tab, counted in its badge.
+- **Settings → Taking messages,** mirrored in each account's Agents here.
+- **People,** **Ask about past messages** (Messages' second tab) and **Settings → Search on this Mac.**
+- **MCP connections:** each connection with its status and last use; **Add a connection** step by step, ending with
+  what was written and what to restart (for Manual, the snippet with its key, shown once); a connection's page with
+  Rename, Rotate key, Change parts (narrowing at once, widening approved) and Remove; **Move to one entry…** with Undo;
+  and "Used by" in Activity.
+
+**In detail**
+- **Taking** (`@agentcomms/core`, the channels, `@agentcomms/events-daemon`): `agentcomms taking <account> …` and
+  `comms_taking`; `gmail_take`/`gmail_taken`, `slack_take`/`slack_taken`, `resend_take`/`resend_taken`; `agentcomms
+  takes list|release|give|keep` for you. A rule's delivery offers the message to the lane's window (until it is woken,
+  at most the account's reminder time) or to the session it posts to (15 minutes); the session still takes it itself.
+  A session's prompt says until when. `events_lane_item` says who has the message, in closed words. Over MCP, other
+  sessions are never named. An agent's shell that joined no window is never you: where a take is required it is
+  refused with `NO_SESSION`. Turning "must take" off, a 👀 on taking, notify off and a longer wait are approved; the
+  rest applies at once. A `done` lapses after 30 days.
+- **Search** (`@agentcomms/core`): `agentcomms search status|query|people|person|show|index|rebuild|link|unlink|label|
+  on|off|accounts|model|delete`. No agent searches, over MCP or from its shell, and Delete everything is yours alone.
+  The words index holds keyed hashes of words, not the words, and keeps no word order; a pruned message's words leave
+  the file. Gmail's send-as addresses count as you. More of Activity's days, while Search keeps words, says so in its
+  preview. Meaning comes only from Ollama at a loopback address, with a model from the reviewed list.
+- **Connections** (`@agentcomms/core`): `agentcomms connection add|list|show|change|rename|key replace|remove|migrate`,
+  with matching `comms_connection_*` tools and `agentcomms mcp --connection <id>`, the gateway. A connection's key is
+  stored only as its SHA-256 and checked in constant time; the parts start without it. It is not a password: any
+  process running as you can read it from the app's config, and the gateway's own environment shows it while it runs.
+  `connection list` says which connections a migration made, and `migrate --undo` refuses the rest and pins by id.
+  `activity sessions` names the connection a session used; `channels --json` says what each part takes. Approvals say
+  which connection asked (`preparedBy`), as the gateway reports it.
+- **Security review fixes before release** (an independent review of this release, 2026-10-27):
+  - Removing a connection whose entry shadows a wider one (one project's, over the app's every-folder connection) is
+    approved like any loosening; its preview says what agents there would use instead.
+  - An agent can rename, re-key or remove only its own connection; every preview names a connection by app, place and
+    id; the gateway's instructions no longer carry a connection's name.
+  - The gateway stops serving when `config.json` becomes unreadable; a re-key never writes back an entry you removed.
+  - An agent can change the parts of only its own connection, narrowing included; a remove checked while the app's
+    config can't be read waits for you; a new connection name can't hold brackets or "…".
+  - A refusal caused by an agent's marker in your own shell names the variable and how to clear it (`CODEX_HOME` is
+    one people export).
+  - When Activity's settings can't be read, Search keeps words 30 days, not a year.
+  - The take and search fixes above (`NO_SESSION`, lapsing offers, hashed words, the retention line, Delete
+    everything).
+- **Gmail's setup** joins the connection like `mcp install`, and leaves a Gmail part kept to another mailbox alone,
+  printing the `connection change` command that would reach the new one.
+
 ## 0.34.0
 
 **What.** The desktop app explains itself, and wears cue-ui's soft look:

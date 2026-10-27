@@ -3,6 +3,7 @@ import type { ChannelManifest } from './channel-manifest.ts';
 import { CHANNEL_SNAPSHOT, SERVICE_SNAPSHOT } from './channels.generated.ts';
 import { isDangerous } from './chars.ts';
 import type { SettingValue } from './config.ts';
+import { mcpServerOf } from './mcp-marker.ts';
 
 /**
  * MCP connections (single-server design §6, D9–D12): each place an app uses Agent Comms — Claude Code in every folder,
@@ -52,6 +53,25 @@ export const CONNECTION_KEY_ENV = 'AGENT_COMMS_CONNECTION_KEY';
 export const CONNECTION_ID_ENV = 'AGENTCOMMS_CONNECTION';
 /** What the gateway tells each part its own process is, so a part takes the gateway's parent as its window (D8). */
 export const GATEWAY_PID_ENV = 'AGENTCOMMS_GATEWAY_PID';
+
+/**
+ * The MCP connection this process is a part of, as its gateway set it (`AGENTCOMMS_CONNECTION`, D11): its id, never
+ * its key — or undefined outside any connection, and for anything there that is not a connection's id. What an audit
+ * line, an approval's `preparedBy` and Activity's "used by" name the connection by (single-server design §7), and what
+ * an agent's own connection is (`connection rename`, `key replace`, `remove`).
+ *
+ * Honoured only inside a part a gateway started: one whose environment carries the gateway's pid
+ * (`AGENTCOMMS_GATEWAY_PID`) and an MCP server's mark (`AGENTCOMMS_MCP_SERVER`), as the gateway gives every part it
+ * starts — each part then marks itself with its own name. Anywhere else the variable is ignored: a shell, a hook or a
+ * server started without a gateway that sets it names no connection (0.35.0 security review, LOW). Code running as the
+ * person can still set all three, as it can read the app's config: the attribution is the connection as the gateway
+ * reports it, not a proof (§6.3).
+ */
+export function connectionOfThisProcess(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!isGatewayPart(env) || mcpServerOf(env) === undefined) return undefined;
+  const id = env[CONNECTION_ID_ENV];
+  return id !== undefined && CONNECTION_ID_PATTERN.test(id) ? id : undefined;
+}
 
 /**
  * Whether this process is a part of an MCP connection, started by its gateway: its instructions are then a brief of a
@@ -116,6 +136,22 @@ export function connectionNameProblem(name: unknown): string | null {
     if (char === '"' || char === "'" || char === '`' || char === '“' || char === '”' || char === '‘' || char === '’') {
       return 'a connection’s name has no quotation marks';
     }
+  }
+  return null;
+}
+
+/**
+ * Why a connection cannot be given `name` now, as it is added or renamed, or null when it can: the rule for a name
+ * (`connectionNameProblem`), and no brackets or ellipsis (the re-review of 0.35.0, LOW 6). A preview names a connection
+ * as `"Acme only" (Claude Code, ~/work/acme, cn_ABCD…)`, and a name such as `Everywhere) (Claude Code, every folder,
+ * cn_0MCZ…` read as another connection's label, while the summary's 200 characters could cut the real one off. A name
+ * that has them already still reads and still works, shown as it is: nothing is migrated.
+ */
+export function newConnectionNameProblem(name: unknown): string | null {
+  const problem = connectionNameProblem(name);
+  if (problem !== null) return problem;
+  if (/[()…]/u.test(name as string)) {
+    return 'a connection’s name has no brackets or “…”: a preview puts its app, place and id there';
   }
   return null;
 }
@@ -464,9 +500,52 @@ export function connectionReach(read: ConnectionRead | undefined): ReadonlyMap<s
   return reach;
 }
 
-/** The path a change to a connection is named by: by its name, so two plans of one new connection agree (no id yet). */
-export function connectionPath(name: string, ...rest: string[]): string {
-  return [`connections["${name}"]`, ...rest].join('.');
+/** How a person names an app in a sentence. */
+export const CONNECTION_APP_LABELS: Readonly<Record<ConnectionApp, string>> = Object.freeze({
+  'claude-code': 'Claude Code',
+  'claude-desktop': 'Claude Desktop',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  gemini: 'Gemini',
+  vscode: 'VS Code',
+  manual: 'the app you paste it into',
+});
+
+/** A connection's id as a preview shortens it: `cn_` and its first four letters, `cn_ABCD…`. */
+export function shortConnectionId(id: string): string {
+  return `${id.slice(0, 'cn_'.length + 4)}…`;
+}
+
+/** Where a connection's entry is, in a preview's words: its one project's folder, another profile, or every folder. */
+export function connectionPlace(record: Pick<ConnectionRecord, 'app' | 'where'>): string {
+  const { where } = record;
+  const profile = where.configDir === null ? null : `profile ${where.configDir}`;
+  if (where.scope === 'local') return [where.folder ?? '', ...(profile === null ? [] : [profile])].join(', ');
+  if (record.app === 'manual') return 'a snippet you paste';
+  return profile ?? 'every folder';
+}
+
+/**
+ * A connection as every preview line names it (0.35.0 security review, M1): its name, its app, its place and its short
+ * id — `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)` — so a name an agent chose, or two connections
+ * swapping names, cannot make a preview name the wrong one. `id` null for one being added, which has none until it is:
+ * "new" in its place, so two plans of the same addition agree.
+ */
+export function connectionLabel(record: Pick<ConnectionRecord, 'name' | 'app' | 'where'>, id: string | null): string {
+  return `"${record.name}" (${CONNECTION_APP_LABELS[record.app]}, ${connectionPlace(record)}, ${id === null ? 'new' : shortConnectionId(id)})`;
+}
+
+/** A connection that cannot be read, as a preview line names it: the name it had, if any, and its short id. */
+function unreadableLabel(read: { readonly id: string; readonly name: string | null }): string {
+  return `${read.name === null ? '' : `"${read.name}" `}(cannot be read, ${shortConnectionId(read.id)})`;
+}
+
+/**
+ * The path a change to a connection is named by, in the preview and in the approval it binds: by its label
+ * (`connectionLabel`) — for one being added without its id, so two plans of one new connection agree.
+ */
+export function connectionPath(label: string, ...rest: string[]): string {
+  return [`connections[${label}]`, ...rest].join('.');
 }
 
 /** One part in a preview's words: "Gmail, pinned to the mailbox cue/gmail, read-only", "Slack, every workspace". */
@@ -491,6 +570,37 @@ export function connectionText(record: ConnectionRecord): string {
   return `${record.name} (${record.app}): ${parts.length === 0 ? 'no parts' : parts.join('; ')}`;
 }
 
+/**
+ * The key a remove's plan marks a connection with, on its before side only, when taking its entry out hands the agents in
+ * its place a wider one (0.35.0 security review, H1): what they would use instead, in words. `config.json` never holds
+ * it — `storedConnection` writes only a record's own fields, and `readConnections` reads none it does not know — so a
+ * hand edit that put one there would only ever make a remove ask first.
+ */
+const REMOVAL_BEHIND_KEY = 'removalBehind';
+
+/**
+ * `config` with the connection `id` marked as a remove's plan sees it (H1): removing it hands the agents in its place
+ * `behind`. `classifyConnectionChange` reads the mark as a loosening of that connection — shown on the preview's
+ * loosening line and bound by the approval's digest like every other. The plan's before side only: never written.
+ */
+export function withRemovalBehind<T extends { readonly connections?: unknown }>(
+  config: T,
+  id: string,
+  behind: string,
+): T {
+  const held = isRecord(config.connections) ? config.connections : {};
+  const record = held[id];
+  if (!isRecord(record)) return config;
+  return { ...config, connections: { ...held, [id]: { ...record, [REMOVAL_BEHIND_KEY]: behind } } };
+}
+
+/** What a remove's plan marked the connection `id` as handing its place's agents, on that side; null for no mark. */
+function removalBehind(config: { readonly connections?: unknown }, id: string): string | null {
+  const record = isRecord(config.connections) ? config.connections[id] : undefined;
+  const behind = isRecord(record) ? record[REMOVAL_BEHIND_KEY] : undefined;
+  return typeof behind === 'string' && behind !== '' ? behind : null;
+}
+
 /** A loosening of a connection, as `classifyChange` records it: by path, with the values it compared. */
 export interface ConnectionLoosening {
   readonly path: string;
@@ -502,9 +612,11 @@ export interface ConnectionLoosening {
 
 /**
  * What a change to the connections loosens (§6.2): a connection added — or one cut off, or unreadable, that serves again
- * — a part added, a part's pin taken away or moved to another account, read-only turned off. Everything else — a
- * connection or part removed, a pin added, read-only on, cut off, renamed, its key replaced — loosens nothing.
- * Connections are matched by id; a path names the connection by its name on the after side.
+ * — a part added, a part's pin taken away or moved to another account, read-only turned off; and a connection removed
+ * whose before side a remove's plan marked (`withRemovalBehind`, H1): its entry shadows a wider one, which the agents in
+ * its place would use instead. Everything else — a connection or part removed, a pin added, read-only on, cut off,
+ * renamed, its key replaced — loosens nothing. Connections are matched by id; a path names the connection by its label
+ * on the after side (`connectionLabel`), or, for one removed, on the before side.
  */
 export function classifyConnectionChange(
   before: { readonly connections?: unknown },
@@ -514,21 +626,36 @@ export function classifyConnectionChange(
     readConnections(before).connections.map((read) => [read.readable ? read.record.id : read.id, read] as const),
   );
   const changes: ConnectionLoosening[] = [];
+  const kept = new Set(readConnections(after).connections.map((read) => (read.readable ? read.record.id : read.id)));
+  // Removed, where taking its entry out hands the agents in its place a wider one (H1): from what it reached to that.
+  for (const [id, previous] of was) {
+    if (kept.has(id) || !previous.readable || previous.record.revokedAt !== null) continue;
+    const behind = removalBehind(before, id);
+    if (behind === null) continue;
+    const parts = [...connectionReach(previous)].map(([server, reach]) => partText(server, reach));
+    changes.push({
+      path: connectionPath(connectionLabel(previous.record, id)),
+      before: parts.length === 0 ? 'no parts' : parts.join('; '),
+      after: behind,
+      id,
+    });
+  }
   for (const read of readConnections(after).connections) {
     if (!read.readable || read.record.revokedAt !== null) continue;
     const { record } = read;
     const previous = was.get(record.id);
     const reachBefore = connectionReach(previous);
     const reachAfter = connectionReach(read);
+    const label = connectionLabel(record, previous === undefined ? null : record.id);
     if (previous === undefined || !previous.readable || previous.record.revokedAt !== null) {
-      changes.push({ path: connectionPath(record.name), before: null, after: connectionText(record) });
+      changes.push({ path: connectionPath(label), before: null, after: connectionText(record) });
       continue;
     }
     for (const [server, now] of reachAfter) {
       const then = reachBefore.get(server);
       if (then === undefined) {
         changes.push({
-          path: connectionPath(record.name, 'parts', server),
+          path: connectionPath(label, 'parts', server),
           before: null,
           after: partText(server, now),
           id: record.id,
@@ -538,7 +665,7 @@ export function classifyConnectionChange(
       if (then.pin !== null && (now.pin === null || now.pin.id !== then.pin.id)) {
         const noun = partFacts(server)?.noun ?? 'account';
         changes.push({
-          path: connectionPath(record.name, 'parts', server, 'pin'),
+          path: connectionPath(label, 'parts', server, 'pin'),
           before: then.pin.alias,
           after: now.pin === null ? `every ${noun}` : now.pin.alias,
           id: record.id,
@@ -546,7 +673,7 @@ export function classifyConnectionChange(
       }
       if (then.readOnly && !now.readOnly) {
         changes.push({
-          path: connectionPath(record.name, 'parts', server, 'readOnly'),
+          path: connectionPath(label, 'parts', server, 'readOnly'),
           before: true,
           after: false,
           id: record.id,
@@ -559,8 +686,8 @@ export function classifyConnectionChange(
 
 /**
  * Every setting of every connection that differs between `before` and `after`, loosened or tightened — what a change
- * approval binds beside its loosenings, so a claim cannot drop a narrowing the person read. By the name on the after
- * side, as the loosenings are, and without the id, the key or a time: a new connection's are made fresh on each plan.
+ * approval binds beside its loosenings, so a claim cannot drop a narrowing the person read. By the label on the after
+ * side, as the loosenings are, and without the key or a time — nor the id of a new connection, made fresh on each plan.
  */
 export function changedConnectionSettings(
   before: { readonly connections?: unknown },
@@ -580,7 +707,6 @@ export function changedConnectionSettings(
     };
   };
   const idOf = (read: ConnectionRead) => (read.readable ? read.record.id : read.id);
-  const nameOf = (read: ConnectionRead) => (read.readable ? read.record.name : (read.name ?? read.id));
   const was = new Map(readConnections(before).connections.map((read) => [idOf(read), read] as const));
   const now = new Map(readConnections(after).connections.map((read) => [idOf(read), read] as const));
   const changes: { path: string; before: SettingValue; after: SettingValue }[] = [];
@@ -589,12 +715,15 @@ export function changedConnectionSettings(
     const next = settings(now.get(id));
     const shown = now.get(id) ?? was.get(id);
     if (shown === undefined) continue;
-    const name = nameOf(shown);
+    // Labelled as the loosenings are: one being added without its id, made fresh on each plan.
+    const label = shown.readable
+      ? connectionLabel(shown.record, was.has(id) ? shown.record.id : null)
+      : unreadableLabel(shown);
     for (const key of [...new Set([...Object.keys(then), ...Object.keys(next)])].sort()) {
       const a = then[key] ?? null;
       const b = next[key] ?? null;
       if (JSON.stringify(a) !== JSON.stringify(b))
-        changes.push({ path: connectionPath(name, key), before: a, after: b });
+        changes.push({ path: connectionPath(label, key), before: a, after: b });
     }
   }
   return changes;

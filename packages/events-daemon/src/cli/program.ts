@@ -9,6 +9,7 @@ import {
   isCommsError,
   isDangerous,
   resolvePaths,
+  withMarkerHint,
 } from '@agentcomms/core';
 import { Command, CommanderError, Option } from 'commander';
 import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
@@ -1755,7 +1756,9 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     if (error instanceof CommanderError) return error.exitCode;
     if (isCommsError(error)) {
       streams.stderr.write(`${escapeForDisplay(error.message)}\n`);
-      if (error.hint !== undefined) streams.stderr.write(`${escapeForDisplay(error.hint)}\n`);
+      // A refusal an agent's marker caused says which variable it was, and how a person clears it (0.35.0 re-review).
+      const hint = withMarkerHint(error).hint;
+      if (hint !== undefined) streams.stderr.write(`${escapeForDisplay(hint)}\n`);
       return error.exitCode;
     }
     streams.stderr.write(`${escapeForDisplay(error instanceof Error ? error.message : String(error))}\n`);

@@ -118,7 +118,9 @@ The send gate protects against a mistaken or prompt-injected agent that uses thi
 
 - **An agent with a shell is outside the boundary.** A program that runs as your user with shell or file access can
   read the stored tokens and call Gmail directly, and can make any command believe it runs in a terminal. Terminal
-  approval and the agent-marker checks are speed bumps against that, not walls. For coding agents, use the `confirm`
+  approval and the agent-marker checks are speed bumps against that, not walls. The markers are variables coding
+  agents set — `CLAUDECODE`, `CODEX_SANDBOX`, `CODEX_HOME` and a few more — so a person who exports one themselves is
+  refused as that agent is; the refusal names the variable and how to clear it. For coding agents, use the `confirm`
   policy with a client whose approval form you have verified, or the `never` policy and send from Gmail — and the
   `confirm` change policy (`agentcomms policy confirm`), so moving a mailbox back to `chat` needs the code too.
 - **Under the default `chat` change policy the software cannot tell your yes from an agent's.** An agent can loosen

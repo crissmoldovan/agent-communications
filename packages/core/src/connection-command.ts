@@ -146,7 +146,14 @@ export async function connectionCommand(
       const id = rest[0] as string;
       const result = await gatedChangeAtTerminal(
         core,
-        connectionChangeChange(core, env, { id, parts: parsePartsSpec(values.parts) }, 'cli', installDeps),
+        connectionChangeChange(
+          core,
+          env,
+          // The approval it claims, either way it comes: what its preparation narrowed at once is read from it.
+          { id, parts: parsePartsSpec(values.parts), approvalId: approval.approvalId ?? appApproval },
+          'cli',
+          installDeps,
+        ),
         {
           ...approval,
           rerun: ['connection', 'change', id, '--parts', values.parts],
@@ -218,9 +225,13 @@ export async function connectionCommand(
       if (rest.length !== 1) throw usage(USAGE.remove);
       onlyFor('remove', []);
       const id = rest[0] as string;
+      // At once, unless its entry shadows a wider one the agents there would use instead (H1): then approved at this
+      // terminal, with --approval, or in the app (--app-approval).
       const result = await gatedChangeAtTerminal(core, connectionRemoveChange(core, env, { id }, 'cli'), {
         ...approval,
         rerun: ['connection', 'remove', id],
+        appApproval,
+        appReach: { clients: true },
       });
       writeResult(result, output, renderRemoved);
       return;
@@ -266,6 +277,11 @@ function viewLines(view: ConnectionView, env: NodeJS.ProcessEnv): string[] {
     `${view.name}  (${view.appLabel}, ${whereLine(view, env)})  ${state}`,
     `  id ${view.id}`,
     ...view.parts.map((part) => `  · ${part.text}${part.available ? '' : `: not started — ${part.why}`}`),
+    ...(view.migratedFrom === null
+      ? []
+      : [
+          `  moved here by connection migrate from ${view.migratedFrom.entries.map((entry) => `"${entry.name}"`).join(', ')}: connection migrate --undo ${view.id} puts them back`,
+        ]),
     `  ${view.lastUsed === null ? 'not used yet' : `last used ${view.lastUsed}`}`,
   ];
 }

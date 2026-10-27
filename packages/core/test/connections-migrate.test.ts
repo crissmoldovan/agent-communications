@@ -4,7 +4,16 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
-import { connectionKeyMatches, readConnections } from '../src/connections.ts';
+import {
+  type ConnectionRecord,
+  connectionKeyHash,
+  connectionKeyMatches,
+  newConnectionId,
+  newConnectionKey,
+  readConnections,
+  storedConnection,
+  withConnection,
+} from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherPaths } from '../src/launcher.ts';
@@ -14,6 +23,8 @@ import {
   type MigrationResult,
   type MigrationUndoResult,
 } from '../src/operations/connection-migrate.ts';
+import { connectionList } from '../src/operations/connections.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -143,7 +154,7 @@ test(
     const effects = first.prepared.effects.join('\n');
     assert.match(
       effects,
-      /moves "agentcomms", "gmail", "slack", "events" in .*\.claude\.json into one connection, "Claude Code"/,
+      /moves "agentcomms", "gmail", "slack", "events" in .*\.claude\.json into one connection, "Claude Code" \(Claude Code, every folder, new\)/,
     );
     assert.match(effects, /Gmail, the mailbox acme\/gmail, read-only/);
     assert.match(effects, /leaves "gmail-2" .*a connection holds one Gmail/);
@@ -189,6 +200,17 @@ test(
     );
     assert.ok((read.record.migratedFrom?.backups.length ?? 0) >= 3, 'each removed entry was saved first');
     for (const backup of read.record.migratedFrom?.backups ?? []) assert.ok(existsSync(backup));
+    // `connection list` says it came from a migration, and which entries it replaced — never where they were saved.
+    const [view] = (await connectionList(m.core, m.env)).connections;
+    assert.deepEqual(view?.migratedFrom, {
+      at: read.record.migratedFrom?.at,
+      entries: [
+        { server: 'core', name: 'agentcomms' },
+        { server: 'gmail', name: 'gmail' },
+        { server: 'slack', name: 'slack' },
+        { server: 'events', name: 'events' },
+      ],
+    });
 
     // The undo: each part an entry of its own again, under its old name, the connection gone.
     const undo = await gatedChange(m.core, connectionMigrateUndoChange(m.core, m.env, { id: read.record.id }, 'cli'), {
@@ -269,6 +291,48 @@ test(
   },
 );
 
+test('a connection no migration made says so, and its undo is refused before anything is asked or changed', async () => {
+  /*
+   * Before 0.35.0's finish, `connection migrate --undo` took any connection: one made by `connection add` or a
+   * channel's own `mcp install` was, once approved, taken out of its app and each part registered as an entry of its
+   * own under its default name — "undoing" a migration that never happened, into the six-entry shape.
+   */
+  const m = machine();
+  const key = newConnectionKey();
+  const made: ConnectionRecord = {
+    id: newConnectionId(),
+    name: 'Claude Code',
+    app: 'claude-code',
+    where: { scope: 'user', folder: null, configDir: null },
+    entry: { name: 'agentcomms', path: m.claudeJson },
+    launcher: 'managed',
+    parts: [{ server: 'core' }, { server: 'gmail' }],
+    keyHash: connectionKeyHash(key),
+    keyIssuedAt: '2026-10-27T09:00:00.000Z',
+    createdAt: '2026-10-27T09:00:00.000Z',
+    revokedAt: null,
+  };
+  await m.core.config.update((config) => ({ ...config, connections: withConnection(config, { put: made }) }), {
+    consent: connectionConsent(made),
+  });
+  const [view] = (await connectionList(m.core, m.env)).connections;
+  assert.equal(view?.migratedFrom, null);
+  await assert.rejects(
+    gatedChange(m.core, connectionMigrateUndoChange(m.core, m.env, { id: made.id }, 'cli'), {
+      surface: 'cli',
+      channel: 'core',
+    }),
+    (error: { code?: string; message?: string; hint?: string }) => {
+      assert.equal(error.code, 'USAGE');
+      assert.match(String(error.message), /"Claude Code" came from no migration, so there is nothing to undo/);
+      assert.match(String(error.hint), /connection remove/);
+      return true;
+    },
+  );
+  assert.deepEqual(await m.core.approvals.list(), [], 'nothing was prepared');
+  assert.equal(readConnections(await m.core.config.load()).connections.length, 1, 'the connection is as it was');
+});
+
 test('an app config that cannot be read stops a migration before anything is planned', NOT_ON_WINDOWS, async () => {
   const m = machine();
   writeFileSync(m.claudeJson, '{ not json');
@@ -278,3 +342,98 @@ test('an app config that cannot be read stops a migration before anything is pla
   );
   assert.deepEqual(readConnections(await m.core.config.load()).connections, []);
 });
+
+test(
+  'LOW (0.35.0 review): the undo keeps each part to its account by id — the name it has now, never the one at pin time',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const made: ConnectionRecord = {
+      id: newConnectionId(),
+      name: 'Claude Code',
+      app: 'claude-code',
+      where: { scope: 'user', folder: null, configDir: null },
+      entry: { name: 'agentcomms', path: m.claudeJson },
+      launcher: 'local',
+      parts: [{ server: 'core' }, { server: 'gmail', pin: { id: INBOX.id, alias: 'acme/gmail' }, readOnly: true }],
+      keyHash: connectionKeyHash(newConnectionKey()),
+      keyIssuedAt: '2026-10-27T09:00:00.000Z',
+      createdAt: '2026-10-27T09:00:00.000Z',
+      revokedAt: null,
+      migratedFrom: {
+        at: '2026-10-27T09:00:00.000Z',
+        entries: [
+          { server: 'core', name: 'agentcomms' },
+          { server: 'gmail', name: 'gmail' },
+        ],
+        backups: [],
+      },
+    };
+    // Since the migration the mailbox was renamed old/gmail, and another mailbox took the name acme/gmail.
+    const other = {
+      ...INBOX,
+      id: 'ibx_BBBBBBBBBBBBBBBB',
+      email: 'sam@other.test',
+      secretRef: 'gmail:refresh:ibx_BBBBBBBBBBBBBBBB',
+    };
+    const write = (inboxes: Record<string, unknown>) =>
+      writeFileSync(
+        join(m.core.paths.configDir, 'config.json'),
+        `${JSON.stringify({ version: 2, inboxes, connections: { [made.id]: storedConnection(made) } })}\n`,
+      );
+    write({ 'old/gmail': INBOX, 'acme/gmail': other });
+    const undo = () => connectionMigrateUndoChange(m.core, m.env, { id: made.id }, 'cli');
+    const first = await gatedChange(m.core, undo(), { surface: 'cli', channel: 'core' });
+    assert.equal(first.status, 'approval-required');
+    if (first.status !== 'approval-required') return;
+    assert.ok(
+      first.prepared.effects.some((effect) =>
+        effect.startsWith('registers the Gmail MCP server with claude-code as "gmail", pinned to old/gmail, read-only'),
+      ),
+      first.prepared.effects.join('\n'),
+    );
+    const done = await gatedChange(m.core, undo(), {
+      surface: 'cli',
+      channel: 'core',
+      approvalId: first.prepared.approvalId,
+    });
+    assert.equal(done.status, 'applied');
+    const gmail = servers(m).mcpServers.gmail;
+    assert.ok(gmail?.args.includes('old/gmail'), gmail?.args.join(' '));
+    assert.equal(gmail?.args.includes('acme/gmail'), false, 'never the mailbox that took the old name');
+  },
+);
+
+test(
+  'LOW (0.35.0 review): an undo whose part is kept to an account no longer here is refused, before anything is asked',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const made: ConnectionRecord = {
+      id: newConnectionId(),
+      name: 'Claude Code',
+      app: 'claude-code',
+      where: { scope: 'user', folder: null, configDir: null },
+      entry: { name: 'agentcomms', path: m.claudeJson },
+      launcher: 'local',
+      parts: [{ server: 'core' }, { server: 'gmail', pin: { id: 'ibx_CCCCCCCCCCCCCCCC', alias: 'gone/gmail' } }],
+      keyHash: connectionKeyHash(newConnectionKey()),
+      keyIssuedAt: '2026-10-27T09:00:00.000Z',
+      createdAt: '2026-10-27T09:00:00.000Z',
+      revokedAt: null,
+      migratedFrom: { at: '2026-10-27T09:00:00.000Z', entries: [{ server: 'gmail', name: 'gmail' }], backups: [] },
+    };
+    writeFileSync(
+      join(m.core.paths.configDir, 'config.json'),
+      `${JSON.stringify({ version: 2, inboxes: { 'acme/gmail': INBOX }, connections: { [made.id]: storedConnection(made) } })}\n`,
+    );
+    await assert.rejects(
+      gatedChange(m.core, connectionMigrateUndoChange(m.core, m.env, { id: made.id }, 'cli'), {
+        surface: 'cli',
+        channel: 'core',
+      }),
+      /Gmail is kept to the mailbox gone\/gmail, which is no longer connected/,
+    );
+    assert.equal(readConnections(await m.core.config.load()).connections.length, 1, 'nothing changed');
+  },
+);

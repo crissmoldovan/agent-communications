@@ -12,7 +12,9 @@
 //! `eventsSubscriberEnable` prepared, for its digest. Workflows' calls (0.36.0, plan 2026-10-27-workflows-0360 I7) take
 //! a checked run, project, step or subscriber id, a closed word, or a document on stdin, and nothing else.
 //! without it. Since 0.35.0 so are Search's three loosenings (`search`): a `searchOn`, `searchAccountsAdd` or
-//! `searchModelSet` with `appApproval` answers only the approval the app prepared for the same call without it.
+//! `searchModelSet` with `appApproval` answers only the approval the app prepared for the same call without it; and an
+//! MCP connection's four (`mcp_connections`): a `connectionAdd`, `connectionChange`, `connectionMigrate` or
+//! `connectionMigrateUndo` with `appApproval` answers only the approval the app prepared for the same call without it.
 
 use crate::connections::{
     McpClient, McpServer, McpServers, MCP_APP_APPROVAL_VERSION, MCP_SEVERAL_VERSION,
@@ -24,6 +26,10 @@ use crate::label::{
     self, LabelIdentity, LabelKinds, LabelName, LabelWord, LABEL_APP_APPROVAL_VERSION,
 };
 use crate::launchers::Product;
+use crate::mcp_connections::{
+    ConnectionApp, ConnectionFolder, ConnectionId, ConnectionName, ConnectionParts,
+    CONNECTIONS_VERSION,
+};
 use crate::rule_editor::{
     AnalyseProvider, DescribeProvider, DescribeRequest, Integration, ProjectDocument, RuleDocument,
     RuleVersion, SubscriberDocument, TargetDocument,
@@ -1496,9 +1502,10 @@ pub enum Call {
     /// Core `taking` (0.35.0): each account's taking settings. Read-only; it takes no argument.
     Taking {},
     /// Core `taking <account> <option> <word> [--app-approval <id>]` (0.35.0): one change to one account's settings.
-    /// Letting sessions act without taking, and a 👀 on taking, loosen: without `appApproval` core answers with their
-    /// preview; with it, the person approved in the app the change the app prepared (`connections::run_app_approval`),
-    /// once. Every other change applies at once, and is refused with an approval (`taking::change_words`).
+    /// Letting sessions act without taking, a 👀 on taking, a longer wait and no reminder loosen: without `appApproval`
+    /// core answers with their preview; with it, the person approved in the app the change the app prepared
+    /// (`connections::run_app_approval`), once. Every other change applies at once, and is refused with an approval
+    /// (`taking::change_words`).
     TakingChange {
         account: AccountName,
         change: TakingSetting,
@@ -1601,6 +1608,67 @@ pub enum Call {
     /// Core `search delete --all --confirm` (0.35.0, §7): everything Search keeps, and its key, deleted at once, once
     /// the person confirms in the app. It takes no argument.
     SearchDeleteAll {},
+    /// Core `connection list` (0.35.0, single-server design §11, `mcp_connections`): every MCP connection — its app,
+    /// where its entry is, its parts and accounts, whether its entry is there with its key, and when it was last used.
+    /// Never a key, nor its hash. It takes no argument.
+    ConnectionList {},
+    /// Core `connection show <id>` (0.35.0): one connection, and the Agent Comms running for it now, part by part.
+    ConnectionShow { connection_id: ConnectionId },
+    /// Core `connection add --app <app> --name <name> --parts <parts> [--folder <dir>] [--profile <dir>]
+    /// [--app-approval <id>]` (0.35.0): a loosening. Without `appApproval` it is prepared, and core answers with its
+    /// preview; with it, the person approved in the app the addition the app prepared (`connections::run_app_approval`),
+    /// once. A folder is Claude Code's one project; a profile another Claude profile or Codex home.
+    ConnectionAdd {
+        app: ConnectionApp,
+        name: ConnectionName,
+        parts: ConnectionParts,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        folder: Option<ConnectionFolder>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        profile: Option<ConnectionFolder>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `connection change <id> --parts <parts> [--app-approval <id>]` (0.35.0): every part it has from now on.
+    /// Taking away applies at once; giving more is prepared and approved as `connectionAdd` is.
+    ConnectionChange {
+        connection_id: ConnectionId,
+        parts: ConnectionParts,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `connection rename <id> <name>` (0.35.0): gives an agent nothing more, so it applies at once.
+    ConnectionRename {
+        connection_id: ConnectionId,
+        name: ConnectionName,
+    },
+    /// Core `connection key replace <id>` (0.35.0): a new key, the old one stopping at once; applied at once. A Manual
+    /// connection's comes back once, in its snippet, for the person to paste.
+    ConnectionKeyReplace { connection_id: ConnectionId },
+    /// Core `connection remove <id> [--app-approval <id>]` (0.35.0): a tightening, applied at once; its entry is taken
+    /// out of its app, and no record of it is kept. Where its entry shadows a wider one the agents in its folder would
+    /// then use (the security review's H1), core answers with a preview instead: prepared and approved as
+    /// `connectionAdd` is.
+    ConnectionRemove {
+        connection_id: ConnectionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `connection migrate [--client <client>] [--app-approval <id>]` (0.35.0): each app's separate entries moved
+    /// into one connection that reaches exactly what they reached. Prepared and approved as `connectionAdd` is.
+    ConnectionMigrate {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        client: Option<McpClient>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
+    /// Core `connection migrate --undo <id> [--app-approval <id>]` (0.35.0): its parts as entries of their own again,
+    /// and the connection taken out. Prepared and approved as `connectionAdd` is.
+    ConnectionMigrateUndo {
+        connection_id: ConnectionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -2349,6 +2417,16 @@ impl Call {
             | Call::SearchModelSet { .. }
             | Call::SearchModelNone {}
             | Call::SearchDeleteAll {} => return self.search_words(),
+            // MCP connections (0.35.0): their own module builds core's `connection …` words.
+            Call::ConnectionList {}
+            | Call::ConnectionShow { .. }
+            | Call::ConnectionAdd { .. }
+            | Call::ConnectionChange { .. }
+            | Call::ConnectionRename { .. }
+            | Call::ConnectionKeyReplace { .. }
+            | Call::ConnectionRemove { .. }
+            | Call::ConnectionMigrate { .. }
+            | Call::ConnectionMigrateUndo { .. } => return self.connection_words(),
         })
     }
 
@@ -2384,7 +2462,8 @@ impl Call {
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
     /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
     /// a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and a taking change that loosens or
-    /// one of Search's three loosenings, each without the app's approval (0.35.0), and only those.
+    /// one of Search's three loosenings, or an MCP connection's addition, change of parts, migration or its undo, each
+    /// without the app's approval (0.35.0), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -2421,8 +2500,9 @@ impl Call {
                 change,
                 app_approval: None,
                 ..
-            } if change.loosens()
+            } if change.can_loosen()
         ) || self.prepares_search_change()
+            || self.prepares_connection_change()
     }
 
     /// The CLI version the call needs (DA12), when it needs a later one than any the app supports.
@@ -2525,6 +2605,7 @@ impl Call {
             | Call::Taking {}
             | Call::TakingChange { .. } => Some(TAKING_VERSION),
             call if call.is_search() => Some(SEARCH_VERSION),
+            call if call.is_connection() => Some(CONNECTIONS_VERSION),
             _ => None,
         }
     }
@@ -2787,6 +2868,34 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "searchModelSet", "address": "http://[::1]:11434", "model": "bge-m3:latest", "appApproval": ID }),
         json!({ "kind": "searchModelNone" }),
         json!({ "kind": "searchDeleteAll" }),
+        json!({ "kind": "connectionList" }),
+        json!({ "kind": "connectionShow", "connectionId": CONNECTION }),
+        json!({
+            "kind": "connectionAdd",
+            "app": "claude-code",
+            "name": "Work — Claude Code",
+            "parts": [{ "server": "core" }, { "server": "gmail", "account": "acme/gmail", "readOnly": true }, { "server": "events" }]
+        }),
+        json!({
+            "kind": "connectionAdd",
+            "app": "claude-code",
+            "name": "Acme site — Claude Code",
+            "parts": [{ "server": "core" }, { "server": "slack", "account": "acme/slack" }],
+            "folder": "/example/home/work/acme-site",
+            "appApproval": ID
+        }),
+        json!({ "kind": "connectionAdd", "app": "codex", "name": "Reviews — Codex", "parts": [{ "server": "core" }], "profile": "/example/home/.codex-reviews" }),
+        json!({ "kind": "connectionAdd", "app": "manual", "name": "Raycast", "parts": [{ "server": "core" }, { "server": "slack" }] }),
+        json!({ "kind": "connectionChange", "connectionId": CONNECTION, "parts": [{ "server": "core" }, { "server": "slack" }] }),
+        json!({ "kind": "connectionChange", "connectionId": CONNECTION, "parts": [{ "server": "core" }], "appApproval": ID }),
+        json!({ "kind": "connectionRename", "connectionId": CONNECTION, "name": "Personal — Claude Desktop" }),
+        json!({ "kind": "connectionKeyReplace", "connectionId": CONNECTION }),
+        json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
+        json!({ "kind": "connectionRemove", "connectionId": CONNECTION, "appApproval": ID }),
+        json!({ "kind": "connectionMigrate" }),
+        json!({ "kind": "connectionMigrate", "client": "claude-code", "appApproval": ID }),
+        json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION }),
+        json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION, "appApproval": ID }),
     ];
     values
         .into_iter()
@@ -2860,6 +2969,10 @@ pub(crate) fn desktop_judges_contract_words(
 /// A well-formed approval id, for the tests: `ap_` and 26 of Crockford's letters.
 #[cfg(test)]
 pub(crate) const ID: &str = "ap_0123456789ABCDEFGHJKMNPQRS";
+
+/// A well-formed connection id, for the tests: `cn_` and 26 of Crockford's letters, nobody's (0.35.0).
+#[cfg(test)]
+pub(crate) const CONNECTION: &str = "cn_MBGB9NHBQB0BVZYCAD95GDM2M4";
 
 /// A well-formed digest, for the tests: 64 lowercase hex digits.
 #[cfg(test)]
@@ -3857,9 +3970,25 @@ mod tests {
                 json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false } }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "eyes" } }),
+                // A wait, and no reminder, can loosen too (security review of 0.35.0): core judges the wait in force.
+                json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "unclaimed", "minutes": 15 } }),
+                json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "notify", "on": false } }),
                 json!({ "kind": "searchOn" }),
                 json!({ "kind": "searchAccountsAdd", "account": "acme/slack" }),
                 json!({ "kind": "searchModelSet", "address": "http://127.0.0.1:11434", "model": "qwen3-embedding:0.6b" }),
+                json!({
+                    "kind": "connectionAdd",
+                    "app": "claude-code",
+                    "name": "Work — Claude Code",
+                    "parts": [{ "server": "core" }, { "server": "gmail", "account": "acme/gmail", "readOnly": true }, { "server": "events" }]
+                }),
+                json!({ "kind": "connectionAdd", "app": "codex", "name": "Reviews — Codex", "parts": [{ "server": "core" }], "profile": "/example/home/.codex-reviews" }),
+                json!({ "kind": "connectionAdd", "app": "manual", "name": "Raycast", "parts": [{ "server": "core" }, { "server": "slack" }] }),
+                json!({ "kind": "connectionChange", "connectionId": CONNECTION, "parts": [{ "server": "core" }, { "server": "slack" }] }),
+                // Core prepares a remove where its entry shadows a wider one (the security review's H1).
+                json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
+                json!({ "kind": "connectionMigrate" }),
+                json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION }),
             ]
         );
     }

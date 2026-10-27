@@ -82,9 +82,9 @@ describe('the marks and the swipe, in the source', () => {
     const controls = files.flatMap(([path, text]) =>
       openingTags(text, 'SegmentedControl').map((tag) => [path, tag] as const),
     );
-    // 0.36.0's designer adds eight: its views, and its steps' settings (where, with, mode, a route's way, a judge's
-    // unsure, a worktree's clean-up, a wait's what-for).
-    expect(controls).toHaveLength(28);
+    // 0.35.0's MCP connections add one; 0.36.0's designer adds eight: its views, and its steps' settings (where, with,
+    // mode, a route's way, a judge's unsure, a worktree's clean-up, a wait's what-for).
+    expect(controls).toHaveLength(29);
     for (const [path, tag] of controls) expect(sets(tag, 'indicator'), `${path}: ${tag}`).toBe(true);
   });
 

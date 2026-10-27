@@ -13,7 +13,7 @@ import { AckLedger } from './standing-ledger.ts';
 import { InboxStateStore } from './state.ts';
 import { TaintStore } from './taint.ts';
 import { TakeStore } from './takes.ts';
-import { takingAccountsOf } from './taking.ts';
+import { offerWaitMs, takingAccountsOf } from './taking.ts';
 import { securityAnswered } from './update-state.ts';
 
 /** Everything a provider package needs from the core, wired to one config directory. */
@@ -110,6 +110,8 @@ export function openCore(options: OpenCoreOptions = {}): Core {
         return stored?.form === 'v2' && (stored.record.state === 'pending' || stored.record.state === 'approved');
       },
       accountIds: async () => new Set(takingAccountsOf(await config.load()).map((account) => account.id)),
+      // A delivery's offer its window is never handed lapses at the account's reminder window (M5).
+      offerWait: async (accountId) => offerWaitMs(await config.load(), accountId),
     }),
     handoffs,
     async secrets(kind?: SecretStoreKind): Promise<SecretStore> {

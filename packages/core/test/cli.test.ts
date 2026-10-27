@@ -7,6 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { asV2 } from '../src/approval-stored.ts';
 import { main, renderAttach } from '../src/cli.ts';
 import {
+  agentMarkerHint,
   inlineCommand,
   insertWordsBeforeSentinel,
   normalizePathOptionWords,
@@ -1391,9 +1392,10 @@ test('approve is refused to an agent and to anything without a terminal, touches
   assert.equal(refusal.message, 'only a person can approve a change, not an agent');
   const approve = locatedCoreLine(refusal.hint, ['approve', approvalId]);
   const wait = locatedCoreLine(refusal.hint, ['approval', 'wait', approvalId]);
+  // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review, LOW 3).
   assert.equal(
     refusal.hint,
-    `Ask the user to run \`${approve}\` in their own terminal; learn when they have with \`${wait}\`.`,
+    `Ask the user to run \`${approve}\` in their own terminal; learn when they have with \`${wait}\`. ${agentMarkerHint('CLAUDECODE')}`,
   );
 
   const piped = run(['approve', approvalId], { AGENT_COMMS_CONFIG_DIR: config });

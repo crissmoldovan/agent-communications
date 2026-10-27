@@ -277,18 +277,20 @@ If it still has no Gmail tools, check whether the server is registered with that
 
 ```bash
 agent-gmail doctor --json | jq '.data.checks[] | select(.id == "mcp-command")'   # one per registered entry
-agent-gmail mcp install --client claude-code   # when none of them is for that client
+agent-gmail mcp install --client claude-code   # when none of them is for that client: Gmail goes into its connection
 ```
 
-A plain `mcp install` is refused for a name that is already registered, and its hint is the command that replaces
-the entry as it is. When an entry is there and broken, its check's `fix` is that command too: `mcp install` with
-the entry's own `--name`, `--inbox` and `--read-only`, and `--force`. Run that `fix` as it is.
+From 0.35.0 a plain `mcp install` puts Gmail into the app's MCP connection, or makes the app one. An entry of
+Gmail's own is `mcp install --standalone`, refused for a name that is already registered, and its hint is the command
+that replaces the entry as it is. When such an entry is there and broken, its check's `fix` is that command too:
+`mcp install --standalone` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force`. Run that `fix`
+as it is.
 
 Registering is a change you approve. At a terminal it shows what it will register and asks you to type `yes`. An
 agent running it gets exit `10`, `APPROVAL_PENDING`, the preview and an approval id; it shows you the preview and,
 after your yes, runs the same command again with `--approval <id>`. A rerun with different flags is refused and
-writes nothing: the approval is for the registration it previewed. `--print` and `--client json` write nothing and
-ask nobody.
+writes nothing: the approval is for the registration it previewed. `--standalone --print` and `--standalone --client
+json` write nothing and ask nobody.
 
 ### `mcp install` fails on Windows
 
@@ -296,10 +298,11 @@ ask nobody.
 any version. Both CLIs install there as `.cmd` files, and this package launches them without a shell, which
 current Node refuses to do for a `.cmd`.
 
-Register the server by hand instead — `mcp install --print` writes no config and prints exactly what to add:
+Register the server by hand instead — `mcp install --standalone --print` writes no config and prints exactly what to
+add:
 
 ```bash
-agent-gmail mcp install --client claude-code --print
+agent-gmail mcp install --client claude-code --standalone --print
 ```
 
 Then paste that entry into the client's own config, keeping the `env` block: it carries
@@ -328,8 +331,8 @@ and its `fix` is the command that re-registers that entry as it is — keeping i
 `--read-only` — rather than a default one. Run that fix with the new version:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp install --client claude-code --force    # plus the flags doctor's fix carries
-npx -y @agentcomms/slack@latest mcp install --client claude-code --force    # the Slack server, the same way
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --standalone --force    # plus the flags doctor's fix carries
+npx -y @agentcomms/slack@latest mcp install --client claude-code --standalone --force    # the Slack server, the same way
 ```
 
 Each asks you to approve the registration it shows — `yes` at a terminal; from an agent, exit `10` and the same
@@ -390,7 +393,7 @@ starting it with a different `AGENT_COMMS_CONFIG_DIR` or a different `HOME`.
 
 ```bash
 agent-gmail doctor          # as you
-agent-gmail mcp install --client <name> --force   # rewrites the entry with the right paths
+agent-gmail mcp install --client <name> --standalone --force   # rewrites the entry with the right paths
 ```
 
 `--force` replaces only an entry this package wrote, and a plain `mcp install` is refused while one is there. It

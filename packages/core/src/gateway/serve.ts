@@ -11,7 +11,7 @@ import {
 } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { VERSION } from '../version.ts';
-import { gatewayInstructions, refusedInstructions } from './instructions.ts';
+import { connectionPlaceWords, gatewayInstructions, refusedInstructions } from './instructions.ts';
 import { connectionExtensions, type PartsContext, partSpecs } from './parts.ts';
 import { type PartSpec, Router } from './router.ts';
 import { markConnectionUsed, removeGatewayStatus, writeGatewayStatus } from './status.ts';
@@ -28,7 +28,7 @@ import { markConnectionUsed, removeGatewayStatus, writeGatewayStatus } from './s
  * It follows its connection live (D15): before every request, and every 30 seconds, it looks at `config.json`; a part
  * added is started, one taken out stopped, one whose pin or switch changed started again, and the client is told with
  * `tools/list_changed`. A connection cut off or removed, or whose key was replaced, stops every part at once, and every
- * later call is refused with the reason.
+ * later call is refused with the reason — as does a `config.json` that can no longer be read: it fails closed.
  */
 
 export interface GatewayOptions {
@@ -179,7 +179,8 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     );
   };
   const initial = await specsOf(served, config as Config);
-  let name = served.name;
+  // Which connection this is, in the instructions: its app and place, never its name (0.35.0 review, M1).
+  const place = connectionPlaceWords(served);
   let lastStat: string | null = null;
   let lastUsedMark = 0;
   let statusQueue: Promise<void> = Promise.resolve();
@@ -199,8 +200,10 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
       .catch(() => undefined);
   };
 
+  /** What the last look found: null to serve, or the reason to refuse — what a look that finds nothing new answers. */
+  let verdict: string | null = null;
   /** D15: `config.json` as it is now, and what changed for this connection. Null to serve; the reason to refuse. */
-  const follow = async (): Promise<string | null> => {
+  const look = async (): Promise<string | null> => {
     let stamp: string;
     try {
       const facts = await stat(core.config.path);
@@ -208,24 +211,42 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     } catch {
       stamp = 'missing';
     }
-    if (stamp === lastStat) return null;
+    if (stamp === lastStat) return verdict;
     lastStat = stamp;
+    verdict = await apply();
+    return verdict;
+  };
+  /** The record read again, and what changed for this connection applied: null to serve, or the reason to refuse. */
+  const apply = async (): Promise<string | null> => {
     let next: Config;
     try {
       next = await core.config.load();
     } catch {
-      return null;
+      // Fails closed (0.35.0 security review, LOW): a file that cannot be read — a hand edit that broke it — stops every
+      // part, rather than serving on the last record it read, which may be wider than what the person meant now.
+      return 'Agent Comms could not read its configuration, so this connection serves nothing until it can and the app is restarted';
     }
     const why = connectionRefusal(next, options.connection, key);
     if (why !== null) return why;
-    const read = connectionById(next, options.connection);
-    if (read === undefined || !read.readable) return 'this connection’s record in Agent Comms could not be read';
+    const found = connectionById(next, options.connection);
+    if (found === undefined || !found.readable) return 'this connection’s record in Agent Comms could not be read';
     config = next;
-    name = read.record.name;
-    const { start, stop } = partsDiff(router.specs(), await specsOf(read.record, next));
+    const { start, stop } = partsDiff(router.specs(), await specsOf(found.record, next));
     for (const server of stop) await router.removePart(server);
     for (const spec of start) await router.addPart(spec);
     return null;
+  };
+  /*
+   * One look at a time, each after the one before. The timer and a request each look; the stamp is recorded as soon as
+   * a look sees it, and the change it found applies only after the record is read and the parts are worked out. A
+   * request that looked in between found the stamp unchanged and was served before that change — Slack's tools still
+   * listed after Slack was taken out, a call answered on a key already replaced. Now it waits for the look in flight,
+   * and a look that finds nothing new answers with the last look's verdict.
+   */
+  let looking: Promise<string | null> = Promise.resolve(null);
+  const follow = (): Promise<string | null> => {
+    looking = looking.then(look, look);
+    return looking;
   };
 
   const router: Router = new Router({
@@ -233,7 +254,7 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     connectionId: options.connection,
     serverInfo: { name: 'agentcomms', version: VERSION },
     extensions: connectionExtensions(served),
-    instructions: (input) => gatewayInstructions(name, input),
+    instructions: (input) => gatewayInstructions(place, input),
     log,
     onStatus: () => writeStatus(null),
     beforeRequest: follow,

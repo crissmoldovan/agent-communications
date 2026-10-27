@@ -362,6 +362,11 @@ export interface PublicApprovalObject extends ApprovalObject {
    * download's question answered — where and to which folder, or `answered (in chat)` with no folder at all.
    */
   readonly said?: string | undefined;
+  /**
+   * The MCP connection it was prepared through, by its id (single-server design §7, P3), for the app's Approvals to say
+   * which connection asks: absent for one prepared outside any connection, or by an earlier release.
+   */
+  readonly preparedBy?: string | undefined;
 }
 
 /**
@@ -523,6 +528,7 @@ export function publicApproval(
     ...(expect === undefined ? {} : { expect }),
     ...(files === undefined ? {} : { files }),
     ...(said === undefined ? {} : { said }),
+    ...(stored.form === 'v2' && stored.record.preparedBy !== undefined ? { preparedBy: stored.record.preparedBy } : {}),
   };
 }
 

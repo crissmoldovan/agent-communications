@@ -47,7 +47,11 @@ function message(id: string, from: string, subject: string, at: string): FakeMes
   };
 }
 
-async function connected(): Promise<{ harness: Harness; context: GmailContext; inboxId: string }> {
+type FakeSendAs = { sendAsEmail: string; displayName?: string; isDefault?: boolean; isPrimary?: boolean };
+
+async function connected(
+  extra: { messages?: Record<string, FakeMessage>; sendAs?: FakeSendAs[] } = {},
+): Promise<{ harness: Harness; context: GmailContext; inboxId: string }> {
   const harness = await newHarness({
     accounts: [
       {
@@ -56,8 +60,12 @@ async function connected(): Promise<{ harness: Harness; context: GmailContext; i
         messages: {
           m1: message('m1', 'Sam Lee <sam@partner.test>', 'Invoice March', '2026-10-20T09:00:00Z'),
           m2: message('m2', 'Jo Example <jo@example.test>', 'Re: Invoice March', '2026-10-21T09:00:00Z'),
+          ...extra.messages,
         },
-        sendAs: [{ sendAsEmail: 'jo@example.test', displayName: 'Jo Example', isDefault: true, isPrimary: true }],
+        sendAs: [
+          { sendAsEmail: 'jo@example.test', displayName: 'Jo Example', isDefault: true, isPrimary: true },
+          ...(extra.sendAs ?? []),
+        ],
       },
     ],
   });
@@ -122,6 +130,34 @@ test('with Search off, a read keeps nothing; on for the mailbox, each message re
     assert.equal(line.includes('sam@partner.test'), false, 'sealed');
     assert.deepEqual(Object.keys(JSON.parse(line) as object).sort(), ['sealed', 'v']);
   }
+});
+
+test('a message from a send-as address of the mailbox, or one it sent, is the person’s own and is not kept as an ask (review 2026-10-27)', async () => {
+  const fromAlias = message('m3', 'Jo at Acme <jo.alias@example.test>', 'Invoice April', '2026-10-22T09:00:00Z');
+  const sentBefore = {
+    ...message('m4', 'Jo Old <jo.old@example.test>', 'Invoice May', '2026-10-23T09:00:00Z'),
+    labelIds: ['SENT'],
+  };
+  const { harness, context, inboxId } = await connected({
+    messages: { m3: fromAlias, m4: sentBefore },
+    sendAs: [{ sendAsEmail: 'Jo.Alias@example.test', displayName: 'Jo at Acme' }],
+  });
+  const asked = () => harness.google.requests.filter((request) => request.path.endsWith('/settings/sendAs')).length;
+  // With Search off, a read asks Gmail for nothing more than it did.
+  await readMessage(context, 'work', 'm3');
+  assert.equal(asked(), 0, 'no send-as call while Search keeps nothing');
+  await searchOn(harness, inboxId);
+  await readMessage(context, 'work', 'm3');
+  assert.deepEqual(inboxLines(harness), [], 'a send-as address is the person’s own');
+  await readMessage(context, 'work', 'm4');
+  assert.deepEqual(inboxLines(harness), [], 'a message the mailbox sent is the person’s own');
+  await readMessage(context, 'work', 'm1');
+  assert.equal(inboxLines(harness).length, 1, 'Sam’s is an ask');
+  // A search's rows: Sam's only, again.
+  await search(context, { query: 'invoice', inboxes: ['work'], kind: 'messages' });
+  assert.equal(inboxLines(harness).length, 2);
+  // The list is read once, and remembered for a while: not one more Gmail call for every read.
+  assert.equal(asked(), 1);
 });
 
 test('a send keeps what went as out, after Gmail accepted it', async () => {

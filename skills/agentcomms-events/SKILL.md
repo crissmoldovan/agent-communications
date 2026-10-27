@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event workflows with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this workflow', 'why is this workflow not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.34.0"
+compatibility: "@agentcomms/events-daemon@0.35.0"
 metadata:
   group: communications
   lifecycle: release
@@ -106,7 +106,9 @@ that window — only that one — is woken for each new item and may read it. On
 - **An offered item.** When the account asks a session to take a message before acting on it, the pointer adds "It is
   offered to this session until 11:20: take it before acting, or hand it back." No other session may act on it until
   then, but it is not yours yet: take it with the channel's take tool (`gmail_take`, `slack_take`, `resend_take`)
-  before you reply or react, or hand it back with a reason when it is not yours.
+  before you reply or react, or hand it back with a reason when it is not yours. `events_lane_item`'s `taken` says
+  who has the message: null for nobody, `by` you, another session or the person, or `offered` to you. Another
+  session's or the person's: leave it.
 - `events_lane_list` lists the lanes and whether each is bound to this window; it names no other window. A lane bound
   to another window, or to none, is not yours to watch or read: say so, and do not look for its items another way.
   `events_lane_unbind` ends this window's own binding at once.

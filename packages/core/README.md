@@ -25,7 +25,7 @@ npx @agentcomms/core label name "Jo Example"  # your name, for where a channel h
 npx @agentcomms/core label rule add acme/slack --kinds reaction --as me  # reactions sent as you, unlabelled (you approve it)
 npx @agentcomms/core label icon acme/slack :jo-agent:  # the workspace emoji the app's Slack posts show (you approve it)
 npx @agentcomms/core label style acme/slack labelled  # every agent message there as you, labelled, not as the app (you approve it)
-npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
+npx @agentcomms/core channels      # which servers exist, which are installed, where each is registered, and what each takes as a connection's part
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core mcp uninstall --client cursor --server gmail   # take one server out of one client, at once
@@ -113,8 +113,9 @@ command or the labelled PowerShell `&` line the result provides.
 Core keeps a private log of what each agent window read, did and sent: `<state>/activity/`, a file a day, kept 30
 days. It holds ids, subjects, senders and file names, and never a message body, an attachment or a secret.
 
-- `agentcomms activity sessions` lists the agent windows, newest first; `agentcomms activity show <session>` lists
-  what one did.
+- `agentcomms activity sessions` lists the agent windows, newest first — each with the MCP connection it was last
+  used through (`connection`, by id and name, from 0.35.0) — and `agentcomms activity show <session>` lists what one
+  did.
 - `agentcomms activity items [--since <ms>] [--ids <id,…>] --json` lists every call that names an item, grouped by
   the item: a Gmail message by its id, a Slack message as `<channelId>/<ts>`. Each line names the window (its key,
   folder and client), the operation, when, and how it ended. A reply also links to what it answers: a Gmail reply
@@ -132,16 +133,18 @@ days. It holds ids, subjects, senders and file names, and never a message body, 
 `agentcomms search status`, `search query` and the other `search` commands keep the words of the messages agents read, for the accounts the person chose, so they can find
 what each person asked (design 2026-10-26-local-search). Off by default; `search on`, `search accounts add` and
 `search model set` are loosenings, approved at a terminal or in the attested app with `--app-approval`; `search off`,
-`accounts remove`, `model none` and `delete --all --confirm` apply at once.
+`accounts remove`, `model none` and `delete --all --confirm` apply at once; Delete everything, which cannot be undone,
+is the person's alone, refused to an agent as their searches are.
 
 - **Capture:** a channel hands `captureForSearch(core, account, captures)` what an ok call had in hand; core keeps it
   only while Search keeps that account, never from the account's own handles, as one sealed line in
   `<state>/search/inbox/<UTC day>-<pid>.jsonl`. It never throws and never changes a result.
 - **The store:** `<state>/search/search.sqlite` through `node:sqlite`, opened only by the person's search commands —
   the indexer is its one writer, run by `search index`, before every search for two seconds, and by the app. Full-text
-  search is probed (FTS5, contentless, `unicode61 remove_diacritics 2`), so a Node without it — before 22.18 — says
-  so and keeps nothing. Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index`
-  in the configured secret store; the words index, the vectors and the handles are not.
+  search is probed (FTS5, contentless, deleting), so a Node without it — before 22.18 — says so and keeps nothing.
+  Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index` in the configured
+  secret store. The words index holds no word: each word, folded, is an HMAC under a subkey of that key, with no
+  position kept. The vectors and the handles are not encrypted.
 - **Meaning:** a loopback Ollama only, a reviewed model only (`qwen3-embedding:0.6b`, `embeddinggemma`, `bge-m3`),
   checked against `/api/tags` before any word is sent; words only without one.
 - **Who reads it:** the person alone. Every command but `status` and the tightenings is refused inside an MCP
@@ -167,7 +170,11 @@ npx @agentcomms/core taking                                  # every account: re
 npx @agentcomms/core taking acme/slack --require on          # a session must take a message first (applies at once)
 npx @agentcomms/core taking acme/slack --require off         # sessions may act without taking (you approve it)
 npx @agentcomms/core taking acme/slack --unclaimed 30        # a message nobody takes in 30 minutes counts as not taken
+npx @agentcomms/core taking acme/slack --notify off          # no reminder: it waits under Not taken (you approve it)
 ```
+
+A shorter wait and a reminder apply at once; a longer wait, like no reminder, lets a message nobody took go unnoticed
+for longer, so you approve it, as every loosening.
 
 With it on, an act that answers a message — a reply, a reaction, an acknowledgement — is refused without the take,
 `TAKE_REQUIRED` (exit `10`), before any preview or approval and again just before it is sent. A message another session
@@ -296,8 +303,8 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_server_prune` | remove the managed runtimes old releases left behind: every managed server's, listed by server, or one `channel`'s; `dryRun` lists them |
 | `comms_server_uninstall` | take one `channel`'s server out of one `client`, at once, as `mcp uninstall`: every user-scope entry of it there, saved first; a project's own entry is left, and said |
 | `comms_connections_list`, `comms_connection_show` | the MCP connections — each place an app uses Agent Comms, its parts, accounts and entry — never with a key; with no id inside a connection, `comms_connection_show` is that connection |
-| `comms_connection_add`, `comms_connection_change`, `comms_connection_migrate` | add a connection, change its parts, or move an app's separate entries into one: approved first where it reaches more, at once where it only narrows |
-| `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` | rename one, give it a new key (written into its entry, the old one stopping), or remove it: each at once |
+| `comms_connection_add`, `comms_connection_change`, `comms_connection_migrate` | add a connection, change its parts, or move an app's separate entries into one: approved first where it reaches more, at once where it only narrows; `comms_connection_change` changes the parts of the connection the server is a part of only — another's are the person's, at their terminal or in the app |
+| `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` | rename the connection the server is a part of, give it a new key (written into its entry, the old one stopping), or remove it: each at once — but a remove that lets agents in its folder reach more is approved first; another connection is the person's, at their terminal or in the app |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
@@ -341,17 +348,27 @@ agentcomms connection migrate            # your app's separate entries into one 
 - **Adding a connection, or letting one reach more** — a part added, an account let go or moved, read-only off — is
   shown first and approved, at your terminal, in the app (`--app-approval`, macOS), or in a chat under the `chat` change
   policy. **Taking away applies at once**: a part removed, kept to one account, read-only on, the connection removed.
-  Renaming it and replacing its key give an agent nothing more, and apply at once too.
+  Except one removal: a one-project connection over the app's Agent Comms for every folder — its entry shadows that
+  one, so once it is gone the agents in that folder use the wider one. That remove waits for you like a loosening,
+  and its preview says what they would use instead. Renaming it and replacing its key give an agent nothing more, and
+  apply at once too. An agent — over MCP, or from
+  its shell — renames, re-keys and removes only the connection it is a part of; any other is yours, at your terminal
+  or in the app.
 - **The key** is not a password: apps on this Mac start Agent Comms as you, so it keeps out no program running as you —
   such a program can read the app's config, or start a channel's server itself, as it always could. What it does: it
   says which connection a call came through, so Activity says "used by <name>", and removing the connection or
   replacing its key stops every copy of it at once. Agent Comms keeps only its hash, writes it into the app's entry
   (in the entry's environment, never its arguments), and shows it only for a Manual snippet, once — at your terminal
-  or in the app, never to an agent. If Agent Comms is ever reachable over a network, the key becomes a real secret.
+  or in the app, never to an agent. The gateway takes it out of its own environment once it has checked it, and no
+  part is given it; but the environment a process started with stays readable while it runs, so `ps eww` shows the
+  key to programs running as you for as long as that gateway runs — accepted, since such a program can read the app's
+  config anyway. If Agent Comms is ever reachable over a network, the key becomes a real secret.
 - **One project** is Claude Code's own local scope, kept in `~/.claude.json` and never in a `.mcp.json`, which is
   often committed and would carry the key into the repository.
 - **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one
   connection per app reaching exactly what those entries reached, saves each entry it removes, and can be undone.
+  `connection list --json` says which connections a migration made (`migratedFrom`, with the entries it replaced), and
+  `connection migrate --undo` refuses any other: one you added replaced nothing, so there is nothing to put back.
 - `connection` commands are `comms_connections_list`, `comms_connection_show`, `comms_connection_add`,
   `comms_connection_change`, `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` and
   `comms_connection_migrate` over MCP; a Manual connection is the one thing they do not do. Inside a connection,

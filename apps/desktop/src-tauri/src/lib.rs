@@ -12,6 +12,7 @@ pub mod label;
 pub mod launchers;
 pub mod links;
 pub mod login_item;
+pub mod mcp_connections;
 pub mod paths;
 pub mod positions;
 pub mod provider_keys;

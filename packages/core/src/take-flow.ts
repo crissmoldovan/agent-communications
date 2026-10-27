@@ -14,6 +14,7 @@ import {
   type HandBackReason,
   isHandBackReason,
   isPerson,
+  isUnmatched,
   MAX_TAKEN_MESSAGES,
   TAKE_LEASE_MS,
   type TakeAct,
@@ -25,6 +26,7 @@ import {
   type TakeOutcome,
   type TakeRecord,
   type TakeStore,
+  unmatchedTakesNothing,
 } from './takes.ts';
 import { takingFor } from './taking.ts';
 
@@ -137,8 +139,9 @@ function resultOf(step: TakeStep, outcome: TakeOutcome): TakeStepResult {
 /**
  * One take step for one message (§5): `take` reads the message first, through the channel (`verify`, which refuses one
  * that is missing or not inbound, T5) and takes it; `hand-back` and `done` need the record a take made, and only the
- * holder may. `caller` null — the person — is refused (`personTakesNothing`). A take, a hand-back and a done write no
- * activity line (T10): the record's history is the story.
+ * holder may. `caller` null — the person — is refused (`personTakesNothing`), and so is an agent's shell that is no
+ * session (`unmatchedTakesNothing`, M4): a take made there could be matched to nothing it does next. A take, a hand-back
+ * and a done write no activity line (T10): the record's history is the story.
  */
 export async function takeStep(
   store: TakeStore,
@@ -153,6 +156,7 @@ export async function takeStep(
 ): Promise<TakeStepResult> {
   const { caller, request, ref, act } = args;
   if (caller === null) throw personTakesNothing(args.handoffs, act.account, ref.id);
+  if (isUnmatched(caller)) throw unmatchedTakesNothing(caller);
   switch (request.step) {
     case 'take':
       return resultOf('take', await store.take(await args.verify(), caller));

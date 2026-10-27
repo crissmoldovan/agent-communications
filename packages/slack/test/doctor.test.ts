@@ -527,7 +527,7 @@ test('a registered entry whose runtime is gone is a failure with the command tha
   assert.match(check?.detail ?? '', /is not there any more/);
   assert.equal(
     check?.fix,
-    slackCommand(TEST_PATHS, ['mcp', 'install', '--client', 'claude-code', '--force'], 'darwin'),
+    slackCommand(TEST_PATHS, ['mcp', 'install', '--client', 'claude-code', '--standalone', '--force'], 'darwin'),
   );
 });
 

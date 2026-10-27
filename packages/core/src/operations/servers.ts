@@ -21,7 +21,7 @@ import { accountNoun, hasNarrowing, listed, narrowingOwner, pinOption } from '..
 import { locateCliCommand } from '../cli-command.ts';
 import type { Config } from '../config.ts';
 import { registeredOrConnected } from '../connection-registrations.ts';
-import { CONNECTION_KEY_ENV, readConnections, withConnection } from '../connections.ts';
+import { CONNECTION_KEY_ENV, connectionLabel, partFacts, readConnections, withConnection } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { writeFileAtomic } from '../fs.ts';
@@ -262,6 +262,11 @@ export interface ServerInstallRequest {
 export interface ConnectionEntryRequest {
   readonly id: string;
   readonly name: string;
+  /**
+   * How the preview names it (`connectionLabel`): its name, app, place and short id — "new" for one being added. Left
+   * out, its name alone: an entry only applied, never previewed.
+   */
+  readonly label?: string | undefined;
   readonly key: string;
   readonly scope?: 'user' | 'local' | undefined;
   readonly folder?: string | undefined;
@@ -702,7 +707,7 @@ export function serverInstallChange(
         effects.push(
           request.connection === undefined
             ? `registers the ${label} MCP server with ${request.client} as "${name}"${pins.length > 0 ? `, ${pins.join(', ')}` : ''}${replacing}`
-            : `registers the connection "${request.connection.name}" with ${request.client} as "${name}"${request.connection.scope === 'local' ? `, for the project ${request.connection.folder ?? ''} only` : ''}: one entry that starts Agent Comms with its parts, its key in the entry's environment${previous.length > 0 ? ', replacing its own earlier entry' : ''}`,
+            : `registers the connection ${request.connection.label ?? `"${request.connection.name}"`} with ${request.client} as "${name}"${request.connection.scope === 'local' ? `, for the project ${request.connection.folder ?? ''} only` : ''}: one entry that starts Agent Comms with its parts, its key in the entry's environment${previous.length > 0 ? ', replacing its own earlier entry' : ''}`,
         );
         /*
          * What it may reach, said when it is everything rather than left to be inferred from a pin not mentioned.
@@ -732,7 +737,7 @@ export function serverInstallChange(
           if (!read.readable || read.record.revokedAt !== null || read.record.app !== request.client) continue;
           if (!read.record.parts.some((part) => part.server === request.channel)) continue;
           effects.push(
-            `${request.client} reaches the ${label} server through the connection "${read.record.name}" already: registered on its own too, the agent sees the same tools twice`,
+            `${request.client} reaches the ${label} server through the connection ${connectionLabel(read.record, read.record.id)} already: registered on its own too, the agent sees the same tools twice`,
           );
         }
       }
@@ -1094,8 +1099,13 @@ async function remedyLocated(error: unknown, core: Core): Promise<unknown> {
   const server = SERVERS.find((each) => serverFacts(each).binary === remedy.binary);
   if (server === undefined) return error;
   const maker = await requireHandoffs(core).registered();
+  // A channel's own `mcp install` registers an entry of its own only with `--standalone` (D17); core's always does.
+  const words =
+    server === 'core' || !isChannel(server)
+      ? remedy.words
+      : [...remedy.words.slice(0, 4), '--standalone', ...remedy.words.slice(4)];
   const handoff = isChannel(server)
-    ? maker.of(server, remedy.words)
+    ? maker.of(server, words)
     : maker.core(['mcp', 'install', '--server', server, ...remedy.words.slice(2)]);
   return new CommsError(error.code, error.message, {
     hint: handoffSentence(handoff, remedy.say),
@@ -1449,6 +1459,15 @@ export interface ChannelAvailability {
   registered: ChannelRegistration[];
   /** The MCP connections that reach this server (§9.2): each by id, name and app. */
   viaConnections: { id: string; name: string; app: string }[];
+  /**
+   * What it takes as a part of an MCP connection (§11, D20) — the account it can be kept to, by its option and what one
+   * is called, and whether it can be started read-only — so the app keeps no table of its own; null for a server no
+   * connection can have.
+   */
+  part: {
+    account: { option: 'inbox' | 'workspace' | 'account'; noun: string } | null;
+    readOnly: boolean;
+  } | null;
 }
 
 export interface ChannelsReport {
@@ -1480,6 +1499,16 @@ async function versionBehind(binPath: string, packageName: string): Promise<stri
     dir = dirname(dir);
   }
   return null;
+}
+
+/** A server's choices as a connection's part, from core's snapshot of the declarations (`partFacts`). */
+function partChoice(server: string): ChannelAvailability['part'] {
+  const facts = partFacts(server);
+  if (facts === undefined) return null;
+  return {
+    account: facts.pin === undefined ? null : { option: facts.pin, noun: facts.noun ?? 'account' },
+    readOnly: facts.readOnlySwitch,
+  };
 }
 
 /**
@@ -1535,6 +1564,7 @@ export async function channelsAvailable(core: Core, env: NodeJS.ProcessEnv): Pro
       onPath,
       registered,
       viaConnections,
+      part: partChoice(channel),
     });
   }
   return { core: VERSION, channels, unreadable: scan.unreadable };

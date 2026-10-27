@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { CommsError, clockTime, homeDirectory, homeForDiscovery, shortenHome } from '@agentcomms/core';
+import { CommsError, clockTime, homeDirectory, homeForDiscovery, shortenHome, type TakenView } from '@agentcomms/core';
 import { type TargetDocument, targetLane } from '../domain/activation-documents.ts';
 import {
   isActivityKey,
@@ -125,6 +125,15 @@ interface Task {
 interface Waiter {
   readonly check: () => void;
   readonly stop: (error: CommsError) => void;
+}
+
+/**
+ * `events_lane_item`'s item: the queue's, as `queue show` gives it, with `taken` — who has its message (taking design
+ * §6): null, or `{ state, by?: 'you' | 'another session' | 'the person', since?, leaseUntil?, offered?: { to: 'you' |
+ * 'another session', until }, handedBack? }`, in T7's closed words only.
+ */
+export interface LaneItemV1 extends QueueItemV1 {
+  readonly taken: TakenView;
 }
 
 export interface LaneServiceOptions {
@@ -662,15 +671,19 @@ export class LaneService {
     });
   }
 
-  /** `events_lane_item`: one item of the caller's lane, since its binding, enveloped as `queue show` gives it. */
-  async item(itemId: unknown, caller: LaneWindowIdentity): Promise<{ readonly item: QueueItemV1 }> {
+  /**
+   * `events_lane_item`: one item of the caller's lane, since its binding, enveloped as `queue show` gives it — and
+   * `taken`, who has its message in the closed words an agent may see (taking design §6, T7), or null.
+   */
+  async item(itemId: unknown, caller: LaneWindowIdentity): Promise<{ readonly item: LaneItemV1 }> {
     this.seen(caller);
     const binding = this.#bindingFor(caller);
     if (binding === undefined) return noLaneHere();
     const read = await this.#queue.laneItem(itemId, binding.lane, binding.since);
     // Only an item the window was given is read; a refusal above names nothing and records nothing.
     this.#record(read.item.id, 'read', caller.activityKey);
-    return read;
+    const taken = (await this.#offers?.takenOfItem(read.item.id, caller)) ?? null;
+    return { item: { ...read.item, taken } };
   }
 
   /** The queue's delivery boundary appended an item: settle every watch and long-poll now rather than on its next look. */

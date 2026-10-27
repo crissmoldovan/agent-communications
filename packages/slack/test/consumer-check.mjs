@@ -181,6 +181,8 @@ try {
     'slack_search',
     // Prepares a standing approval for a person to approve at their terminal with its code: it approves nothing.
     'slack_standing_add',
+    'slack_take',
+    'slack_taken',
     'slack_thread',
     // Connecting and changing a workspace: whatever loosens it or removes it waits for a change approval.
     'slack_workspace_add',
@@ -209,7 +211,18 @@ try {
  * in a client config it had already written. `--client json --print` writes nothing and `--no-verify` starts nothing
  * from the registry, so this reads the entry without installing anything.
  */
-const printed = run('mcp', 'install', '--client', 'json', '--launcher', 'npx', '--print', '--no-verify', '--json');
+const printed = run(
+  'mcp',
+  'install',
+  '--client',
+  'json',
+  '--standalone',
+  '--launcher',
+  'npx',
+  '--print',
+  '--no-verify',
+  '--json',
+);
 assert.equal(printed.status, 0, `mcp install --print failed: ${printed.stdout.slice(0, 400)}`);
 const install = JSON.parse(printed.stdout);
 assert.equal(install.ok, true);

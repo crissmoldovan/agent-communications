@@ -1,7 +1,9 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Call, CliResult, Installation } from '../ipc.ts';
+import { MESSAGES_COPY } from '../screens/Messages.tsx';
 import { PEOPLE_COPY, SEARCH_COPY, SEARCH_SETTINGS_COPY } from '../screens/search/copy.ts';
+import { TAKE_ACTIONS_COPY } from '../screens/TakeActions.tsx';
 import { createFakeBridge, EXAMPLE_INSTALLATION, type FakeBridge, failed, ok } from './fake-bridge.ts';
 import activityItems from './fixtures/activity-items.json';
 import searchPeople from './fixtures/search-people.json';
@@ -9,6 +11,8 @@ import searchPerson from './fixtures/search-person.json';
 import searchQuery from './fixtures/search-query.json';
 import statusNever from './fixtures/search-status.never.json';
 import statusOn from './fixtures/search-status.on.json';
+import takesList from './fixtures/takes-list.json';
+import taking from './fixtures/taking.json';
 import { renderApp } from './render.tsx';
 
 /*
@@ -227,7 +231,11 @@ describe('Ask about past messages', () => {
       activityItems: () => ok({ items: {} }),
     });
     renderApp(bridge, { screen: 'messages' });
-    const tabs = await screen.findByRole('navigation', { name: 'Messages' });
+    // Messages draws its tabs over a spinner first, and again once it knows the event service: the first ones are gone
+    // by then, and a click on them is lost. Under load that is what kept this test from ever seeing Search; take the
+    // tabs the settled screen draws.
+    await screen.findByText(MESSAGES_COPY.nothing, {}, { timeout: 15_000 });
+    const tabs = screen.getByRole('navigation', { name: 'Messages' });
     expect(within(tabs).getByRole('button', { name: 'All messages' }).getAttribute('aria-current')).toBe('page');
     fireEvent.click(within(tabs).getByRole('button', { name: SEARCH_COPY.heading }));
     // The whole app renders Search for the first time here: it is given room on a loaded machine.
@@ -277,6 +285,39 @@ describe('Ask about past messages', () => {
       expect(new Set(searchKinds(bridge))).toEqual(
         new Set(['searchStatus', 'searchPeople', 'searchIndex', 'searchQuery']),
       );
+    },
+  );
+
+  it(
+    'a found message’s story says who has it, read as Messages reads it, and Take back reads it again (0.35.0)',
+    SLOW,
+    async () => {
+      const bridge = bridgeAt('0.35.0', {
+        takesList: () => ok(takesList),
+        taking: () => ok(taking),
+        takesRelease: () => ok({ account: 'x', message: 'y', state: 'open', changed: true, take: null }),
+      });
+      renderApp(bridge, { screen: 'search' });
+      await ask('invoices');
+      await waitFor(() => expect(main().querySelectorAll('li[data-hit]')).toHaveLength(3));
+      // Nothing of taking is read until a story opens.
+      expect(asked(bridge, 'takesList')).toEqual([]);
+      const slack = main().querySelector<HTMLElement>('li[data-hit]') as HTMLElement;
+      // Its story is a press away once what was done is joined in.
+      await waitFor(() => expect(slack.textContent).toContain('Acknowledged'));
+      fireEvent.click(within(slack).getByRole('button', { name: SEARCH_COPY.open }));
+      const who = await within(main()).findByRole('region', { name: TAKE_ACTIONS_COPY.who });
+      await waitFor(() => expect(who.textContent).toContain('The agent in ~/work/acme has it'));
+      // The same closed reads Messages makes, and Resend's accounts with them, as Messages reads them.
+      expect(asked(bridge, 'takesList')).toEqual([{ kind: 'takesList', since: '30d' }]);
+      expect(asked(bridge, 'taking')).toEqual([{ kind: 'taking' }]);
+      expect(asked(bridge, 'accounts').map((call) => call.product)).toContain('resend');
+      fireEvent.click(within(who).getByRole('button', { name: TAKE_ACTIONS_COPY.takeBack }));
+      expect(await within(who).findByText(TAKE_ACTIONS_COPY.released)).toBeTruthy();
+      expect(asked(bridge, 'takesRelease')).toEqual([
+        { kind: 'takesRelease', account: 'example/slack', message: 'D0EXAMPLE1/1792927860.000100' },
+      ]);
+      await waitFor(() => expect(asked(bridge, 'takesList')).toHaveLength(2));
     },
   );
 

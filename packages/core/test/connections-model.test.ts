@@ -11,9 +11,11 @@ import {
   connectionReach,
   newConnectionId,
   newConnectionKey,
+  newConnectionNameProblem,
   readConnections,
   storedConnection,
   withConnection,
+  withRemovalBehind,
 } from '../src/connections.ts';
 import { openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
@@ -28,6 +30,9 @@ import { tempDir } from './helpers/temp.ts';
 const MAIL = { id: 'ibx_AAAAAAAAAAAAAAAA', alias: 'cue/gmail' };
 const OTHER_MAIL = { id: 'ibx_BBBBBBBBBBBBBBBB', alias: 'wf/gmail' };
 const KEY = newConnectionKey();
+/** How a preview names the record below: as one being added, and as one already there (0.35.0 review, M1). */
+const ADDED = 'connections["Claude Code · cue++" (Claude Code, every folder, new)]';
+const HELD = 'connections["Claude Code · cue++" (Claude Code, every folder, cn_0123…)]';
 
 function record(over: Partial<ConnectionRecord> = {}): ConnectionRecord {
   return {
@@ -137,16 +142,14 @@ test('§6.2 loosenings: adding a connection or a part, unpinning or moving a pin
   const paths = (after: Config) => loosened(base, after).map((change) => change.path);
   assert.deepEqual(
     loosened(none, base).map((change) => [change.path, change.before]),
-    [['connections["Claude Code · cue++"]', null]],
+    [[ADDED, null]],
   );
   const [added] = loosened(none, base);
   assert.match(String(added?.after), /Gmail, the mailbox cue\/gmail, read-only; Events/);
   const parts = (next: ConnectionRecord['parts']) => withRecords(storedConnection(record({ parts: next })));
-  assert.deepEqual(paths(parts([...record().parts, { server: 'slack' }])), [
-    'connections["Claude Code · cue++"].parts.slack',
-  ]);
+  assert.deepEqual(paths(parts([...record().parts, { server: 'slack' }])), [`${HELD}.parts.slack`]);
   assert.deepEqual(paths(parts([{ server: 'core' }, { server: 'gmail', readOnly: true }, { server: 'events' }])), [
-    'connections["Claude Code · cue++"].parts.gmail.pin',
+    `${HELD}.parts.gmail.pin`,
   ]);
   const unpinned = loosened(
     base,
@@ -155,17 +158,40 @@ test('§6.2 loosenings: adding a connection or a part, unpinning or moving a pin
   assert.deepEqual([unpinned[0]?.before, unpinned[0]?.after], ['cue/gmail', 'every mailbox']);
   assert.deepEqual(
     paths(parts([{ server: 'core' }, { server: 'gmail', pin: OTHER_MAIL, readOnly: true }, { server: 'events' }])),
-    ['connections["Claude Code · cue++"].parts.gmail.pin'],
+    [`${HELD}.parts.gmail.pin`],
   );
   assert.deepEqual(paths(parts([{ server: 'core' }, { server: 'gmail', pin: MAIL }, { server: 'events' }])), [
-    'connections["Claude Code · cue++"].parts.gmail.readOnly',
+    `${HELD}.parts.gmail.readOnly`,
   ]);
   // A connection cut off that serves again is the loosening adding it is.
   const revoked = withRecords(storedConnection(record({ revokedAt: '2026-10-27T10:00:00.000Z' })));
   assert.deepEqual(
     loosened(revoked, base).map((change) => change.path),
-    ['connections["Claude Code · cue++"]'],
+    [HELD],
   );
+});
+
+test('H1: a connection removed loosens only where its plan says what its entry would hand the agents behind it', () => {
+  const base = withRecords(storedConnection(record()));
+  const removed = withRecords();
+  // Removing loosens nothing as config.json alone shows it…
+  assert.deepEqual(loosened(base, removed), []);
+  // …but a remove's plan whose entry shadows a wider one marks its before side, and that is a loosening, bound.
+  const behind =
+    'removed: agents in ~/work/acme use the connection "Everywhere" (Claude Code, every folder, cn_EFGH…): Agent Comms itself; Gmail, every mailbox';
+  const marked = withRemovalBehind(base, record().id, behind);
+  assert.deepEqual(loosened(marked, removed), [
+    {
+      path: HELD,
+      before: 'Agent Comms itself; Gmail, the mailbox cue/gmail, read-only; Events',
+      after: behind,
+      id: record().id,
+    },
+  ]);
+  // The mark is the plan's alone: on the after side, or on a connection that stays, it is no loosening.
+  assert.deepEqual(loosened(base, marked), []);
+  assert.deepEqual(loosened(marked, base), []);
+  assert.equal(JSON.stringify(base).includes(behind), false, 'nothing is marked in the configuration itself');
 });
 
 test('§6.2 tightenings and neutral changes loosen nothing: a part removed, a pin added, read-only on, cut off, renamed, a new key', () => {
@@ -200,7 +226,7 @@ test('§6.2 tightenings and neutral changes loosen nothing: a part removed, a pi
   const narrowed = cases[0]?.[1] as Config;
   assert.deepEqual(
     changedSettings(wide, narrowed).map((change) => change.path),
-    ['connections["Claude Code · cue++"].parts'],
+    [`${HELD}.parts`],
   );
 });
 
@@ -256,6 +282,26 @@ test('a name is 1 to 64 printable characters with no quotes, newlines or bidi co
   }
 });
 
+test('LOW 6: a new name has no brackets or ellipsis, which a preview’s label uses; one that has them already still reads', () => {
+  const imitation = 'Everywhere) (Claude Code, every folder, cn_0MCZ…';
+  for (const name of [imitation, 'Work (old', 'Work)', 'Work…']) {
+    assert.equal(
+      newConnectionNameProblem(name),
+      'a connection’s name has no brackets or “…”: a preview puts its app, place and id there',
+      name,
+    );
+    // Read as a name a record has: no migration, it still reads and still works.
+    assert.equal(connectionNameProblem(name), null, name);
+  }
+  // Everything the rule for a name refuses, a new name refuses too; what it allows, a new one does.
+  assert.equal(newConnectionNameProblem('Work — Claude Code'), null);
+  assert.equal(newConnectionNameProblem('quote"d'), connectionNameProblem('quote"d'));
+  assert.equal(newConnectionNameProblem(''), connectionNameProblem(''));
+  const [read] = readConnections(withRecords(storedConnection(record({ name: imitation })))).connections;
+  assert.ok(read?.readable, JSON.stringify(read));
+  assert.equal(read.record.name, imitation);
+});
+
 test('a connection loosened without consent is refused by the store, and one narrowed is written at once', async () => {
   const home = tempDir('comms-connections-');
   const configDir = join(home, 'config');
@@ -275,11 +321,11 @@ test('a connection loosened without consent is refused by the store, and one nar
   await assert.rejects(core.config.update(put(record())), (error: unknown) => {
     assert.ok(error instanceof CommsError);
     assert.equal(error.code, 'LOOSENING_REFUSED');
-    assert.match(error.message, /connections\["Claude Code · cue\+\+"\]/);
+    assert.ok(error.message.includes(ADDED), error.message);
     return true;
   });
   await core.config.update(put(record()), {
-    consent: { kind: 'loosening-consent', paths: ['connections["Claude Code · cue++"]'] },
+    consent: { kind: 'loosening-consent', paths: [ADDED] },
   });
   // Narrowing applies at once, with no consent: read-only already, now Gmail is gone too.
   await core.config.update(put(record({ parts: [{ server: 'core' }, { server: 'events' }] })));

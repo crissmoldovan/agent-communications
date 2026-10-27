@@ -64,7 +64,7 @@ import {
 import { sendCertainlyRefused, sendThrottleOf, throttledRefusal } from '../gmail-api/errors.ts';
 import { type GmailTransport, providerId } from '../gmail-api/transport.ts';
 import { SENT_FOR_SEARCH } from '../search-capture.ts';
-import { pinGmailTake, requireGmailTake } from '../takes.ts';
+import { pinGmailTake, requireGmailTake, threadAnswered } from '../takes.ts';
 import { VERSION } from '../version.ts';
 import { refuseWhileSending } from './drafts.ts';
 import type { HistoryResult } from './history-cache.ts';
@@ -908,9 +908,20 @@ function replyToOf(proof: ReplyProof | undefined): ActivityReplyTo | undefined {
     : { messageId: proof.messageId, ...(proof.threadId === undefined ? {} : { threadId: proof.threadId }) };
 }
 
-/** The message a proven reply answers, as a take names it: a message this mailbox received, never its own (§6). */
-function answeredBy(proof: ReplyProof | undefined): string | undefined {
-  return proof === undefined || proof.sent ? undefined : proof.messageId;
+/**
+ * The message a proven reply answers, as a take names it (§6): a message this mailbox received, never its own. A
+ * follow-up to its own mail answers its thread's newest message this mailbox received, and is refused while another
+ * session has any of them (`threadAnswered`, security review of 0.35.0) — none, in a thread of its own mail alone.
+ */
+async function answeredBy(
+  context: GmailContext,
+  transport: GmailTransport,
+  resolved: ResolvedInbox,
+  proof: ReplyProof | undefined,
+): Promise<string | undefined> {
+  if (proof === undefined) return undefined;
+  if (!proof.sent) return proof.messageId;
+  return threadAnswered(context, transport, resolved, proof.threadId);
 }
 
 /**
@@ -927,9 +938,9 @@ async function answeredAtClaim(
   known: ReplyProof | undefined,
 ): Promise<string | undefined> {
   if (messageIdOf(analysis.inReplyTo) === undefined) return undefined;
-  if (known !== undefined) return answeredBy(known);
+  if (known !== undefined) return answeredBy(context, transport, resolved, known);
   const matters = takeRequiredIn(config, resolved.inbox.id) || (await context.core.takes.recordsIn(resolved.inbox.id));
-  return matters ? answeredBy(await replyProofOf(transport, analysis)) : undefined;
+  return matters ? answeredBy(context, transport, resolved, await replyProofOf(transport, analysis)) : undefined;
 }
 
 /** A send's recipients as its activity line keeps them: To, Cc and Bcc, as addresses. */
@@ -976,8 +987,8 @@ async function prepareOneSend(
   requireMailActs(context, config, resolved, placeActs(first.analysis, firstProof), first.analysis);
   // Taking messages (design 2026-10-26-taking-messages §6): a reply to a message this mailbox received needs this
   // session's take where the mailbox asks for one, and is refused while someone else has it — before the draft is
-  // relabelled, and before any approval or preview exists. A follow-up to its own mail answers nobody's.
-  const firstAnswered = answeredBy(firstProof);
+  // relabelled, and before any approval or preview exists. A follow-up to its own mail answers its thread's.
+  const firstAnswered = await answeredBy(context, transport, resolved, firstProof);
   const firstTake =
     firstAnswered === undefined ? null : await requireGmailTake(context, resolved, firstAnswered, 'gmail.send.prepare');
   // Who it appears to come from, and a From that says so — rewritten, its header alone, when it does not (G2).
@@ -987,7 +998,7 @@ async function prepareOneSend(
   const proof = analysis.inReplyTo === first.analysis.inReplyTo ? firstProof : await replyProofOf(transport, analysis);
   const acts = placeActs(analysis, proof);
   const allowed = requireMailActs(context, config, resolved, acts, analysis);
-  const answered = answeredBy(proof);
+  const answered = proof === firstProof ? firstAnswered : await answeredBy(context, transport, resolved, proof);
   const take =
     answered === firstAnswered
       ? firstTake

@@ -286,7 +286,7 @@ Read a draft back, with the same preview the person would approve. Show the prev
 
 ### `gmail_setup`
 
-Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_server_install with channel "gmail" (the agent connection).
+Where this machine is in connecting Gmail, and the one thing to do next: the eligible client for a target mailbox, connected mailboxes, registered MCP clients, and any Google Cloud steps still needed. Call this when asked to set up Gmail, before anything else. With `profile`, it adds that organisation profile through its own `orgApproval`, then continues; without one it changes nothing. The remaining steps are gmail_client_add (a client of one’s own), gmail_inbox_add then gmail_inbox_finish (a mailbox), and the core server’s comms_connection_change with `add` {server: "gmail"} and the client as `app` (the agent connection; comms_server_install with channel "gmail" registers an entry of Gmail’s own instead).
 
 *writes*
 
@@ -325,7 +325,7 @@ Begin connecting a Gmail account. Returns a sign-in link and stops — this serv
 
 ### `gmail_inbox_finish`
 
-Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and registering the server is a change of its own that this tool does not make — call the core server’s comms_server_install with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).
+Complete a sign-in started by gmail_inbox_add or gmail_inbox_reauth, once Google has returned a grant for it. APPROVAL_PENDING means the browser flow has not completed yet and the link is still good — wait and call again, do not start a new one. When the browser is on another machine and its page could not load, pass the whole address it ended up at as `url`. A sign-in handed off by the Gmail CLI’s `setup --mcp-client` also returns `pendingRegistration`: the mailbox is connected, and putting Gmail into the client’s MCP connection is a change of its own that this tool does not make — call the core server’s tool it names (comms_connection_change; comms_server_install after `setup --standalone`) with the arguments it gives. The same as `inbox add --finish` in the Gmail CLI (or `inbox reauth --finish`).
 
 *writes*
 

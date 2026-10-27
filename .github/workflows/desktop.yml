@@ -29,6 +29,8 @@ on:
       - 'packages/core/src/name-grammar.ts'
       - 'packages/core/src/operations/label.ts'
       - 'packages/core/src/activity.ts'
+      - 'packages/core/src/operations/search.ts'
+      - 'packages/core/src/search/**'
       - 'packages/*/package.json'
       # The rule text the app's editor imports from the events package's source (0.33.0), and what it imports.
       - 'packages/events/src/**'
@@ -65,6 +67,8 @@ on:
       - 'packages/core/src/name-grammar.ts'
       - 'packages/core/src/operations/label.ts'
       - 'packages/core/src/activity.ts'
+      - 'packages/core/src/operations/search.ts'
+      - 'packages/core/src/search/**'
       - 'packages/*/package.json'
       # The rule text the app's editor imports from the events package's source (0.33.0), and what it imports.
       - 'packages/events/src/**'

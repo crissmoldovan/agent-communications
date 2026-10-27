@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  agentMarkerHint,
   asV2,
   commandText,
   EXIT_CODES,
@@ -567,7 +568,7 @@ test('mcp install writes an entry that really starts the server, once the regist
   const harness = await newHarness({ accounts: [{ sub: 'sub-1', email: 'jo@example.test' }] });
   await harness.addInbox({ alias: 'work', email: 'jo@example.test', sub: 'sub-1', refreshToken: 'rt_x' });
   const home = tempDir();
-  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--json'];
+  const argv = ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'local', '--json'];
 
   // Registering a server is a change a person approves: an agent gets the preview and an id, and nothing is written.
   const asked = await cli(harness, argv, { env: { HOME: home, USERPROFILE: home } });
@@ -623,7 +624,7 @@ test(
     await chmod(join(bin, 'npx'), 0o755);
     const home = tempDir();
     const env = { HOME: home, USERPROFILE: home, PATH: bin };
-    const argv = ['mcp', 'install', '--client', 'json', '--launcher', 'npx'];
+    const argv = ['mcp', 'install', '--client', 'json', '--standalone', '--launcher', 'npx'];
 
     const json = await cli(harness, [...argv, '--json'], { env });
     assert.equal(json.code, EXIT_CODES.UNAVAILABLE, json.stdout);
@@ -649,7 +650,7 @@ test('mcp install warns when another Gmail server is registered with that client
   // come through the change `comms_server_install` makes too, from the channel's facts in core.
   const result = await approving(
     harness,
-    ['mcp', 'install', '--client', 'cursor', '--launcher', 'local', '--no-verify'],
+    ['mcp', 'install', '--client', 'cursor', '--standalone', '--launcher', 'local', '--no-verify'],
     {
       env: { HOME: home, USERPROFILE: home },
     },
@@ -671,7 +672,7 @@ test('mcp install --print changes nothing and shows the snippet', async () => {
   const home = tempDir();
   const result = await cli(
     harness,
-    ['mcp', 'install', '--client', 'claude-desktop', '--launcher', 'local', '--no-verify', '--print'],
+    ['mcp', 'install', '--client', 'claude-desktop', '--standalone', '--launcher', 'local', '--no-verify', '--print'],
     { env: { HOME: home, USERPROFILE: home } },
   );
   assert.equal(result.code, 0);
@@ -1070,7 +1071,8 @@ test('approving a send refuses an agent, and refuses a pipe', async () => {
     assert.equal(agent.code, EXIT_CODES.APPROVAL);
     assert.equal(
       agent.json<Envelope<never>>().error?.hint,
-      `Ask the user to run ${gmailInline(harness.core.paths, ['approve', 'ap_whatever'], platform)} in their own terminal; learn when they have with ${gmailInline(harness.core.paths, ['send', 'wait', 'ap_whatever'], platform)}.`,
+      // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review).
+      `Ask the user to run ${gmailInline(harness.core.paths, ['approve', 'ap_whatever'], platform)} in their own terminal; learn when they have with ${gmailInline(harness.core.paths, ['send', 'wait', 'ap_whatever'], platform)}. ${agentMarkerHint('CLAUDECODE', platform)}`,
       platform,
     );
   }
@@ -1711,11 +1713,16 @@ test('an interactive setup with an explicit flag does not ask what you already s
     // `--launcher local` so this registers the checkout rather than running an `npm install` of a managed
     // runtime — which is what the default does, and what made the first version of this test reach into the
     // machine's real data directory.
-    cli(harness, ['setup', '--mcp-client', 'codex', '--launcher', 'local', '--no-browser', '--no-tui'], {
-      tty: true,
-      env: { HOME: home, USERPROFILE: home },
-      stdin: 'n\nn\nn\n',
-    }),
+    // `--standalone`: an entry of Gmail's own, which codex's absent CLI prints — install-connection.test.ts holds the default.
+    cli(
+      harness,
+      ['setup', '--mcp-client', 'codex', '--standalone', '--launcher', 'local', '--no-browser', '--no-tui'],
+      {
+        tty: true,
+        env: { HOME: home, USERPROFILE: home },
+        stdin: 'n\nn\nn\n',
+      },
+    ),
     new Promise<never>((_resolve, reject) =>
       setTimeout(
         () => reject(new Error('setup was still running after 30s: it went somewhere that waits for a browser')),
@@ -1772,7 +1779,7 @@ test('setup --launcher reaches the headless agent step, and the entry it writes 
 
   const { first, second: result } = await settingUp(
     harness,
-    ['setup', '--mcp-client', 'cursor', '--launcher', 'local'],
+    ['setup', '--mcp-client', 'cursor', '--standalone', '--launcher', 'local'],
     { env: { HOME: home, USERPROFILE: home } },
   );
   // The preview names the checkout it will start: the flag had arrived before anybody was asked.
@@ -1815,7 +1822,7 @@ test('setup --replace-server keeps the mailbox pin and --read-only of the entry 
 
   const { first, second: result } = await settingUp(
     harness,
-    ['setup', '--mcp-client', 'cursor', '--launcher', 'local', '--replace-server'],
+    ['setup', '--mcp-client', 'cursor', '--standalone', '--launcher', 'local', '--replace-server'],
     { env: { HOME: home, USERPROFILE: home } },
   );
   // What the person approved already said so: the replacement, and the narrowing it keeps.
@@ -1865,7 +1872,7 @@ test('every option `mcp` and `mcp install` both define reaches the registered en
 
   for (const option of shared) {
     const typed = [option, ...(expected[option]?.value ? [expected[option].value] : [])];
-    const install = ['--client', 'json', '--launcher', 'local', '--no-verify'];
+    const install = ['--client', 'json', '--standalone', '--launcher', 'local', '--no-verify'];
     for (const argv of [
       ['mcp', 'install', ...typed, ...install],
       ['mcp', ...typed, 'install', ...install],
@@ -1888,7 +1895,7 @@ test('mcp install exits non-zero when the client CLI is missing and nothing was 
   const home = tempDir();
   const result = await cli(
     harness,
-    ['--json', 'mcp', 'install', '--client', 'claude-code', '--launcher', 'local', '--no-verify'],
+    ['--json', 'mcp', 'install', '--client', 'claude-code', '--standalone', '--launcher', 'local', '--no-verify'],
     { env: { HOME: home, USERPROFILE: home, PATH: tempDir() } },
   );
   assert.equal(result.code, EXIT_CODES.UNAVAILABLE, result.stdout);
@@ -1912,6 +1919,7 @@ test('`mcp install --inbox` actually pins the registered server', async () => {
     'install',
     '--client',
     'json',
+    '--standalone',
     '--launcher',
     'local',
     '--inbox',

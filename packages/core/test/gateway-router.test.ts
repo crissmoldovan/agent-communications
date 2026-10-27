@@ -473,6 +473,24 @@ test('D15: a connection cut off stops every part at once, lists nothing, and ref
   await waitFor(() => pids.every((pid) => pid === null || !alive(pid)));
 });
 
+test('D15: a second refusal while the first is stopping the parts waits for it, and a call it refuses is answered after', async (t) => {
+  /*
+   * The timer's look and a request's look can both find the replaced key. The second `refuse` returned at once — the
+   * refusal was set — so its call was answered "replaced" while the first was still stopping the parts (the flake in
+   * gateway-serve.test.ts, "every part stopped", about 1 run in 2 once requests waited for the timer's look).
+   */
+  const routed = await viaRouter(t, [part('slack'), part('gmail')]);
+  assert.ok((await routed.client.listTools()).tools.length > 0);
+  const first = routed.router.refuse('this connection was cut off');
+  const second = routed.router.refuse('this connection was cut off');
+  await second;
+  assert.ok(
+    routed.router.status().every((each) => each.state === 'stopped'),
+    JSON.stringify(routed.router.status().map((each) => each.state)),
+  );
+  await first;
+});
+
 test('§4: a client relay keeps the SDK timeout lifted: a person slower than it is cut off only when the relay times out', async (t) => {
   // A 300 ms relay limit (the SDK default is 60 s, the gateway's 10 min) shows the failure the lift prevents.
   const slow = async (params: Record<string, unknown>) => {

@@ -606,6 +606,33 @@ function lastReopening(record: TakeView): TakeLineView | undefined {
   return [...record.history].reverse().find((line) => REOPENING.has(line.kind));
 }
 
+/** The lines that set what state a record is in; an acknowledgement does not. */
+const STATE_LINES: ReadonlySet<TakeLineKind> = new Set([...REOPENING, 'offered', 'given', 'taken', 'kept', 'done']);
+
+/**
+ * The newest line that left the message open, as "nobody took it" counts from it (§8, as the event service's sweep
+ * does): an offer that ran out counts from when it was made, not from when it ran out (security review of 0.35.0, M5) —
+ * being offered to one window is no session taking it, so the clock runs on through the offer.
+ */
+function reopenedFrom(record: TakeView): TakeLineView | undefined {
+  const index = record.history.findLastIndex((line) => REOPENING.has(line.kind));
+  if (index < 0) return undefined;
+  const line = record.history[index] as TakeLineView;
+  if (line.kind !== 'expired') return line;
+  for (let before = index - 1; before >= 0; before -= 1) {
+    const earlier = record.history[before] as TakeLineView;
+    if (earlier.kind === 'offered' || earlier.kind === 'given') return { ...line, at: earlier.at };
+    if (STATE_LINES.has(earlier.kind)) break;
+  }
+  return line;
+}
+
+/** When the offer `record` is in was made: its newest offered or given line, or null when no line says. */
+function offerMadeAt(record: TakeView): Millis | null {
+  const line = record.history.findLast((each) => each.kind === 'offered' || each.kind === 'given');
+  return line?.at ?? null;
+}
+
 /** Whether the message is open again because a session handed it back: what the Handed back filter shows. */
 export function isHandedBack(record: TakeView | null): boolean {
   return record !== null && record.state === 'open' && lastReopening(record)?.kind === 'handed-back';
@@ -644,7 +671,8 @@ const MINUTE_MS = 60_000;
  * Whether nobody took a message in time (§8, as the event service's sweep counts it): taking is required for its
  * account; it came in, and a rule matched it and delivered it to a lane, a session or the Queue; nobody has taken it,
  * marked it done or holds a live offer of it; and the account's window has passed since it arrived or was last open
- * again — at once for a hand-back that says it needs the person.
+ * again — at once for a hand-back that says it needs the person. A delivery's offer still waiting for its window lives
+ * only that window after it was made (M5), and an offer that ran out counts from when it was made.
  */
 export function notTakenOf(
   event: MessageEvent | null,
@@ -659,22 +687,31 @@ export function notTakenOf(
   );
   if (!matched || !delivered) return null;
   if (record !== null && (record.state === 'taken' || record.state === 'done')) return null;
-  const offeredUntil = record?.state === 'offered' ? (record.offer?.until ?? null) : null;
-  if (record?.state === 'offered' && (offeredUntil === null || offeredUntil > now)) return null;
+  const waitMs = setting.unclaimed.afterMinutes * MINUTE_MS;
+  const offer = record?.state === 'offered' ? record.offer : null;
+  const offerMade = record !== null && offer !== null ? offerMadeAt(record) : null;
+  // A live offer stops it: until its time — or, a delivery's still waiting for its window, until the account's window
+  // after it was made, when it lapses by itself (M5). Without a line saying when it was made, it is live.
+  const offerEnds =
+    offer === null ? null : (offer.until ?? (offer.byPerson || offerMade === null ? null : offerMade + waitMs));
+  if (record?.state === 'offered' && (offerEnds === null || offerEnds > now)) return null;
   const arrived = event.occurredAt ?? event.observedAt;
   if (arrived === null) return null;
   let since = arrived;
   let why: NotTaken['why'] = 'waited';
-  const reopened = record === null ? undefined : lastReopening(record);
+  const reopened = record === null ? undefined : reopenedFrom(record);
   if (reopened !== undefined && reopened.at >= since) {
     since = reopened.at;
     if (reopened.kind === 'handed-back' && reopened.reason === 'needs-the-person') why = 'needs-the-person';
   }
-  if (offeredUntil !== null && offeredUntil > since) {
-    since = offeredUntil;
+  // An offer that ran out, not yet written down: from when it was made, as one written down counts — or, with no line
+  // to say when, from when it ran out.
+  const offerFrom = offer === null ? null : (offerMade ?? offerEnds);
+  if (offerFrom !== null && offerFrom > since) {
+    since = offerFrom;
     why = 'waited';
   }
-  const due = why === 'needs-the-person' ? since : since + setting.unclaimed.afterMinutes * MINUTE_MS;
+  const due = why === 'needs-the-person' ? since : since + waitMs;
   return now >= due ? { since, due, why } : null;
 }
 

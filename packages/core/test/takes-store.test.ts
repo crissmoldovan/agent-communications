@@ -72,6 +72,9 @@ function storeAt(start = '2026-10-26T10:00:00.000Z', options: TakeStoreOptions =
     running: () => true,
     probe: async () => null,
     pinLive: async () => false,
+    // These cases are about a holder's parent, which only macOS and Linux read: a Windows runner tests them as
+    // Linux would, with the fake probe above; the one Windows case says `platform: 'win32'` itself.
+    platform: process.platform === 'win32' ? 'linux' : process.platform,
     ...options,
   });
   return {
@@ -501,6 +504,37 @@ test('pruning deletes records thirty days past their last change, and the folder
   assert.deepEqual(await store.list(), []);
 });
 
+test('a done, and the person’s keep, lapse with the record’s retention: read as none thirty days after they last changed', async () => {
+  // Security review of 0.35.0: a done never lapsed — every other session stayed refused DONE until a daily prune
+  // happened to run in some process after a write, which a refused act never is.
+  const DAY = 24 * 60 * 60_000;
+  const kept: TakeMessage = { ...MESSAGE, id: 'C0123/1729936900.000200' };
+  const { store, advance } = storeAt();
+  await store.take(MESSAGE, ALICE);
+  await store.finish(MESSAGE, ALICE, undefined, ACT);
+  await store.keep(kept, TERMINAL);
+  advance(29 * DAY);
+  assert.equal((await refusal(store.gate(MESSAGE, BOB, ACT, { required: false }))).details?.reason, 'DONE');
+  assert.equal((await refusal(store.take(MESSAGE, BOB))).details?.reason, 'DONE');
+  assert.equal((await refusal(store.take(kept, BOB))).details?.reason, 'PERSON');
+  advance(DAY);
+  // Thirty days on, as if the daily prune had deleted them, whether or not one has run since.
+  assert.equal(await store.read(MESSAGE), null);
+  assert.equal((await store.views([MESSAGE, kept], BOB)).get(MESSAGE.id), null);
+  assert.deepEqual(await store.list(), []);
+  await store.refuseHeldElsewhere([MESSAGE, kept], BOB);
+  assert.deepEqual(await store.gate(MESSAGE, BOB, ACT, { required: false }), { held: false, line: null });
+  assert.deepEqual(await store.lapse(), { ended: 0, expired: 0 });
+  const taken = await store.take(MESSAGE, BOB);
+  assert.equal(taken.view?.by, 'you');
+  assert.deepEqual(
+    taken.record.history.map((line) => line.kind),
+    ['taken'],
+    'a new record: nothing of the old one is carried',
+  );
+  assert.equal((await store.take(kept, BOB)).view?.by, 'you');
+});
+
 // ── Who a caller is (T2) ───────────────────────────────────────────────────────────────────────────────────────
 
 test('takerIdentity: the person at a terminal is nobody; a window, or a Claude Code session, is a holder', async () => {
@@ -520,18 +554,46 @@ test('takerIdentity: the person at a terminal is nobody; a window, or a Claude C
     env: {},
     identity: async () => session({ grouped: true }),
   });
-  assert.equal(joined?.key, 'aaaaaaaaaaaaaaaa');
+  assert.equal((joined as TakeHolder | null)?.key, 'aaaaaaaaaaaaaaaa');
   const claude = await takerIdentity(core, 'cli', undefined, {
     env: { CLAUDE_CODE_SESSION_ID: sid.toUpperCase() },
     identity: async () => session({}),
   });
-  assert.equal(claude?.sessionId, sid);
+  assert.equal((claude as TakeHolder | null)?.sessionId, sid);
   const server = await takerIdentity(core, 'mcp', undefined, {
     env: {},
     identity: async () => session({ surface: 'mcp' }),
   });
-  assert.equal(server?.grouped, false, 'a server is never the person');
+  assert.equal((server as TakeHolder | null)?.grouped, false, 'a server is never the person');
   assert.equal(claudeCodeSessionId({ CLAUDE_CODE_SESSION_ID: 'not-a-uuid' }), null);
+});
+
+test('takerIdentity hands an MCP transport’s own session id on, so two connections through one parent are two takers', async () => {
+  // Security review of 0.35.0 (LOW): it passed the option by its old name, `connection`, which the activity session no
+  // longer reads — so two transport sessions through one parent were one taker, each able to act on the other's take.
+  const facts = { 900: { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'Claude' } };
+  const probe: ProcessProbe = async (pid) => facts[pid as 900] ?? null;
+  const taker = async (pid: number, transportSession?: string) =>
+    (await takerIdentity({ activity: undefined }, 'mcp', undefined, {
+      env: {},
+      ...(transportSession === undefined ? {} : { transportSession }),
+      session: {
+        pid,
+        ppid: 900,
+        cwd: () => '/example/home/jo/work/acme',
+        probe,
+        platform: 'darwin',
+        home: '/example/home/jo',
+      },
+    })) as TakeHolder;
+  const viaA = await taker(105, 'conn-a');
+  const viaB = await taker(106, 'conn-b');
+  const plain = await taker(107);
+  assert.equal(viaA.grouped, true);
+  assert.notEqual(viaA.key, viaB.key, 'two connections are two takers');
+  assert.notEqual(viaA.key, plain.key);
+  assert.equal((await taker(108, 'conn-a')).key, viaA.key, 'the same connection is the same taker');
+  assert.equal(sameSession(viaA, viaB), false);
 });
 
 test('a command that joined no window holds no parent — its shell ends at once — and a renewal keeps what was known', async () => {
@@ -549,7 +611,7 @@ test('a command that joined no window holds no parent — its shell ends at once
       surface: 'cli',
     }),
   });
-  assert.equal(cli?.parent, null, 'the shell a command ran in is not the window');
+  assert.equal((cli as TakeHolder | null)?.parent, null, 'the shell a command ran in is not the window');
   // The window's server took it; the same session renews it from its shell: the window's parent is kept.
   const { store } = storeAt('2026-10-26T10:00:00.000Z', { running: (pid) => pid !== shell.pid });
   const server = holder({ sessionId: sid });

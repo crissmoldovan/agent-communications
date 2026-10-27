@@ -25,6 +25,7 @@ import {
 import { readActivitySettings } from '../src/activity-settings.ts';
 import { type GatedOutcome, gatedChange } from '../src/change-flow.ts';
 import { type Config, classifyChange } from '../src/config.ts';
+import { newConnectionId } from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
@@ -394,6 +395,58 @@ test('sessions(): two processes with one parent are one session; an ungrouped on
   assert.deepEqual(first?.client, { name: 'claude-code', version: '2.1.0' });
   assert.equal(second?.key, alone.key);
   assert.equal(second?.grouped, false);
+});
+
+test('D11: a session’s summary names the connection it was last used through — from today’s lines and a day’s index alike', async () => {
+  const state = tempDir();
+  let now = new Date('2026-10-25T12:00:00.000Z');
+  const log = new ActivityLog(state, { settings: ON, now: () => now });
+  const id = newConnectionId();
+  const window = session({ key: 'cccccccccccccccc', connection: { id, name: 'Work — Claude Code' } });
+  const plain = session({ key: 'dddddddddddddddd' });
+  await log.append(line({ at: '2026-10-25T10:00:00.000Z', session: window }));
+  // Renamed since: the summary says the name it had last.
+  await log.append(line({ at: '2026-10-25T11:00:00.000Z', session: { ...window, connection: { id, name: 'Acme' } } }));
+  // A line through no connection names none, and takes nothing away.
+  const { connection: _none, ...without } = window;
+  await log.append(line({ at: '2026-10-25T11:30:00.000Z', session: without }));
+  await log.append(line({ at: '2026-10-25T09:00:00.000Z', session: plain }));
+  const named = async () =>
+    new Map(
+      (await log.sessions()).map((summary) => [
+        summary.key,
+        summary.connection === undefined ? 'missing' : summary.connection,
+      ]),
+    );
+  const today = await named();
+  assert.deepEqual(today.get(window.key), { id, name: 'Acme' });
+  assert.equal(today.get(plain.key), null);
+  // The next day the 25th is read from its index, which keeps the connection too.
+  now = new Date('2026-10-26T12:00:00.000Z');
+  assert.deepEqual(await named(), today);
+  const index = join(state, 'activity', '.index', '2026-10-25.json');
+  const held = JSON.parse(readFileSync(index, 'utf8')) as { version: number; mark: string; sessions: unknown[] };
+  // An index written before summaries named a connection is made again from the day's lines, not read as none.
+  writeFileSync(
+    index,
+    `${JSON.stringify({
+      version: 1,
+      mark: held.mark,
+      sessions: held.sessions.map((each) => {
+        const { connection: _dropped, ...rest } = each as Record<string, unknown>;
+        return rest;
+      }),
+    })}\n`,
+  );
+  assert.deepEqual(await named(), today);
+  // And the CLI's view carries it, as the app reads it.
+  const m = machine();
+  await recordActivity(m.core, line({ at: new Date().toISOString(), session: window }));
+  const listed = await activitySessions(m.core, {});
+  assert.deepEqual(listed.sessions.find((summary) => summary.key === window.key)?.connection, {
+    id,
+    name: 'Work — Claude Code',
+  });
 });
 
 test('a CLI call joins the session of an agent window in its ancestors, and is its own session otherwise', async () => {

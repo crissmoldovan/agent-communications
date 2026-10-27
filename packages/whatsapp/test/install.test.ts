@@ -53,6 +53,7 @@ test('mcp install --account prints an entry that starts this release’s server 
     'install',
     '--client',
     'json',
+    '--standalone',
     '--launcher',
     'npx',
     '--print',
@@ -81,6 +82,7 @@ test('mcp install --account prints an entry that starts this release’s server 
     'install',
     '--client',
     'json',
+    '--standalone',
     '--launcher',
     'npx',
     '--print',
@@ -93,7 +95,18 @@ test('mcp install --account prints an entry that starts this release’s server 
 test('registering is a change a person approves; the approval is claimed with --approval, and the entry keeps the pin', async () => {
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
   await harness.ready(ACCOUNT);
-  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--account', ACCOUNT];
+  const argv = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'npx',
+    '--no-verify',
+    '--account',
+    ACCOUNT,
+  ];
   const asked = await harness.cli([...argv, '--json']);
   assert.equal(asked.code, 10, asked.stdout);
   const error = asked.json().error as { code: string; details: { approvalId: string; preview: string } };
@@ -147,6 +160,7 @@ test('an approval comms_server_install prepared is claimed by WhatsApp’s mcp i
     'install',
     '--client',
     'cursor',
+    '--standalone',
     '--launcher',
     'npx',
     '--no-verify',
@@ -164,7 +178,18 @@ test('a pin to an account that is not there, or is not WhatsApp’s, is refused 
   const harness = await newHarness();
   await harness.ready(ACCOUNT);
   const install = (account: string) =>
-    harness.cli(['mcp', 'install', '--client', 'json', '--print', '--no-verify', '--account', account, '--json']);
+    harness.cli([
+      'mcp',
+      'install',
+      '--client',
+      'json',
+      '--standalone',
+      '--print',
+      '--no-verify',
+      '--account',
+      account,
+      '--json',
+    ]);
   const missing = await install('nobody/whatsapp');
   assert.equal(missing.code, 66, missing.stdout);
   const config = harness.coreConfig();
@@ -201,7 +226,18 @@ test('under confirm, only a person approves — WhatsApp’s own approve, at a t
   const harness = await newHarness({ env: { CLAUDECODE: '1' } });
   await harness.ready(ACCOUNT);
   setChangePolicy(harness, 'confirm');
-  const argv = ['mcp', 'install', '--client', 'cursor', '--launcher', 'npx', '--no-verify', '--account', ACCOUNT];
+  const argv = [
+    'mcp',
+    'install',
+    '--client',
+    'cursor',
+    '--standalone',
+    '--launcher',
+    'npx',
+    '--no-verify',
+    '--account',
+    ACCOUNT,
+  ];
   const asked = await harness.cli([...argv, '--json']);
   const error = asked.json().error as { details: { approvalId: string; policy: string } };
   assert.equal(error.details.policy, 'confirm');
