@@ -409,7 +409,7 @@ Remove a connection: its entry is taken out of its app, saved first, and its key
 
 ### `comms_connection_migrate`
 
-Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. `client` keeps it to one app. With `undo` and a connection’s id, its parts become entries of their own again, under the names they had, and the connection goes. Either way a change: the first call returns `approvalRequired` with a preview naming every entry it writes, removes and leaves alone, and an approvalId. Tell the person the tools then appear under agentcomms — mcp__agentcomms__… — so permission rules that named the old servers need allowing again, and that the app needs one restart.
+Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. `client` keeps it to one app. With `undo` and a connection’s id, its parts become entries of their own again, under the names they had, and the connection goes. Either way a change: the first call returns `approvalRequired` with a preview naming every entry it writes, removes and leaves alone, and an approvalId. Tell the person the tools then appear under the one Agent Comms entry — mcp__agentcomms__… — so permission rules that named the old servers need allowing again, and that the app needs one restart.
 
 *writes · destructive*
 
