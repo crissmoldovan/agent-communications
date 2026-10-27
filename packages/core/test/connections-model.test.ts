@@ -14,6 +14,7 @@ import {
   readConnections,
   storedConnection,
   withConnection,
+  withRemovalBehind,
 } from '../src/connections.ts';
 import { openCore } from '../src/core.ts';
 import { CommsError } from '../src/errors.ts';
@@ -167,6 +168,29 @@ test('§6.2 loosenings: adding a connection or a part, unpinning or moving a pin
     loosened(revoked, base).map((change) => change.path),
     [HELD],
   );
+});
+
+test('H1: a connection removed loosens only where its plan says what its entry would hand the agents behind it', () => {
+  const base = withRecords(storedConnection(record()));
+  const removed = withRecords();
+  // Removing loosens nothing as config.json alone shows it…
+  assert.deepEqual(loosened(base, removed), []);
+  // …but a remove's plan whose entry shadows a wider one marks its before side, and that is a loosening, bound.
+  const behind =
+    'removed: agents in ~/work/acme use the connection "Everywhere" (Claude Code, every folder, cn_EFGH…): Agent Comms itself; Gmail, every mailbox';
+  const marked = withRemovalBehind(base, record().id, behind);
+  assert.deepEqual(loosened(marked, removed), [
+    {
+      path: HELD,
+      before: 'Agent Comms itself; Gmail, the mailbox cue/gmail, read-only; Events',
+      after: behind,
+      id: record().id,
+    },
+  ]);
+  // The mark is the plan's alone: on the after side, or on a connection that stays, it is no loosening.
+  assert.deepEqual(loosened(base, marked), []);
+  assert.deepEqual(loosened(marked, base), []);
+  assert.equal(JSON.stringify(base).includes(behind), false, 'nothing is marked in the configuration itself');
 });
 
 test('§6.2 tightenings and neutral changes loosen nothing: a part removed, a pin added, read-only on, cut off, renamed, a new key', () => {

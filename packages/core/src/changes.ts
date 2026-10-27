@@ -802,7 +802,9 @@ function describeLoosening(loosening: Loosening): string {
   const line = `${moved}${words ? ` — ${words}` : ''}`;
   // Every part is escaped and cut to one line: an effect or a value can be whatever a caller passed, and this is
   // printed at the terminal of the person about to type a code — the one place a control sequence would do most harm.
-  return truncateDisplay(line, 300);
+  // A connection's line names it by its label, and a widening remove's names the one its agents would use instead and
+  // what that reaches (H1): the most it can need is two labels and every part, so it is cut later, never before that.
+  return truncateDisplay(line, loosening.path.startsWith('connections[') ? 640 : 300);
 }
 
 /**

@@ -495,7 +495,7 @@ describe('MCP connections: one connection (Connection board)', () => {
           (call as Extract<Call, { kind: 'connectionRemove' }>).appApproval === undefined
             ? pending(
                 ID,
-                'Remove the connection "Acme site — Claude Code"\nAgents in ~/work/acme-site will then use the connection "Work — Claude Code"',
+                'Remove the connection "Acme site — Claude Code"\nIt loosens:\n  connections["Acme site — Claude Code"]: Agent Comms itself → removed: agents in ~/work/acme-site use the connection "Work — Claude Code"',
               )
             : ok({ id: acme, name: 'Acme site — Claude Code', entry: { removed: 1, kept: [] }, next: '' }),
       });
@@ -503,7 +503,9 @@ describe('MCP connections: one connection (Connection board)', () => {
       fireEvent.click(view.getByRole('button', { name: ONE_COPY.removeButton }));
       fireEvent.click(view.getByRole('button', { name: ONE_COPY.removeConfirm }));
       expect(await view.findByText(ONE_COPY.removeAsk('Acme site — Claude Code'))).toBeTruthy();
-      expect(view.getByText(/will then use the connection "Work — Claude Code"/)).toBeTruthy();
+      expect(
+        view.getByText(/removed: agents in ~\/work\/acme-site use the connection "Work — Claude Code"/),
+      ).toBeTruthy();
       fireEvent.click(view.getByRole('button', { name: MCP_COPY.approve }));
       expect(
         await view.findByText(MCP_COPY.removedApprovedSaid('Acme site — Claude Code', 'Claude Code')),

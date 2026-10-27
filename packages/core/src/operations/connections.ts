@@ -30,6 +30,7 @@ import {
   partText,
   readConnections,
   withConnection,
+  withRemovalBehind,
 } from '../connections.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
@@ -1640,7 +1641,8 @@ function reachesMore(wider: ConnectionRecord, than: ConnectionRecord): boolean {
 
 /**
  * What agents in a connection's place would use once its entry is gone, when that reaches more (0.35.0 security review,
- * H1): the sentence a preview says it in, or null when nothing wider is left behind.
+ * H1): the words its loosening moves to — `removed: agents in ~/work/acme use the connection "Everywhere" (…): …` — or
+ * null when nothing wider is left behind.
  *
  * A one-project connection's entry is Claude Code's local scope, under core's name (`entryName`), so it shadows an
  * entry of the same name for every folder — the app's own Agent Comms. Taking it out hands the agents there that one.
@@ -1655,7 +1657,7 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
   const client = APP_CLIENT[record.app];
   const scan = await scanRegisteredServers(envFor(env, record)).catch(() => null);
   if (scan === null) {
-    return `Agents in ${place} will then use whatever ${APP_LABELS[record.app]} has called "${record.entry.name}" for every folder, and its settings could not be read to say what that reaches`;
+    return `removed: agents in ${place} use whatever ${APP_LABELS[record.app]} calls "${record.entry.name}" for every folder — its settings could not be read to say what that reaches`;
   }
   const behind = scan.servers.find(
     (server) =>
@@ -1672,10 +1674,10 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
     if (read === undefined || !read.readable || read.record.revokedAt !== null) return null;
     if (!reachesMore(read.record, record)) return null;
     const parts = [...connectionReach(read)].map(([server, reach]) => partText(server, reach));
-    return `Agents in ${place} will then use the connection ${connectionLabel(read.record, read.record.id)}, for every folder: ${parts.join('; ')} — more than this one reaches`;
+    return `removed: agents in ${place} use the connection ${connectionLabel(read.record, read.record.id)}: ${parts.join('; ')}`;
   }
   const own = PART_FACTS.find((facts) => isProductServer(behind, serverFacts(facts.server)));
-  return `Agents in ${place} will then use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`} — nothing here shows it reaches less than this one`;
+  return `removed: agents in ${place} use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`}`;
 }
 
 export interface ConnectionRemoveResult {
@@ -1695,8 +1697,9 @@ export interface ConnectionRemoveResult {
  *
  * Except where taking its entry out widens what agents there reach (0.35.0 security review, H1; the lead's decision):
  * a one-project connection over the app's Agent Comms for every folder, which its entry shadows. That remove is a
- * loosening — prepared, its preview saying what the agents there will use instead (`widerBehind`), and approved under
- * the change policy, in the app or at the terminal. A remove that leaves nothing wider behind stays at once.
+ * loosening, classified as one (`withRemovalBehind`): prepared, its preview's loosening line saying what the agents there
+ * will use instead (`widerBehind`), bound by the approval, and approved under the change policy, in the app or at the
+ * terminal. A remove that leaves nothing wider behind stays at once.
  */
 export function connectionRemoveChange(
   core: Core,
@@ -1711,10 +1714,10 @@ export function connectionRemoveChange(
       held = requireConnection(config, request.id);
       const behind = held.readable ? await widerBehind(env, config, held.record) : null;
       return {
-        before: config,
+        // Marked on the before side only, so `classifyChange` reads it as the loosening it is: the preview's loosening
+        // line says what the agents there would use instead, and the approval binds it (the lead's call, H1).
+        before: behind === null ? config : withRemovalBehind(config, request.id, behind),
         after: { ...config, connections: withConnection(config, { remove: request.id }) } as Config,
-        // What the agents there would use instead, as the one thing it does that waits for the person.
-        ...(behind === null ? {} : { effects: [behind] }),
         summary: `Remove the connection ${held.readable ? connectionLabel(held.record, held.record.id) : request.id}`,
       };
     },

@@ -554,6 +554,37 @@ export function connectionText(record: ConnectionRecord): string {
   return `${record.name} (${record.app}): ${parts.length === 0 ? 'no parts' : parts.join('; ')}`;
 }
 
+/**
+ * The key a remove's plan marks a connection with, on its before side only, when taking its entry out hands the agents in
+ * its place a wider one (0.35.0 security review, H1): what they would use instead, in words. `config.json` never holds
+ * it — `storedConnection` writes only a record's own fields, and `readConnections` reads none it does not know — so a
+ * hand edit that put one there would only ever make a remove ask first.
+ */
+const REMOVAL_BEHIND_KEY = 'removalBehind';
+
+/**
+ * `config` with the connection `id` marked as a remove's plan sees it (H1): removing it hands the agents in its place
+ * `behind`. `classifyConnectionChange` reads the mark as a loosening of that connection — shown on the preview's
+ * loosening line and bound by the approval's digest like every other. The plan's before side only: never written.
+ */
+export function withRemovalBehind<T extends { readonly connections?: unknown }>(
+  config: T,
+  id: string,
+  behind: string,
+): T {
+  const held = isRecord(config.connections) ? config.connections : {};
+  const record = held[id];
+  if (!isRecord(record)) return config;
+  return { ...config, connections: { ...held, [id]: { ...record, [REMOVAL_BEHIND_KEY]: behind } } };
+}
+
+/** What a remove's plan marked the connection `id` as handing its place's agents, on that side; null for no mark. */
+function removalBehind(config: { readonly connections?: unknown }, id: string): string | null {
+  const record = isRecord(config.connections) ? config.connections[id] : undefined;
+  const behind = isRecord(record) ? record[REMOVAL_BEHIND_KEY] : undefined;
+  return typeof behind === 'string' && behind !== '' ? behind : null;
+}
+
 /** A loosening of a connection, as `classifyChange` records it: by path, with the values it compared. */
 export interface ConnectionLoosening {
   readonly path: string;
@@ -565,9 +596,11 @@ export interface ConnectionLoosening {
 
 /**
  * What a change to the connections loosens (§6.2): a connection added — or one cut off, or unreadable, that serves again
- * — a part added, a part's pin taken away or moved to another account, read-only turned off. Everything else — a
- * connection or part removed, a pin added, read-only on, cut off, renamed, its key replaced — loosens nothing.
- * Connections are matched by id; a path names the connection by its label on the after side (`connectionLabel`).
+ * — a part added, a part's pin taken away or moved to another account, read-only turned off; and a connection removed
+ * whose before side a remove's plan marked (`withRemovalBehind`, H1): its entry shadows a wider one, which the agents in
+ * its place would use instead. Everything else — a connection or part removed, a pin added, read-only on, cut off,
+ * renamed, its key replaced — loosens nothing. Connections are matched by id; a path names the connection by its label
+ * on the after side (`connectionLabel`), or, for one removed, on the before side.
  */
 export function classifyConnectionChange(
   before: { readonly connections?: unknown },
@@ -577,6 +610,20 @@ export function classifyConnectionChange(
     readConnections(before).connections.map((read) => [read.readable ? read.record.id : read.id, read] as const),
   );
   const changes: ConnectionLoosening[] = [];
+  const kept = new Set(readConnections(after).connections.map((read) => (read.readable ? read.record.id : read.id)));
+  // Removed, where taking its entry out hands the agents in its place a wider one (H1): from what it reached to that.
+  for (const [id, previous] of was) {
+    if (kept.has(id) || !previous.readable || previous.record.revokedAt !== null) continue;
+    const behind = removalBehind(before, id);
+    if (behind === null) continue;
+    const parts = [...connectionReach(previous)].map(([server, reach]) => partText(server, reach));
+    changes.push({
+      path: connectionPath(connectionLabel(previous.record, id)),
+      before: parts.length === 0 ? 'no parts' : parts.join('; '),
+      after: behind,
+      id,
+    });
+  }
   for (const read of readConnections(after).connections) {
     if (!read.readable || read.record.revokedAt !== null) continue;
     const { record } = read;
