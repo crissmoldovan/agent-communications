@@ -428,6 +428,12 @@ in the background, and the old vectors serve until the new set is complete. Word
   4. write a content-free audit line.
 
   A test then finds no planted marker under `<state>`.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding; L).** "Applies from anywhere" let an agent's
+  > shell run `search delete --all --confirm` and erase what the person kept, and its key, at once. It cannot be
+  > undone, so it is now the person's alone. It is refused inside an MCP server's process and under an agent's
+  > marker, as the person's searches are (S13), and the app's confirm still runs it. `off`, `accounts remove` and
+  > `model none` stay anyone's: they stop keeping, or drop vectors that Rebuild makes again.
 - **Who reads what:**
   - the person alone, in the app and at a terminal (S13);
   - no MCP tool reads the index;
@@ -448,7 +454,7 @@ in the background, and the old vectors serve until the new set is complete. Word
 | `index [--budget]`, `rebuild` | upkeep; S13 refusals |
 | `link <p> <p>`, `unlink <handle>`, `label <p> <name>` | the person's own data; no approval; S13 refusals |
 | `on`, `accounts add <alias>`, `model set <address> <name>`, `summaries on <model>` | loosening: the change policy, `--app-approval` from the attested app |
-| `off`, `accounts remove`, `model none`, `summaries off`, `delete --all --confirm` | tightening: at once |
+| `off`, `accounts remove`, `model none`, `summaries off`, `delete --all --confirm` | tightening: at once (2026-10-27: `delete` is the person's alone, §7's note) |
 
 **MCP:** none. Each command gets an exception row in `capabilities.json`, giving its reason, as `core.activity.items`
 has. `pnpm verify:parity` checks them.

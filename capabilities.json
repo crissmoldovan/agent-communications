@@ -224,7 +224,7 @@
       "cli": "search delete",
       "mcp": null,
       "status": "exception",
-      "reason": "Delete everything is a tightening that applies at once from anywhere once --all --confirm says so — or the app's confirm — and deletes the key with the folder; a tool would put an irreversible delete of the person's store one agent call away (design 2026-10-26-local-search §7)."
+      "reason": "Delete everything applies at once once --all --confirm says so — or the app's confirm — and deletes the key with the folder. It cannot be undone, so it is the person's alone: refused inside an MCP server's process and under an agent's marker, and a tool would put it one agent call away (design 2026-10-26-local-search §7, note of 2026-10-27)."
     },
     {
       "id": "core.approvals.list",

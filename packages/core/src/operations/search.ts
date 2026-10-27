@@ -64,9 +64,10 @@ import type { DoctorCheck } from './maintenance.ts';
  * Search on this machine (design 2026-10-26-local-search): what each person asked, found by words and by meaning, from
  * what Agent Comms already had in hand — the person's view, at a terminal and in the app, and nobody else's.
  *
- * **Who may (S13).** Every command here but `status` and the tightenings — `off`, `accounts remove`, `model none`,
- * `delete` — is refused inside an MCP server's process (its marker, `AGENTCOMMS_MCP_SERVER`) and under an agent's
- * environment marker, as `activity items` and the event service's person-only reads are. No MCP tool reads the index:
+ * **Who may (S13).** Every command here but `status` and the tightenings — `off`, `accounts remove`, `model none` —
+ * is refused inside an MCP server's process (its marker, `AGENTCOMMS_MCP_SERVER`) and under an agent's environment
+ * marker; so is Delete everything, a tightening that cannot be undone and the person's alone (the review of
+ * 2026-10-27), as `activity items` and the event service's person-only reads are. No MCP tool reads the index:
  * a year of everyone's mail, searchable by meaning, is the widest read there is. The marker check is a speed bump
  * against agents, not a boundary: a shell runs as the person, and code running as the person can read what the person
  * can. `status` is content-free, so doctor — and `comms_doctor` — may show it.
@@ -1292,10 +1293,14 @@ async function filesIn(dir: string): Promise<string[]> {
 }
 
 /**
- * Delete everything (§7): a tightening, from anywhere, once `--all --confirm` (or the app's confirm) says so. Stops a
- * run in progress; deletes the inbox, the database, its WAL and SHM — the whole folder; deletes the `search-index` key;
+ * Delete everything (§7): the person's alone, once `--all --confirm` (or the app's confirm) says so. Stops a run in
+ * progress; deletes the inbox, the database, its WAL and SHM — the whole folder; deletes the `search-index` key;
  * writes a content-free audit line. Search stays on or off as it was: what it keeps from now on starts empty, under a
  * new key.
+ *
+ * It tightens, but it cannot be undone, so it is refused inside an MCP server's process and under an agent's marker,
+ * as the person's searches are (the review of 2026-10-27): an agent's shell could otherwise erase what the person
+ * kept, and its key, at once. `off` stops keeping and deletes nothing, and stays anyone's.
  */
 export async function searchDeleteEverything(
   core: Core,
@@ -1303,6 +1308,7 @@ export async function searchDeleteEverything(
   surface: ChangeSurface,
   options: SearchOptions = {},
 ): Promise<SearchDeleteResult> {
+  refuseSearchToAgents(envOf(options), 'delete everything Search on this machine keeps');
   if (request.all !== true || request.confirm !== true) {
     throw new CommsError('USAGE', 'deleting everything Search keeps needs both --all and --confirm', {
       hint: 'It deletes every message, person, vector and capture Search keeps, and its key. Nothing in Slack or Gmail is touched.',

@@ -457,7 +457,7 @@ on, and only you search it: at your terminal, or in the app.
   `search query <words…>`, `search people`, `search person <id>`, `search show <id>`, `search link` and `unlink`
   (only you join a Gmail address and a Slack user as one person; names never join anyone), `search index` and
   `rebuild`. `search off`, `accounts remove`, `model none` and `search delete --all --confirm` apply at once —
-  Delete everything removes the folder and its key.
+  Delete everything removes the folder and its key, and only you can run it: it is refused to an agent.
 - **No agent searches it.** No MCP tool reads it, and every search command but `status` and the tightenings is
   refused inside an MCP server's process and from an agent's shell — a speed bump against agents, not a boundary
   against code running as you. Agents keep their own live searches, `gmail_search` and `slack_search`.

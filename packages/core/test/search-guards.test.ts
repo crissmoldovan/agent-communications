@@ -97,6 +97,8 @@ const PERSON_ONLY: readonly (readonly string[])[] = [
   ['search', 'on'],
   ['search', 'accounts', 'add', MAIL.alias],
   ['search', 'model', 'set', 'http://127.0.0.1:11434'],
+  // The person's alone (review 2026-10-27): an irreversible delete of their store, and its key, is not an agent's.
+  ['search', 'delete', '--all', '--confirm'],
 ];
 
 const ANYWHERE: readonly (readonly string[])[] = [
@@ -104,7 +106,6 @@ const ANYWHERE: readonly (readonly string[])[] = [
   ['search', 'off'],
   ['search', 'accounts', 'remove', SLACK.alias],
   ['search', 'model', 'none'],
-  ['search', 'delete', '--all', '--confirm'],
 ];
 
 for (const [marker, value, reason] of [
@@ -164,6 +165,16 @@ test('GUARD: the operations refuse by themselves, whatever surface calls them', 
   assert.doesNotThrow(() =>
     searchSettingsChange(machine.core, { enabled: 'off' }, 'cli', { env: { GEMINI_CLI: '1' } }),
   );
+  // Delete everything is the person's: refused before the folder or the key is touched.
+  await capture(machine, MAIL, [mail()]);
+  for (const env of [{ CLAUDECODE: '1' }, { AGENTCOMMS_MCP_SERVER: 'core' }]) {
+    await assert.rejects(
+      searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env, deps: machine.deps }),
+      { code: 'APPROVAL_REQUIRED' },
+    );
+  }
+  assert.equal(existsSync(searchPaths(machine.stateDir).inbox), true);
+  assert.equal(machine.secrets.values.has(SEARCH_KEY_REF), true);
 });
 
 test('GUARD: no MCP tool reads what Search keeps: every search command is an exception row with no tool', () => {
@@ -766,7 +777,7 @@ test('GUARD: after Delete everything, a process that kept the old key in memory 
     });
   assert.equal(await keep('18c00000000000c1'), 1);
   const first = await readSearchKey(machine.secrets);
-  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env: {}, deps: machine.deps });
   // The same process captures again, without being told: the old key is gone from the store and from its memory.
   assert.equal(await keep('18c00000000000c2'), 1);
   const second = await readSearchKey(machine.secrets);
@@ -777,7 +788,7 @@ test('GUARD: after Delete everything, a process that kept the old key in memory 
   assert.equal(run.inserted, 1);
   // A key made by another process is seen too: its id is noted beside the folder.
   machine.secrets.values.delete(SEARCH_KEY_REF);
-  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env: {}, deps: machine.deps });
   await index(machine);
   const third = await readSearchKey(machine.secrets);
   assert.ok(third);
@@ -795,10 +806,11 @@ test('GUARD: delete everything leaves no file and no key, and a later run starts
   await capture(machine, MAIL, [mail({ sourceId: '18c0000000000009' })]);
   const before = await readSearchKey(machine.secrets);
   assert.ok(before);
-  await assert.rejects(searchDeleteEverything(machine.core, { all: true }, 'cli', { deps: machine.deps }), {
+  await assert.rejects(searchDeleteEverything(machine.core, { all: true }, 'cli', { env: {}, deps: machine.deps }), {
     code: 'USAGE',
   });
   const result = await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', {
+    env: {},
     deps: machine.deps,
   });
   assert.equal(result.keyDeleted, true);
