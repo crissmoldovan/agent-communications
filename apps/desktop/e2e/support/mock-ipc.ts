@@ -8,6 +8,8 @@ import type { Page } from '@playwright/test';
  * `scenario` names each command's answer by its Rust name (`installation`, `take_deep_link`, …). `cli` maps a call's
  * kind to the data of an `ok` result — or, for `doctor` and `accounts`, a map by product, and for `queueList` a map by
  * the state it asks for — and `cliResults` maps a kind to a whole `CliResult`, for a failure or a pending approval.
+ * Core's taking reads (0.35.0), which the shared reads make once core takes messages, answer as a machine where no
+ * account requires a take, unless the scenario says otherwise: `taking` with no accounts, and `takesList` with no takes.
  */
 export async function installMockIpc(page: Page, scenario: Record<string, unknown>): Promise<void> {
   await page.route('**/*', (route) => {
@@ -20,7 +22,11 @@ export async function installMockIpc(page: Page, scenario: Record<string, unknow
     const callbacks = new Map<number, Handler>();
     const listeners = new Map<string, number[]>();
     let next = 1;
-    const cli = (given.cli ?? {}) as Record<string, unknown>;
+    const cli = {
+      taking: { accounts: [], problems: [] },
+      takesList: { since: null, takes: [], unreadable: [] },
+      ...((given.cli ?? {}) as Record<string, unknown>),
+    } as Record<string, unknown>;
     const cliResults = (given.cliResults ?? {}) as Record<string, unknown>;
     const scoped = (value: unknown, product: unknown) =>
       typeof value === 'object' &&

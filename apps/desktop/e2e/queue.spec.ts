@@ -124,6 +124,11 @@ test('Queue lists the open items as cards, the judge as a chip and every sender-
       'standingList',
       'doctor',
       'version',
+      // Once core takes messages (0.35.0), the shared read the Queue's Not taken comes from.
+      'taking',
+      'takesList',
+      'eventsMessagesList',
+      'accounts',
     ]).toContain(call.kind);
   }
 });
