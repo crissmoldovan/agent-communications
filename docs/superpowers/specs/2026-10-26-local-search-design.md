@@ -437,6 +437,12 @@ in the background, and the old vectors serve until the new set is complete. Word
   - removing an account from Search, or from Agent Comms, deletes its rows at once;
   - **Off** stops capture and indexing at once. What is kept stays searchable until its days pass, or until Delete
     everything.
+  - **Activity's days that cannot be read keep Search to 30** (2026-10-27, the re-review of 0.35.0, LOW 5). Activity
+    reads a retention it cannot read — a hand edit leaving `"retentionDays": "60"`, a later release's word — as the
+    longest, 365 days, so as to delete nothing of its log; read so for Search, a typo kept a year of message words,
+    with no approval. Search's cut-off then falls back to 30 days, the default (`searchRetentionDays`), doctor's
+    warning names both ("…so recording is off, Activity keeps 365 days and Search on this machine keeps 30"), and a
+    person who then sets more than 30 days is shown that Search keeps them too, and approves it (M6).
 - **Delete everything** (a tightening; applies from anywhere, after the app's confirm or `--confirm`). In order:
   1. stop any run;
   2. delete the inbox, the database, its WAL and SHM;
