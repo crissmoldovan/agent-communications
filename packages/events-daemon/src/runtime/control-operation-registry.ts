@@ -140,6 +140,14 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   },
   // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see. The person's read, CLI and app.
   { capabilityOperation: 'integrationShow', wireOperation: 'integration-show', desktopCallable: true, family: 'owner' },
+  // Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints —
+  // the person's alone, from the app or their terminal, and no tool reads or changes them.
+  { capabilityOperation: 'projectsList', wireOperation: 'projects-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectShow', wireOperation: 'project-show', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectAdd', wireOperation: 'project-add', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectUpdate', wireOperation: 'project-update', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectRemove', wireOperation: 'project-remove', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectScan', wireOperation: 'project-scan', desktopCallable: true, family: 'owner' },
   // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
   // their terminal (its show is `integration-show` above) — and the busy queue, the person's to read and drop from; a
   // bound window sees its own lane's.

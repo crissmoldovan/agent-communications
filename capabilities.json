@@ -3342,6 +3342,70 @@
       "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a workflow can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
     },
     {
+      "id": "events-daemon.projects.list",
+      "package": "events-daemon",
+      "cli": "projects list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectsList",
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.show",
+      "package": "events-daemon",
+      "cli": "project show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectShow",
+      "argv": ["acme-site"],
+      "expect": { "projectId": "acme-site" },
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.add",
+      "package": "events-daemon",
+      "cli": "project add",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectAdd",
+      "argv": ["{\"projectId\":\"parity\"}"],
+      "expect": { "document.projectId": "parity" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.update",
+      "package": "events-daemon",
+      "cli": "project update",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectUpdate",
+      "argv": ["{\"projectId\":\"parity\"}"],
+      "expect": { "document.projectId": "parity" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.remove",
+      "package": "events-daemon",
+      "cli": "project remove",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectRemove",
+      "argv": ["acme-site"],
+      "expect": { "projectId": "acme-site" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.scan",
+      "package": "events-daemon",
+      "cli": "project scan",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectScan",
+      "argv": ["--root", "/example/home/work"],
+      "expect": { "roots": ["/example/home/work"] },
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
       "id": "events-daemon.session-queue.list",
       "package": "events-daemon",
       "cli": "session-queue list",

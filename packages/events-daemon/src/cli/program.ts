@@ -82,6 +82,14 @@ import {
 import { laneBind, laneList, laneUnbind } from '../operations/lanes.ts';
 import { messageShow, messagesList } from '../operations/messages.ts';
 import { pause, resume } from '../operations/pause.ts';
+import {
+  projectAdd,
+  projectRemove,
+  projectScan,
+  projectShow,
+  projectsList,
+  projectUpdate,
+} from '../operations/projects.ts';
 import { providerKeyRemove, providerKeySet, providerList } from '../operations/providers.ts';
 import {
   queueClear,
@@ -840,7 +848,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -1087,6 +1095,79 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           { ...controlOptions(program), origin },
         ),
       );
+    });
+  // Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints.
+  // Each command is the person's alone, from the app or their terminal: personSetupOrigin refuses the event service's
+  // MCP server, an agent's shell and, on macOS, a process the app did not start, before anything is read; the owner
+  // takes them only from the person's origin; and no tool reads or changes a project (taking design T7).
+  const asPerson = (what: string) =>
+    personSetupOrigin(what, {
+      where: 'Events → Projects',
+      action: 'projects',
+      terminal: 'output',
+      // Nothing here approves anything: a project's folders become authority only inside a workflow's own approval.
+      unattested: 'accept',
+    });
+  program
+    .command('projects')
+    .description('the GitHub repositories on this Mac a workflow can route to (a person only)')
+    .command('list')
+    .description('list every project, with its folders, profile and hints (a person only)')
+    .action(async () => {
+      ran = true;
+      const origin = await asPerson('list your projects');
+      print(await projectsList({ ...controlOptions(program), origin }));
+    });
+  const project = program
+    .command('project')
+    .description(
+      'add, show, change, remove or find a project: a GitHub repository, its folders on this Mac, a profile and hints (a person only)',
+    );
+  project
+    .command('show <project-id>')
+    .description('show one project (a person only)')
+    .action(async (projectId: string) => {
+      ran = true;
+      const origin = await asPerson('see a project');
+      print(await projectShow(projectId, { ...controlOptions(program), origin }));
+    });
+  for (const [name, operation, what] of [
+    ['add', projectAdd, 'add a project'],
+    ['update', projectUpdate, 'change a project'],
+  ] as const) {
+    project
+      .command(`${name} <document>`)
+      .description(
+        `${what} from its JSON document { projectId, name, repo, profile, hints, folders }, or - to read it from stdin (a person only)`,
+      )
+      .action(async (document: string) => {
+        ran = true;
+        const origin = await asPerson(what);
+        print(
+          await operation(await documentArgument(document, 'project document'), { ...controlOptions(program), origin }),
+        );
+      });
+  }
+  project
+    .command('remove <project-id>')
+    .description(
+      'remove a project and its folders; a workflow that chose among them then finds it changed (a person only)',
+    )
+    .action(async (projectId: string) => {
+      ran = true;
+      const origin = await asPerson('remove a project');
+      print(await projectRemove(projectId, { ...controlOptions(program), origin }));
+    });
+  project
+    .command('scan')
+    .description(
+      "find the GitHub checkouts under the relay's allowed roots, else ~/work and ~/code, to 4 folders down; reads no file (a person only)",
+    )
+    .option('--root <path>', 'a folder to look under instead (repeat for more, at most 8)', collect, [])
+    .action(async (options: { readonly root: string[] }) => {
+      ran = true;
+      const origin = await asPerson('look for your projects');
+      print(await projectScan(options.root, { ...controlOptions(program), origin }));
     });
   const sessionQueue = program
     .command('session-queue')

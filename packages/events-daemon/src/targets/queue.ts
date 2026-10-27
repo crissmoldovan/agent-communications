@@ -35,6 +35,7 @@ export function assertNotMcpServer(
     | 'integration'
     | 'relay'
     | 'sessions'
+    | 'projects'
     | 'approve' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
@@ -109,6 +110,12 @@ export function assertNotMcpServer(
       message:
         "the items waiting for a busy session are for a person to manage, at a terminal or in the app — the event service's MCP server cannot drop one",
       hint: 'events_session_queue_list shows a bound window the items of its own lane.',
+    },
+    // Projects (0.36.0 §8.1): the repositories on this Mac, their folders, profile and hints, are the person's alone.
+    projects: {
+      message:
+        "projects are for a person, at a terminal or in the app — the event service's MCP server cannot read or change them",
+      hint: 'An agent can ask the person to add or change a project in the app: Events → Projects.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {

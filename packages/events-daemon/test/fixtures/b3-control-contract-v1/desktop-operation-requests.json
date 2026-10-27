@@ -268,5 +268,93 @@
         "digest": "75518500da9318b19a1148deebe93db44b3f6351f6488d79acf0ada8a2b7552c"
       }
     }
+  },
+  {
+    "name": "projects-list-request",
+    "request": {
+      "operation": "projects-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "project-show-request",
+    "request": {
+      "operation": "project-show",
+      "args": {
+        "projectId": "acme-site"
+      }
+    }
+  },
+  {
+    "name": "project-add-request",
+    "request": {
+      "operation": "project-add",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "project-update-request",
+    "request": {
+      "operation": "project-update",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "project-remove-request",
+    "request": {
+      "operation": "project-remove",
+      "args": {
+        "projectId": "acme-site"
+      }
+    }
+  },
+  {
+    "name": "project-scan-request",
+    "request": {
+      "operation": "project-scan",
+      "args": {
+        "roots": ["/example/home/work", "/example/home/code"]
+      }
+    }
   }
 ]

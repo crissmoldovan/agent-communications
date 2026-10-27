@@ -46,6 +46,13 @@ import {
   type MessageShowResultV1,
   type MessagesListResultV1,
 } from '../domain/messages.ts';
+import {
+  PROJECT_SCAN_SKIP_REASONS,
+  type ProjectRemoveResultV1,
+  type ProjectScanResultV1,
+  type ProjectsListResultV1,
+  type ProjectV1,
+} from '../domain/projects.ts';
 import { type EventSecretProvider, isEventSecretProvider } from '../domain/providers.ts';
 import {
   isQueueItemId,
@@ -589,6 +596,12 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'provider-key-set': ProviderKeyResultV1;
   readonly 'provider-key-remove': ProviderKeyResultV1;
   readonly 'integration-show': IntegrationShowResultV1 | AgentSessionsIntegrationV1;
+  readonly 'projects-list': ProjectsListResultV1;
+  readonly 'project-show': ProjectV1;
+  readonly 'project-add': ProjectV1;
+  readonly 'project-update': ProjectV1;
+  readonly 'project-remove': ProjectRemoveResultV1;
+  readonly 'project-scan': ProjectScanResultV1;
   readonly 'integration-set': AgentSessionsIntegrationV1;
   readonly 'session-queue-list': SessionQueueListResultV1;
   readonly 'session-queue-drop': SessionQueueDropResultV1;
@@ -774,6 +787,16 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'integration-show':
     | { readonly integration: 'linear'; readonly team?: string | undefined }
     | { readonly integration: 'agent-sessions' };
+  /**
+   * Projects (0.36.0 workflows design §8.1): the person's alone, from the app or their terminal. A document is
+   * `canonicalProject`'s; a scan's roots are at most 8 absolute folders.
+   */
+  readonly 'projects-list': Record<string, never>;
+  readonly 'project-show': { readonly projectId: string };
+  readonly 'project-add': { readonly document: Readonly<Record<string, JsonValue>> };
+  readonly 'project-update': { readonly document: Readonly<Record<string, JsonValue>> };
+  readonly 'project-remove': { readonly projectId: string };
+  readonly 'project-scan': { readonly roots?: readonly string[] | undefined };
   /**
    * Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is, theirs to see and to set from the
    * app or their terminal; and the busy queue, theirs to read and to drop from. No token is in any of them.
@@ -1229,6 +1252,71 @@ function assertAgentSessionsIntegration(value: Readonly<Record<string, unknown>>
   assertNonNegativeInteger(value.waiting, 'the items waiting for a busy session');
 }
 
+const PROJECT_RESULT_FIELDS: readonly string[] = Object.freeze([
+  'projectId',
+  'name',
+  'repo',
+  'profile',
+  'profileBy',
+  'profileAt',
+  'hints',
+  'folders',
+  'createdAt',
+  'updatedAt',
+]);
+
+/** One project (0.36.0 §8.1), as `project show` gives it: closed, its folders absolute. */
+function assertProject(value: unknown): void {
+  assertClosedRecord(value, PROJECT_RESULT_FIELDS, 'a project');
+  for (const field of ['projectId', 'name', 'repo']) assertText(value[field], `a project's ${field}`);
+  if (typeof value.profile !== 'string') throw new TypeError("a project's profile is text");
+  if (value.profileBy !== null && value.profileBy !== 'person')
+    throw new TypeError("a project's profile is the person's");
+  assertNullable(value.profileAt, assertNonNegativeInteger, "when a project's profile was written");
+  assertClosedRecord(value.hints, ['senderDomains', 'slackConversations', 'people'], "a project's hints");
+  for (const list of Object.values(value.hints))
+    if (!Array.isArray(list) || list.some((entry) => typeof entry !== 'string'))
+      throw new TypeError("a project's hints are lists of words");
+  if (!Array.isArray(value.folders)) throw new TypeError("a project's folders are a list");
+  for (const folder of value.folders) {
+    assertClosedRecord(folder, ['folder', 'kind', 'defaultBranch', 'worktreeRoot'], "a project's folder");
+    if (typeof folder.folder !== 'string' || !folder.folder.startsWith('/'))
+      throw new TypeError("a project's folder is absolute");
+    if (folder.kind !== 'checkout' && folder.kind !== 'worktree')
+      throw new TypeError("a project's folder is a checkout or a worktree");
+    assertNullable(folder.defaultBranch, assertText, "a folder's default branch");
+    assertNullable(folder.worktreeRoot, assertText, "a checkout's worktree root");
+  }
+  for (const field of ['createdAt', 'updatedAt']) assertNonNegativeInteger(value[field], `a project's ${field}`);
+}
+
+/** `project scan`'s result: the roots, the repositories found by origin, and the folders passed over. */
+function assertProjectScan(value: Readonly<Record<string, unknown>>): void {
+  if (!Array.isArray(value.roots) || value.roots.some((root) => typeof root !== 'string'))
+    throw new TypeError("a scan's roots are folders");
+  if (!Array.isArray(value.repos)) throw new TypeError("a scan's repositories are a list");
+  for (const repo of value.repos) {
+    assertClosedRecord(repo, ['repo', 'known', 'folders'], 'a scanned repository');
+    assertText(repo.repo, 'a scanned repository');
+    assertNullable(repo.known, assertText, 'the project that names a scanned repository');
+    if (!Array.isArray(repo.folders)) throw new TypeError("a scanned repository's folders are a list");
+    for (const folder of repo.folders) {
+      assertClosedRecord(folder, ['folder', 'kind', 'defaultBranch'], 'a scanned folder');
+      assertText(folder.folder, 'a scanned folder');
+      if (folder.kind !== 'checkout' && folder.kind !== 'worktree')
+        throw new TypeError('a scanned folder is a checkout or a worktree');
+      assertNullable(folder.defaultBranch, assertText, "a scanned checkout's branch");
+    }
+  }
+  if (!Array.isArray(value.skipped)) throw new TypeError("a scan's passed-over folders are a list");
+  for (const entry of value.skipped) {
+    assertClosedRecord(entry, ['folder', 'reason'], 'a folder a scan passed over');
+    assertText(entry.folder, 'a folder a scan passed over');
+    if (!(PROJECT_SCAN_SKIP_REASONS as readonly unknown[]).includes(entry.reason))
+      throw new TypeError('a scan passes a folder over for a closed reason');
+  }
+}
+
 /** One `session-queue list` item: ids, a lane and times, content-free. */
 function assertSessionQueueItem(value: unknown): void {
   assertClosedRecord(
@@ -1443,6 +1531,12 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'provider-key-set': ['provider', 'hasKey', 'judges'],
   'provider-key-remove': ['provider', 'hasKey', 'judges'],
   'integration-show': ['integration', 'connected', 'workspace', 'teams'],
+  'projects-list': ['projects'],
+  'project-show': PROJECT_RESULT_FIELDS,
+  'project-add': PROJECT_RESULT_FIELDS,
+  'project-update': PROJECT_RESULT_FIELDS,
+  'project-remove': ['projectId', 'removed'],
+  'project-scan': ['roots', 'repos', 'skipped'],
   'integration-set': ['integration', 'settings', 'relay', 'waiting'],
   'session-queue-list': ['items'],
   'session-queue-drop': ['deliveryId', 'dropped'],
@@ -1866,6 +1960,22 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (value.hasKey !== (operation === 'provider-key-set'))
         throw new TypeError('a provider key result says whether the provider has a key now');
       assertNonNegativeInteger(value.judges, 'a provider key judge count');
+      return;
+    case 'projects-list':
+      if (!Array.isArray(value.projects)) throw new TypeError('a project list needs its projects');
+      for (const project of value.projects) assertProject(project);
+      return;
+    case 'project-show':
+    case 'project-add':
+    case 'project-update':
+      assertProject(value);
+      return;
+    case 'project-remove':
+      assertText(value.projectId, 'a removed project');
+      if (value.removed !== true) throw new TypeError('a project removal says it removed the project');
+      return;
+    case 'project-scan':
+      assertProjectScan(value);
       return;
     case 'integration-set':
       assertAgentSessionsIntegration(value);
