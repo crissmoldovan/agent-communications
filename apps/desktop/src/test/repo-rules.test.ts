@@ -67,7 +67,11 @@ describe("the app's repository rules", () => {
   });
 
   it("the install command is the README's", () => {
-    const line = readFileSync(join(ROOT, 'README.md'), 'utf8').split('\n')[99] ?? '';
+    // The README's own install line, wherever the sections above it leave it: the first that runs `mcp install`.
+    const line =
+      readFileSync(join(ROOT, 'README.md'), 'utf8')
+        .split('\n')
+        .find((text) => text.startsWith('npx -y @agentcomms/core mcp install ')) ?? '';
     expect(line.split('#')[0]?.trim()).toBe(INSTALL_COMMAND);
   });
 

@@ -355,8 +355,8 @@ flow, at most 6 runs an hour
   events in acme as client-asks, run emits failed and finished
   step route: choose a project among acme-site and billing, by hints
     looking at text
-    project acme-site, in /Users/you/work/acme-site
-    project billing, in /Users/you/work/billing
+    project acme-site, in /example/home/work/acme-site
+    project billing, in /example/home/work/billing
     none → tell
   step issue: linear issue client-issues, version 1, in team ACME, assigned to me
     team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11

@@ -76,9 +76,14 @@ const ATTESTED = async (): Promise<DesktopOrigin> => ({
 
 async function cli(
   args: readonly string[],
-  options: { readonly stdin?: string; readonly env?: NodeJS.ProcessEnv; readonly claudeDeadlineMs?: number } = {},
+  options: {
+    readonly stdin?: string;
+    readonly tty?: boolean;
+    readonly env?: NodeJS.ProcessEnv;
+    readonly claudeDeadlineMs?: number;
+  } = {},
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
-  const stdin = new PassThrough();
+  const stdin = Object.assign(new PassThrough(), options.tty === true ? { isTTY: true } : {});
   stdin.end(options.stdin ?? '');
   const stdout = new PassThrough();
   const stderr = new PassThrough();
@@ -546,7 +551,15 @@ test('exit 10 inside the MCP marker and an agent’s shell', { skip: WINDOWS_SKI
     ] as const) {
       const bad = await cli(['--state-dir', stateDir, '--json', ...args], { stdin, env: {} });
       assert.equal(bad.code, 64, `${args.join(' ')}: ${bad.stderr}`);
+      assert.doesNotMatch(bad.stderr, /Say what should happen/u, 'piped words get no prompt');
     }
+    // At a terminal nothing is piped in: it says what it waits for, rather than wait in silence.
+    const typed = await cli(['--state-dir', stateDir, '--json', 'workflow', 'describe'], {
+      stdin: '',
+      tty: true,
+      env: {},
+    });
+    assert.match(typed.stderr, /^Say what should happen, in your words\. End with Ctrl-D on a line of its own\.\n/u);
   } finally {
     await rm(stateDir, { recursive: true, force: true });
   }

@@ -1929,6 +1929,9 @@ async function describeInput(streams: EventsCliStreams): Promise<unknown> {
   const chunks: Buffer[] = [];
   let total = 0;
   const most = DESCRIBE_LIMITS.draftBytes + 4 * (DESCRIBE_LIMITS.words + DESCRIBE_LIMITS.example) + 16_384;
+  // At a terminal nothing is piped in: say what it waits for, rather than wait in silence.
+  if (streams.stdin.isTTY === true)
+    streams.stderr.write('Say what should happen, in your words. End with Ctrl-D on a line of its own.\n');
   for await (const chunk of streams.stdin) {
     const bytes = Buffer.from(chunk as Uint8Array);
     total += bytes.byteLength;
