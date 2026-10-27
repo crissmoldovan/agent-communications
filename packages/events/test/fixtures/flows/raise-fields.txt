@@ -1,0 +1,14 @@
+workflow client-asked, version 3
+
+when a Slack message is posted in acme/slack, in conversation C0123
+match text exists
+
+flow, at most 240 events an hour
+  events in acme as client-asked
+  step asked: raise client-asked
+    fields text, author.name
+    label "Tell the dashboard"
+  step tell: tell me "A client asked something in acme/slack"
+
+keep author.name, text
+at most 60 an hour

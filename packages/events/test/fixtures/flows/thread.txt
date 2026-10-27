@@ -1,0 +1,33 @@
+workflow client-thread, version 2
+
+when a Slack message is posted in acme/slack, in conversation C0123
+match text exists
+
+flow
+  events in acme as client-thread
+  step thread: find the session that took this conversation, with claude-code
+    emits found and not-found
+    idle → give
+    busy → queued
+    none → route
+    otherwise → tell
+  step queued: wait for thread's session to be free, up to 2 hours
+    free → give
+    otherwise → tell
+  step route: choose a project among acme-site and billing, by hints
+    looking at text
+    project acme-site, in /example/home/work/acme-site
+    project billing, in /example/home/work/billing and /example/home/work/billing-api
+    none → tell
+  step find: find a session in route's project, with claude-code
+    idle → give
+    otherwise → tell
+  step give: session client-prompt, version 2, with claude-code, to thread or find
+    give
+      fields text
+      text "Do what they ask. Don't push."
+    then → end
+  step tell: tell me "A message in acme/slack needs you"
+
+keep author.name, text
+at most 60 an hour

@@ -96,7 +96,7 @@ describe('the rule editor', () => {
     mode(editor, 'Text');
     const text = await waitFor(() => textArea(editor));
     expect(text.value).toContain('subject contains "receipt"');
-    expect(text.value).toMatch(/^rule invoices, version 3$/m);
+    expect(text.value).toMatch(/^workflow invoices, version 3$/m);
     // An edit to the text is the visual editor's too.
     fireEvent.change(text, { target: { value: text.value.replace('"receipt"', '"refund"') } });
     mode(editor, 'Visual');

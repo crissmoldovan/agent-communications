@@ -209,7 +209,7 @@ test('session: mistakes are named where they stand', () => {
     'give needs its context parts on the lines indented under it',
   ]);
   assert.deepEqual(errorsOf(['  session s, version 1, working in /a, with codex', '    give', '      prompt "x"']), [
-    'a context part is fields, text, written by, file or raw; found "prompt"',
+    'a context part is fields, text, written by, file, from step or raw; found "prompt"',
   ]);
   assert.deepEqual(
     errorsOf(['  session s, version 1, working in /a, with codex', '    give', '      written by m via openrouter']),

@@ -1,0 +1,15 @@
+workflow issue-followup, version 1
+
+when a Slack message is posted in acme/slack, in conversation C0123
+match text exists
+
+flow, at most 4 runs an hour, 1 at a time
+  events in acme as issue-followup, run emits finished
+  on raised acme.client-asks.issue.created and acme.client-asks.run.failed, within 2 hours
+  step known: if trigger.outputs.issue.identifier exists
+    no → end
+  step tell: tell me "{{trigger.outputs.issue.identifier}} was made for a message in acme/slack"
+    emits notified
+
+keep text
+at most 60 an hour

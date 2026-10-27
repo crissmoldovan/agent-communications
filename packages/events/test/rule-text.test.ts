@@ -79,7 +79,7 @@ function section(text: string, word: string): string[] {
 test('a rule starts with its id and version, then says when it applies, which messages match, and what happens', () => {
   const text = roundTrip(rule());
   assert.deepEqual(text.split('\n').slice(0, 4), [
-    'rule invoices, version 3',
+    'workflow invoices, version 3',
     '',
     'when a new message arrives in cue/gmail, in the inbox',
     'match subject exists',
@@ -413,7 +413,7 @@ test('names are bare when they can be, and quoted when they have other character
       },
     }),
   );
-  assert.equal(section(text, 'rule')[0], 'rule "the rule", version 3');
+  assert.equal(section(text, 'workflow')[0], 'workflow "the rule", version 3');
   assert.equal(
     section(text, 'when')[0],
     'when a new message arrives in "and" and "café" and "version", in labels "\\"quoted\\"" and "port" and status',
@@ -726,7 +726,7 @@ const INVOICES = rule({
 test("the prototype's invoices rule prints as the prototype draws it, where today's targets allow", () => {
   assert.equal(
     roundTrip(INVOICES),
-    `rule invoices, version 4
+    `workflow invoices, version 4
 
 when a new message arrives in cue/gmail, in the inbox
 match any
@@ -780,12 +780,13 @@ test('errors: an unknown keyword is named where it stands, with the keyword it i
       line: 4,
       column: 1,
       message:
-        'unknown keyword "thne"; did you mean "then"? A line here starts with rule, when, match, ask, then, keep, keep for, at most, cloud event type, subscriber or raw',
+        'unknown keyword "thne"; did you mean "then"? A line here starts with workflow, when, match, ask, then, flow, keep, keep for, at most, cloud event type, subscriber or raw',
     },
     {
       line: 6,
       column: 1,
-      message: 'a rule says what happens to a match: then, with each target on its own indented line below it',
+      message:
+        'a workflow says what happens to a match: then, with each target on its own indented line below it, or flow, with its steps',
     },
   ]);
   const [phrase] = errorsOf([...VALID, 'atmost 60 an hour'].join('\n'));
@@ -797,7 +798,7 @@ test('errors: an unknown keyword is named where it stands, with the keyword it i
     line: 5,
     column: 3,
     message:
-      'a target starts with dry run, queue, webhook, stream, session, linear issue or raw; found "queu". Did you mean "queue"?',
+      'a target starts with dry run, queue, webhook, stream, session, linear issue, linear change or raw; found "queu". Did you mean "queue"?',
   });
   const [inAsk] = errorsOf([...VALID, 'ask jev, version 1', '  questoin "x"'].join('\n'));
   assert.deepEqual(inAsk, {
@@ -821,7 +822,7 @@ test('errors: a bad indent is named on its own line, and does not cost the lines
     },
   ]);
   assert.deepEqual(errorsOf([VALID[0], '  match subject exists', ...VALID.slice(1)].join('\n')), [
-    { line: 2, column: 3, message: 'unexpected indent: the rule line has no lines indented under it' },
+    { line: 2, column: 3, message: 'unexpected indent: the workflow line has no lines indented under it' },
   ]);
   assert.deepEqual(errorsOf(VALID.join('\n').replace('  dry run', '\tdry run')), [
     { line: 5, column: 1, message: 'indent with spaces, two per level; this line has a tab in its indentation' },
@@ -833,18 +834,19 @@ test('errors: a missing then, when or rule line is named, at the end of the text
     {
       line: 4,
       column: 1,
-      message: 'a rule says what happens to a match: then, with each target on its own indented line below it',
+      message:
+        'a workflow says what happens to a match: then, with each target on its own indented line below it, or flow, with its steps',
     },
   ]);
   assert.deepEqual(errorsOf([VALID[0], ...VALID.slice(2)].join('\n')), [
     {
       line: 5,
       column: 1,
-      message: 'a rule says when it applies: when a new message arrives in <account>, in the inbox',
+      message: 'a workflow says when it applies: when a new message arrives in <account>, in the inbox',
     },
   ]);
   assert.deepEqual(errorsOf(VALID.slice(1).join('\n')), [
-    { line: 1, column: 1, message: "a rule's text starts with its id and version: rule <id>, version <n>" },
+    { line: 1, column: 1, message: "a workflow's text starts with its id and version: workflow <id>, version <n>" },
   ]);
   assert.deepEqual(errorsOf([...VALID.slice(0, 3), 'then'].join('\n')), [
     { line: 4, column: 1, message: 'then needs at least one target, each on its own line indented under it' },
@@ -862,7 +864,7 @@ test('errors: each mistake is reported, in order, with the column of what is wro
     'raw /a/b = 1',
   ].join('\n');
   assert.deepEqual(errorsOf(text), [
-    { line: 1, column: 14, message: 'expected ", version <n>" after the rule id, found the end of the line' },
+    { line: 1, column: 14, message: `expected ", version <n>" after the workflow's id, found the end of the line` },
     {
       line: 2,
       column: 40,
@@ -886,7 +888,7 @@ test('errors: each mistake is reported, in order, with the column of what is wro
 
 test('errors: a section given twice, and a field given by a section and by raw, are refused', () => {
   assert.deepEqual(errorsOf([...VALID, 'match subject exists'].join('\n')), [
-    { line: 6, column: 1, message: 'a rule has one match section; this repeats the one on line 3' },
+    { line: 6, column: 1, message: 'a workflow has one match section; this repeats the one on line 3' },
   ]);
   assert.deepEqual(errorsOf([...VALID, 'raw /condition = {}'].join('\n')), [
     {
