@@ -48,6 +48,7 @@ test('E9 operator control creates immutable subscriber and judge versions while 
           state: null,
           listening: null,
           listenError: null,
+          address: null,
           backlog: 0,
           lastDeliveredAt: null,
         },

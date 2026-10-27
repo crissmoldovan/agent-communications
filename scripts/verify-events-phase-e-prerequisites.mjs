@@ -79,7 +79,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
     'cea5d4fb1a36f9c3648e6d2333382ce615c383af88d2632ba2065f12e163d0f3',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
-    '0d21b030a2ac336e9c612f96ed568fb9dd8c5877ce82f5bc8b921116cd1d9360',
+    '6a53c157ac7d8605b58754e1979f2002223882d821731b79ec547f8e5fc356d4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
     'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':

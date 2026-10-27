@@ -52,6 +52,7 @@ test('D1: a stored SSE subscriber without events keeps its bytes and digest', { 
       state: null,
       listening: null,
       listenError: null,
+      address: null,
       backlog: 0,
       lastDeliveredAt: null,
     });
@@ -298,6 +299,19 @@ test('D1: webhook subscribers take a secret URL and a signing secret, shown once
     assert.equal(version2.state, 'inert');
     assert.doesNotMatch(version2.document, /SENTINEL-URL-SECRET|token=/u, 'the stored document has no secret URL');
     assert.equal((JSON.parse(version2.document) as { url: { kind: string } }).url.kind, 'secret');
+    // `subscribers list` names each version's public address: a plain URL's path, a secret URL's authority alone.
+    const listed = (await harness.control.request('subscribersList', {})) as Array<{
+      version: number;
+      address: { url: string } | null;
+    }>;
+    assert.deepEqual(
+      listed.map((entry) => [entry.version, entry.address]),
+      [
+        [1, { url: 'http://127.0.0.1:4802/hooks/events' }],
+        [2, { url: 'http://127.0.0.1:4803' }],
+      ],
+    );
+    assert.doesNotMatch(JSON.stringify(listed), /SENTINEL-URL-SECRET|token=|hooks\/events\?/u);
     // An SSE subscriber has no signing secret.
     await harness.control.request('addSubscriber', { document: sseSubscriber({}) });
     const sse = await harness.cli(['subscriber', 'secret', 'create', 'events-dashboard', '--version', '1'], {
