@@ -106,6 +106,24 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
   - a subscriber that hangs slows no run;
   - a held message let through into a workflow keeps its thread;
   - a message whose hold ran out or was cancelled can be read, and its story says so in words.
+- **Security review fixes before release** (an independent review of this release, 2026-10-27):
+  - an agent could read your projects' folders and worktree roots in a Which project? step, through
+    `events_rule_show` and the approval view. Now an agent sees each project's id and name, with `folders: []`,
+    `worktreeRoot: null` and how many folders it has; you still see them in the app and at your terminal. Enabling a
+    workflow whose projects changed is refused in one wording that names the step, not the project or its folders;
+  - a webhook subscriber's approval named only the host, so on a shared host such as `hooks.zapier.com` you could
+    approve events going to someone else's hook. Now it names the whole URL (a secret one by its host and port), the
+    addresses it may connect to and how many times each event is tried, at the terminal and in the app;
+  - Describe it's "Draft it again" sent the current draft as written, with your projects' folders, judge endpoints,
+    webhook addresses and Linear, notify and session templates, though the box said it never does. Now the event
+    service replaces each with a placeholder before the model reads the draft and puts your values back in its
+    answer; a draft that does not read as a workflow goes as you wrote it, and the box says so;
+  - a model's draft could write a step or a condition as `raw` JSON in a form the refusal missed (`raw{…}`, `match
+    raw`, `match not raw`, a step's `if raw`). Now the parser reports every raw site (`ruleTextRawSites`, new in
+    `@agentcomms/events`), and any one refuses the draft;
+  - a two-letter quote such as "to", or the words of a choice the model itself offered, showed as "From your words".
+    Now a note counts only when it quotes at least 12 characters and three whole words of your description or of an
+    answer you typed.
 
 ## 0.35.0
 

@@ -144,14 +144,19 @@ approves again.
 - **A subscriber receives them,** live on this Mac or by signed webhook, by the namespaces and patterns it is given.
   Propose one with `events_subscriber_add` (its `events` part: `namespaces`, `patterns` of four segments where `*` is
   one segment, and `content`), then `events_subscriber_enable` for that exact version: it prepares the person's
-  approval and approves nothing. Show its preview and hand over as for a workflow. Until they approve it, the
+  approval and approves nothing. Show its preview whole and hand over as for a workflow: a webhook's preview names its
+  whole URL, the addresses it may connect to and how many times each event is tried. Until they approve it, the
   subscriber is inert.
 - **Ask before `content: "enveloped"`.** Only then does a Raise step's declared `fields` — what a sender wrote — reach
   the subscriber, inside the untrusted-content envelope. Propose `none` unless the person asked for the words.
 - **Never a token or secret.** A live subscriber's token, a webhook's signing secret and a secret URL are made at the
   person's terminal; say so and give the command, never ask for the value.
 - **The person's alone:** their projects (no tool reads or changes them), a workflow's runs (no tool lists, shows or
-  cancels one), and Describe it (`workflow describe`, which spends their subscription or key). Write a workflow
+  cancels one), and Describe it (`workflow describe`, which spends their subscription or key). You see a project's name,
+  never its folders: in `events_rule_show` and `events_approval_view` a Which project? step's projects come with
+  `folders: []`, `worktreeRoot: null` and `foldersHidden` (how many it has). Don't save a new version from that
+  document: its projects would not match, and enabling it is refused with `PROJECT_CHANGED`. The person ticks a
+  workflow's projects in the app's designer. Write a workflow
   yourself with `events_rule_create`, check it with `events_rule_check`, and hand it over.
 
 ## Workflows and deliveries in plain words

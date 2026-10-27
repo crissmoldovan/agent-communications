@@ -565,8 +565,10 @@ agent-events workflow-events show <schema> --json
   agent-events subscriber secret create <id> --version <n>   # a webhook subscriber's signing secret, shown once
   ```
 - **Two approvals let an event out.** The workflow's says what is raised and with what; the subscriber's says who
-  receives which names, in which namespaces, and whether it gets what senders wrote. Both are checked again just before
-  each event leaves. `subscriber remove` ends it at once: its streams close and its undelivered events are cancelled.
+  receives which names, in which namespaces, and whether it gets what senders wrote. For a webhook it names the whole
+  URL — scheme, host, port and path, since on a shared host such as `hooks.zapier.com` the path decides who receives —
+  or a secret URL by its host and port, "(a URL kept secret)"; the addresses it may connect to; and how many times each
+  event is tried. Both are checked again just before each event leaves. `subscriber remove` ends it at once: its streams close and its undelivered events are cancelled.
 - **Sender content only by a Raise step's `fields`,** only to a subscriber approved with `content: "enveloped"`, and
   only inside the untrusted-content envelope. Every other subscriber gets the event without them.
 - **Delivery never holds a run back.** Each event goes to each matching subscriber at least once, in order. Limits: a
@@ -586,7 +588,9 @@ agent-events workflow-events show <schema> --json
 
 From 0.36.0 the app's designer has **Describe it…**: say in your words what should happen, and a model drafts the
 workflow. The draft opens in the designer, with each step marked by the words it came from ("Added by the model, not
-from your words" where none), up to 5 questions with choices, and the checks. Nothing is saved until you save it, and
+from your words" where none: a note counts only when it quotes at least 12 characters and three whole words of your
+description, or of an answer you typed, never a choice the model offered), up to 5 questions with choices, and the
+checks. A draft that writes any part as `raw` JSON is refused, however it is spaced. Nothing is saved until you save it, and
 nothing runs until you approve it.
 
 ```bash
@@ -599,8 +603,11 @@ echo "When acme writes in C0123, find a session in their project and hand it ove
   you keep for Analyse.
 - **What is sent:** your words (at most 4,000 characters) and your answers, a fixed brief with the text's grammar, and
   the names a draft may use — your accounts, lanes, judges, targets, projects' ids and names, the step event words and
-  your namespaces. Never a message's content (unless you paste one, which goes inside the untrusted envelope), never a
-  profile, a folder, a target's URL, a secret or a key.
+  your namespaces. When you ask again, the current draft goes too, with its folders, URLs, address sets and templates
+  replaced by placeholders (`/redacted/folder-1`, `https://redacted.invalid/1`, `"template 1"`), and the event service
+  puts your values back in what comes back; a draft that does not read as a workflow goes as you wrote it, for the model
+  to fix. Never a message's content (unless you paste one, which goes inside the untrusted envelope), never a profile,
+  a folder, a target's URL, a secret or a key.
 - **Yours alone.** `workflow describe` refuses inside the event service's MCP server, in an agent's shell and, on
   macOS, from a process the app did not start; no tool runs it. An agent writes a workflow itself with
   `workflow create`, which you approve as any other.
@@ -687,7 +694,12 @@ channel servers applies, and the result tells you to restart the client. The
   - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
   - analyse a workflow (`workflow analyse`), or draft one with Describe it (`workflow describe`);
   - approve a subscriber's events, or see its token or signing secret;
-  - read or change your projects, or read or cancel a workflow's runs;
+  - read or change your projects, or read or cancel a workflow's runs. A workflow's Which project? step names its
+    projects by id and name only, when an agent reads it: `events_rule_show`, `events_approval_view`, and `workflow
+    show` or `approval view` in an agent's shell give each project `folders: []`, `worktreeRoot: null` and
+    `foldersHidden`, how many folders it has (0.36.0). You see the folders in the app and at your terminal. When an
+    agent enables a workflow whose projects have changed, the refusal (`PROJECT_CHANGED`) names the step, not which
+    project changed or how;
   - try a workflow on a message the event service holds (`workflow test-retained`);
   - resume a target;
   - decide a held event.
