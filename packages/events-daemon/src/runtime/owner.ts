@@ -160,6 +160,7 @@ import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
+import { composeOwnerWorkflowEvents } from './workflow/compose-events.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowFailpoint } from './workflow/engine.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -290,8 +291,9 @@ export interface EventOwnerOptions {
   readonly eventsWebSocket?: WebSocketTiming | undefined;
   /**
    * Workflows (0.36), test seams only: more compositions than the owner's own — a stand-in executor for a kind another
-   * track adds — the notifier a notify step raises its notice through, and a crash at a point of a step's life.
-   * Production composes every track's part and raises notices on the person's own screen.
+   * track adds, which takes the place of the owner's own executor of that kind — the notifier a notify step raises its
+   * notice through, and a crash at a point of a step's life. Production composes every track's part and raises notices
+   * on the person's own screen.
    */
   readonly workflows?:
     | {
@@ -1548,6 +1550,13 @@ async function startOwnerWithLock(
     },
   });
   // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  // A test's stand-in for a step kind takes that kind's place in the owner's own parts; nothing else of a part changes.
+  const testParts = options.workflows?.parts ?? [];
+  const stoodIn = new Set(testParts.flatMap((part) => part.executors.map((executor) => executor.kind)));
+  const ownParts = [composeOwnerWorkflowEvents({ store: database, cipher })].map((part) => ({
+    ...part,
+    executors: part.executors.filter((executor) => !stoodIn.has(executor.kind)),
+  }));
   const workflows = composeWorkflows(
     {
       store: database,
@@ -1559,7 +1568,7 @@ async function startOwnerWithLock(
       now,
       failpoint: options.workflows?.failpoint,
     },
-    [...(options.workflows?.parts ?? [])],
+    [...ownParts, ...testParts],
   );
   const activations = new ActivationRuntime({
     store: database,

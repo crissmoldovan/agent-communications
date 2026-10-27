@@ -2410,7 +2410,17 @@
             "properties": {
               "ruleId": { "$ref": "#/$defs/id" },
               "ruleVersion": { "$ref": "#/$defs/positive" },
-              "outcome": { "enum": ["matched", "no-match", "mapping-rejected", "retention-expired", "hold"] },
+              "outcome": {
+                "enum": [
+                  "matched",
+                  "no-match",
+                  "mapping-rejected",
+                  "retention-expired",
+                  "hold",
+                  "awaiting-chain",
+                  "not-chained"
+                ]
+              },
               "judge": {
                 "anyOf": [
                   {

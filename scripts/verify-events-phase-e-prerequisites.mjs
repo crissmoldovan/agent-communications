@@ -55,7 +55,7 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '9a56ff368dfa81031a3a448eab6df020fb457ca0d7542a0e5b0b5248f3619eaf',
+    '08f8414257643bf45f12490b5c6507eeaa0b51e8d9cd2eed3d5e9f3c2271b562',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':

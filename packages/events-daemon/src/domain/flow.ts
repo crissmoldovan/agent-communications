@@ -415,6 +415,22 @@ export function canonicalFlowInRule(rule: RuleWithoutFlow, raw: unknown): FlowDo
         `the workflow starts on ${self}, which is its own events: a workflow never starts on what it raises`,
       );
   }
+  // A chained workflow keeps each message's projection while it waits (W34): never past the workflow's own retention.
+  if (flow.on !== undefined && flow.on.withinMs > rule.retention.ingestMs)
+    refuse(
+      'FLOW_INVALID',
+      "the workflow's flow: a chained workflow waits for a raised event no longer than it keeps a message (withinMs is at most retention.ingestMs)",
+      {
+        problems: [
+          {
+            code: 'FLOW_LIMIT',
+            message: "a chained workflow's withinMs is at most its retention.ingestMs",
+            stepId: null,
+            pointer: '/on/withinMs',
+          },
+        ],
+      },
+    );
   return flow;
 }
 
@@ -490,10 +506,10 @@ export function assertFlowEventNameFree(database: DatabaseSync, rule: CanonicalF
 }
 
 /**
- * Chaining (W34) can slip from 0.36 on its own: until the evaluator waits for raised events, a workflow that starts on
- * one is refused at activation, and nothing else depends on it.
+ * Chaining (W34) could slip from 0.36 on its own: while this is false, a workflow that starts on a raised event is
+ * refused at activation, and nothing else depends on it. The evaluator waits for raised events now (§9.3).
  */
-export const FLOW_CHAINS_AVAILABLE = false;
+export const FLOW_CHAINS_AVAILABLE: boolean = true;
 
 /** Refuses, at activation, a workflow that starts on a raised event while chains are not available. */
 export function assertFlowChainAvailable(rule: CanonicalFullRuleDocument): void {

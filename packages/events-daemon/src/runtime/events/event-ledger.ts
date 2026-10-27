@@ -67,8 +67,9 @@ function scopeWhere(scope: EventDeliveryScope): { readonly sql: string; readonly
 }
 
 /**
- * Settles every named event none of whose deliveries is still open, or kept as a dead letter that may be retried: it
- * becomes `done` and its sealed record goes. An event past its own deadline becomes `expired` the same way.
+ * Settles every named event none of whose deliveries is still open, or kept as a dead letter that may be retried, and
+ * that no chained workflow may still start from (W34): it becomes `done` and its sealed record goes. An event past its
+ * own deadline becomes `expired` the same way.
  */
 export function settleFinishedEventsInTransaction(
   database: DatabaseSync,
@@ -85,6 +86,10 @@ export function settleFinishedEventsInTransaction(
       )
       .get(eventId, now);
     if (open !== undefined) continue;
+    const chained = database
+      .prepare('SELECT 1 AS present FROM workflow_chain_requests WHERE workflow_event_id = ? LIMIT 1')
+      .get(eventId);
+    if (chained !== undefined) continue;
     database
       .prepare(
         `UPDATE workflow_events

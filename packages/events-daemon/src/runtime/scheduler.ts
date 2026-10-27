@@ -25,6 +25,7 @@ import type { ActivationRuntime } from './activations.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatcher } from './dispatcher.ts';
 import { EventEvaluator } from './evaluate.ts';
+import { readyChains, sweepChainsInTransaction } from './events/chains.ts';
 import type { EventExpiry } from './expiry.ts';
 import type { HostedJudgeCredential } from './judge-transport.ts';
 import type { EventLifecycle } from './lifecycle.ts';
@@ -192,6 +193,7 @@ export class EventScheduler {
     }
 
     await this.#workflows?.tick().catch(() => this.#recordFailure('workflow', 'owner'));
+    await this.#chains().catch(() => this.#recordFailure('workflow', 'chains'));
     const status = this.#lifecycle.status();
     if (!status.enabled || status.paused) return;
 
@@ -215,6 +217,59 @@ export class EventScheduler {
     } catch (error) {
       this.#recordFailure('dispatch', error instanceof CommsError ? error.code : 'owner');
     }
+  }
+
+  /**
+   * Chains (workflows design W34, §9.3), after the engine's turn so a run that raised this tick is answered in it: a wait
+   * whose time has passed ends `not-chained` whatever the switch; then — collection on and not paused — each waiting
+   * message whose chain request has come is gated and mapped through its chained workflow's own approval, as an
+   * evaluation is. A WhatsApp message is read only under its live-list fence, as a held one is.
+   */
+  async #chains(): Promise<void> {
+    this.#store.immediate(() => sweepChainsInTransaction(this.#store.database, this.#now()));
+    const status = this.#lifecycle.status();
+    if (!status.enabled || status.paused) return;
+    const ready = readyChains(this.#store.database);
+    if (ready.length === 0) return;
+    const evaluator = this.#evaluator();
+    for (const message of ready) {
+      const work = () =>
+        evaluator.evaluate({ eventId: message.eventId, ruleId: message.ruleId, ruleVersion: message.ruleVersion });
+      try {
+        if (message.whatsappMessageId === null) await work();
+        else if (this.#whatsappVisibilityFence !== undefined)
+          await this.#whatsappVisibilityFence.withCurrentVisibleRead(
+            { accountId: message.accountId, whatsappMessageId: message.whatsappMessageId },
+            work,
+          );
+      } catch (error) {
+        if (isRemovedAccountError(error)) continue;
+        this.#recordFailure('workflow', 'chain');
+      }
+    }
+  }
+
+  /** An evaluator for owner work outside a source's turn: the account's own addresses mark what it sent itself. */
+  #evaluator(): EventEvaluator {
+    return new EventEvaluator({
+      store: this.#store,
+      cipher: this.#cipher,
+      approvals: this.#approvals,
+      config: this.#config,
+      taint: {
+        record: async (input) => {
+          const config = await this.#config.load();
+          const inbox = Object.values(config.inboxes).find((candidate) => candidate.id === input.accountId);
+          await recordEventTaint(
+            this.#taint,
+            { ownAddresses: inbox?.email ? [inbox.email] : [], internalDomains: inbox?.internalDomains ?? [] },
+            input,
+          );
+        },
+      },
+      ...(this.#hostedJudgeKeyFor === undefined ? {} : { hostedJudgeKeyFor: this.#hostedJudgeKeyFor }),
+      now: this.#now,
+    });
   }
 
   /** One fair ready-source turn per owner tick; Gmail and every Phase-D source share the same bounded rotation. */

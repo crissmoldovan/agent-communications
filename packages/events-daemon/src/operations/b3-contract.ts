@@ -38,6 +38,7 @@ import { JUDGE_KIND_LOCAL_ENDPOINT, JUDGE_KIND_TYPESAFE } from '../domain/lifecy
 import { linearChangeTargetDisclosure } from '../domain/linear-change-target.ts';
 import { isLinearId, linearTargetDisclosure } from '../domain/linear-target.ts';
 import {
+  CHAIN_DECISION_OUTCOMES,
   isEventId,
   isMessagesCursor,
   MESSAGE_DECISION_OUTCOMES,
@@ -1465,7 +1466,10 @@ function assertMessageEntry(value: unknown, name: string): void {
     assertClosedRecord(decision, ['ruleId', 'ruleVersion', 'outcome', 'judge'], `${name} decision`);
     assertText(decision.ruleId, `${name} decision rule id`);
     assertPositiveInteger(decision.ruleVersion, `${name} decision rule version`);
-    if (!MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never))
+    if (
+      !MESSAGE_DECISION_OUTCOMES.includes(decision.outcome as never) &&
+      !CHAIN_DECISION_OUTCOMES.includes(decision.outcome as never)
+    )
       throw new TypeError(`${name} decision has an unknown outcome`);
     if (decision.judge !== null) {
       assertClosedRecord(decision.judge, ['kind', 'answer', 'confidence', 'calibrated'], `${name} judge`);
