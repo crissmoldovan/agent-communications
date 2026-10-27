@@ -22,7 +22,7 @@ const LABELS: Record<Screen, string | RegExp> = {
   search: /^Messages ?New$/,
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).
-  connections: 'Connections New',
+  connections: 'MCP connections New',
   approvals: 'Approvals',
   activity: 'Activity',
   agent: 'Your agents',
@@ -61,6 +61,7 @@ describe('what each CLI version supports', () => {
       accountAppApproval: '0.34.0',
       taking: '0.35.0',
       search: '0.35.0',
+      connections: '0.35.0',
     });
     // Taking messages is core's from 0.35.0, a pull request's build of it included.
     expect(supports('0.34.0', 'taking')).toBe(false);

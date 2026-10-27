@@ -26,6 +26,9 @@
  * where nothing attests the app); an older core shows none of them.
  * `search` is core's (`SEARCH_VERSION`, 0.35.0): Search on this machine — People, Search, and Settings → Search on this
  * Mac, whose loosenings are approved in the app.
+ * `connections` is core's (`CONNECTIONS_VERSION`, 0.35.0, `mcp_connections.rs`): MCP connections — each place an app
+ * uses Agent Comms, added, changed and moved into one entry in the app; an older core keeps Connections' table of apps
+ * by server.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -47,10 +50,14 @@ export const GATES = {
   accountAppApproval: '0.34.0',
   taking: '0.35.0',
   search: '0.35.0',
+  connections: '0.35.0',
 } as const;
 
 /** The first core that takes messages (`taking.rs`, `TAKING_VERSION`). */
 export const TAKING_VERSION: string = GATES.taking;
+
+/** The first core with MCP connections (`mcp_connections.rs`, `CONNECTIONS_VERSION`). */
+export const CONNECTIONS_VERSION: string = GATES.connections;
 
 export type Feature = keyof typeof GATES;
 
