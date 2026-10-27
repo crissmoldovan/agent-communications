@@ -45,6 +45,17 @@ export type FakeLinearScript =
   | { readonly status: number; readonly body: unknown }
   | { readonly drop: true; readonly after?: 'handled' | 'unhandled' };
 
+/** An issue as Linear would show it now: its state's name from the last `issueUpdate` that set one, and its comments. */
+export interface FakeLinearIssueNow extends FakeLinearIssue {
+  readonly state: string | null;
+  readonly comments: readonly string[];
+}
+
+export interface FakeLinearOptions {
+  /** The workspace's one team, in place of FAKE_TEAM: its key names the issues it makes (`ACME-1`). */
+  readonly team?: { readonly id: string; readonly key: string; readonly name: string } | undefined;
+}
+
 export interface FakeLinear {
   readonly requests: FakeLinearRequest[];
   readonly issues: FakeLinearIssue[];
@@ -56,6 +67,8 @@ export interface FakeLinear {
   readonly tlsNames: string[];
   /** The next answers to `operation`, in order, before the fake answers as Linear would. */
   script(operation: string, ...answers: FakeLinearScript[]): void;
+  /** The issue with this identifier as Linear would show it now, or undefined when none was made. */
+  issue(identifier: string): FakeLinearIssueNow | undefined;
   clientOptions(): LinearClientOptions;
   close(): Promise<void>;
 }
@@ -79,7 +92,8 @@ function operationOf(query: unknown): string {
   return typeof query === 'string' ? (/^\s*(?:query|mutation)\s+([A-Za-z0-9_]+)/u.exec(query)?.[1] ?? '') : '';
 }
 
-export async function startFakeLinear(): Promise<FakeLinear> {
+export async function startFakeLinear(options: FakeLinearOptions = {}): Promise<FakeLinear> {
+  const team = options.team ?? FAKE_TEAM;
   const requests: FakeLinearRequest[] = [];
   const issues: FakeLinearIssue[] = [];
   const comments: FakeLinearComment[] = [];
@@ -97,7 +111,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           body: {
             data: {
               viewer: { organization: { name: 'Example Workspace' } },
-              teams: { nodes: [FAKE_TEAM, { id: 'not-a-uuid', key: 'BAD', name: 'dropped' }] },
+              teams: { nodes: [team, { id: 'not-a-uuid', key: 'BAD', name: 'dropped' }] },
             },
           },
         };
@@ -106,7 +120,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           status: 200,
           body: {
             data: {
-              team: variables.team === FAKE_TEAM.id ? { labels: { nodes: [FAKE_LABELS[0]] } } : null,
+              team: variables.team === team.id ? { labels: { nodes: [FAKE_LABELS[0]] } } : null,
               issueLabels: { nodes: [FAKE_LABELS[1], FAKE_LABELS[0]] },
             },
           },
@@ -116,7 +130,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           status: 200,
           body: {
             data: {
-              team: variables.team === FAKE_TEAM.id ? { states: { nodes: [...FAKE_STATES] } } : null,
+              team: variables.team === team.id ? { states: { nodes: [...FAKE_STATES] } } : null,
             },
           },
         };
@@ -139,7 +153,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
             status: 400,
             body: { errors: [{ message: 'Entity already exists', extensions: { code: 'INVALID_INPUT' } }] },
           };
-        const identifier = `${FAKE_TEAM.key}-${issues.length + 1}`;
+        const identifier = `${team.key}-${issues.length + 1}`;
         const issue = {
           id: input.id as string,
           identifier,
@@ -165,7 +179,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           body: {
             data: {
               viewer: { id: FAKE_VIEWER_ID },
-              issues: { nodes: found.map(({ id }) => ({ id, team: { id: FAKE_TEAM.id } })) },
+              issues: { nodes: found.map(({ id }) => ({ id, team: { id: team.id } })) },
               comments: {
                 nodes: comments.filter((comment) => comment.id === variables.comment).map(({ id }) => ({ id })),
               },
@@ -259,6 +273,18 @@ export async function startFakeLinear(): Promise<FakeLinear> {
     tlsNames,
     script(operation, ...answers) {
       scripts.set(operation, [...(scripts.get(operation) ?? []), ...answers]);
+    },
+    issue(identifier) {
+      const issue = issues.find((candidate) => candidate.identifier === identifier);
+      if (issue === undefined) return undefined;
+      const stateId = updates
+        .filter((update) => update.id === issue.id && typeof update.input.stateId === 'string')
+        .at(-1)?.input.stateId;
+      return {
+        ...issue,
+        state: FAKE_STATES.find((state) => state.id === stateId)?.name ?? null,
+        comments: comments.filter((comment) => comment.issueId === issue.id).map((comment) => comment.body),
+      };
     },
     clientOptions() {
       return {
