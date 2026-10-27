@@ -712,5 +712,268 @@
         "roots": ["/example/home/work", "/example/home/code"]
       }
     }
+  },
+  {
+    "name": "runs-list-request",
+    "request": {
+      "operation": "runs-list",
+      "args": {
+        "ruleId": "client-asks",
+        "state": "waiting"
+      }
+    }
+  },
+  {
+    "name": "run-show-request",
+    "request": {
+      "operation": "run-show",
+      "args": {
+        "runId": "wfr_0123456789abcdefghjkmnpqrs"
+      }
+    }
+  },
+  {
+    "name": "run-cancel-request",
+    "request": {
+      "operation": "run-cancel",
+      "args": {
+        "runId": "wfr_0123456789abcdefghjkmnpqrs",
+        "interrupt": true
+      }
+    }
+  },
+  {
+    "name": "rule-check-request",
+    "request": {
+      "operation": "rule-check",
+      "args": {
+        "document": {
+          "ruleId": "invoices",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["ibx_ABCDEFGHIJKLMNOP"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "mapping": {
+            "subject": {
+              "$path": "/subject"
+            }
+          },
+          "targets": [
+            {
+              "targetId": "dry-invoices",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 86400000
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 60,
+          "retention": {
+            "ingestMs": 604800000,
+            "holdMs": 604800000,
+            "deliveryMs": 604800000,
+            "dryrunMs": 86400000,
+            "sseReplayMs": 604800000,
+            "deadLetterMs": 604800000,
+            "decisionMetadataMs": 7776000000
+          },
+          "flow": {
+            "events": {
+              "namespace": "acme",
+              "workflow": "invoices"
+            },
+            "flowVersion": 1,
+            "limits": {
+              "concurrentRuns": 2,
+              "eventsPerHour": 120,
+              "linearWritesPerHour": 30,
+              "runMs": 259200000,
+              "runsPerHour": 10,
+              "sessionsPerHour": 2,
+              "worktreesPerDay": 5
+            },
+            "start": "check",
+            "steps": {
+              "check": {
+                "kind": "condition",
+                "next": {
+                  "no": "tell",
+                  "yes": "found"
+                },
+                "when": {
+                  "caseSensitive": false,
+                  "op": "contains",
+                  "path": "/fields/subject",
+                  "value": "invoice"
+                }
+              },
+              "found": {
+                "kind": "raise",
+                "name": "invoice-seen",
+                "next": {
+                  "raised": "out"
+                }
+              },
+              "out": {
+                "emit": ["succeeded"],
+                "kind": "deliver",
+                "next": {},
+                "target": {
+                  "targetId": "dry-invoices",
+                  "version": 1
+                }
+              },
+              "tell": {
+                "kind": "notify",
+                "next": {
+                  "sent": "check"
+                },
+                "text": "A mail that is not an invoice"
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "rule-show-version-request",
+    "request": {
+      "operation": "rule-show",
+      "args": {
+        "ruleId": "invoices",
+        "version": 1
+      }
+    }
+  },
+  {
+    "name": "rule-test-flow-outcomes-request",
+    "request": {
+      "operation": "ruleTest",
+      "args": {
+        "document": {
+          "ruleId": "invoices",
+          "version": 1,
+          "source": {
+            "channel": "gmail",
+            "accountIds": ["ibx_ABCDEFGHIJKLMNOP"],
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
+          },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
+          "condition": {
+            "path": "/subject",
+            "op": "exists"
+          },
+          "mapping": {
+            "subject": {
+              "$path": "/subject"
+            }
+          },
+          "targets": [
+            {
+              "targetId": "dry-invoices",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 86400000
+            }
+          ],
+          "subscribers": [],
+          "judges": [],
+          "deliveryRateCap": 60,
+          "retention": {
+            "ingestMs": 604800000,
+            "holdMs": 604800000,
+            "deliveryMs": 604800000,
+            "dryrunMs": 86400000,
+            "sseReplayMs": 604800000,
+            "deadLetterMs": 604800000,
+            "decisionMetadataMs": 7776000000
+          },
+          "flow": {
+            "events": {
+              "namespace": "acme",
+              "workflow": "invoices"
+            },
+            "flowVersion": 1,
+            "limits": {
+              "concurrentRuns": 2,
+              "eventsPerHour": 120,
+              "linearWritesPerHour": 30,
+              "runMs": 259200000,
+              "runsPerHour": 10,
+              "sessionsPerHour": 2,
+              "worktreesPerDay": 5
+            },
+            "start": "check",
+            "steps": {
+              "check": {
+                "kind": "condition",
+                "next": {
+                  "no": "tell",
+                  "yes": "found"
+                },
+                "when": {
+                  "caseSensitive": false,
+                  "op": "contains",
+                  "path": "/fields/subject",
+                  "value": "invoice"
+                }
+              },
+              "found": {
+                "kind": "raise",
+                "name": "invoice-seen",
+                "next": {
+                  "raised": "out"
+                }
+              },
+              "out": {
+                "emit": ["succeeded"],
+                "kind": "deliver",
+                "next": {},
+                "target": {
+                  "targetId": "dry-invoices",
+                  "version": 1
+                }
+              },
+              "tell": {
+                "kind": "notify",
+                "next": {},
+                "text": "A mail that is not an invoice"
+              }
+            }
+          }
+        },
+        "catalogue": {
+          "type": "gmail.message.received",
+          "version": 1,
+          "exampleIndex": 1
+        },
+        "outcomes": {
+          "check": "no"
+        }
+      }
+    }
   }
 ]

@@ -6,7 +6,14 @@ import {
   type DisclosureVersionKind,
   neutralise,
 } from '@agentcomms/core';
-import { describeRule, isJsonValue, type JsonValue, WORKFLOW_EVENT_CATALOGUE_V1 } from '@agentcomms/events';
+import {
+  describeFlow,
+  describeRule,
+  isJsonValue,
+  type JsonValue,
+  STEP_KINDS,
+  WORKFLOW_EVENT_CATALOGUE_V1,
+} from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
@@ -97,6 +104,20 @@ import type {
 import type { TighteningPreview } from '../runtime/queue-tightening.ts';
 import type { SessionQueueDropResultV1, SessionQueueListResultV1 } from '../runtime/session-queue.ts';
 import type { DeliveryRepresentation } from '../runtime/target-delivery.ts';
+import type { FlowTestResultV1, RuleCheckResultV1 } from '../runtime/workflow/flow-test.ts';
+import {
+  RUN_EVENT_STATES,
+  RUN_ID_PATTERN,
+  RUN_STATES,
+  RUN_STEP_STATES,
+  RUN_SUMMARY_SESSIONS,
+  RUN_WAIT_KINDS,
+  RUNS_LIST_MAX,
+  type RunCancelResultV1,
+  type RunShowResultV1,
+  type RunState,
+  type RunsListResultV1,
+} from '../runtime/workflow/run-show.ts';
 import { renderLayaJudgePreviewV3 } from './b3-control-v3.ts';
 import type { DoctorReportV1 } from './doctor.ts';
 
@@ -594,8 +615,9 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'target-update': B3VersionResultV1<'target', TargetDocument>;
   readonly 'target-remove': Readonly<{ targetId: string; removed: true }>;
   readonly approve: Readonly<{ intentId: string; status: 'completed'; usedAt: string }>;
-  readonly ruleTest: B3RuleTestResultV1;
-  readonly ruleTestRetained: B3RuleTestResultV1;
+  /** A workflow with a flow is walked (0.36.0 §7.7): its path, and each step's would, prompt, issue and events. */
+  readonly ruleTest: B3RuleTestResultV1 | FlowTestResultV1;
+  readonly ruleTestRetained: B3RuleTestResultV1 | FlowTestResultV1;
   readonly targetTest: B3TargetTestResultV1;
   readonly targetResume: B3TargetResumeResultV1;
   readonly subscribersList: readonly JsonValue[];
@@ -638,6 +660,10 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'session-queue-list': SessionQueueListResultV1;
   readonly 'session-queue-drop': SessionQueueDropResultV1;
   readonly 'rule-analyse': RuleAnalyseResultV1;
+  readonly 'runs-list': RunsListResultV1;
+  readonly 'run-show': RunShowResultV1;
+  readonly 'run-cancel': RunCancelResultV1;
+  readonly 'rule-check': RuleCheckResultV1;
   readonly 'judge-show': JudgeShowResultV1;
   readonly 'subscriber-enable': B3PreparedActivationResultV1;
   readonly 'subscriber-approve': SubscriptionApprovalResultV1;
@@ -715,6 +741,8 @@ export interface B3ControlRequestArgumentsV1 {
   readonly ruleTest: {
     readonly document: CanonicalFullRuleDocument;
     readonly catalogue: { readonly type: string; readonly version: number; readonly exampleIndex: number };
+    /** A workflow with a flow (0.36.0 §7.7): the outcome each named step answers with; every other its first. */
+    readonly outcomes?: Readonly<Record<string, string>> | undefined;
   };
   readonly ruleTestRetained: { readonly eventId: string; readonly ruleId: string; readonly ruleVersion: number };
   readonly targetTest: { readonly targetId: string; readonly targetVersion: number };
@@ -773,7 +801,8 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'sources-list': Record<string, never>;
   readonly 'source-show': { readonly source: string };
   readonly 'rules-list': Record<string, never>;
-  readonly 'rule-show': { readonly ruleId: string };
+  /** With `version` (0.36.0), that one version alone. */
+  readonly 'rule-show': { readonly ruleId: string; readonly version?: number | undefined };
   readonly 'rule-create': { readonly document: CanonicalFullRuleDocument };
   readonly 'rule-update': { readonly document: CanonicalFullRuleDocument };
   readonly 'rule-enable': { readonly ruleId: string; readonly version: number };
@@ -871,6 +900,12 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
     readonly draft?: Readonly<Record<string, JsonValue>> | undefined;
     readonly provider?: AnalyseProvider | undefined;
   };
+  /** A workflow's runs (0.36.0 §7.6): the person's to list, show and cancel, from the app or their terminal. */
+  readonly 'runs-list': { readonly ruleId?: string | undefined; readonly state?: RunState | undefined };
+  readonly 'run-show': { readonly runId: string };
+  readonly 'run-cancel': { readonly runId: string; readonly interrupt?: boolean | undefined };
+  /** `workflow check` (0.36.0 §7.7): any document, checked as the event service reads it; nothing is written. */
+  readonly 'rule-check': { readonly document: Readonly<Record<string, JsonValue>> };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -1399,6 +1434,165 @@ function assertProjectScan(value: Readonly<Record<string, unknown>>): void {
   }
 }
 
+const RUN_ENTRY_FIELDS: readonly string[] = Object.freeze([
+  'runId',
+  'ruleId',
+  'ruleVersion',
+  'state',
+  'startedAt',
+  'updatedAt',
+  'endCode',
+  'eventId',
+  'parentRunId',
+  'depth',
+  'shadow',
+  'waiting',
+  'summary',
+]);
+
+/** A closed code: upper-case words, as a run's end code and a step's last error code are. */
+function assertClosedCode(value: unknown, name: string): void {
+  if (typeof value !== 'string' || !/^[A-Z][A-Z0-9_]{0,63}$/u.test(value))
+    throw new TypeError(`${name} is a closed code`);
+}
+
+/** One run (0.36.0 §7.6), as `runs list` lists it: ids, its state, times and what it waits on — content-free. */
+function assertRunEntry(value: Readonly<Record<string, unknown>>, name: string): void {
+  if (typeof value.runId !== 'string' || !RUN_ID_PATTERN.test(value.runId))
+    throw new TypeError(`${name}'s id is a run id`);
+  assertText(value.ruleId, `${name}'s workflow`);
+  assertPositiveInteger(value.ruleVersion, `${name}'s version`);
+  if (!(RUN_STATES as readonly unknown[]).includes(value.state)) throw new TypeError(`${name} has an unknown state`);
+  assertNonNegativeInteger(value.startedAt, `when ${name} started`);
+  assertNonNegativeInteger(value.updatedAt, `when ${name} changed`);
+  assertNullable(value.endCode, assertClosedCode, `${name}'s end code`);
+  assertText(value.eventId, `${name}'s event`);
+  assertNullable(value.parentRunId, assertText, `${name}'s parent run`);
+  if (!Number.isSafeInteger(value.depth) || (value.depth as number) < 0 || (value.depth as number) > 3)
+    throw new TypeError(`${name}'s depth is 0 to 3`);
+  if (typeof value.shadow !== 'boolean') throw new TypeError(`${name} says whether it is a shadow`);
+  assertClosedRecord(value.summary, ['project', 'issue', 'session', 'turn'], `${name}'s summary`);
+  assertNullable(value.summary.project, assertText, `the project ${name} chose`);
+  assertNullable(value.summary.issue, assertText, `the issue ${name} made`);
+  if (value.summary.session !== null && !(RUN_SUMMARY_SESSIONS as readonly unknown[]).includes(value.summary.session))
+    throw new TypeError(`${name}'s session was found or started`);
+  assertNullable(value.summary.turn, assertText, `how ${name}'s turn ended`);
+  if (value.waiting === null) return;
+  assertClosedRecord(value.waiting, ['stepId', 'kind', 'since', 'ahead', 'needsYouInClaudeStream'], `${name}'s wait`);
+  assertText(value.waiting.stepId, `the step ${name} waits on`);
+  if (!(RUN_WAIT_KINDS as readonly unknown[]).includes(value.waiting.kind))
+    throw new TypeError(`${name} waits on an unknown kind`);
+  assertNonNegativeInteger(value.waiting.since, `since when ${name} waits`);
+  assertNullable(value.waiting.ahead, assertNonNegativeInteger, `how many are ahead of ${name}`);
+  if (typeof value.waiting.needsYouInClaudeStream !== 'boolean')
+    throw new TypeError(`${name}'s wait says whether it needs the person`);
+}
+
+/** A flow's try (0.36.0 §7.7): the path, and for each step its outcome, its would, its prompt and issue, and its events. */
+function assertFlowTestResult(value: Readonly<Record<string, unknown>>, operation: string): void {
+  assertClosedRecord(value, ['ruleId', 'version', 'path', 'steps'], `a ${operation} result for a flow`);
+  assertText(value.ruleId, "a try's workflow");
+  assertPositiveInteger(value.version, "a try's version");
+  if (!Array.isArray(value.path) || value.path.some((step) => typeof step !== 'string'))
+    throw new TypeError("a try's path is its steps' ids");
+  if (!Array.isArray(value.steps)) throw new TypeError("a try's steps are a list");
+  for (const step of value.steps) {
+    if (!isRecord(step)) throw new TypeError("a try's step is an object");
+    const keys = ['stepId', 'kind', 'outcome', 'would', 'events'];
+    const optional = ['prompt', 'issue'];
+    if (
+      keys.some((key) => !Object.hasOwn(step, key)) ||
+      Object.keys(step).some((key) => ![...keys, ...optional].includes(key))
+    )
+      throw new TypeError("a try's step must be a closed object");
+    assertText(step.stepId, "a try's step id");
+    if (!(STEP_KINDS as readonly unknown[]).includes(step.kind))
+      throw new TypeError("a try's step has an unknown kind");
+    assertText(step.outcome, "a try's step outcome");
+    if (!Array.isArray(step.would)) throw new TypeError("a try's would is its parts");
+    for (const part of step.would) {
+      assertClosedRecord(part, ['text', 'kind'], "a would's part");
+      if (typeof part.text !== 'string' || !['plain', 'value', 'untrusted'].includes(part.kind as string))
+        throw new TypeError("a would's part is plain, a value or untrusted text");
+    }
+    if (Object.hasOwn(step, 'prompt')) assertText(step.prompt, "a try's prompt");
+    if (Object.hasOwn(step, 'issue')) {
+      assertClosedRecord(step.issue, ['title', 'description'], "a try's issue");
+      assertText(step.issue.title, "a try's issue title");
+      assertText(step.issue.description, "a try's issue description");
+    }
+    if (!Array.isArray(step.events)) throw new TypeError("a try's events are a list");
+    for (const event of step.events) {
+      assertClosedRecord(event, ['type', 'data'], 'an event a try would raise');
+      assertText(event.type, "an event's type");
+      if (!isRecord(event.data) || !isJsonValue(event.data)) throw new TypeError("an event's data is a JSON object");
+    }
+  }
+}
+
+/** `runs show`'s result: the run, its path, each step it reached of its own version, and the events it raised. */
+function assertRunShow(value: Readonly<Record<string, unknown>>): void {
+  assertRunEntry(value, 'a shown run');
+  if (!Array.isArray(value.path) || value.path.some((step) => typeof step !== 'string'))
+    throw new TypeError("a shown run's path is its steps' ids");
+  assertNonNegativeInteger(value.notRaised, "a shown run's events not raised");
+  if (!Array.isArray(value.steps)) throw new TypeError("a shown run's steps are a list");
+  for (const step of value.steps) {
+    assertClosedRecord(
+      step,
+      [
+        'stepId',
+        'kind',
+        'state',
+        'outcome',
+        'attempts',
+        'startedAt',
+        'settledAt',
+        'output',
+        'lastErrorCode',
+        'deliveryId',
+        'wait',
+      ],
+      "a shown run's step",
+    );
+    assertText(step.stepId, "a step's id");
+    if (!(STEP_KINDS as readonly unknown[]).includes(step.kind)) throw new TypeError('a step has an unknown kind');
+    if (!(RUN_STEP_STATES as readonly unknown[]).includes(step.state))
+      throw new TypeError('a step has an unknown state');
+    assertNullable(step.outcome, assertText, "a step's outcome");
+    assertNonNegativeInteger(step.attempts, "a step's attempts");
+    assertNullable(step.startedAt, assertNonNegativeInteger, 'when a step started');
+    assertNullable(step.settledAt, assertNonNegativeInteger, 'when a step settled');
+    if (step.output !== null && (!isRecord(step.output) || !isJsonValue(step.output)))
+      throw new TypeError("a step's output is a closed JSON object");
+    assertNullable(step.lastErrorCode, assertClosedCode, "a step's last error code");
+    assertNullable(step.deliveryId, assertText, "a step's delivery");
+    if (step.wait !== null) {
+      assertClosedRecord(step.wait, ['kind', 'since', 'wakeAt'], "a step's wait");
+      if (!(RUN_WAIT_KINDS as readonly unknown[]).includes(step.wait.kind))
+        throw new TypeError('a step waits on an unknown kind');
+      assertNonNegativeInteger(step.wait.since, 'since when a step waits');
+      assertNonNegativeInteger(step.wait.wakeAt, 'when a waiting step wakes');
+    }
+  }
+  if (!Array.isArray(value.events)) throw new TypeError("a shown run's events are a list");
+  for (const event of value.events) {
+    assertClosedRecord(event, ['eventId', 'type', 'raisedAt', 'state', 'deliveries'], 'an event a run raised');
+    assertText(event.eventId, "a raised event's id");
+    assertText(event.type, "a raised event's type");
+    assertNonNegativeInteger(event.raisedAt, 'when an event was raised');
+    if (!(RUN_EVENT_STATES as readonly unknown[]).includes(event.state))
+      throw new TypeError('a raised event has an unknown state');
+    if (!Array.isArray(event.deliveries)) throw new TypeError("a raised event's deliveries are a list");
+    for (const delivery of event.deliveries) {
+      assertClosedRecord(delivery, ['subscriberId', 'subscriberVersion', 'state'], "a raised event's delivery");
+      assertText(delivery.subscriberId, "a delivery's subscriber");
+      assertPositiveInteger(delivery.subscriberVersion, "a delivery's subscriber version");
+      assertText(delivery.state, "a delivery's state");
+    }
+  }
+}
+
 /** One `session-queue list` item: ids, a lane and times, content-free. */
 function assertSessionQueueItem(value: unknown): void {
   assertClosedRecord(
@@ -1626,6 +1820,10 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'session-queue-list': ['items'],
   'session-queue-drop': ['deliveryId', 'dropped'],
   'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
+  'runs-list': ['runs'],
+  'run-show': [...RUN_ENTRY_FIELDS, 'path', 'notRaised', 'steps', 'events'],
+  'run-cancel': ['runId', 'state', 'cancelledDeliveries', 'cancelledEvents', 'interrupted'],
+  'rule-check': ['ok', 'problems'],
   'judge-show': ['judgeId', 'version', 'document', 'digest', 'state'],
   'subscriber-enable': ['intentId', 'approvalId', 'binding', 'kind', 'status', 'replacementOfVersion'],
   'subscriber-approve': ['approvalId', 'subscriberId', 'version', 'approved', 'approvedBy', 'completion'],
@@ -1860,6 +2058,10 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     else assertIntegrationShow(value);
     return;
   }
+  if ((operation === 'ruleTest' || operation === 'ruleTestRetained') && isRecord(value) && 'path' in value) {
+    assertFlowTestResult(value, operation);
+    return;
+  }
   assertClosedRecord(value, fields, `a ${operation} result`);
   switch (operation) {
     case 'status': {
@@ -2075,6 +2277,39 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       return;
     case 'rule-analyse':
       assertRuleAnalyseResult(value);
+      return;
+    case 'runs-list':
+      if (!Array.isArray(value.runs) || value.runs.length > RUNS_LIST_MAX)
+        throw new TypeError(`a run list holds at most ${RUNS_LIST_MAX} runs`);
+      for (const run of value.runs) {
+        assertClosedRecord(run, RUN_ENTRY_FIELDS, 'a listed run');
+        assertRunEntry(run, 'a listed run');
+      }
+      return;
+    case 'run-show':
+      assertRunShow(value);
+      return;
+    case 'run-cancel':
+      if (typeof value.runId !== 'string' || !RUN_ID_PATTERN.test(value.runId))
+        throw new TypeError('a cancelled run names its run id');
+      if (value.state !== 'cancelled') throw new TypeError('a cancelled run is cancelled');
+      assertNonNegativeInteger(value.cancelledDeliveries, "a cancelled run's cancelled deliveries");
+      assertNonNegativeInteger(value.cancelledEvents, "a cancelled run's cancelled events");
+      if (typeof value.interrupted !== 'boolean')
+        throw new TypeError('a cancelled run says whether it interrupted a turn');
+      return;
+    case 'rule-check':
+      if (typeof value.ok !== 'boolean' || !Array.isArray(value.problems))
+        throw new TypeError('a workflow check says whether the document is ok, and lists its problems');
+      if (value.ok !== (value.problems.length === 0))
+        throw new TypeError('a workflow check is ok exactly when it lists none');
+      for (const problem of value.problems) {
+        assertClosedRecord(problem, ['code', 'message', 'stepId', 'pointer'], "a workflow check's problem");
+        assertClosedCode(problem.code, "a problem's code");
+        assertText(problem.message, "a problem's message");
+        assertNullable(problem.stepId, assertText, "a problem's step");
+        assertNullable(problem.pointer, assertText, "a problem's pointer");
+      }
       return;
     case 'judge-show': {
       assertText(value.judgeId, 'a shown judge id');
@@ -2428,6 +2663,26 @@ function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
 }
 
 /**
+ * A workflow's numbered effects (workflows design §10.2, plan B7): after its plain words, one line per step that does
+ * something, as `describeFlow` says it. Each author's string is one literal it cannot close, as in the plain words.
+ */
+function flowSummaryLines(document: ActivationDocumentV1): readonly string[] {
+  if (document.kind !== 'rule' || document.rule.flow === undefined) return [];
+  return describeFlow(document.rule as Parameters<typeof describeFlow>[0]).map((line) => {
+    const parts = line.parts.map((part) => ({ ...part }));
+    for (const [index, part] of parts.entries()) {
+      if (part.kind !== 'untrusted') continue;
+      const before = parts[index - 1];
+      const after = parts[index + 1];
+      if (before?.kind === 'plain' && before.text.endsWith("'")) before.text = before.text.slice(0, -1);
+      if (after?.kind === 'plain' && after.text.startsWith("'")) after.text = after.text.slice(1);
+    }
+    const text = parts.map((part) => (part.kind === 'untrusted' ? authorLiteral(part.text) : part.text)).join('');
+    return `${line.number}. ${neutralise(text).text}`;
+  });
+}
+
+/**
  * Where a rule's hosted judge sends the fields the rule names (owner decision 2026-10-26): to TypeSafe's Jev itself, or
  * to OpenRouter, which passes them on to TypeSafe's Jev. A local or Laya judge sends nothing off this machine.
  */
@@ -2592,6 +2847,7 @@ export function renderB3ApprovalPreviewV1(
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       ...ruleSummaryLine(document),
+      ...flowSummaryLines(document),
       ...subscriptionLine(document, value.subscription),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),

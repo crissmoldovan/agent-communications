@@ -328,6 +328,16 @@ export interface RelaySnapshotV1 {
   readonly session: RelaySessionV1;
   readonly runs: readonly RelayRunV1[];
   readonly cursor: number;
+  /**
+   * The session's open requests to the person — an approval, a question, any kind (api-contract `pendingRequests`, read
+   * 2026-10-27) — each by the turn that asked, when the relay says it. Only that: never what was asked.
+   */
+  readonly pendingRequests?: readonly { readonly runId: string | null }[] | undefined;
+}
+
+/** Whether the person is needed for `turn` in claude-stream: an open request of that turn, or of the session's own. */
+export function needsThePerson(snapshot: RelaySnapshotV1, turn: string): boolean {
+  return (snapshot.pendingRequests ?? []).some((request) => request.runId === null || request.runId === turn);
 }
 
 export interface RelayInfoV1 {
@@ -518,7 +528,15 @@ export class RelayClient {
     if (body.status === 404) return null;
     if (!isRecord(body.value) || !Array.isArray(body.value.runs) || typeof body.value.cursor !== 'number')
       throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a session in a shape this client cannot read');
-    return { session: session(body.value.session), runs: body.value.runs.map(run), cursor: body.value.cursor };
+    const pending = Array.isArray(body.value.pendingRequests) ? body.value.pendingRequests : [];
+    return {
+      session: session(body.value.session),
+      runs: body.value.runs.map(run),
+      cursor: body.value.cursor,
+      pendingRequests: pending.filter(isRecord).map((request) => ({
+        runId: typeof request.runId === 'string' && RUN_ID.test(request.runId) ? request.runId : null,
+      })),
+    };
   }
 
   /** `POST /v1/sessions`: a new session in `cwd`, which the relay checks is inside its allowed roots. */
@@ -573,6 +591,17 @@ export class RelayClient {
     }
     if (!isRecord(body.value)) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a started run oddly');
     return { kind: 'started', run: run(body.value.run), repeated: body.value.repeated === true };
+  }
+
+  /**
+   * `POST /v1/runs/:id/interrupt` (api-contract, read 2026-10-27): interrupts a session's live turn, only when the person
+   * cancels a workflow's run with `--interrupt` (workflows design §7.6). True when the relay interrupted it (200); false
+   * for a turn it does not know (404), one no longer live (409), or a provider that cannot interrupt (501).
+   */
+  async interruptRun(runId: string): Promise<boolean> {
+    if (!RUN_ID.test(runId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay run id is run_<uuid>');
+    const body = await this.#json('POST', `/v1/runs/${runId}/interrupt`, {}, [200, 404, 409, 501]);
+    return body.status === 200;
   }
 
   /**

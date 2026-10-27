@@ -101,6 +101,7 @@ import {
   queueReopen,
   queueShow,
 } from '../operations/queue.ts';
+import { ruleCheck } from '../operations/rule-check.ts';
 import { ruleTest, ruleTestRetained } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -112,6 +113,7 @@ import {
   updateRule,
 } from '../operations/rules.ts';
 import { run as runOwner } from '../operations/run.ts';
+import { runCancel, runShow, runsList } from '../operations/runs.ts';
 import {
   judgeKeyRotate,
   judgeKeySet,
@@ -147,6 +149,7 @@ import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
 import { withinTestProfile } from '../runtime/test-profile.ts';
+import { RUN_STATES, type RunState } from '../runtime/workflow/run-show.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -506,10 +509,18 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     print(await rulesList(controlOptions(program)));
   });
   const rule = program.command('workflow').alias('rule').description('create, inspect and control immutable workflows');
-  rule.command('show <workflow-id>').action(async (ruleId: string) => {
-    ran = true;
-    print(await ruleShow(ruleId, controlOptions(program)));
-  });
+  rule
+    .command('show <workflow-id>')
+    .option('--version <version>', 'that one version alone, as a run of it draws its graph')
+    .action(async (ruleId: string, options: { readonly version?: string }) => {
+      ran = true;
+      print(
+        await ruleShow(ruleId, {
+          ...controlOptions(program),
+          ...(options.version === undefined ? {} : { version: parseVersion(options.version) }),
+        }),
+      );
+    });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
     print(await createRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
@@ -533,14 +544,26 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   }
   rule.command('test <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {
     ran = true;
+    // A workflow with a flow is walked over the example (0.36.0 §7.7): each step named answers as asked, every other
+    // with its first outcome. `-` reads the document from stdin, as the app gives it.
+    const outcomes = outcomeArguments(ruleTestCommand.opts<{ readonly outcome: string[] }>().outcome);
     print(
-      await ruleTest(
-        jsonArgument(document, 'workflow document'),
-        catalogueArgument(catalogueExample),
-        controlOptions(program),
-      ),
+      await ruleTest(await documentArgument(document, 'workflow document'), catalogueArgument(catalogueExample), {
+        ...controlOptions(program),
+        ...(outcomes === undefined ? {} : { outcomes }),
+      }),
     );
   });
+  // The command just made: the guarded line above is left as it is, and its option is added here.
+  const ruleTestCommand = rule.commands.at(-1) as Command;
+  ruleTestCommand
+    .description('try a workflow on a catalogue example; a flow is walked, each effect a would, with no I/O')
+    .option(
+      '--outcome <step=outcome>',
+      'the outcome a step of the flow answers with (repeat for more); every other step answers its first',
+      collect,
+      [],
+    );
   rule
     .command('test-retained <event-id>')
     .addOption(new Option('--workflow <workflow-id>'))
@@ -558,6 +581,70 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           ruleTestRetained(eventId, ruleId, ruleVersion, controlOptions(program)),
         ),
       );
+    });
+  rule
+    .command('check <document>')
+    .description('check a workflow document as the event service reads it, every problem named; - reads it from stdin')
+    .action(async (document: string) => {
+      ran = true;
+      print(await ruleCheck(await documentArgument(document, 'workflow document'), controlOptions(program)));
+    });
+  // A workflow's runs (0.36.0 workflows design §7.6, §11.1): `runs`, not `run`, which starts the service. Each command is
+  // the person's alone, from the app or their terminal: personSetupOrigin refuses the event service's MCP server, an
+  // agent's shell and, on macOS, a process the app did not start, before anything is asked; the owner takes them only
+  // from the person's origin; and no tool reads or cancels a run.
+  const asPersonForRuns = (what: string) =>
+    personSetupOrigin(what, {
+      where: "Events → Workflows, a workflow's Runs",
+      action: 'runs',
+      terminal: 'output',
+      // Nothing here loosens anything: a list and a run are read, and a cancel is a tightening.
+      unattested: 'accept',
+    });
+  const runs = program
+    .command('runs')
+    .description("a workflow's runs: list them, show one, cancel one (a person only)");
+  runs
+    .command('list')
+    .description(
+      'list the runs, newest first, at most 200: their state, version and what each waits on (a person only)',
+    )
+    .option('--workflow <workflow-id>', "only this workflow's runs")
+    .option('--state <state>', `only the runs in this state: ${RUN_STATES.join(', ')}`)
+    .action(async (options: { readonly workflow?: string; readonly state?: string }) => {
+      ran = true;
+      const origin = await asPersonForRuns("list your workflows' runs");
+      if (options.state !== undefined && !(RUN_STATES as readonly string[]).includes(options.state))
+        throw new CommsError('USAGE', `a run's state is ${RUN_STATES.join(', ')}`);
+      print(
+        await runsList({
+          ...controlOptions(program),
+          origin,
+          ruleId: options.workflow,
+          state: options.state as RunState | undefined,
+        }),
+      );
+    });
+  runs
+    .command('show <run-id>')
+    .description(
+      "show one run of the version it started on: its path, each step's outcome, output and wait, and the events it raised (a person only)",
+    )
+    .action(async (runId: string) => {
+      ran = true;
+      const origin = await asPersonForRuns('see a run');
+      print(await runShow(runId, { ...controlOptions(program), origin }));
+    });
+  runs
+    .command('cancel <run-id>')
+    .description(
+      'cancel a live run at once: its waiting deliveries and undelivered events are cancelled and what it kept purged (a person only)',
+    )
+    .option('--interrupt', 'also interrupt the turn it gave a session; without it, that turn runs on')
+    .action(async (runId: string, options: { readonly interrupt?: boolean }) => {
+      ran = true;
+      const origin = await asPersonForRuns('cancel a run');
+      print(await runCancel(runId, { interrupt: options.interrupt === true }, { ...controlOptions(program), origin }));
     });
 
   rule
@@ -941,7 +1028,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects' | 'runs';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -1706,6 +1793,20 @@ function isTerminalSecretReveal(
 }
 
 /** Commander's repeatable option: each value given, in order. */
+/** `--outcome <step>=<outcome>`, each once: the steps of a flow a test answers for (0.36.0 §7.7). */
+function outcomeArguments(values: readonly string[] | undefined): Readonly<Record<string, string>> | undefined {
+  if (values === undefined || values.length === 0) return undefined;
+  const outcomes: Record<string, string> = {};
+  for (const value of values) {
+    const match = /^([a-z][a-z0-9-]{0,31})=([a-z][a-z-]{0,31})$/u.exec(value);
+    if (match === null) throw new CommsError('USAGE', '--outcome is a step and its outcome: step=outcome');
+    const [, step, outcome] = match as unknown as [string, string, string];
+    if (Object.hasOwn(outcomes, step)) throw new CommsError('USAGE', `--outcome names the step ${step} twice`);
+    Object.defineProperty(outcomes, step, { value: outcome, enumerable: true });
+  }
+  return outcomes;
+}
+
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }

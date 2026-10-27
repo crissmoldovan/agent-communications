@@ -38,6 +38,7 @@ import {
 import { pause, resume } from '../operations/pause.ts';
 import { providerList } from '../operations/providers.ts';
 import { queueCounts, queueDismiss, queueDone, queueItems, queueReopen } from '../operations/queue.ts';
+import { ruleCheck } from '../operations/rule-check.ts';
 import { ruleTest } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -378,7 +379,7 @@ function buildEventsMcpServer(
   strictControlTool(
     'events_rule_test',
     'Test a workflow with a catalogue example',
-    'Locally evaluates one selectable catalogue example without provider or judge I/O.',
+    'Locally evaluates one selectable catalogue example without provider or judge I/O. A workflow with a flow is walked: each step in outcomes answers as named, every other with its first outcome, and every effect and event is a would.',
     {
       document: z.unknown(),
       catalogue: z.strictObject({
@@ -386,13 +387,22 @@ function buildEventsMcpServer(
         version: z.number().int().positive(),
         exampleIndex: z.number().int().min(0),
       }),
+      outcomes: z.record(z.string(), z.string()).optional(),
     },
     (args) =>
       ruleTest(
         args.document,
         args.catalogue as { readonly type: string; readonly version: number; readonly exampleIndex: number },
-        options,
+        { ...options, outcomes: args.outcomes as Readonly<Record<string, string>> | undefined },
       ),
+  );
+  // `workflow check` (0.36.0 §7.7): content-free and writing nothing, so an agent checks a document as the person does.
+  strictControlTool(
+    'events_rule_check',
+    'Check a workflow document',
+    'Checks a workflow document as the event service reads it — its flow, its targets, its events’ name — and lists every problem with its code. It writes nothing.',
+    { document: z.unknown() },
+    (args) => ruleCheck(args.document, options),
   );
   server.registerTool(
     'events_target_test',
@@ -628,11 +638,17 @@ function buildEventsMcpServer(
     'events_rule_show',
     {
       title: 'Show workflow',
-      description: 'Shows immutable versions of one workflow.',
-      inputSchema: { ruleId: z.string() },
+      description: 'Shows immutable versions of one workflow, or with version that one version alone.',
+      inputSchema: { ruleId: z.string(), version: z.number().int().positive().optional() },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    async (args, ctx) => reply(await ruleShow(args.ruleId, await scoped(ctx))),
+    async (args, ctx) =>
+      reply(
+        await ruleShow(args.ruleId, {
+          ...(await scoped(ctx)),
+          ...(args.version === undefined ? {} : { version: args.version }),
+        }),
+      ),
   );
   controlTool(
     'events_rule_create',

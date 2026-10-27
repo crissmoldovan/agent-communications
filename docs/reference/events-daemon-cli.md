@@ -48,6 +48,7 @@ Scripts should read these rather than parse output.
 | [`source`](#agent-events-source) | inspect one configured event source |
 | [`workflows\|rules`](#agent-events-workflows) | inspect immutable local workflow versions |
 | [`workflow\|rule`](#agent-events-workflow) | create, inspect and control immutable workflows |
+| [`runs`](#agent-events-runs) | a workflow's runs: list them, show one, cancel one (a person only) |
 | [`targets`](#agent-events-targets) | inspect immutable local event target versions |
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
 | [`subscribers`](#agent-events-subscribers) | inspect immutable subscriber versions: live on this Mac, or by signed webhook |
@@ -232,6 +233,10 @@ agent-events workflow|rule [options] [command]
 agent-events workflow show [options] <workflow-id>
 ```
 
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` | that one version alone, as a run of it draws its graph | — |
+
 ### `agent-events workflow create`
 
 ```
@@ -264,9 +269,15 @@ agent-events workflow remove [options] <workflow-id>
 
 ### `agent-events workflow test`
 
+try a workflow on a catalogue example; a flow is walked, each effect a would, with no I/O
+
 ```
 agent-events workflow test [options] <document> <catalogue-example>
 ```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--outcome <step=outcome>` | the outcome a step of the flow answers with (repeat for more); every other step answers its first | `[]` |
 
 ### `agent-events workflow test-retained`
 
@@ -278,6 +289,14 @@ agent-events workflow test-retained [options] <event-id>
 |---|---|---|
 | `--workflow <workflow-id>` |  | — |
 | `--version <version>` |  | — |
+
+### `agent-events workflow check`
+
+check a workflow document as the event service reads it, every problem named; - reads it from stdin
+
+```
+agent-events workflow check [options] <document>
+```
 
 ### `agent-events workflow analyse`
 
@@ -303,6 +322,47 @@ agent-events workflow approve [options] <approval-id>
 | Option | What it does | Default |
 |---|---|---|
 | `--digest <digest>` | the fingerprint of the activation the preview showed | — |
+
+### `agent-events runs`
+
+a workflow's runs: list them, show one, cancel one (a person only)
+
+```
+agent-events runs [options] [command]
+```
+
+### `agent-events runs list`
+
+list the runs, newest first, at most 200: their state, version and what each waits on (a person only)
+
+```
+agent-events runs list [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--workflow <workflow-id>` | only this workflow's runs | — |
+| `--state <state>` | only the runs in this state: held, running, waiting, done, failed, cancelled, expired | — |
+
+### `agent-events runs show`
+
+show one run of the version it started on: its path, each step's outcome, output and wait, and the events it raised (a person only)
+
+```
+agent-events runs show [options] <run-id>
+```
+
+### `agent-events runs cancel`
+
+cancel a live run at once: its waiting deliveries and undelivered events are cancelled and what it kept purged (a person only)
+
+```
+agent-events runs cancel [options] <run-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--interrupt` | also interrupt the turn it gave a session; without it, that turn runs on | — |
 
 ### `agent-events targets`
 

@@ -7,6 +7,7 @@ import {
   type FlowActivationCheck,
   NO_WORKFLOW_EVENTS,
   type PreparedEvents,
+  type RunView,
   type StepContext,
   type StepExecutor,
   type StepTransition,
@@ -38,6 +39,8 @@ export interface WorkflowOwnerDeps {
   readonly notifier: Notifier;
   readonly writerQuiescer?: WriterQuiescer | undefined;
   readonly now?: (() => number) | undefined;
+  /** `runs cancel --interrupt` (plan B6): interrupts the turns a run's deliveries started, through the relay. */
+  readonly interrupt?: ((run: RunView) => Promise<boolean>) | undefined;
   /** Test seam only: a crash at a point of a step's life. */
   readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
   /**
@@ -107,6 +110,7 @@ export function composeWorkflows(deps: WorkflowOwnerDeps, parts: readonly Workfl
     activationChecks,
     writerQuiescer: deps.writerQuiescer,
     now: deps.now,
+    interrupt: deps.interrupt,
     failpoint: deps.failpoint,
     judgeFor: deps.judgeFor,
     deliveries: createFlowDeliveries({ store: deps.store, cipher: deps.cipher, now: deps.now ?? Date.now }),

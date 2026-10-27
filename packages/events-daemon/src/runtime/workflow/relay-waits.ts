@@ -1,5 +1,5 @@
 import type { EventDatabase } from '../../store/database.ts';
-import { RELAY_RUN_END_TYPES, type RelayEventV1, type RelaySnapshotV1 } from '../relay-client.ts';
+import { needsThePerson, RELAY_RUN_END_TYPES, type RelayEventV1, type RelaySnapshotV1 } from '../relay-client.ts';
 
 /*
  * The waits the relay ends (workflows design W9, §6.5, §7.3; plan B4): a turn's end and a free session. A wait is a
@@ -68,8 +68,28 @@ export class RelayWaits {
       .all(sessionId) as Array<{ turn: string }>;
     for (const { turn } of turns) {
       if (snapshot === null || snapshot.session.activeRunId !== turn) this.#over('turn-end', turn);
+      else this.#needsYou(turn, needsThePerson(snapshot, turn));
     }
     if (snapshot === null || snapshot.session.activeRunId === undefined) this.#over('session-idle', sessionId);
+  }
+
+  /**
+   * A turn that goes on, and whether it waits on the person in claude-stream now (§6.5): the waiting step's stored output
+   * says so, content-free, for `runs list`, `runs show` and the run view. Nothing wakes, and nothing counts as a step.
+   */
+  #needsYou(turn: string, needed: boolean): void {
+    this.#store.immediate(() =>
+      this.#store.database
+        .prepare(
+          `UPDATE workflow_steps
+              SET output = json_set(COALESCE(output, '{}'), '$.needsYouInClaudeStream', json(?))
+            WHERE state = 'waiting'
+              AND COALESCE(json_extract(output, '$.needsYouInClaudeStream'), 0) <> ?
+              AND (run_id, step_id) IN (SELECT run_id, step_id FROM workflow_waits
+                                         WHERE kind = 'turn-end' AND key = ? AND wake_at <> 0)`,
+        )
+        .run(needed ? 'true' : 'false', needed ? 1 : 0, turn),
+    );
   }
 
   #over(kind: 'turn-end' | 'session-idle', key: string): void {

@@ -2768,6 +2768,49 @@
       "expect": { "catalogue.type": "gmail.message.received", "catalogue.version": 1, "catalogue.exampleIndex": 0 }
     },
     {
+      "id": "events-daemon.rule.check",
+      "package": "events-daemon",
+      "cli": "workflow check",
+      "mcp": "events_rule_check",
+      "status": "both",
+      "operation": "ruleCheck",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.runs.list",
+      "package": "events-daemon",
+      "cli": "runs list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runsList",
+      "argv": ["--workflow", "client-asks"],
+      "expect": { "options.ruleId": "client-asks" },
+      "reason": "A workflow's runs are the person's view of what each workflow did: its steps and their outcomes, what it waits on, the events it raised and the folders a session worked in, so listing and showing runs is the person's, in the app's Events → Workflows or at their terminal (0.36.0 workflows design §7.6, §10.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.runs.show",
+      "package": "events-daemon",
+      "cli": "runs show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runShow",
+      "argv": ["wfr_0123456789abcdefghjkmnpqrs"],
+      "expect": { "runId": "wfr_0123456789abcdefghjkmnpqrs" },
+      "reason": "A workflow's runs are the person's view of what each workflow did: its steps and their outcomes, what it waits on, the events it raised and the folders a session worked in, so listing and showing runs is the person's, in the app's Events → Workflows or at their terminal (0.36.0 workflows design §7.6, §10.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.runs.cancel",
+      "package": "events-daemon",
+      "cli": "runs cancel",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runCancel",
+      "argv": ["wfr_0123456789abcdefghjkmnpqrs", "--interrupt"],
+      "expect": { "runId": "wfr_0123456789abcdefghjkmnpqrs", "input.interrupt": true },
+      "reason": "Cancelling a run is the person's, in the app or at their terminal: it stops at once what a workflow they approved is doing — its waiting deliveries and undelivered events cancelled, its waits dropped and what it kept purged — and with --interrupt it interrupts the turn it gave a session (0.36.0 workflows design §7.6, §10.1). No tool cancels a run, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
       "id": "events-daemon.rule.test-retained",
       "package": "events-daemon",
       "cli": "workflow test-retained",

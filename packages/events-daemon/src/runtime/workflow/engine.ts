@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import {
   FAILURE_OUTCOMES,
@@ -33,6 +33,7 @@ import {
   type WorkflowEventSink,
 } from './contracts.ts';
 import { STEP_KIND_UNAVAILABLE } from './executors.ts';
+import { type FlowAnswer, type FlowTestResultV1, TRY_READING_KINDS, tryRetainedFlow } from './flow-test.ts';
 import { limitInTransaction } from './limits.ts';
 import {
   anyRunMayStartInTransaction,
@@ -52,7 +53,15 @@ import {
   startRunInTransaction,
   stepOutput,
   stepStates,
+  takeRunsEndedElsewhere,
 } from './runs.ts';
+import {
+  insertShadowRecordInTransaction,
+  type PreparedShadowRecord,
+  shadowHandles,
+  shadowStep,
+  withShadowEvents,
+} from './shadow.ts';
 import { SPLIT_OUTCOME } from './steps/split.ts';
 
 /*
@@ -179,7 +188,13 @@ export class WorkflowEngine {
     this.#approvals = options.approvals;
     this.#config = options.config;
     this.#executors = options.executors;
-    this.#sink = options.sink ?? NO_WORKFLOW_EVENTS;
+    // A shadow run's ticked events, of the steps it does run and of the run, are dry-run records, never raised (§7.7).
+    this.#sink = withShadowEvents({
+      sink: options.sink ?? NO_WORKFLOW_EVENTS,
+      cipher: options.cipher,
+      installationId: options.store.installationId,
+      now: options.now ?? Date.now,
+    });
     this.#onRunEnded = options.onRunEnded ?? [];
     this.activationChecks = options.activationChecks ?? [];
     this.#judgeFor = options.judgeFor;
@@ -235,6 +250,68 @@ export class WorkflowEngine {
     return work;
   }
 
+  /**
+   * `workflow test-retained` for a workflow with a flow (§7.7): the person's try on a recent message. A condition, a
+   * judge, Which project? and a find answer for real, through this engine's own executors, reading only — a find by
+   * thread with the message's own ids; every effect and event is a "would". No run is made and nothing is written.
+   */
+  tryRetained(input: {
+    readonly rule: CanonicalFullRuleDocument;
+    readonly event: Record<string, unknown>;
+    readonly eventId: string;
+  }): Promise<FlowTestResultV1> {
+    return tryRetainedFlow({
+      rule: input.rule,
+      event: input.event,
+      eventId: input.eventId,
+      answer: this.#answer(input.rule),
+      installationId: this.#store.installationId,
+      now: this.#now,
+    });
+  }
+
+  /** A try's reading steps, answered by their executors with a context that charges, fences and keeps nothing. */
+  #answer(rule: CanonicalFullRuleDocument): FlowAnswer {
+    // One attempt id per try: a judge a try asks is real work, on the workflow's budget, as the gate's is (§7.7).
+    const attemptId = `workflow-try-${randomUUID()}`;
+    const generation = (
+      this.#store.database.prepare('SELECT switch_generation FROM event_settings WHERE singleton = 1').get() as
+        | { switch_generation: number }
+        | undefined
+    )?.switch_generation;
+    return async ({ run, message, fields, stepId, step, outputs }) => {
+      if (!TRY_READING_KINDS.has(step.kind)) return null;
+      try {
+        const executor = this.#executors.get(step.kind);
+        const judge =
+          generation === undefined
+            ? undefined
+            : this.#judgeFor?.({ run, stepId, attemptId, switchGeneration: generation, source: rule.source.channel });
+        const context: StepContext = {
+          run,
+          rule,
+          stepId,
+          step,
+          attempt: { id: attemptId, number: 1 },
+          now: this.#now,
+          fields: async () => fields,
+          trigger: async () => null,
+          message: async () => message,
+          output: (id) => outputs.get(id) ?? null,
+          // A try makes nothing, so nothing counts against a limit.
+          charge: () => ({ ok: true }),
+          judge: judge ?? (async () => ({ kind: 'failed', code: 'JUDGE_NOT_COMPOSED' })),
+          fence: async () => {},
+        };
+        const result = await executor.run(context);
+        return result.kind === 'settled' ? { outcome: result.outcome, output: result.output } : null;
+      } catch {
+        // A kind not composed here, or one that cannot answer now, takes the outcome named for it, or its first.
+        return null;
+      }
+    };
+  }
+
   async #cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
     const row = readRun(this.#store.database, runId);
     if (row === undefined || !['held', 'running', 'waiting'].includes(row.state))
@@ -264,6 +341,7 @@ export class WorkflowEngine {
   }
 
   async #tick(): Promise<number> {
+    await this.#finishEndedElsewhere();
     await this.#expire();
     if (!this.#collecting()) return 0;
     let ran = 0;
@@ -283,6 +361,24 @@ export class WorkflowEngine {
       if (progressed === 0) break;
     }
     return ran;
+  }
+
+  /**
+   * The runs an ending of authority cancelled outside the engine — a revocation, disable-all or an account's removal,
+   * each in its own transaction, raising no event (W10) — finish here, after that commit: each step they ran gets its
+   * executor's `finish`, as a run the engine ends does. Best-effort, whatever the switch: a run still live (its
+   * transaction rolled back) is passed over, and a finish that fails changes nothing about the cancel.
+   */
+  async #finishEndedElsewhere(): Promise<void> {
+    for (const id of takeRunsEndedElsewhere(this.#store.database)) {
+      try {
+        const row = readRun(this.#store.database, id);
+        if (row?.state !== 'cancelled') continue;
+        await this.#ended(row, this.#ruleOf(row), 'cancelled');
+      } catch {
+        // A run whose version cannot be read finishes nothing; it stays cancelled.
+      }
+    }
   }
 
   #collecting(): boolean {
@@ -448,9 +544,29 @@ export class WorkflowEngine {
       fence,
     });
     let result: StepResult;
+    let shadowRecord: PreparedShadowRecord | null = null;
     try {
-      const executor = this.#executors.get(step.kind);
-      result = claim.wake === null ? await executor.run(context) : await executor.resume(context, claim.wake);
+      if (row.shadow === 1 && shadowHandles(step)) {
+        // A shadow version (§7.7) runs no effect: each becomes a dry-run record, and a wait times out at once.
+        const shadowed = await shadowStep({
+          cipher: this.#cipher,
+          run: runViewOf(row),
+          rule,
+          stepId,
+          step,
+          fields: await context.fields(),
+          outputs,
+          path: this.#path(before, null, false),
+          installationId: this.#store.installationId,
+          now: this.#now(),
+          newDeliveryId: () => randomUUID(),
+        });
+        result = shadowed.result;
+        shadowRecord = shadowed.record;
+      } else {
+        const executor = this.#executors.get(step.kind);
+        result = claim.wake === null ? await executor.run(context) : await executor.resume(context, claim.wake);
+      }
     } catch (error) {
       if (isAuthorityGone(error)) {
         await this.#cancelForAuthority(row, rule, reasonOf(error));
@@ -481,7 +597,7 @@ export class WorkflowEngine {
         }
       }
     }
-    await this.#settle(row, rule, claim, result, delivery);
+    await this.#settle(row, rule, claim, result, delivery, shadowRecord);
     return true;
   }
 
@@ -526,6 +642,7 @@ export class WorkflowEngine {
     claim: ClaimedStep,
     result: StepResult,
     delivery: { readonly deliveryId: string } | null,
+    shadowRecord: PreparedShadowRecord | null = null,
   ): Promise<void> {
     const database = this.#store.database;
     for (let tries = 0; tries < SETTLE_TRIES; tries += 1) {
@@ -535,6 +652,7 @@ export class WorkflowEngine {
       const settled = this.#store.immediate(() => {
         if (!settleStepInTransaction(database, planned.settle)) return false;
         if (delivery !== null) this.#deliveries?.insertInTransaction(database, delivery);
+        if (shadowRecord !== null) insertShadowRecordInTransaction(database, row, shadowRecord);
         this.#sink.commitInTransaction(database, prepared);
         this.#failpoint?.('before-settle-commit');
         return true;

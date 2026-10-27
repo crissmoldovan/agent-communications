@@ -41,6 +41,9 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   // step that reads it, both through the centrally leased cipher.
   'packages/events-daemon/src/runtime/workflow/runs.ts',
   'packages/events-daemon/src/runtime/workflow/context.ts',
+  // A shadow version (0.36.0 §7.7): each effect it does not run is a dry-run record of the run's own values, sealed
+  // through the same centrally leased cipher.
+  'packages/events-daemon/src/runtime/workflow/shadow.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',

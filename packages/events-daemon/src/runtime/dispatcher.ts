@@ -417,11 +417,11 @@ export class DryRunDispatcher {
     const row = this.#store.database
       .prepare(
         `SELECT l.delivery_id, l.rule_id, l.rule_version, l.target_id, l.target_version, l.event_id, l.account_id,
-                l.encrypted_record, l.delivered_at, l.expires_at, l.whatsapp_message_id, d.switch_generation
+                l.encrypted_record, l.delivered_at, l.expires_at, l.whatsapp_message_id, d.switch_generation, d.run_id
          FROM dryrun_log l JOIN deliveries d ON d.id = l.delivery_id WHERE l.delivery_id = ?`,
       )
       .get(deliveryId) as
-      | (Record<string, unknown> & { encrypted_record: Uint8Array; switch_generation: number })
+      | (Record<string, unknown> & { encrypted_record: Uint8Array; switch_generation: number; run_id: string | null })
       | undefined;
     if (!row) throw new CommsError('NOT_FOUND', 'the retained local record does not exist');
     if (Number(row.expires_at) <= this.#now()) {
@@ -433,7 +433,10 @@ export class DryRunDispatcher {
       throw new CommsError('NOT_FOUND', 'the retained local record has expired');
     }
     const rule = ruleFor(this.#store, String(row.rule_id), Number(row.rule_version));
-    dryRunTarget(rule, String(row.target_id), Number(row.target_version));
+    // A shadow version's record (workflows design §7.7) is its run's own — a step it did not run — and names no target:
+    // it is read behind the version's own fence, as the engine fences each step. Any other names its dry-run target.
+    const shadow = row.run_id !== null && rule.flow?.shadow === true;
+    if (!shadow) dryRunTarget(rule, String(row.target_id), Number(row.target_version));
     const readFence: ActiveDisclosableRequest = {
       database: this.#store.database,
       approvals: this.#approvals,
@@ -442,8 +445,7 @@ export class DryRunDispatcher {
       boundary: 'read',
       ruleId: String(row.rule_id),
       ruleVersion: Number(row.rule_version),
-      targetId: String(row.target_id),
-      targetVersion: Number(row.target_version),
+      ...(shadow ? {} : { targetId: String(row.target_id), targetVersion: Number(row.target_version) }),
       switchGeneration: Number(row.switch_generation),
     };
     const fenced = async (): Promise<void> => {
@@ -470,7 +472,8 @@ export class DryRunDispatcher {
         this.#store.immediate(() => {
           this.#store.database.prepare('DELETE FROM dryrun_log WHERE delivery_id = ?').run(deliveryId);
         });
-        newLocalResetBarrier(this.#store, String(row.target_id), Number(row.target_version));
+        // A shadow's record names no target, so no target's reset barrier is raised for it.
+        if (!shadow) newLocalResetBarrier(this.#store, String(row.target_id), Number(row.target_version));
         throw new CommsError('BAD_DATA', 'the retained local record is unreadable and was purged');
       }
       throw error;

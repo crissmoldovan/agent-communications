@@ -8,7 +8,8 @@ import { join } from 'node:path';
  * A loopback stand-in for a claude-stream relay (0.33.0 design §3.5), serving the shapes of its API contract
  * (`agent-stream/docs/agent-relay/api-contract.md`, read 2026-10-26) and nothing else: `GET /v1/relay`,
  * `GET /v1/workspace`, the session list and snapshot, `POST /v1/sessions`, `POST /v1/sessions/:id/runs` with
- * `startId` idempotency and its 409, and the `GET /v1/events?follow=1` SSE stream with `Last-Event-ID` resume. No real
+ * `startId` idempotency and its 409, `POST /v1/runs/:id/interrupt`, and the `GET /v1/events?follow=1` SSE stream with
+ * `Last-Event-ID` resume. No real
  * claude-stream is ever started or contacted; tests drive what its sessions do through this object.
  */
 
@@ -188,6 +189,25 @@ export class FakeRelay {
     this.#publish({ sessionId, runId: `run_${uuid()}`, type: `run.${status}` });
   }
 
+  /** The open requests to the person, as a session's snapshot lists them: who asked, never what. */
+  readonly personRequests: { requestId: string; sessionId: string; runId: string; kind: string; state: string }[] = [];
+
+  /** The session's live turn asks the person something (an approval), as claude-stream's `request.requested`. */
+  askThePerson(sessionId: string): void {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.activeRunId === undefined) throw new Error('no live run to ask from');
+    const requestId = `apr_${uuid()}`;
+    this.personRequests.push({ requestId, sessionId, runId: session.activeRunId, kind: 'approval', state: 'pending' });
+    this.#publish({ sessionId, runId: session.activeRunId, type: 'request.requested' });
+  }
+
+  /** The person answers every open request of the session. */
+  answerThePerson(sessionId: string): void {
+    for (let index = this.personRequests.length - 1; index >= 0; index -= 1)
+      if (this.personRequests[index]?.sessionId === sessionId) this.personRequests.splice(index, 1);
+    this.#publish({ sessionId, type: 'request.resolved' });
+  }
+
   /** Writes `text` as it is to every open follow stream: a relay that sends what no record is. */
   writeRaw(text: string): void {
     for (const stream of this.#streams) stream.write(text);
@@ -295,7 +315,7 @@ export class FakeRelay {
         session,
         runs: this.runs.filter((run) => run.sessionId === session.id),
         pendingApprovals: [],
-        pendingRequests: [],
+        pendingRequests: this.personRequests.filter((request) => request.sessionId === session.id),
         cursor: this.#journal.length,
       });
     }
@@ -353,6 +373,16 @@ export class FakeRelay {
         return;
       }
       return send(202, { run: made });
+    }
+    // `POST /v1/runs/:id/interrupt` (api-contract, read 2026-10-27): 200 for a live run, which ends `interrupted`; 404 for
+    // a run it does not know; 409 for one no longer live.
+    const interruptMatch = /^\/v1\/runs\/(run_[0-9a-f-]{36})\/interrupt$/u.exec(url.pathname);
+    if (method === 'POST' && interruptMatch !== null) {
+      const run = this.runs.find((candidate) => candidate.id === interruptMatch[1]);
+      if (run === undefined) return refuse(404, 'not_found', 'no such run');
+      if (run.status !== 'running') return refuse(409, 'conflict', `run ${run.id} is not active`);
+      this.endRun(run.sessionId, 'interrupted');
+      return send(200, { ok: true });
     }
     if (method === 'GET' && url.pathname === '/v1/events' && url.searchParams.get('follow') !== '1') {
       // One page, every filter honoured, as `GET /v1/events?follow=0` answers.

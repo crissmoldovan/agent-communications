@@ -338,6 +338,89 @@ agent-events workflow analyse invoices --provider anthropic --json   # the model
   agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
   a boundary against code running as you — and no MCP tool runs it.
 
+## A workflow's runs
+
+From 0.36.0 a workflow with a `flow` makes a run for each message it matches, and the run goes through its steps. The
+desktop app shows them in a workflow's Runs and in the run view; at a terminal:
+
+```bash
+agent-events runs list --json                                     # newest first, at most 200
+agent-events runs list --workflow client-asks --state waiting --json
+agent-events runs show <run-id> --json                            # one run: its path, each step, the events it raised
+agent-events runs cancel <run-id> --json                          # stop it now; its session's turn runs on
+agent-events runs cancel <run-id> --interrupt --json              # and interrupt that turn too
+```
+
+It is `runs`, not `run`: `agent-events run` starts the event service.
+
+- **What a run says.** Its id (`wfr_…`), its workflow and the version it started on (`ruleVersion`), its state —
+  `held`, `running`, `waiting`, `done`, `failed`, `cancelled` or `expired` — its times, the message it is about
+  (`eventId`), its parent run and depth when another workflow's event started it, whether it is a shadow, and what it
+  waits on: the step, the kind (`turn-end`, `session-idle`, `time` or `limit`), since when, how many are ahead of it in
+  a busy session's queue, and whether the turn needs you in claude-stream. Its `summary` is the story line a list
+  shows: the project Which project? chose, the issue it made, whether it `found` or `started` a session, and how the
+  turn it gave ended — each from a settled step's closed output, never a folder or a sender's words.
+- **A run keeps its version.** `runs show` gives the steps of the version the run started on, of that version's kinds,
+  even after you edit the workflow: a run finishes under its own version. The app draws it from
+  `workflow show <id> --version <n>`.
+- **What `runs show` adds.** The path the run took, each step it reached with its outcome, attempts, times, closed
+  output, last error code, delivery and wait, how many events it did not raise over its limit, and each event it raised
+  with who it was delivered to. A step's output is ids and closed words, and a worktree's folder: `runs show` is the
+  one place a run's folders are shown, to you. No event carries one.
+- **How a run ends** (`endCode`). Done carries none. Otherwise:
+  - `RUN_EXPIRED`: it reached its deadline (`flow.limits.runMs`);
+  - `CANCELLED_BY_PERSON`: you cancelled it;
+  - `DISABLED_ALL`: collection was switched off;
+  - `AUTHORIZATION_REVOKED`: its version's authority ended — `workflow disable`, a tightening, or a target, subscriber
+    or judge kind it used removed or turned off;
+  - `ACCOUNT_REMOVED`: the account it watches was removed;
+  - `STEP_LIMIT`: it executed 64 steps;
+  - `STEP_FAILED`: a step ended on a failure outcome (`refused`, `failed`) that no arrow handles;
+  - a step's own code, when that step failed (`STEP_THREW`, `OUTCOME_UNKNOWN`, …);
+  - the fence's reason, when its version's authority was found gone just before a step (`RULE_REVOKED` and its kin).
+- **Cancel is yours, at once.** `runs cancel` cancels the run's deliveries still waiting and its events not yet
+  delivered, and purges what they kept; drops its waits; purges the run's own record; and says how many it cancelled. A
+  session's turn the run started goes on unless you add `--interrupt`, which asks claude-stream to interrupt it
+  (`interrupted` says whether it did). A run that has ended can't be cancelled. However a run is cancelled — by you, by
+  switching collection off, by a revocation or by an account's removal — each step it ran is finished afterwards, as at
+  any run's end: a worktree made with `cleanup: remove-if-clean` is removed if it is clean.
+- **Who can do it: you.** Every `runs` command refuses inside the event service's MCP server, in an agent's shell (an
+  agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
+  a boundary against code running as you. The event service takes them only from your terminal or the app, and no MCP
+  tool lists, shows or cancels a run.
+
+## Try a workflow
+
+From 0.36.0 you can check a workflow and try it before it runs, at a terminal or in the app's designer:
+
+```bash
+agent-events workflow check - --json < client-asks.json                      # every problem, with its code; writes nothing
+agent-events workflow test - gmail.message.received@1:1 --json < client-asks.json
+agent-events workflow test - gmail.message.received@1:1 --outcome find=busy --json < client-asks.json
+agent-events workflow test-retained <event-id> --workflow client-asks --version 5   # on a recent message (you only)
+agent-events workflow show client-asks --version 5 --json                     # that one version alone
+```
+
+- **`workflow check`** reads the document as the event service does — canonical, its flow checked by `checkFlow` and
+  against its own targets, its events' name free among the active workflows — and lists every problem
+  (`FLOW_CYCLE`, `FLOW_TARGET_UNUSED`, `VERSION_DOCUMENT_INVALID`, …) with the step and pointer it is about. An agent
+  may check a document as you may (`events_rule_check`): it holds no content and writes nothing.
+- **`workflow test`** walks a flow over a catalogue example. Each step answers with the outcome you name with
+  `--outcome <step>=<outcome>`, or else its first; every effect is a "would" — what it would have done, the prompt a
+  session would have been sent and the issue Linear would have been given, as written, with the sender's words inside
+  their envelope or labelled quote — and each event it would raise is shown with its data. It does no I/O and makes no
+  run. A workflow without a flow is tested as before.
+- **`workflow test-retained`** tries a flow on a message the event service still holds: a condition, a judge, Which
+  project? and a find answer for real, reading only — a find of the session that took the conversation with the
+  message's own ids — and every start, worktree, delivery, notice and event is a "would". Nothing is started.
+- **A shadow version** (`flow.shadow: true`) is approved like any other and runs on real messages, route and find for
+  real; every start, worktree, delivery, notice and raised event becomes a dry-run record of what it would have done,
+  kept 24 hours (`agent-events dryrun list`, `dryrun show <id>`), and each wait ends at once, `timed-out`. Each event
+  ticked on a step it does run — a condition, Which project?, a find — and each of the run's own is a dry-run record
+  too. Nothing leaves, and it raises no event, so no subscriber gets one.
+- **A flow's approval** lists, after the workflow's plain words, one numbered line per step that does something, as
+  `describeFlow` says it.
+
 ## What you can do with it
 
 - **Sources:**
