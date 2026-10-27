@@ -3527,6 +3527,16 @@
       "reason": "Analyse is the person's view of one workflow and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
     },
     {
+      "id": "events-daemon.rule.describe",
+      "package": "events-daemon",
+      "cli": "workflow describe",
+      "mcp": null,
+      "status": "exception",
+      "operation": "workflowDescribe",
+      "expect": { "request.words": "parity" },
+      "reason": "Describe it drafts a workflow from the person's own words, on their own Claude subscription in the process of the terminal they started, or with an OpenRouter or Anthropic key they keep for Analyse, and saves nothing: the draft becomes a version only when the person saves it in the designer, and runs only once they approve it (0.36.0 workflows design §11.4, W21). No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never spends the person's subscription or key without getting past that speed bump. An agent writes a workflow itself with workflow create, which the person approves as any other."
+    },
+    {
       "id": "events-daemon.integration.show",
       "package": "events-daemon",
       "cli": "integration show",

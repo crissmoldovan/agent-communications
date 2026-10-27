@@ -161,6 +161,8 @@ const EXPECTED_RULE_APPROVAL_ROWS = [
 /** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
 const EXPECTED_ANALYSE_ROWS = [
   ['events-daemon.rule.analyse', 'workflow analyse', null, 'exception', 'ruleAnalyse'],
+  // Describe it (0.36.0 workflows design §11.4, W21): the person's words drafted into a workflow, written nowhere.
+  ['events-daemon.rule.describe', 'workflow describe', null, 'exception', 'workflowDescribe'],
 ] as const;
 
 /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
@@ -426,6 +428,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.rule.approve',
     'events-daemon.collection.approve',
     'events-daemon.rule.analyse',
+    'events-daemon.rule.describe',
     'events-daemon.integration.show',
     'events-daemon.integration.show-agent-sessions',
     'events-daemon.integration.set',

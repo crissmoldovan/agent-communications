@@ -852,6 +852,24 @@
     }
   },
   {
+    "name": "workflow-describe-request",
+    "request": {
+      "operation": "workflow-describe",
+      "args": {
+        "request": {
+          "words": "When someone at acme asks for a change to the site, find their project and give it to its session.",
+          "answers": [
+            {
+              "question": "Which Linear team gets the issue?",
+              "answer": "ACME"
+            }
+          ]
+        },
+        "provider": "openrouter"
+      }
+    }
+  },
+  {
     "name": "rule-show-version-request",
     "request": {
       "operation": "rule-show",

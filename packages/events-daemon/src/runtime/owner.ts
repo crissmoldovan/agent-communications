@@ -42,6 +42,7 @@ import type { AuthenticatedControlRequest } from '../control/protocol.ts';
 import { type ControlServerOptions, type RunningControlServer, startControlServer } from '../control/server.ts';
 import { normaliseActivationDocument } from '../domain/activation-documents.ts';
 import { HumanSecret } from '../domain/human-secret.ts';
+import { personSetupApprover } from '../domain/judge-setup.ts';
 import {
   type LayaPlatformProbe,
   type LayaReviewedAssetSource,
@@ -165,6 +166,7 @@ import { checkRuleDocument, runRuleTest } from './workflow/flow-test.ts';
 import { flowJudge } from './workflow/judge-call.ts';
 import { RelayWaits } from './workflow/relay-waits.ts';
 import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
+import { WorkflowDescribeService } from './workflow-describe.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -1316,6 +1318,22 @@ async function startOwnerWithLock(
       ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
       now,
     }),
+    // Describe it (0.36.0 §11.4): on Analyse's transport and the person's own provider key, read at the call and never
+    // kept; nothing it does writes a row.
+    describe: new WorkflowDescribeService({
+      database: database.database,
+      accounts: () => connectedEventAccounts(core.config),
+      keyPresence: () => b3Ports.secrets.providerKeys(),
+      keyFor: async (provider) => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner(provider),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+      ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
+    }),
   };
   notifyLaneAppend = () => lanes.notifyAppended();
   // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
@@ -2107,6 +2125,8 @@ interface OwnerReaders {
   readonly rules: RuleReader;
   readonly judges: JudgeReader;
   readonly analyse: RuleAnalyseService;
+  /** Describe it (0.36.0 §11.4): the names a draft may use, a key's draft, and every draft read and checked. */
+  readonly describe: WorkflowDescribeService;
   /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
   readonly linear?: LinearIntegration | undefined;
 }
@@ -2256,6 +2276,20 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
     // Analyse (0.33.0 §3.3): the person's, from the CLI and the app; a caller is refused. It writes nothing.
+    // Describe it (0.36.0 §11.4): the person's alone, from their origin; it writes nothing. Its brief is for the CLI that
+    // runs the person's own `claude`; the draft is read and checked here, in-process.
+    case OWNER_CONTROL_WIRES.workflowDescribe:
+    case OWNER_CONTROL_WIRES.workflowDescribeBrief: {
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow describe is not available');
+      const args = personOnly(request.args, 'workflow describe');
+      if (personSetupApprover(request.origin) === null)
+        throw new CommsError('APPROVAL_REQUIRED', 'Describe it is yours, from the app or your terminal', {
+          details: { reason: 'PERSON_SETUP_ONLY' },
+        });
+      return request.operation === OWNER_CONTROL_WIRES.workflowDescribe
+        ? readers.describe.describe(args, request.signal)
+        : readers.describe.brief(args);
+    }
     // One judge version's document (0.33.0): content-free, for the person and an agent alike, as judges list is.
     case OWNER_CONTROL_WIRES.judgeShow:
       if (readers === undefined) throw new CommsError('USAGE', 'judge show is not available');

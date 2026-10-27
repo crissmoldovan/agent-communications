@@ -213,6 +213,21 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // One judge version's exact canonical document (0.33.0), for the app's rule editor to embed; content-free, as
   // `judges list` is, so CLI and MCP alike.
   { capabilityOperation: 'judgeShow', wireOperation: 'judge-show', desktopCallable: true, family: 'owner' },
+  // Describe it (0.36.0 workflows design §11.4): the person's words drafted into a workflow, written nowhere — the
+  // person's, from the app or their terminal. Its brief is the CLI's own step before it runs the person's `claude` in
+  // the CLI's process: no capability of its own, never the app's or a tool's.
+  {
+    capabilityOperation: 'workflowDescribe',
+    wireOperation: 'workflow-describe',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowDescribeBrief',
+    wireOperation: 'workflow-describe-brief',
+    desktopCallable: false,
+    family: 'owner',
+  },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

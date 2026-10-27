@@ -311,6 +311,18 @@ agent-events workflow analyse [options] <workflow-id>
 | `--draft <source>` | analyse a draft workflow document instead of the stored version: - reads it from stdin | — |
 | `--provider <provider>` | the provider Analyse's model runs on: openrouter or anthropic | — |
 
+### `agent-events workflow describe`
+
+draft a workflow from your words on stdin — { words, example?, answers?, draft? } as JSON, or the words alone — by your Claude, OpenRouter or Anthropic; nothing is saved (a person)
+
+```
+agent-events workflow describe [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--provider <provider>` | who drafts it: claude-cli, openrouter, anthropic; your Claude first when it is found | — |
+
 ### `agent-events workflow approve`
 
 approve a workflow's activation from the Agent Comms app, after its preview, as the person
