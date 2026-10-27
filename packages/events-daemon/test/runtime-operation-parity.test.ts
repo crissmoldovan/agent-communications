@@ -152,6 +152,10 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
       !names.some((name) => /_runs?(?:_|$)/u.test(name)),
       'a workflow’s runs are the person’s: no MCP tool lists, shows or cancels one (0.36.0 §7.6, §10.1)',
     );
+    assert.ok(
+      !names.some((name) => /describe/u.test(name)),
+      'Describe it is the person’s: no MCP tool drafts a workflow from words (0.36.0 §11.4, W21)',
+    );
     assert.ok(!names.includes('events_lane_bind'), 'binding a lane is the person’s act at a terminal (routing B1)');
     assert.ok(
       !names.some((name) => /message/u.test(name)),

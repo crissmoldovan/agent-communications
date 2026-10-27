@@ -283,3 +283,44 @@ test('a subscriber’s pattern outside its namespaces is refused as it is typed'
   await expect(form.getByRole('button', { name: 'Add it' })).toBeDisabled();
   expect(await calls(page, 'eventsSubscriberAdd')).toHaveLength(0);
 });
+
+test('Describe it drafts into the designer, says where each step came from, and saves nothing', async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1000 });
+  const drafted = {
+    text: [
+      'workflow reminders, version 1',
+      '',
+      'when a new message arrives in in_01EXAMPLE0000000000000000, in the inbox',
+    ].join('\n'),
+    notes: [{ step: 'wait', words: 'wait an hour' }],
+    unnoted: ['tell'],
+    questions: [{ step: 'tell', question: 'Should it tell you on Slack too?', choices: ['Only here', 'Slack too'] }],
+    parse: { ok: false, errors: [{ line: 3, column: 1, message: 'a workflow has a match section' }] },
+    check: null,
+    model: { provider: 'claude-cli', model: null },
+  };
+  const base = scenario();
+  await installMockIpc(page, {
+    ...base,
+    cli: { ...(base.cli as Record<string, unknown>), eventsWorkflowDescribe: drafted },
+  });
+  await page.goto('/');
+  await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
+  await page.getByRole('tab', { name: /^Workflows\b/ }).click();
+  await page.locator('[data-rule="reminders"]').click();
+  await page.getByRole('region', { name: 'Workflow reminders' }).getByRole('button', { name: 'Edit…' }).click();
+  const editor = page.getByRole('region', { name: 'Edit reminders' });
+  await editor.getByRole('button', { name: 'Describe it…' }).click();
+  const box = editor.getByRole('region', { name: 'Describe it' });
+  await expect(box.getByRole('region', { name: 'What is sent' })).toContainText(
+    'Never a message, unless you paste one',
+  );
+  expect(await calls(page, 'eventsWorkflowDescribe')).toHaveLength(0);
+  await box.getByRole('textbox', { name: 'Your words' }).fill('When a reminder comes in, wait an hour and tell me.');
+  await box.getByRole('button', { name: 'Draft it' }).click();
+  await expect(box.locator('[data-describe-step="tell"]')).toContainText('Added by the model, not from your words.');
+  await expect(box.locator('[data-describe-step="wait"] [data-slot="from-outside"]')).toContainText('wait an hour');
+  await expect(box.getByRole('region', { name: 'The draft does not read as a workflow yet' })).toContainText('Line 3:');
+  expect(await calls(page, 'eventsWorkflowDescribe')).toHaveLength(1);
+  expect(await calls(page, 'eventsRuleUpdate')).toHaveLength(0);
+});

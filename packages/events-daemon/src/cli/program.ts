@@ -13,6 +13,13 @@ import {
 import { Command, CommanderError, Option } from 'commander';
 import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
 import {
+  DESCRIBE_LIMITS,
+  DESCRIBE_PROVIDERS,
+  type DescribeProvider,
+  isDescribeProvider,
+  parseDescribeRequest,
+} from '../domain/describe-brief.ts';
+import {
   changeAtTerminal,
   isSetupJudgeKind,
   localSetupEndpoint,
@@ -141,6 +148,7 @@ import {
 import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { workflowDescribe } from '../operations/workflow-describe.ts';
 import { workflowEventsList, workflowEventsShow } from '../operations/workflow-events.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { parseJudgeShowArguments } from '../runtime/judge-show.ts';
@@ -177,6 +185,8 @@ export interface EventsCliDeps {
   readonly env?: NodeJS.ProcessEnv | undefined;
   /** Test-only: where this process came from (core's `desktopAppOrigin`), which production always asks. */
   readonly desktopOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+  /** Test-only: a shorter deadline for the person's own `claude` than Describe it's 120 seconds. */
+  readonly claudeDeadlineMs?: number | undefined;
 }
 
 interface EventsCliOptions {
@@ -683,6 +693,43 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await ruleAnalyse(ruleId, { ...controlOptions(program), draft, provider }));
     });
 
+  // Describe it (0.36.0 workflows design §11.4, W21): the person's words drafted into a workflow, written nowhere. It is
+  // the person's, as Analyse is: from the app (attested on macOS) or a terminal whose output they read; the event
+  // service's MCP server, an agent's shell and, on macOS, a process the app did not start are refused before anything
+  // is read or sent. Their own `claude` runs here, in this process, never in the event service.
+  rule
+    .command('describe')
+    .description(
+      'draft a workflow from your words on stdin — { words, example?, answers?, draft? } as JSON, or the words alone — by your Claude, OpenRouter or Anthropic; nothing is saved (a person)',
+    )
+    .option(
+      '--provider <provider>',
+      `who drafts it: ${DESCRIBE_PROVIDERS.join(', ')}; your Claude first when it is found`,
+    )
+    .action(async (options: Record<string, unknown>) => {
+      ran = true;
+      const origin = await personSetupOrigin('describe a workflow', {
+        where: 'Events → Workflows, Describe it in the designer',
+        action: 'describe',
+        terminal: 'output',
+        // It changes nothing: as Analyse, Windows and Linux take it from an unattested origin.
+        unattested: 'accept',
+      });
+      const provider = options.provider as string | undefined;
+      if (provider !== undefined && !isDescribeProvider(provider))
+        throw new CommsError('USAGE', `Describe it's provider is ${DESCRIBE_PROVIDERS.join(', ')}`);
+      const request = await describeInput(streams);
+      // The owner reads it again; checking here first gives a bad request its exit (64) before anything is sent.
+      parseDescribeRequest(request);
+      print(
+        await workflowDescribe(
+          request,
+          { provider: provider as DescribeProvider | undefined },
+          { ...controlOptions(program), origin, env, claudeDeadlineMs: deps.claudeDeadlineMs },
+        ),
+      );
+    });
+
   const targets = program.command('targets').description('inspect immutable local event target versions');
   targets.command('list').action(async () => {
     ran = true;
@@ -1028,7 +1075,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects' | 'runs';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects' | 'runs' | 'describe';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -1864,6 +1911,36 @@ async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<st
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
     throw new CommsError('USAGE', 'the draft on stdin must be one JSON workflow document');
   return parsed as Readonly<Record<string, unknown>>;
+}
+
+/**
+ * What Describe it is asked, on stdin (0.36.0 §11.4): one JSON object `{ words, example?, answers?, draft? }`, or plain
+ * words, which are the words alone. At most the largest request a draft rides in.
+ */
+async function describeInput(streams: EventsCliStreams): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const most = DESCRIBE_LIMITS.draftBytes + 4 * (DESCRIBE_LIMITS.words + DESCRIBE_LIMITS.example) + 16_384;
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > most) throw new CommsError('USAGE', 'what Describe it is asked is too large');
+    chunks.push(bytes);
+  }
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new CommsError('USAGE', 'what Describe it is asked is UTF-8 text');
+  }
+  if (text.trimStart().startsWith('{')) {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new CommsError('USAGE', 'what Describe it is asked is one JSON object, or your words alone');
+    }
+  }
+  return { words: text.replace(/\r?\n$/u, '') };
 }
 
 /** The most a provider key read from the app's stdin may be. */

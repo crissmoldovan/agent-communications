@@ -1603,6 +1603,53 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "workflow-describe" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["request"],
+              "properties": {
+                "request": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["words"],
+                  "properties": {
+                    "words": { "type": "string", "minLength": 1, "maxLength": 4000 },
+                    "example": { "type": "string", "maxLength": 4000 },
+                    "answers": {
+                      "type": "array",
+                      "maxItems": 5,
+                      "items": {
+                        "oneOf": [
+                          { "type": "string", "minLength": 1, "maxLength": 1000 },
+                          {
+                            "type": "object",
+                            "additionalProperties": false,
+                            "required": ["answer"],
+                            "properties": {
+                              "question": { "type": "string", "maxLength": 300 },
+                              "answer": { "type": "string", "minLength": 1, "maxLength": 1000 }
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    "draft": { "oneOf": [{ "type": "string" }, { "type": "object" }] }
+                  }
+                },
+                "provider": { "enum": ["claude-cli", "openrouter", "anthropic"] },
+                "answer": { "type": "string" },
+                "model": { "type": "string", "pattern": "^[A-Za-z0-9._:@/-]{1,128}$" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "decideHeld" },
             "args": {
               "type": "object",
@@ -3890,6 +3937,73 @@
             }
           }
         },
+        "workflow-describe": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["text", "notes", "unnoted", "questions", "parse", "check", "model"],
+          "properties": {
+            "text": { "type": "string" },
+            "notes": {
+              "type": "array",
+              "maxItems": 64,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step", "words"],
+                "properties": {
+                  "step": { "type": "string", "minLength": 1 },
+                  "words": { "type": "string", "minLength": 1 }
+                }
+              }
+            },
+            "unnoted": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "questions": {
+              "type": "array",
+              "maxItems": 5,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["step", "question", "choices"],
+                "properties": {
+                  "step": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] },
+                  "question": { "type": "string", "minLength": 1 },
+                  "choices": { "type": "array", "maxItems": 4, "items": { "type": "string", "minLength": 1 } }
+                }
+              }
+            },
+            "parse": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["ok", "errors"],
+              "properties": {
+                "ok": { "type": "boolean" },
+                "errors": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["line", "column", "message"],
+                    "properties": {
+                      "line": { "type": "integer", "minimum": 1 },
+                      "column": { "type": "integer", "minimum": 1 },
+                      "message": { "type": "string", "minLength": 1 }
+                    }
+                  }
+                }
+              }
+            },
+            "check": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/resultsByOperation/$defs/rule-check" }] },
+            "model": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["provider", "model"],
+              "properties": {
+                "provider": { "enum": ["claude-cli", "openrouter", "anthropic"] },
+                "model": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1 }] }
+              }
+            }
+          }
+        },
         "doctor": { "$ref": "#/$defs/doctor" }
       }
     },
@@ -4004,6 +4118,7 @@
                     "run-show",
                     "run-cancel",
                     "rule-check",
+                    "workflow-describe",
                     "projects-list",
                     "project-show",
                     "project-add",
@@ -4304,6 +4419,12 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-check" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/rule-check" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "workflow-describe" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/workflow-describe" } } }
             },
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "rule-approve" } } } } },

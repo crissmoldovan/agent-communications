@@ -30,6 +30,12 @@ import {
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE_CODES, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
 import { ANALYSE_PROVIDERS, ANALYSE_ROUTES, type AnalyseProvider } from '../domain/analyse-model.ts';
+import {
+  DESCRIBE_LIMITS,
+  type DescribeProvider,
+  isDescribeProvider,
+  type WorkflowDescribeResultV1,
+} from '../domain/describe-brief.ts';
 import { PERSON_CHANGE_APPROVERS, type SetupJudgeKind } from '../domain/judge-setup.ts';
 import type { CanonicalJudgeDocument, JevProvider } from '../domain/judges.ts';
 import {
@@ -664,6 +670,7 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'run-show': RunShowResultV1;
   readonly 'run-cancel': RunCancelResultV1;
   readonly 'rule-check': RuleCheckResultV1;
+  readonly 'workflow-describe': WorkflowDescribeResultV1;
   readonly 'judge-show': JudgeShowResultV1;
   readonly 'subscriber-enable': B3PreparedActivationResultV1;
   readonly 'subscriber-approve': SubscriptionApprovalResultV1;
@@ -906,6 +913,21 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
   readonly 'run-cancel': { readonly runId: string; readonly interrupt?: boolean | undefined };
   /** `workflow check` (0.36.0 §7.7): any document, checked as the event service reads it; nothing is written. */
   readonly 'rule-check': { readonly document: Readonly<Record<string, JsonValue>> };
+  /**
+   * Describe it (0.36.0 §11.4): the person's words, a pasted example, their answers and the current draft; the provider
+   * when they pick one; and, from the CLI that ran their own `claude`, its answer and model to be read and checked.
+   */
+  readonly 'workflow-describe': {
+    readonly request: {
+      readonly words: string;
+      readonly example?: string | undefined;
+      readonly answers?: readonly ({ readonly question: string; readonly answer: string } | string)[] | undefined;
+      readonly draft?: string | Readonly<Record<string, JsonValue>> | undefined;
+    };
+    readonly provider?: DescribeProvider | undefined;
+    readonly answer?: string | undefined;
+    readonly model?: string | undefined;
+  };
 }
 
 /** `messages list`'s closed argument shape (0.32.0 spec §3.6); every field is optional. */
@@ -1824,6 +1846,7 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'run-show': [...RUN_ENTRY_FIELDS, 'path', 'notRaised', 'steps', 'events'],
   'run-cancel': ['runId', 'state', 'cancelledDeliveries', 'cancelledEvents', 'interrupted'],
   'rule-check': ['ok', 'problems'],
+  'workflow-describe': ['text', 'notes', 'unnoted', 'questions', 'parse', 'check', 'model'],
   'judge-show': ['judgeId', 'version', 'document', 'digest', 'state'],
   'subscriber-enable': ['intentId', 'approvalId', 'binding', 'kind', 'status', 'replacementOfVersion'],
   'subscriber-approve': ['approvalId', 'subscriberId', 'version', 'approved', 'approvedBy', 'completion'],
@@ -1852,6 +1875,60 @@ function assertNullableNumber(value: unknown, name: string): void {
  * Analyse's result (0.33.0 design §3.3): what was analysed, the counts — numbers, closed words and, for each listed
  * sending domain, the domain inside the untrusted-content envelope — the suggestions and what the model did.
  */
+/** A Describe it draft (0.36.0 §11.4): the model's text, its notes and questions within their bounds, and its checks. */
+function assertWorkflowDescribeResult(value: Readonly<Record<string, unknown>>): void {
+  if (typeof value.text !== 'string' || Buffer.byteLength(value.text) > DESCRIBE_LIMITS.textBytes)
+    throw new TypeError("a draft's text is at most 48 KiB");
+  if (!Array.isArray(value.notes) || value.notes.length > DESCRIBE_LIMITS.notes)
+    throw new TypeError("a draft's notes are a list");
+  for (const note of value.notes) {
+    assertClosedRecord(note, ['step', 'words'], "a draft's note");
+    assertText(note.step, "a note's step");
+    assertText(note.words, "a note's words");
+  }
+  if (!Array.isArray(value.unnoted) || value.unnoted.some((step) => typeof step !== 'string'))
+    throw new TypeError("a draft's unnoted steps are a list of step ids");
+  if (!Array.isArray(value.questions) || value.questions.length > DESCRIBE_LIMITS.questions)
+    throw new TypeError(`a draft asks at most ${DESCRIBE_LIMITS.questions} questions`);
+  for (const question of value.questions) {
+    assertClosedRecord(question, ['step', 'question', 'choices'], "a draft's question");
+    assertNullable(question.step, assertText, "a question's step");
+    assertText(question.question, 'a question');
+    if (
+      !Array.isArray(question.choices) ||
+      question.choices.length > DESCRIBE_LIMITS.choices ||
+      question.choices.some((choice) => typeof choice !== 'string' || choice === '')
+    )
+      throw new TypeError(`a question has at most ${DESCRIBE_LIMITS.choices} choices`);
+  }
+  assertClosedRecord(value.parse, ['ok', 'errors'], "a draft's parse");
+  if (typeof value.parse.ok !== 'boolean' || !Array.isArray(value.parse.errors))
+    throw new TypeError("a draft's parse says whether it parsed, and its errors");
+  if (value.parse.ok !== (value.parse.errors.length === 0))
+    throw new TypeError("a draft's parse is ok exactly when it has no error");
+  for (const error of value.parse.errors) {
+    assertClosedRecord(error, ['line', 'column', 'message'], "a draft's parse error");
+    assertPositiveInteger(error.line, "a parse error's line");
+    assertPositiveInteger(error.column, "a parse error's column");
+    assertText(error.message, "a parse error's message");
+  }
+  if (value.check !== null) {
+    assertClosedRecord(value.check, ['ok', 'problems'], "a draft's check");
+    if (typeof value.check.ok !== 'boolean' || !Array.isArray(value.check.problems))
+      throw new TypeError("a draft's check says whether it is ok, and lists its problems");
+    for (const problem of value.check.problems) {
+      assertClosedRecord(problem, ['code', 'message', 'stepId', 'pointer'], "a draft check's problem");
+      assertClosedCode(problem.code, "a problem's code");
+      assertText(problem.message, "a problem's message");
+      assertNullable(problem.stepId, assertText, "a problem's step");
+      assertNullable(problem.pointer, assertText, "a problem's pointer");
+    }
+  } else if (value.parse.ok) throw new TypeError('a draft that parses is checked');
+  assertClosedRecord(value.model, ['provider', 'model'], "a draft's model");
+  if (!isDescribeProvider(value.model.provider)) throw new TypeError("a draft's provider is a known one");
+  assertNullable(value.model.model, assertText, "a draft's model name");
+}
+
 function assertRuleAnalyseResult(value: Readonly<Record<string, unknown>>): void {
   assertText(value.ruleId, 'an analysed rule id');
   if (!isRecord(value.analysed)) throw new TypeError('an analysis says what it analysed');
@@ -2310,6 +2387,9 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
         assertNullable(problem.stepId, assertText, "a problem's step");
         assertNullable(problem.pointer, assertText, "a problem's pointer");
       }
+      return;
+    case 'workflow-describe':
+      assertWorkflowDescribeResult(value);
       return;
     case 'judge-show': {
       assertText(value.judgeId, 'a shown judge id');

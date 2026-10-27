@@ -153,10 +153,13 @@ export interface DescribeAnswer {
 
 /**
  * What Describe it is asked (0.36.0, `rule_editor.rs`, `DescribeRequest`), on stdin: the person's words, 1 to 4,000
- * characters; up to five answers; and the current draft sent along, its text or its document, at most 48 KiB.
+ * characters; a message they pasted, as an example; up to five answers; and the current draft sent along, its text or
+ * its document, at most 48 KiB.
  */
 export interface DescribeRequest {
   words: string;
+  /** A message the person pasted, at most 4,000 characters: sent inside the untrusted envelope, as an example. */
+  example?: string;
   answers?: DescribeAnswer[];
   draft?: string | JsonDocument;
 }
