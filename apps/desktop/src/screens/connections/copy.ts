@@ -278,5 +278,5 @@ export const PARTS_COPY = {
   only: (account: string) => `Only ${account}`,
   readOnly: 'Read-only',
   noAccounts: 'No account of it is set up here yet, so it reaches none until you add one.',
-  events: 'Events covers all your rules and the whole Queue, so there are no accounts to choose.',
+  events: 'Events covers all your workflows and the whole Queue, so there are no accounts to choose.',
 } as const;
