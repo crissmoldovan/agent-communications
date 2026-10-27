@@ -1,4 +1,5 @@
 import { isTakeChannel, type TakeChannel, type TakeMessageRef } from '@agentcomms/core';
+import { isInside } from '../../agent-sessions.ts';
 import { isPromptableSession, type RelayClient, RelayError, type RelaySessionV1 } from '../../relay-client.ts';
 import type { Output, StepContext, StepExecutor, StepResult } from '../contracts.ts';
 import { lastActive, newestFirst, relayRetry, resolvePlace } from './session-place.ts';
@@ -43,12 +44,19 @@ export interface SessionStepDeps {
         readonly accountId: string;
         readonly thread: string;
         readonly except: TakeMessageRef;
-      }) => Promise<{ readonly sessionId: string } | null>)
+      }) => Promise<{ readonly sessionId: string; readonly folder: string | null } | null>)
     | undefined;
 }
 
-/** The Claude Code session id of whoever took an earlier message of this run's conversation, or null. */
-async function threadTaker(ctx: StepContext, deps: SessionStepDeps): Promise<string | null> {
+/**
+ * The Claude Code session id of the agent window that took an earlier message of this run's conversation, and the
+ * folder that window worked in; null when nobody did, or the window recorded no folder. The folder is compared, never
+ * kept: it enters no output, event or record.
+ */
+async function threadTaker(
+  ctx: StepContext,
+  deps: SessionStepDeps,
+): Promise<{ readonly sessionId: string; readonly folder: string } | null> {
   const channel = ctx.rule.source.channel;
   if (deps.threadHolder === undefined || !isTakeChannel(channel)) return null;
   const message = (await ctx.message?.()) ?? null;
@@ -61,7 +69,8 @@ async function threadTaker(ctx: StepContext, deps: SessionStepDeps): Promise<str
       thread: message.thread,
       except: { channel, accountId, id: message.id },
     });
-    return holder?.sessionId ?? null;
+    if (holder === null || holder.folder === null) return null;
+    return { sessionId: holder.sessionId, folder: holder.folder };
   } catch {
     // A take store that cannot be read names no one.
     return null;
@@ -86,7 +95,21 @@ async function find(ctx: StepContext, deps: SessionStepDeps): Promise<StepResult
     const sessions = await client.sessions();
     let matching: RelaySessionV1[];
     if (place.kind === 'thread') {
-      matching = sessions.filter((session) => session.nativeSessionId === taker && session.provider === step.provider);
+      // Security review of 0.36.0, M2: the approval names no folder here, so the session must be the taking window's,
+      // in the folder it worked in, inside the allowed roots and outside Agent Comms' own folders.
+      const where = taker?.folder;
+      const roots = where === undefined ? [] : await deps.sessionRoots();
+      const denied = deps.deniedFolders();
+      if (
+        where === undefined ||
+        !roots.some((root) => isInside(where, root)) ||
+        denied.some((folder) => isInside(where, folder) || isInside(folder, where))
+      )
+        return none();
+      matching = sessions.filter(
+        (session) =>
+          session.nativeSessionId === taker?.sessionId && session.provider === step.provider && session.cwd === where,
+      );
     } else if (place.kind === 'lane') {
       const binding = deps.laneBinding(place.lane);
       // No window, a window with no Claude Code session id, or a run from before the binding: no session.

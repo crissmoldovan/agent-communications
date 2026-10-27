@@ -36,14 +36,14 @@ const NATIVE = '7c9e6679-7425-40de-944b-e07fc1f90ae7';
 const CLIENT_FOLDER = '/example/home/work/client-secret-project';
 const TAKER_KEY = 'aaaaaaaaaaaaaaaa';
 
-function taker(sessionId: string | null): TakeHolder {
+function taker(sessionId: string | null, folder: string | null = CLIENT_FOLDER): TakeHolder {
   return {
     key: TAKER_KEY,
     grouped: true,
     process: 'a1a1a1a1a1a1',
     sessionId,
     parent: { pid: 4242, startedAt: 'Mon Oct 26 10:00:00 2026', name: 'claude' },
-    folder: CLIENT_FOLDER,
+    folder,
     client: { name: 'claude-code', version: '2.1.0' },
   };
 }
@@ -96,7 +96,7 @@ test('a Slack reply in a thread a session took finds that session: idle, busy, w
   skip: WINDOWS_SKIP,
 }, async () => {
   await withThread(async ({ relay, takes, folder, deps }) => {
-    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE));
+    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE, folder));
     const find = createFindSessionExecutor(deps);
     relay.addSession({ cwd: folder, provider: 'codex', nativeSessionId: NATIVE });
     relay.addSession({ cwd: folder, nativeSessionId: '0f8fad5b-d9cb-469f-a165-70867728950e' });
@@ -139,7 +139,7 @@ test("the taker's session gone from the relay is none; a message with no thread 
   skip: WINDOWS_SKIP,
 }, async () => {
   await withThread(async ({ relay, takes, folder, deps }) => {
-    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE));
+    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE, folder));
     relay.addSession({ cwd: folder, nativeSessionId: '0f8fad5b-d9cb-469f-a165-70867728950e' });
     const find = createFindSessionExecutor(deps);
     const none = { kind: 'settled', outcome: 'none', output: { session: null, provider: 'claude' } };
@@ -181,7 +181,7 @@ test('the output holds session and provider only: no folder, client or key of th
   skip: WINDOWS_SKIP,
 }, async () => {
   await withThread(async ({ relay, takes, folder, deps }) => {
-    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE));
+    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE, folder));
     relay.addSession({ cwd: folder, nativeSessionId: NATIVE });
     const result = await createFindSessionExecutor(deps).run(replyContext());
     assert.equal(result.kind, 'settled');
@@ -239,4 +239,39 @@ test("the run's record keeps the message and its thread for a flow that finds by
   });
   assert.deepEqual(await ctx.message?.(), message);
   assert.deepEqual(await ctx.fields(), { text: 'x' });
+});
+
+test('a session found by thread works where the taking window worked, inside the allowed roots', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Security review of 0.36.0, M2: the approval names no folder for "the session that took this conversation", so the
+  // session found must be the one in the folder the taking window was in, never one elsewhere with the same id.
+  await withThread(async ({ relay, takes, folder, deps }) => {
+    const none = { kind: 'settled', outcome: 'none', output: { session: null, provider: 'claude' } };
+    const find = createFindSessionExecutor(deps);
+    const elsewhere = join(folder, '..', 'billing');
+    await mkdir(elsewhere, { recursive: true });
+    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: PARENT, thread: PARENT }, taker(NATIVE, folder));
+    relay.addSession({ cwd: elsewhere, nativeSessionId: NATIVE });
+    assert.deepEqual(await find.run(replyContext()), none, 'the same session id in another folder is not it');
+    const window = relay.addSession({ cwd: folder, nativeSessionId: NATIVE });
+    assert.deepEqual(await find.run(replyContext()), {
+      kind: 'settled',
+      outcome: 'idle',
+      output: { session: window.id, provider: 'claude' },
+    });
+    // A window that recorded no folder, one outside the allowed roots, or one in Agent Comms' own folders is nobody.
+    const other = 'C0123/1729935000.000100';
+    await takes.take({ channel: 'slack', accountId: ACCOUNT, id: other, thread: other }, taker(NATIVE, null));
+    assert.deepEqual(await find.run(replyContext({ id: 'C0123/1729935100.000200', thread: other })), none);
+    const outside = 'C0123/1729934000.000100';
+    await takes.take(
+      { channel: 'slack', accountId: ACCOUNT, id: outside, thread: outside },
+      taker(NATIVE, CLIENT_FOLDER),
+    );
+    relay.addSession({ cwd: CLIENT_FOLDER, nativeSessionId: NATIVE });
+    assert.deepEqual(await find.run(replyContext({ id: 'C0123/1729934100.000200', thread: outside })), none);
+    const denied = createFindSessionExecutor({ ...deps, deniedFolders: () => [folder] });
+    assert.deepEqual(await denied.run(replyContext()), none);
+  });
 });
