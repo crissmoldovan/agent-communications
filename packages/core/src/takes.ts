@@ -17,8 +17,9 @@
  *   time it happened.
  * - **Offers (T4):** a message offered to one window is reserved for it; it must still take it. The person's **Give
  *   to…** offers one for fifteen minutes; a rule's delivery offers one through the event service (`offer`), while its
- *   item waits for the window and for fifteen minutes after the window was handed it (`handOffer`). A delivery's offer
- *   never takes a message from anyone, and the event service never writes `taken`.
+ *   item waits for the window and for fifteen minutes after the window was handed it (`handOffer`) — and one its window
+ *   is never handed lapses by itself, at the account's reminder window (`offerWait`), or after an hour (security review
+ *   of 0.35.0, M5). A delivery's offer never takes a message from anyone, and the event service never writes `taken`.
  * - **What an agent learns (T7, T8):** closed words — `you`, `another session`, `the person`, `done`, and the closed
  *   hand-back reasons. Never another session's folder, client, key or session id, and never a hand-back's note, which an
  *   agent wrote and may have copied a sender's words into: notes are the person's, shown enveloped.
@@ -109,6 +110,11 @@ export const TAKE_LEASE_MS: number = 60 * 60 * 1000;
  * from when its window was handed the message.
  */
 export const TAKE_OFFER_MS: number = 15 * 60 * 1000;
+/**
+ * M5: how long a delivery's offer waits for its window to be handed it, where the account's reminder window is not
+ * known (`TakeStoreOptions.offerWait`): an hour, as a take's lease. A window that never wakes holds the message no longer.
+ */
+export const TAKE_OFFER_WAIT_MS: number = 60 * 60 * 1000;
 /** §4: a record is deleted this many days after it last changed. */
 export const TAKE_RETENTION_DAYS = 30;
 /** §4: the newest lines of a record's history kept. */
@@ -242,7 +248,10 @@ export interface TakeWindow {
 
 export interface TakeOffer {
   readonly to: TakeWindow;
-  /** When it lapses; null while the item a delivery's offer came with still waits for the window. */
+  /**
+   * When it lapses; null while the item a delivery's offer came with still waits for the window — and then it lapses
+   * by itself once it has waited the account's reminder window, or an hour (`offerWaitsUntil`, M5).
+   */
   readonly until: string | null;
   readonly by: { readonly rule: string; readonly delivery: string } | TakePerson;
 }
@@ -822,6 +831,24 @@ export interface TakeStoreOptions {
   readonly platform?: NodeJS.Platform | undefined;
   /** The ids of every connected account, for the daily prune to drop the folders of the rest. */
   readonly accountIds?: (() => Promise<ReadonlySet<string> | null>) | undefined;
+  /**
+   * M5: how long a delivery's offer waits for its window to be handed it in an account, in milliseconds: the account's
+   * reminder window (`unclaimed.afterMinutes`), as core reads it from the configuration. Left out, or failing, an hour
+   * (`TAKE_OFFER_WAIT_MS`).
+   */
+  readonly offerWait?: ((accountId: string) => Promise<number>) | undefined;
+}
+
+/**
+ * M5: when a delivery's offer still waiting for its window lapses by itself — `waitMs` after it was made — or null for
+ * any other record: an offer with a time lapses at that time, and the person's always has one.
+ */
+export function offerWaitsUntil(record: TakeRecord, waitMs: number): string | null {
+  if (record.state !== 'offered' || record.offer === null || record.offer.until !== null) return null;
+  if ('person' in record.offer.by) return null;
+  const made = Date.parse(record.history.findLast((line) => line.kind === 'offered')?.at ?? record.updatedAt);
+  const wait = Number.isFinite(waitMs) && waitMs > 0 ? waitMs : TAKE_OFFER_WAIT_MS;
+  return Number.isFinite(made) ? new Date(made + wait).toISOString() : null;
 }
 
 /** Whether `pid` is a running process, as `kill(pid, 0)` says: false only for one that is not there. */
@@ -969,6 +996,7 @@ export class TakeStore {
   readonly #running: (pid: number) => boolean;
   readonly #platform: NodeJS.Platform;
   readonly #accountIds: (() => Promise<ReadonlySet<string> | null>) | undefined;
+  readonly #offerWait: ((accountId: string) => Promise<number>) | undefined;
   #prunedDay: string | null = null;
 
   constructor(stateDir: string, options: TakeStoreOptions = {}) {
@@ -979,6 +1007,18 @@ export class TakeStore {
     this.#running = options.running ?? runningPid;
     this.#platform = options.platform ?? process.platform;
     this.#accountIds = options.accountIds;
+    this.#offerWait = options.offerWait;
+  }
+
+  /** M5: how long a delivery's offer waits for its window in an account: its reminder window, or an hour. */
+  async #offerWaitIn(accountId: string): Promise<number> {
+    if (this.#offerWait === undefined) return TAKE_OFFER_WAIT_MS;
+    try {
+      const wait = await this.#offerWait(accountId);
+      return Number.isFinite(wait) && wait > 0 ? wait : TAKE_OFFER_WAIT_MS;
+    } catch {
+      return TAKE_OFFER_WAIT_MS;
+    }
   }
 
   #path(ref: TakeMessageRef): string {
@@ -1014,9 +1054,10 @@ export class TakeStore {
   }
 
   /**
-   * Works out what has lapsed (T3, T4), at the time it happened: an offer past its time; a take with no approval
-   * waiting under it, sixty minutes after its last act; and — only when `probing`, for a caller that is not the holder —
-   * a take whose holder's parent has gone.
+   * Works out what has lapsed (T3, T4), at the time it happened: an offer past its time; a delivery's offer its window
+   * was never handed, past the account's reminder window (M5); a take with no approval waiting under it, sixty minutes
+   * after its last act; and — only when `probing`, for a caller that is not the holder — a take whose holder's parent
+   * has gone.
    */
   async #settle(
     record: TakeRecord,
@@ -1026,6 +1067,12 @@ export class TakeStore {
     const until = record.state === 'offered' ? (record.offer?.until ?? null) : null;
     if (until !== null && Date.parse(until) <= now.getTime()) {
       const line: TakeLine = { at: until, kind: 'expired', by: 'service', windowKey: record.offer?.to.key ?? null };
+      return { record: opened(record, line, now.toISOString()), changed: true };
+    }
+    if (record.state === 'offered' && record.offer !== null && record.offer.until === null) {
+      const waits = offerWaitsUntil(record, await this.#offerWaitIn(record.message.accountId));
+      if (waits === null || Date.parse(waits) > now.getTime()) return { record, changed: false };
+      const line: TakeLine = { at: waits, kind: 'expired', by: 'service', windowKey: record.offer.to.key };
       return { record: opened(record, line, now.toISOString()), changed: true };
     }
     if (record.state !== 'taken' || record.holder === null || isPerson(record.holder))
@@ -1483,8 +1530,8 @@ export class TakeStore {
    * T4: a rule's delivery offers a message to the window it was delivered to — a lane's bound window, or the session its
    * prompt was posted to. While the offer lasts it is exclusive: any other session's take or act is refused, and the
    * window must still take the message itself. `until` is null while the item waits for the window; `handOffer` starts
-   * its fifteen minutes when the window is handed it. The event service writes it best-effort, after its delivery
-   * commits.
+   * its fifteen minutes when the window is handed it, and one never handed it lapses at the account's reminder window,
+   * or after an hour (M5). The event service writes it best-effort, after its delivery commits.
    *
    * It never takes a message from anyone: one a session holds or has done, one the person keeps, one already offered —
    * by the person or by another delivery — or one whose record cannot be read is left as it is (`changed: false`), and
@@ -1590,8 +1637,9 @@ export class TakeStore {
   /**
    * §8, T3: the event service's sweep writes every lapse down, under each record's lock, at the time it happened —
    * `ended` for a take whose holder's parent has gone, `expired` for one past its lease and for an offer past its time —
-   * so the story, and "nobody took it", count from then rather than from whenever someone next meets the record. A take
-   * still held, an offer still waiting for its window, and the person's keep stand. Returns how many of each it wrote.
+   * so the story, and "nobody took it", count from then rather than from whenever someone next meets the record — and a
+   * delivery's offer its window was never handed, past the account's reminder window (M5). A take still held, an offer
+   * still waiting within that window, and the person's keep stand. Returns how many of each it wrote.
    * Each holder's parent is looked at once per sweep, and a record that cannot be written now is left for the next.
    */
   async lapse(): Promise<{ ended: number; expired: number }> {
@@ -1614,10 +1662,9 @@ export class TakeStore {
         const path = join(this.directory, accountId, file);
         const found = await this.#readFile(path);
         if (found === null || found === 'unreadable') continue;
-        // Only a session's take, or an offer with a time, can lapse by itself.
+        // Only a session's take, or an offer — with a time, or waiting past its account's reminder window — lapses by itself.
         const may =
-          (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) ||
-          (found.state === 'offered' && found.offer?.until !== null);
+          (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) || found.state === 'offered';
         if (!may) continue;
         await withFileLock(`${path}.lock`, async () => {
           const again = await this.#readFile(path);

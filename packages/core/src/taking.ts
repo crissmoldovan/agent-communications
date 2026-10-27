@@ -297,6 +297,18 @@ export function takingFor(
   return found ?? DEFAULT_TAKING;
 }
 
+/**
+ * How long a delivery's offer waits for its window to be handed it in an account, in milliseconds (security review of
+ * 0.35.0, M5): the account's reminder window, `unclaimed.afterMinutes`, as it applies. An offer its window was never
+ * handed lapses then, and the message counts as not taken. Never throws.
+ */
+export function offerWaitMs(
+  config: Pick<Config, 'inboxes' | 'accounts'> & { readonly taking?: unknown },
+  accountId: string,
+): number {
+  return takingFor(config, accountId).unclaimed.afterMinutes * 60_000;
+}
+
 /** One loosening a change to the settings makes: its path, by the account's name, the values, and the account's id. */
 export interface TakingLoosening {
   readonly path: string;
