@@ -228,9 +228,17 @@ test(
     assert.equal(asked.status, 'approval-required', 'not applied at once');
     if (asked.status !== 'approval-required') return;
     const place = shortenHome(real, homeDirectory(m.env));
-    const line = `Agents in ${place} will then use the connection "Everywhere" (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…), for every folder: Agent Comms itself; Events — more than this one reaches`;
-    assert.deepEqual(asked.prepared.effects, [line]);
-    assert.ok(asked.prepared.preview.includes(line), asked.prepared.preview);
+    // A real loosening (the lead's call on the open question): classified, shown on the preview's loosening line, and
+    // bound by the approval's digest like every other — never "It loosens no safety setting".
+    const path = `connections["Acme only" (Claude Code, ${real}, ${acme.id.slice(0, 7)}…)]`;
+    const behind = `removed: agents in ${place} use the connection "Everywhere" (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…): Agent Comms itself; Events`;
+    assert.deepEqual(asked.prepared.loosened, [{ path, before: 'Agent Comms itself', after: behind, id: acme.id }]);
+    assert.deepEqual(asked.prepared.effects, []);
+    assert.ok(
+      asked.prepared.preview.includes(`It loosens:\n  ${path}: Agent Comms itself → ${behind}`),
+      asked.prepared.preview,
+    );
+    assert.equal(asked.prepared.preview.includes('It loosens no safety setting'), false);
     assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, 'nothing removed while it waits');
     assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
     // The person's yes in the chat, claimed with the approval: removed.
@@ -281,7 +289,10 @@ test(
     assert.equal(asked.code, 10, asked.stdout + asked.stderr);
     const error = asked.json().error as { code: string; details: { approvalId: string; preview: string } };
     assert.equal(error.code, 'APPROVAL_PENDING');
-    assert.match(error.details.preview, /will then use the connection "Everywhere"/);
+    assert.match(
+      error.details.preview,
+      /It loosens:\n {2}connections\["Acme only" .*: Agent Comms itself → removed: agents in .* use the connection "Everywhere"/,
+    );
     assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
     const removed = await runMain([...words, '--approval', error.details.approvalId], m.env, 'darwin');
     assert.equal(removed.code, 0, removed.stdout + removed.stderr);

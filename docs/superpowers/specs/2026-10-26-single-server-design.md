@@ -401,8 +401,9 @@ does not protect.
   - removing or changing a pin;
   - turning read-only off;
   - a migration (its effects are every entry it rewrites);
-  - removing a connection whose entry shadows a wider one of the same name (2026-10-27, H1: its effect says what the
-    agents there will use instead; §8.1's note).
+  - removing a connection whose entry shadows a wider one of the same name (2026-10-27, H1: classified by
+    `classifyChange` from the mark its plan puts on the before side, `withRemovalBehind`; its loosening line says what
+    the agents there will use instead; §8.1's note).
 - **Tightenings:**
   - removing a part;
   - adding a pin;
@@ -494,10 +495,14 @@ does not protect.
   under core's name, so it shadows the app's `agentcomms` for every folder (§6.1); removing it handed the agents in
   that folder the wider one, at once. A remove whose entry shadows a wider entry of the same name — a connection
   reaching a part, an account or a switch this one does not, or an entry of its own, or a config that cannot be read —
-  is now a loosening: prepared, its preview saying what the agents there will use instead ("Agents in ~/work/acme will
-  then use the connection "Everywhere" (Claude Code, every folder, cn_ABCD…), for every folder: Agent Comms itself;
-  Gmail, every mailbox; Events — more than this one reaches"), and approved under the change policy, in the app or at
-  the terminal. A remove that leaves nothing wider behind stays at once. A key replaced never takes the entry out: a
+  is now a loosening, classified as one by `classifyChange`: the remove's plan marks the connection on its before side
+  with what the agents there would use instead (`withRemovalBehind`; never written to `config.json`), so the preview's
+  loosening line says it — `connections["Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)]: Agent Comms
+  itself → removed: agents in ~/work/acme use the connection "Everywhere" (Claude Code, every folder, cn_EFGH…): Agent
+  Comms itself; Gmail, every mailbox; Events` — and the approval's digest binds it like every other loosening. It is
+  approved under the change policy, in the app or at the terminal. A remove that leaves nothing wider behind stays at
+  once. `ConfigStore.update` still sees only `config.json`, where a removal loosens nothing: the remove's own gate is
+  what holds it, as for every change whose reach lies outside the file. A key replaced never takes the entry out: a
   connection cut off by it still shadows the wider one, serving nothing, and the one case where its entry was gone —
   removed by hand — is refused (§16).
 - **`--app-approval` is extended to** `connection add|update|migrate|remove`, in `takesAppApproval` (`cli.ts:535-547`) and in
