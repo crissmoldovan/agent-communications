@@ -85,11 +85,13 @@ test('threadHolder names the newest session to take the thread, and skips the me
     sessionId: BOB_SESSION,
     state: 'done',
     at: '2026-10-26T10:01:00.000Z',
+    folder: '/example/home/work/client-secret-project',
   });
   assert.deepEqual(await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: THREAD, except: reply }), {
     sessionId: ALICE_SESSION,
     state: 'taken',
     at: '2026-10-26T10:00:00.000Z',
+    folder: '/example/home/work/client-secret-project',
   });
   assert.deepEqual(snapshot(dir), before, 'it writes nothing');
   // Never another account's, nor another channel's.
@@ -114,6 +116,7 @@ test("threadHolder names the session that took the conversation's first message 
     sessionId: ALICE_SESSION,
     state: 'taken',
     at: '2026-10-26T10:00:00.000Z',
+    folder: '/example/home/work/client-secret-project',
   });
   // The first message itself is never "an earlier one", and another conversation's first message is not in this one.
   assert.equal(
@@ -157,4 +160,22 @@ test('threadHolder is null for the person, for a holder with no session id, and 
     null,
   );
   assert.equal(await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: '', except: asked }), null);
+});
+
+test('threadHolder skips a take by a command that joined no agent window, whatever session id it stated', async () => {
+  // Security review of 0.36.0, M2: a command run from an agent's own shell states its Claude Code session id itself
+  // (CLAUDE_CODE_SESSION_ID), so it could name any session. Only a take by an agent window's own session counts.
+  const { store, advance } = storeAt();
+  const parent = message('1729936800.000100');
+  await store.take(parent, holder('a', ALICE_SESSION));
+  advance(60_000);
+  const reply = message('1729936900.000200');
+  await store.take(reply, { ...holder('b', BOB_SESSION), grouped: false, parent: null });
+  const latest = message('1729937000.000300');
+  assert.deepEqual(await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: THREAD, except: latest }), {
+    sessionId: ALICE_SESSION,
+    state: 'taken',
+    at: '2026-10-26T10:00:00.000Z',
+    folder: '/example/home/work/client-secret-project',
+  });
 });

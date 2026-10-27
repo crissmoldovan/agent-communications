@@ -405,8 +405,10 @@ at most 60 an hour
   120), events an hour (120, at most 600) and a run's deadline (3 days, at most 30). A flow has at most 32 steps and a
   run at most 64 executed steps.
 - **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
-  the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). The
-  message's own take doesn't count, and a Codex session can't be found this way.
+  the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). Only
+  a take by an agent window's own session counts, never one by a command that joined no window, and the session found
+  must still work in the folder that window worked in, inside the relay's allowed roots. The message's own take doesn't
+  count, and a Codex session can't be found this way.
 - **What a session is told.** A flow hands a message over through a `session` target, as a straight-line workflow
   does: its fixed frame, the fields you mapped, the sender's words inside their envelope. The session is offered the
   message for 15 minutes after it is handed over, and still takes it itself.

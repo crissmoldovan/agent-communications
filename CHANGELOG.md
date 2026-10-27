@@ -101,6 +101,11 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
     depth 3. A shadow version's events are dry-run records.
 - **`@agentcomms/core`:** `TakeStore.threadHolder`, the session that took an earlier message in a conversation.
   Approvals gain the `subscription` activation kind.
+- **Security review fixes before release** (an independent review of this release, 2026-10-27):
+  - "The session that took this conversation" could be named by an agent: a command run from an agent's shell states
+    its own Claude Code session id, so it could take a message as any session and send the conversation's next
+    messages there. Now only a take by an agent window's own session counts, and the session found must work in the
+    folder that window worked in, inside the relay's allowed roots and outside Agent Comms' own folders.
 - **Fixed while building it:**
   - a raised event goes out in the tick that raised it, and a subscriber's queue drains in order at once;
   - a subscriber that hangs slows no run;
