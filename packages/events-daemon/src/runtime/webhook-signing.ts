@@ -10,16 +10,18 @@ export interface StandardWebhookSigningInput {
   readonly overlap: readonly string[];
 }
 
-function signingKey(secret: string): Buffer {
-  if (!secret.startsWith('whsec_')) {
-    throw new CommsError('BAD_DATA', 'the webhook signing secret has an unsupported format');
-  }
+function isStandardSecret(secret: string): boolean {
+  if (!secret.startsWith('whsec_')) return false;
   const encoded = secret.slice('whsec_'.length);
   const key = Buffer.from(encoded, 'base64');
-  if (key.byteLength === 0 || key.toString('base64') !== encoded) {
+  return key.byteLength > 0 && key.toString('base64') === encoded;
+}
+
+function signingKey(secret: string): Buffer {
+  if (!isStandardSecret(secret)) {
     throw new CommsError('BAD_DATA', 'the webhook signing secret has an unsupported format');
   }
-  return key;
+  return Buffer.from(secret.slice('whsec_'.length), 'base64');
 }
 
 function signature(secret: string, id: string, timestamp: string, body: string): string {
@@ -33,7 +35,9 @@ export function signStandardWebhook(input: StandardWebhookSigningInput): Readonl
   }
   if (input.id.length === 0) throw new CommsError('BAD_DATA', 'the webhook id is invalid');
   const timestamp = String(input.timestamp);
-  const signatures = [input.current, ...input.overlap].map(
+  // A previous generation that could never sign — every secret made before 0.36.0 was base64url — is left out, so
+  // rotating away from one signs at once instead of failing for its overlap. The current one must sign.
+  const signatures = [input.current, ...input.overlap.filter(isStandardSecret)].map(
     (secret) => `v1,${signature(secret, input.id, timestamp, input.body)}`,
   );
   return {
