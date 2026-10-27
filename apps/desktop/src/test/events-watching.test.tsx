@@ -30,7 +30,7 @@ const DIGEST = '0f'.repeat(32);
 const WATCH = 'Watching your accounts';
 const ASK = 'Switch on watching? Approve it';
 const SAID =
-  "Switched off: the event service is still running but no longer watches your accounts, so no rule does anything. Your rules are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
+  "Switched off: the event service is still running but no longer watches your accounts, so no workflow does anything. Your workflows are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
 
 /** `enable-all --json`: the approval, and the digest its preview binds. */
 const PREPARED = {

@@ -42,7 +42,7 @@ describe('Analyse', () => {
     );
     // What was sent, in the event service's own words.
     expect(view.querySelector('[data-slot="sent"]')?.textContent).toBe(
-      "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
+      "The workflow's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
     );
     // Only OpenRouter has a key: there is no other provider to run it on.
     expect(within(view).queryByRole('group', { name: 'Run on' })).toBeNull();

@@ -38,9 +38,10 @@ at most 60 an hour
 - **Round trip:** `parseRuleText(printRuleText(doc))` deep-equals `doc`, for any JSON object.
 - **Stable:** the same document always prints the same text, whatever order its keys are in.
 - **Nothing dropped:** a field or shape the readable form has no words for is written as `raw` JSON in its place (see
-  [The escape form](#the-escape-form)). A canonical rule never needs it.
-- **Grammar only:** the parser checks the text, not the rule. Whether the accounts, lanes, judges and targets exist,
-  and whether the event service accepts the rule, is for the event service to say when the document is submitted.
+  [The escape form](#the-escape-form)). A canonical workflow never needs it.
+- **Grammar only:** the parser checks the text, not the workflow. Whether the accounts, lanes, judges and targets
+  exist, and whether the event service accepts the workflow, is for the event service to say when the document is
+  submitted.
 - **No I/O and no knowledge of accounts:** an account is written as the alias or id the document holds.
 
 ## Lines and words
@@ -414,9 +415,9 @@ keep for
 ```
 
 Only what differs from the defaults is written, and the parser fills the rest: 7 days each, except dry runs (1 day)
-and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a rule with a
-queue target or a session target that leaves items in the Queue, queue items 7 days (action queue design, Q2). With
-no `keep for`, the rule has the defaults. They are `RULE_RETENTION_DEFAULTS`, exported by this package, the one copy
+and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a workflow with
+a queue target or a session target that leaves items in the Queue, queue items 7 days (action queue design, Q2). With
+no `keep for`, the workflow has the defaults. They are `RULE_RETENTION_DEFAULTS`, exported by this package, the one copy
 the event service uses too.
 
 ## What the parser fills
@@ -435,10 +436,10 @@ Whatever the readable form cannot say is written as JSON, never dropped:
 
 - `raw <JSON>` in place of a condition or a target;
 - `raw /<field> = <JSON>` for a top-level field: one the grammar has no section for, or one whose shape a section
-  cannot say (a retention without `queueMs` on a queue rule, `targets: []`);
+  cannot say (a retention without `queueMs` on a workflow with a queue target, `targets: []`);
 - `raw /<field> absent` for a field the document lacks where the parser would otherwise expect or fill it.
 
-A field given by a section and by `raw` is refused. Of the repository's rule fixtures, only ones the event service
+A field given by a section and by `raw` is refused. Of the repository's workflow fixtures, only ones the event service
 would refuse need the escape form: partial documents, an authoring condition without `caseSensitive`, no targets.
 
 ## Errors

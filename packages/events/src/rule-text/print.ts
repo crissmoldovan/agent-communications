@@ -38,13 +38,13 @@ type Doc = Readonly<Record<string, JsonValue>>;
 export function printRuleText(doc: object): string {
   const json = canonicalJson(doc);
   const record = JSON.parse(json) as JsonValue;
-  if (!isRecord(record)) throw new EventsError('NOT_JSON', 'a rule document is a JSON object');
+  if (!isRecord(record)) throw new EventsError('NOT_JSON', 'a workflow document is a JSON object');
   const natural = writeDocument(record, true);
   if (roundTrips(natural, json)) return natural;
   // A safety net, never the plan: the readable form is checked by the tests to cover every canonical shape.
   const raw = writeDocument(record, false);
   if (roundTrips(raw, json)) return raw;
-  throw new EventsError('NOT_JSON', 'the rule document cannot be written as rule text');
+  throw new EventsError('NOT_JSON', 'the workflow document cannot be written as workflow text');
 }
 
 function roundTrips(text: string, json: string): boolean {

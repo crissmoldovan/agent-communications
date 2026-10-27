@@ -43,9 +43,9 @@ Eight packages and twenty-one skills.
   WhatsApp for Mac keeps on the Mac, and drafts replies as links you open and send yourself. No
   network client, no WhatsApp session, nothing that sends.
 - **`@agentcomms/events-daemon`** — local events (`agent-events`): watches the Gmail, Slack, Resend and
-  WhatsApp accounts you connected and, when an event matches a rule you approved at your terminal, delivers it
+  WhatsApp accounts you connected and, when an event matches a workflow you approved at your terminal, delivers it
   to a signed webhook, a local live stream or a dry-run log. Its MCP server (`agent-events mcp`) lets an agent
-  propose and test rules, never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
+  propose and test workflows, never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
 - **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a
   library with no I/O that runs in Node and in a browser.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
@@ -162,7 +162,7 @@ The tray shows how many approvals wait, and closing the window hides it there.
 
 **From 0.27.0 it also runs the event service** (`agent-events run`), so it no longer needs a terminal left open.
 - **On by default,** with "Run the event service" on the Events screen to switch it off. The service collects nothing
-  until you approve a rule at the terminal, so an idle one costs little.
+  until you approve a workflow at the terminal, so an idle one costs little.
 - **It survives the app.** The service keeps running when the app quits, unless you choose **Stop it** when asked.
   It starts at login when the app does.
 - **After a crash, the app restarts it,** waiting 1 s, 5 s, then 30 s between tries. After 5 failed starts in 10
@@ -177,7 +177,7 @@ The tray shows how many approvals wait, and closing the window hides it there.
   running without it.
 - **Not on Windows yet:** the service doesn't run there, and the switch is absent.
 - **Its judges, from 0.27.1.** Events lists the service's three kinds of judge: Jev (TypeSafe's hosted model, sent
-  the fields a rule names), Laya (on this Mac, not offered yet) and a local model server of your own. **Turn on in
+  the fields a workflow names), Laya (on this Mac, not offered yet) and a local model server of your own. **Turn on in
   Terminal** opens the enablement for you to approve there; **Turn off** applies at once.
 
 - **What it changes itself:** only what takes something away, which applies at once from the CLI too — revoking an
@@ -218,9 +218,9 @@ login is off until you switch it on there.
 On Windows and Linux nothing attests that the app started a command, so the app's person-only changes — adding
 servers to an app, bringing everything up to date, your agents' name, word and exceptions, what agents may do on an
 account, setting up a judge, an AI provider's or Linear's key, Settings → Integrations → Agent sessions, approving a
-rule — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the command to run there.
-On macOS the app checks that it started the command itself: a speed bump against agents, not a boundary against code
-running as you.
+workflow — go through a terminal: the app offers Approve in Terminal or Do it in Terminal, with the command to run
+there. On macOS the app checks that it started the command itself: a speed bump against agents, not a boundary against
+code running as you.
 
 ### Or package by package
 
@@ -473,17 +473,17 @@ whatever the setting, `TAKEN_ELSEWHERE`. Turning it off again is approved, as ev
 says who has each message in closed words, never which session. `agentcomms takes list|release|give|keep` are yours: who
 has each message across every window, and ending, giving or keeping one. [More](packages/core/README.md).
 
-With the take required, the event service offers each message a rule delivers to a lane or a session to that window:
-no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is posted,
-and the window still takes it itself — its pointer or prompt says until when. A window that is never woken for it holds
-it only for the account's reminder time; then the offer lapses, and the message counts as not taken. The event service
-never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
-reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one handed back as
-needing you at once; the notice never says what they are, and the app lists them under Not taken.
+With the take required, the event service offers each message a workflow delivers to a lane or a session to that
+window: no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is
+posted, and the window still takes it itself — its pointer or prompt says until when. A window that is never woken for
+it holds it only for the account's reminder time; then the offer lapses, and the message counts as not taken. The event
+service never takes a message. Once a minute it reminds you of the messages a workflow delivered that nobody took within
+the account's reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one
+handed back as needing you at once; the notice never says what they are, and the app lists them under Not taken.
 
 ### Agent sessions, through claude-stream
 
-From 0.33.0 a rule can hand a match to a coding-agent session that your claude-stream relay runs: the session working
+From 0.33.0 a workflow can hand a match to a coding-agent session that your claude-stream relay runs: the session working
 in a folder, started there if there is none, or the one behind the agent window you bound to a lane. Agent Comms is one more client of the
 relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac only.
 
@@ -495,7 +495,7 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
   prints it or puts it in a command line. It sends the token only to a port that a process of yours listens on — any
   local user can take a free loopback port — asking `lsof` on macOS and `/proc/net/tcp` on Linux first; on Windows that
   is not checked.
-- **The rule says everything the session gets**, and you approve it like any rule:
+- **The workflow says everything the session gets**, and you approve it like any workflow:
 
   ```
   then
@@ -512,15 +512,15 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
 
   The prompt is a fixed frame — "[Agent Comms] The workflow acme passed you a message from gmail/cue/gmail." — with each
   part labelled, and every field the sender wrote, every model's words and every file's text inside the
-  untrusted-content envelope. Only fields the rule's mapping keeps are sent. A model writes its part on your own
+  untrusted-content envelope. Only fields the workflow's mapping keeps are sent. A model writes its part on your own
   OpenRouter or Anthropic key, at most 400 tokens, once for each match. A file is read only under the relay's allowed
   roots or a folder you add (`--allow-folder`), at most 64 KB, and only when it is a plain file of yours with no other
   name (no link, hard link or FIFO), never in Agent Comms' own folders; a relay root of `/` or your home folder itself
   confines nothing, so it is ignored, and `--allow-folder` refuses them. What a match's parts resolved to is kept,
   sealed with the match, only while it may still be sent: a match that fails keeps none of it, and one that waited
   sends a file's text only if its folder is still allowed — a folder you have since removed (`--remove-folder`) leaves
-  a note in its place. The session runs in the mode the rule fixes: `manual` (it asks before it acts) unless you choose
-  `acceptEdits` or `plan`; a rule can never fix `bypassPermissions`.
+  a note in its place. The session runs in the mode the workflow fixes: `manual` (it asks before it acts) unless you
+  choose `acceptEdits` or `plan`; a workflow can never fix `bypassPermissions`.
 - **claude-stream keeps what it is sent.** The relay journals each prompt, the sender's words included, under its own
   retention: Agent Comms' retention settings do not reach it, and the approval preview says so.
 - **A busy session queues the match** until its run ends (or leaves it in the Queue, with `if busy leave it in the
