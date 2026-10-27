@@ -209,6 +209,54 @@ test('with taking required, a reply draft needs this session’s take; a forward
   assert.ok(draft.draftId);
 });
 
+test('a reply to this mailbox’s own mail in a thread is held to the thread’s take: its newest received message', async () => {
+  // Security review of 0.35.0 (LOW): a reply to the person's own sent mail answered "nobody's message" and skipped the
+  // take, though it goes to the same people in the same thread — a way round another session's take of David's mail.
+  const { harness, google, session } = await mailbox();
+  const messages = google.accounts.get('sub-1')?.messages as Record<string, FakeMessage>;
+  messages.ownin = {
+    ...message('ownin', '<own-in-thread@example.test>', ['SENT'], 't_m1'),
+    internalDate: String(Date.parse('2026-10-26T10:00:00Z')),
+  };
+  const alice = session(ALICE);
+  const bob = session(BOB);
+  await takeMessage(alice, 'work', 'm1', {});
+  // Bob replies to the person's own mail in the thread Alice holds David's message in: refused, as a reply to it is.
+  await assert.rejects(replyDraft(bob, 'work', 'ownin', { text: 'Following up.' }), refused('TAKEN_ELSEWHERE', 'HELD'));
+  // Alice, who holds it, may; and the send of that reply is held to the same take, at prepare and at the claim.
+  const draft = await replyDraft(alice, 'work', 'ownin', { text: 'Following up.' });
+  await assert.rejects(prepareSend(bob, 'work', draft.draftId), refused('TAKEN_ELSEWHERE', 'HELD'));
+  const prepared = await prepareSend(alice, 'work', draft.draftId);
+  assert.match(prepared.preview, /^Taken by this session at \d\d:\d\d\.$/m);
+  await harness.core.takes.keep(
+    {
+      channel: 'gmail',
+      accountId: (await harness.core.config.load()).inboxes.work?.id as string,
+      id: 'm1',
+      thread: null,
+    },
+    { folder: null, ancestors: [] },
+  );
+  await assert.rejects(
+    executeSend(alice, 'work', { approvalId: prepared.approvalId }),
+    refused('TAKEN_ELSEWHERE', 'PERSON'),
+  );
+  assert.equal(sends(google), 0, 'nothing was sent');
+  // With taking required and nobody holding it, it needs the take of the thread's newest message this mailbox received.
+  await harness.core.takes.release(
+    { channel: 'gmail', accountId: (await harness.core.config.load()).inboxes.work?.id as string, id: 'm1' },
+    { folder: null, ancestors: [] },
+  );
+  await requireTakes(harness);
+  await assert.rejects(replyDraft(bob, 'work', 'ownin', { text: 'Following up.' }), (error: unknown) => {
+    refused('TAKE_REQUIRED', 'NOT_TAKEN')(error);
+    assert.equal((error as CommsError).details?.message, 'm1');
+    return true;
+  });
+  // A follow-up in a thread of this mailbox's own mail alone answers nobody's, and needs no take.
+  assert.ok((await replyDraft(bob, 'work', 'mine', { text: 'Following up.' })).draftId);
+});
+
 test('another session’s take is respected with taking off: its reply, forward, organise and bin are refused', async () => {
   const { session } = await mailbox();
   const alice = session(ALICE);
