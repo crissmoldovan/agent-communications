@@ -14,8 +14,11 @@ import { EventsError } from '../result.ts';
 /** One segment of a step event's name (W.1). */
 export const EVENT_SEGMENT: RegExp = /^[a-z][a-z0-9_-]{0,31}$/;
 
+/** The suite's own namespace: a protocol name, never a command. */
+const SUITE_NAMESPACE = 'agentcomms';
+
 /** Namespaces no workflow may raise in: `com.agentcomms.<type>.v<n>` is today's message events' default type. */
-export const RESERVED_NAMESPACES: readonly ['agentcomms', 'com'] = Object.freeze(['agentcomms', 'com'] as const);
+export const RESERVED_NAMESPACES: readonly ['agentcomms', 'com'] = Object.freeze([SUITE_NAMESPACE, 'com'] as const);
 
 /** Whether `value` is a literal string that is one segment of an event name. Anything that is not a string is not. */
 export function isEventSegment(value: unknown): value is string {
