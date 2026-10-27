@@ -1524,6 +1524,42 @@ The draft's fifteen are answered in §0.3. None is open.
 - a status field and a `cwd` filter on `GET /v1/sessions`;
 - `outputFormat` for Codex.
 
+## 16. After the security review (2026-10-27)
+
+An independent review of the built release found no HIGH, 7 MEDIUM and 8 LOW findings. Each MEDIUM is fixed before
+release, and these decisions amend the sections above:
+
+- **W36, find the session that took this conversation.** Only a take by an agent window's own session counts, never
+  one by a command that joined no window, since such a command states its session id itself. The session found must
+  work in the folder that window worked in, inside the relay's allowed roots and outside Agent Comms' folders. The
+  folder is compared, never kept.
+- **§8.1, an agent never reads a project's folders.** A call that names an agent gets each route candidate with
+  `folders: []`, `worktreeRoot: null` and `foldersHidden`, in `workflow show` and in the approval view. Ids and names
+  stay. `PROJECT_CHANGED` has one wording, which names the step.
+- **W29, a webhook subscription's preview** names the whole plain URL, or a secret URL's authority and "(a URL kept
+  secret)", the approved addresses and the retry limit.
+- **§11.4, asking Describe it again** sends the draft with its folders, URLs, addresses and templates replaced by
+  placeholders, which are restored in the answer. A draft that doesn't parse goes as written, and the box says so. A
+  draft's `raw` sites are found by the parser. A note counts as the person's words only at 12 characters and three
+  words, at word boundaries, from their own words or an answer they typed.
+- **W31, a listener** closes within a bound whatever its clients do. It cuts a request not received within 15 seconds,
+  takes at most 64 connections, closes a stream more than 1 MiB behind, and writes only its own subscriber's frames.
+  An overlap stream closes when the overlap ends.
+- **§5 and §7.6, the engine.** Held runs start one workflow at a time, each by its own limits. `runs cancel` ends the
+  run at once, outside the engine's pass: a step under way settles nothing, its event in flight is stopped, and its
+  frames are deleted. A run ending at its step limit cancels its waiting deliveries, and a limit's wake is not counted
+  as a step.
+- **W7, history.** An ended run's history is purged with its decision's metadata. A raised event's charge leaves after
+  its hour.
+
+**Left for 0.37:**
+- the engine's I/O runs inside the owner's tick, one step at a time (L3);
+- worktree rows of purged runs stay while the worktree may be on disk;
+- how git behaves, beyond hooks, in a worktree a session can write to, needs its own review;
+- `runs cancel --interrupt` answers after the engine's pass;
+- a placeholder inside a model's question is shown as written;
+- an approval's numbered lines don't name the limits, which only the approved document holds (§10.2).
+
 ## Appendix W. The step event catalogue, version 1 (normative)
 
 This appendix is the complete version-1 contract for events a workflow raises. Its rules:
