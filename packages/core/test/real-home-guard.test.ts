@@ -73,7 +73,8 @@ test('REAL-HOME: outside tests the guard changes nothing', () => {
 test('REAL-HOME: a process that catches the refusal and goes on still fails, at exit, saying what it looked for', () => {
   const script = [
     "import { userInfo } from 'node:os';",
-    `const { homeForDiscovery } = await import(${JSON.stringify(PATHS)});`,
+    // The same on Windows for import(): an absolute path is not a URL, so it goes as file://.
+    `const { homeForDiscovery } = await import(${JSON.stringify(pathToFileURL(PATHS).href)});`,
     "try { homeForDiscovery(userInfo().homedir, 'a swallowed test folder'); } catch {}",
     "process.stdout.write('went on\\n');",
   ].join('\n');
