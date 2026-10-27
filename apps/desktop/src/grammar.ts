@@ -22,6 +22,10 @@ const WINDOW_ID = new RegExp(grammar.windowId, 'u');
 const DELIVERY_ID = new RegExp(grammar.deliveryId, 'u');
 const LOOPBACK_URL = new RegExp(grammar.loopbackUrl, 'u');
 const LOCAL_MODEL = new RegExp(grammar.localModel, 'u');
+const PERSON_ID = new RegExp(grammar.personId, 'u');
+const SEARCH_HANDLE = new RegExp(grammar.searchHandle, 'u');
+const SEARCH_MODEL_ADDRESS = new RegExp(grammar.searchModelAddress, 'u');
+const REFUSED_IN_TEXT: readonly (readonly number[])[] = grammar.searchText.refused;
 const CONTROL_OR_FORMAT = /[\p{Cc}\p{Cf}]/u;
 
 /** Not empty, not starting with `-`, no control or format character, and at most 320 characters. */
@@ -121,6 +125,56 @@ export function isLoopbackUrl(value: string): boolean {
 export function isLocalModel(value: string): boolean {
   return isPlainValue(value) && LOCAL_MODEL.test(value);
 }
+
+/** A person's id, as core makes one (0.35.0, design 2026-10-26-local-search S5): `p_` and 26 of Crockford's letters. */
+export function isPersonId(value: string): boolean {
+  return isPlainValue(value) && PERSON_ID.test(value);
+}
+
+/** A handle, as `search people` lists one and `search unlink` takes it: `email:<address>` or `slack:<team>/<user>`. */
+export function isSearchHandle(value: string): boolean {
+  return isPlainValue(value) && SEARCH_HANDLE.test(value);
+}
+
+/**
+ * Search's local model server (0.35.0, S9), as `search model set` takes it: plain HTTP to the literal 127.0.0.1 or
+ * [::1], a port from 1 to 65535, and no path but `/`.
+ */
+export function isSearchModelAddress(value: string): boolean {
+  if (!isPlainValue(value)) return false;
+  const port = SEARCH_MODEL_ADDRESS.exec(value)?.[1];
+  return port !== undefined && Number(port) >= 1 && Number(port) <= 65_535;
+}
+
+/**
+ * Whether core refuses a character in a search's words or a person's label: a control (a line break and a tab among
+ * them), DEL, a C1 control, or one of the invisible and bidi characters core's `chars.ts` names.
+ */
+export function refusedInSearchText(char: string): boolean {
+  const code = char.codePointAt(0) ?? 0;
+  return REFUSED_IN_TEXT.some(([from = 0, to = 0]) => code >= from && code <= to);
+}
+
+/** A search's words (0.35.0, §8): 1 to 500 characters, not only spaces, and none core refuses. It may start with `-`. */
+export function isSearchQuery(value: string): boolean {
+  const chars = [...value];
+  return value.trim() !== '' && chars.length <= grammar.searchText.queryLimit && !chars.some(refusedInSearchText);
+}
+
+/** The name a person gives someone (0.35.0, `search label`): 1 to 80 characters, no space at either end, none refused. */
+export function isPersonLabel(value: string): boolean {
+  const chars = [...value];
+  return (
+    value !== '' &&
+    value.trim() === value &&
+    chars.length <= grammar.searchText.labelLimit &&
+    !chars.some(refusedInSearchText)
+  );
+}
+
+/** The longest search, in characters, and the longest label. */
+export const SEARCH_QUERY_LIMIT: number = grammar.searchText.queryLimit;
+export const PERSON_LABEL_LIMIT: number = grammar.searchText.labelLimit;
 
 /** The acts a rule can allow, in the order the form shows them. */
 export const KNOWN_ACTS: readonly string[] = ACTS;

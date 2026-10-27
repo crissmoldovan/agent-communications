@@ -16,6 +16,7 @@ pub mod paths;
 pub mod provider_keys;
 pub mod rule_editor;
 pub mod runner;
+pub mod search;
 pub mod settings;
 pub mod terminal;
 pub mod tray;

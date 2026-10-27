@@ -55,7 +55,12 @@ describe('what each CLI version supports', () => {
       bringUpToDate: '0.34.0',
       collectionSwitch: '0.34.0',
       accountAppApproval: '0.34.0',
+      search: '0.35.0',
     });
+    // Search on this machine is core's from 0.35.0, a pull request's build of it included.
+    expect(supports('0.34.0', 'search')).toBe(false);
+    expect(supports('0.35.0', 'search')).toBe(true);
+    expect(supports('0.35.0-feat-0.35-search-app', 'search')).toBe(true);
     // Events → Service's Switch on… approved in the app, and Switch off, are the event service's from 0.34.0.
     expect(supports('0.33.0', 'collectionSwitch')).toBe(false);
     expect(supports('0.34.0', 'collectionSwitch')).toBe(true);
@@ -161,6 +166,11 @@ describe('the gated sections', () => {
       'labelName',
       'labelRuleAdd',
       'labelRuleRemove',
+      'searchStatus',
+      'searchQuery',
+      'searchPeople',
+      'searchPerson',
+      'searchIndex',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.
