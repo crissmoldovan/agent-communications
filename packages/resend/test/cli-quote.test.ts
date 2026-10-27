@@ -70,7 +70,7 @@ test('the hand-off command quotes a spaced word on POSIX and prints words instea
   const posix = await addAccount('two words.test', 'darwin');
   assert.equal(
     posix.hint,
-    `Ask the user to run ${resendInline(posix.core, words('two words.test'))} in their own terminal. Never paste a key into a chat: the transcript keeps it. ${agentMarkerHint('CLAUDECODE', process.platform)}`,
+    `Ask the user to run ${resendInline(posix.core, words('two words.test'))} in their own terminal. Never paste a key into a chat: the transcript keeps it. ${agentMarkerHint('CLAUDECODE', 'darwin')}`,
   );
   assert.match(posix.hint, / account add acme\/resend --domain 'two words\.test'`/);
 
