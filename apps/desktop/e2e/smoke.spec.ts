@@ -40,6 +40,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Your agents',
     'Updates',
     'Events',
+    'Workflows New',
     'Doctor',
     'Settings',
   ]);

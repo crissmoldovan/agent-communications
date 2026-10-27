@@ -13,6 +13,7 @@ import type {
   Folders,
   Installation,
   Product,
+  WorkflowPositions,
 } from '../ipc.ts';
 import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
@@ -437,6 +438,8 @@ export function createFakeBridge(
   const calls: FakeBridge['calls'] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const answers = { ...FIXTURES, ...fixtures };
+  // Where the designer kept each workflow's boxes, as Rust's `positions.rs` would: in memory, for this bridge only.
+  const kept = new Map<string, WorkflowPositions>();
   const record = (command: keyof Bridge, args: unknown) => calls.push({ command, args });
 
   const defaults: Omit<Bridge, 'on'> = {
@@ -518,6 +521,13 @@ export function createFakeBridge(
     },
     async appBuild() {
       return RELEASE_BUILD;
+    },
+    async workflowPositions(ruleId) {
+      return JSON.parse(JSON.stringify(kept.get(ruleId) ?? {}));
+    },
+    async setWorkflowPositions(ruleId, positions) {
+      if (Object.keys(positions).length === 0) kept.delete(ruleId);
+      else kept.set(ruleId, JSON.parse(JSON.stringify(positions)));
     },
   };
 

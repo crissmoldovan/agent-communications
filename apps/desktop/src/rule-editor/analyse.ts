@@ -198,7 +198,7 @@ export function partWords(part: string): string {
     case 'linear.title':
       return 'The Linear issue’s title';
     case 'general':
-      return 'About this rule';
+      return 'About this workflow';
     default:
       return part;
   }

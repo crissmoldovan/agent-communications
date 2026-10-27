@@ -186,7 +186,7 @@ describe('a message’s take, joined', () => {
     expect(statusLabel(slack.status)).toEqual({ label: 'Taken by an agent', tone: 'accent' });
     expect(slack.touches.map((touch) => [touch.kind, touch.take?.eyes])).toEqual([['taken', true]]);
     expect(cardSteps(slack, CONTEXT).map(said)).toEqual([
-      'Rule ⟨invoices⟩',
+      'Workflow ⟨invoices⟩',
       'Queue, lane billing',
       'Taken by the agent in ~/work/acme (👀)',
     ]);
@@ -207,7 +207,7 @@ describe('a message’s take, joined', () => {
     expect(statusLabel(back.status)).toEqual({ label: 'Handed back', tone: 'warn' });
     expect(storySummary(back, CONTEXT)).toBe('Two sessions handed it back; nobody has it.');
     expect(cardSteps(back, CONTEXT).map(said)).toEqual([
-      'Rule ⟨invoices⟩',
+      'Workflow ⟨invoices⟩',
       'Queue, lane billing',
       'Taken by the agent in ~/work/billing',
       'Handed back: not mine',

@@ -8,7 +8,7 @@ import type { AiProvider } from '../../ipc.ts';
 
 export const JUDGE_ROWS_COPY = {
   intro:
-    'A judge reads a message a rule has matched, and answers the rule’s question, such as “Is this asking me for something?”. A rule can use a judge once you turn it on here.',
+    'A judge reads a message a workflow has matched, and answers the workflow’s question, such as “Is this asking me for something?”. A workflow can use a judge once you turn it on here.',
   keysAreKept: 'Keys are kept in Settings → ',
   aiProviders: 'AI providers',
   offAtOnce: '. Turning a judge off applies at once.',
@@ -18,11 +18,11 @@ export const JUDGE_ROWS_COPY = {
   change: 'Change…',
   turnOff: 'Turn off',
   turnOffBody:
-    "Decisions waiting on its judges are cancelled, and its rules can't call it until it is turned on again.",
+    "Decisions waiting on its judges are cancelled, and its workflows can't call it until it is turned on again.",
   jev: {
     name: 'Jev, by TypeSafe',
     where:
-      'A hosted model made for yes-or-no questions. It sees only the parts of a message a rule keeps, such as the sender and the subject.',
+      'A hosted model made for yes-or-no questions. It sees only the parts of a message a workflow keeps, such as the sender and the subject.',
     needsKey: 'Needs a key from TypeSafe or OpenRouter.',
     through: 'Through',
     model: 'Model',
@@ -56,7 +56,7 @@ export function turnOffJudgeTitle(name: string): string {
 export const JEV_SETUP_COPY = {
   title: 'Set up Jev',
   changeTitle: 'Change Jev',
-  body: "Jev answers a rule's yes-or-no question. Choose how to reach it.",
+  body: "Jev answers a workflow's yes-or-no question. Choose how to reach it.",
   connectThrough: 'Connect through',
   options: {
     openrouter: {
@@ -64,14 +64,14 @@ export const JEV_SETUP_COPY = {
       hasKey: 'Your OpenRouter key is added. OpenRouter bills your OpenRouter account.',
       noKey: 'No OpenRouter key yet.',
       host: 'openrouter.ai',
-      sees: "Only the parts of a message each rule keeps, sent to openrouter.ai, which passes them to TypeSafe's Jev. Not your mailbox, and never a message no rule matched.",
+      sees: "Only the parts of a message each workflow keeps, sent to openrouter.ai, which passes them to TypeSafe's Jev. Not your mailbox, and never a message no workflow matched.",
     },
     typesafe: {
       label: 'TypeSafe, directly',
       hasKey: 'Your TypeSafe key is added. TypeSafe bills your TypeSafe account.',
       noKey: 'No TypeSafe key yet.',
       host: 'api.typesafe.ai',
-      sees: 'Only the parts of a message each rule keeps, sent to api.typesafe.ai. Not your mailbox, and never a message no rule matched.',
+      sees: 'Only the parts of a message each workflow keeps, sent to api.typesafe.ai. Not your mailbox, and never a message no workflow matched.',
     },
   },
   addOne: 'Add one in Settings → AI providers',
@@ -81,7 +81,7 @@ export const JEV_SETUP_COPY = {
   openProviders: 'Open AI providers',
   model: 'Model',
   whatJevSees: 'What Jev sees',
-  budget: 'At most 60 calls an hour, two at a time, for every rule together.',
+  budget: 'At most 60 calls an hour, two at a time, for every workflow together.',
   cancel: 'Cancel',
   turnOn: 'Turn on Jev',
   save: 'Save',

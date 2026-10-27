@@ -20,6 +20,7 @@ import { People } from './screens/search/People.tsx';
 import { Search } from './screens/search/Search.tsx';
 import { SearchUpkeep } from './screens/search/upkeep.tsx';
 import { Updates } from './screens/Updates.tsx';
+import { Workflows } from './screens/workflows/Workflows.tsx';
 import { YourAgents } from './screens/YourAgents.tsx';
 
 /** A screen may open another, as Overview opens Approvals; the others take nothing. */
@@ -36,6 +37,7 @@ const SCREENS: Record<Screen, ComponentType<{ onScreen: (screen: Screen) => void
   agent: YourAgents,
   updates: Updates,
   events: Events,
+  workflows: Workflows,
   doctor: Doctor,
   settings: Settings,
 };

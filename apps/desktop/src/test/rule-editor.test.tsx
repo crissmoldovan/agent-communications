@@ -20,7 +20,7 @@ afterEach(() => {
 });
 
 async function openRulesTab(): Promise<void> {
-  const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
+  const tab = await screen.findByRole('tab', { name: /^Workflows\b/ });
   fireEvent.click(tab);
   await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
 }
@@ -37,7 +37,7 @@ async function card(id: string): Promise<HTMLElement> {
 async function editInvoices(): Promise<HTMLElement> {
   await openRulesTab();
   fireEvent.click(await card('invoices'));
-  const page = await screen.findByRole('region', { name: 'Rule invoices' });
+  const page = await screen.findByRole('region', { name: 'Workflow invoices' });
   fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
   return screen.findByRole('region', { name: 'Edit invoices' });
 }
@@ -47,7 +47,7 @@ function mode(editor: HTMLElement, name: 'Visual' | 'Text' | 'Advanced: JSON'): 
 }
 
 const textArea = (editor: HTMLElement) =>
-  within(editor).getByRole('textbox', { name: 'The rule as text' }) as HTMLTextAreaElement;
+  within(editor).getByRole('textbox', { name: 'The workflow as text' }) as HTMLTextAreaElement;
 
 const fieldValue = (editor: HTMLElement, name: string) =>
   (within(editor).getByRole('textbox', { name }) as HTMLInputElement | HTMLTextAreaElement).value;
@@ -270,7 +270,7 @@ describe('the rule editor', () => {
       ]),
     );
     // The editor closes on the rule's page; the approval it answered is not revoked.
-    expect(await screen.findByRole('region', { name: 'Rule invoices' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Workflow invoices' })).toBeTruthy();
     expect(screen.queryByRole('region', { name: 'Edit invoices' })).toBeNull();
     expect(service.bridge.calls.filter((each) => each.command === 'revokePreview')).toHaveLength(1);
   });
@@ -298,7 +298,7 @@ describe('the rule editor', () => {
     expect(service.calls('eventsRuleApprove')).toEqual([]);
     // Done leaves it to the terminal: nothing is revoked, and the rule's page reads it again.
     fireEvent.click(within(dialog).getByRole('button', { name: 'Done' }));
-    expect(await screen.findByRole('region', { name: 'Rule invoices' })).toBeTruthy();
+    expect(await screen.findByRole('region', { name: 'Workflow invoices' })).toBeTruthy();
     expect(service.bridge.calls.filter((each) => each.command === 'revokePreview')).toEqual([]);
     expect(service.calls('eventsRuleApprove')).toEqual([]);
   });
@@ -357,16 +357,16 @@ describe('the rule editor', () => {
     const service = editorBridge();
     renderApp(service.bridge, { screen: 'events' });
     await openRulesTab();
-    fireEvent.click(await screen.findByRole('button', { name: 'New rule…' }));
-    const naming = await screen.findByRole('dialog', { name: 'New rule' });
+    fireEvent.click(await screen.findByRole('button', { name: 'New workflow…' }));
+    const naming = await screen.findByRole('dialog', { name: 'New workflow' });
     const name = within(naming).getByRole('textbox', { name: 'Name' });
     fireEvent.change(name, { target: { value: 'invoices' } });
-    expect(naming.textContent).toContain('A rule has this name already.');
+    expect(naming.textContent).toContain('A workflow has this name already.');
     fireEvent.change(name, { target: { value: 'bad name' } });
     expect((within(naming).getByRole('button', { name: 'Start' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.change(name, { target: { value: 'receipts-log' } });
     fireEvent.click(within(naming).getByRole('button', { name: 'Start' }));
-    const editor = await screen.findByRole('region', { name: 'New rule receipts-log' });
+    const editor = await screen.findByRole('region', { name: 'New workflow receipts-log' });
     expect(within(editor).getByText('Version 1, not saved')).toBeTruthy();
     expect(editor.textContent).toContain('Saving makes version 1. Nothing runs until you approve it.');
     fireEvent.change(within(editor).getByRole('textbox', { name: 'Value 1' }), { target: { value: 'receipt' } });
@@ -443,10 +443,10 @@ describe('the rule editor', () => {
     renderApp(service.bridge, { screen: 'events' });
     await openRulesTab();
     await card('invoices');
-    expect(screen.queryByRole('button', { name: 'New rule…' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'New workflow…' })).toBeNull();
     fireEvent.click(await card('invoices'));
-    const page = await screen.findByRole('region', { name: 'Rule invoices' });
+    const page = await screen.findByRole('region', { name: 'Workflow invoices' });
     expect(within(page).queryByRole('button', { name: 'Edit…' })).toBeNull();
-    expect(page.textContent).toContain('To change a rule, ask an agent to write a new version.');
+    expect(page.textContent).toContain('To change a workflow, ask an agent to write a new version.');
   });
 });

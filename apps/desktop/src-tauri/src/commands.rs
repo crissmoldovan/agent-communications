@@ -1,7 +1,7 @@
-//! The twenty-three commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
+//! The twenty-five commands the webview may invoke, each granted as `allow-<name>` (`capabilities/default.json`), and
 //! each declared to Tauri in `build.rs`. Every one is built: each body is one call into its module.
 
-use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId, KeyProvider};
+use crate::allowlist::{AccountName, ApprovalId, Call, ConversationId, KeyProvider, RuleId};
 use crate::build_info::{self, AppBuild};
 use crate::ipc::{
     AppError, AppSettings, CliResult, DeepLinkTarget, EventServiceState, Installation,
@@ -9,6 +9,7 @@ use crate::ipc::{
 };
 use crate::launchers::discover;
 use crate::paths::FolderOverrides;
+use crate::positions::{self, Positions};
 use crate::provider_keys::{self, ProviderKey};
 use crate::runner::{run, RunContext};
 use crate::{
@@ -42,6 +43,8 @@ pub const NAMES: &[&str] = &[
     "answer_quit",
     "provider_key_set",
     "app_build",
+    "workflow_positions",
+    "set_workflow_positions",
 ];
 
 /// This machine's run context, with Settings' folder overrides.
@@ -295,6 +298,23 @@ pub fn app_build(app: AppHandle) -> Result<AppBuild, AppError> {
     Ok(build_info::current(&app.config().identifier))
 }
 
+/// Where the designer kept a workflow's boxes (0.36.0, `positions`): the app's own, never part of what is approved,
+/// read from the settings folder off the main thread, as `get_settings` is.
+#[tauri::command]
+pub async fn workflow_positions(rule_id: RuleId, app: AppHandle) -> Result<Positions, AppError> {
+    blocking(move || Ok(positions::load(&settings::settings_dir(&app)?, &rule_id))).await?
+}
+
+/// Keeps where a workflow's boxes are, each named by a step's id or the gate's and placed inside the canvas's bounds.
+#[tauri::command]
+pub async fn set_workflow_positions(
+    rule_id: RuleId,
+    positions: Positions,
+    app: AppHandle,
+) -> Result<(), AppError> {
+    blocking(move || positions::save(&settings::settings_dir(&app)?, &rule_id, positions)).await?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -315,9 +335,12 @@ mod tests {
 
     #[test]
     fn capabilities_grant_exactly_the_commands() {
-        assert_eq!(NAMES.len(), 23);
-        // The last, 0.32.0's: which build this is (spec 2026-10-26-owner-feedback-0320 §3.7).
-        assert_eq!(NAMES.last(), Some(&"app_build"));
+        assert_eq!(NAMES.len(), 25);
+        // The last two, 0.36.0's: where the designer keeps a workflow's boxes (workflows design W20).
+        assert_eq!(
+            &NAMES[NAMES.len() - 3..],
+            &["app_build", "workflow_positions", "set_workflow_positions"]
+        );
         assert_eq!(build_rs_commands(), NAMES);
         let capability: serde_json::Value =
             serde_json::from_str(include_str!("../capabilities/default.json"))

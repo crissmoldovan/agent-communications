@@ -28,6 +28,8 @@ const LABELS: Record<Screen, string | RegExp> = {
   agent: 'Your agents',
   updates: 'Updates',
   events: 'Events',
+  // Workflows (0.36.0): Events at its Workflows tab, with its "New" tag.
+  workflows: /^Workflows ?New$/,
   doctor: 'Doctor',
   settings: 'Settings',
 };

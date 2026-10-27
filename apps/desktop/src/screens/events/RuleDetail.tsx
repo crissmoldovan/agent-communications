@@ -36,7 +36,7 @@ import { BackTo, DRY_RUN, Problem, Sentence, Short, StatusChip, statusOf } from 
 
 /** The page's words, in sentence case. */
 export const RULE_COPY = {
-  allRules: 'All rules',
+  allRules: 'All workflows',
   inPlainWords: 'In plain words',
   panels: {
     watches: 'What it watches',
@@ -51,7 +51,7 @@ export const RULE_COPY = {
   versions: 'Versions',
   versionWords: { active: 'on', superseded: 'replaced', revoked: 'off', none: 'not switched on' },
   newVersion:
-    'To change a rule, ask an agent to write a new version. It waits for your approval, and this one keeps running until then.',
+    'To change a workflow, ask an agent to write a new version. It waits for your approval, and this one keeps running until then.',
   editVersion: 'Edit… makes a new version. It waits for your approval, and this one keeps running until then.',
   edit: 'Edit…',
   notSwitchedOn: 'Not switched on. If an agent asked for it, its approval is in Approvals.',
@@ -247,9 +247,9 @@ function TechnicalDetails({ id, versions }: { id: string; versions: readonly Rul
                 <h4 className="font-medium text-fg">{`Version ${version.version}`}</h4>
                 <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-(--cue-space-4) gap-y-(--cue-space-2)">
                   <Technical
-                    name="Rule id"
+                    name="Workflow id"
                     value={id}
-                    means="the rule's name, as agents and the event service use it"
+                    means="the workflow's name, as agents and the event service use it"
                   />
                   <Technical
                     name="State"
@@ -401,7 +401,7 @@ export function RuleDetail({
     [RULE_COPY.panels.limit, [limitLine(document)]],
   ];
   return (
-    <section aria-label={`Rule ${id}`} className="flex flex-col gap-(--cue-space-4)">
+    <section aria-label={`Workflow ${id}`} className="flex flex-col gap-(--cue-space-4)">
       <BackTo label={RULE_COPY.allRules} onBack={() => nav.openRule(null)} />
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <h2 className="font-semibold text-(length:--cue-text-title) text-fg">

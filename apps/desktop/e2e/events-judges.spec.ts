@@ -84,7 +84,7 @@ test('Judges: the owner’s Mac, where Jev and a local model server are off and 
   const judges = await openJudges(page);
   const jev = judges.getByRole('region', { name: 'Jev, by TypeSafe' });
   await expect(
-    jev.getByText('A hosted judge. The fields a rule names are sent to TypeSafe, with your TypeSafe API key.'),
+    jev.getByText('A hosted judge. The fields a workflow names are sent to TypeSafe, with your TypeSafe API key.'),
   ).toBeVisible();
   await expect(jev.getByText('Off', { exact: true })).toBeVisible();
   await expect(jev.getByRole('button')).toHaveText(['Turn on in Terminal']);
@@ -139,7 +139,7 @@ test('Judges: Turn off asks first; Cancel runs nothing, and its Turn off runs th
   const dialog = page.getByRole('alertdialog', { name: 'Turn off Jev, by TypeSafe?' });
   await expect(
     dialog.getByText(
-      "Decisions waiting on its judges are cancelled, and its rules can't call it until it is turned on again.",
+      "Decisions waiting on its judges are cancelled, and its workflows can't call it until it is turned on again.",
     ),
   ).toBeVisible();
   await dialog.getByRole('button', { name: 'Cancel' }).click();

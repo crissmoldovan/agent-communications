@@ -532,7 +532,7 @@ describe('Queue', () => {
     expect(await within(view).findByText(QUEUE_COPY.noMatch)).toBeTruthy();
     // A rule whose id the allow-list would refuse is never offered.
     fireEvent.click(within(main()).getByRole('combobox', { name: QUEUE_COPY.rule }));
-    await screen.findByRole('option', { name: 'All rules' });
+    await screen.findByRole('option', { name: 'All workflows' });
     expect(screen.queryByRole('option', { name: 'Not a filter' })).toBeNull();
   });
 

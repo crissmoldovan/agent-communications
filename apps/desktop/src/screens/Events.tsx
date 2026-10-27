@@ -77,7 +77,7 @@ const isRecord = (value: unknown): value is Row => typeof value === 'object' && 
 
 /** The screen's own words beside the event service's and the judges' (below): its tabs, and the hints it moved. */
 export const EVENTS_COPY = {
-  tabs: { service: 'Service', judges: 'Judges', rules: 'Rules', deliveries: 'Deliveries' },
+  tabs: { service: 'Service', judges: 'Judges', rules: 'Workflows', deliveries: 'Deliveries' },
   toLookAt: 'to look at',
   failed: 'could not be read',
   needsUpdate: 'needs an update',
@@ -398,7 +398,7 @@ export const JUDGES_COPY = {
   kinds: {
     typesafe: {
       name: 'Jev, by TypeSafe',
-      where: 'A hosted judge. The fields a rule names are sent to TypeSafe, with your TypeSafe API key.',
+      where: 'A hosted judge. The fields a workflow names are sent to TypeSafe, with your TypeSafe API key.',
     },
     laya: { name: 'Laya', where: 'A judge that runs on this Mac. Nothing leaves it.' },
     'local-endpoint': {
@@ -413,7 +413,7 @@ export const JUDGES_COPY = {
   turnOnInTerminal: 'Turn on in Terminal',
   turnOff: 'Turn off',
   turnOffBody:
-    "Decisions waiting on its judges are cancelled, and its rules can't call it until it is turned on again.",
+    "Decisions waiting on its judges are cancelled, and its workflows can't call it until it is turned on again.",
   next: 'Next: add a judge and its key at the terminal.',
   nextLocal: 'Next: add a judge at the terminal.',
   howToSetUp: 'How to set it up',
@@ -1334,11 +1334,10 @@ type EventsTab = keyof typeof EVENTS_COPY.tabs;
 function EventsTabs({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined }) {
   const { eventService, eventServiceProblem } = useAppData();
   const judgeReads = useJudgeReads();
-  // A link from Settings → AI providers opens the Judges tab; otherwise the screen opens on Service. The tab is held
-  // here, so that a rule's page can open its deliveries, and a delivery's page its rule (0.32.0).
-  const [selected, setSelected] = useState<EventsTab>(() =>
-    takeDestination('events') === null ? 'service' : 'judges',
-  );
+  // A link from Settings → AI providers opens the Judges tab, and the sidebar's Workflows the Workflows tab (0.36.0);
+  // otherwise the screen opens on Service. The tab is held here, so that a rule's page can open its deliveries, and a
+  // delivery's page its rule (0.32.0).
+  const [selected, setSelected] = useState<EventsTab>(() => takeDestination('events')?.tab ?? 'service');
   const lists = useEventsLists();
   const nav = useEventsNav(setSelected);
   const { rules, deliveries } = lists;

@@ -61,7 +61,7 @@ function deliveriesBridge(fixtures: Partial<Record<Call['kind'], Fixture>> = {},
   });
 }
 
-async function openTab(name: 'Rules' | 'Deliveries'): Promise<HTMLElement> {
+async function openTab(name: 'Workflows' | 'Deliveries'): Promise<HTMLElement> {
   const tab = await screen.findByRole('tab', { name: new RegExp(`^${name}\\b`) });
   fireEvent.click(tab);
   await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
@@ -122,7 +122,7 @@ describe('Events → Deliveries', () => {
     renderApp(deliveriesBridge(), { screen: 'events' });
     const view = await openTab('Deliveries');
     expect(view.textContent).toContain(
-      'A delivery is one match a rule passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log.',
+      'A delivery is one match a workflow passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log.',
     );
 
     // Newest first, each one's time read from when it was made.
@@ -248,7 +248,7 @@ describe('Events → Deliveries', () => {
 
     const why = within(page).getByRole('region', { name: 'Why it was passed on' });
     expect(why.textContent).toBe(
-      'Why it was passed onRule mail-subject, version 1: the subject contains testNo judge on this rule.',
+      'Why it was passed onWorkflow mail-subject, version 1: the subject contains testNo judge on this workflow.',
     );
     expect([...why.querySelectorAll('[data-part="untrusted"]')].map((each) => each.textContent)).toEqual(['test']);
 
@@ -664,7 +664,7 @@ describe('Events → Deliveries', () => {
 
   it("a rule's See its deliveries opens the Deliveries tab narrowed to that rule, and Show all widens it", async () => {
     renderApp(deliveriesBridge(), { screen: 'events' });
-    await openTab('Rules');
+    await openTab('Workflows');
     fireEvent.click(
       await waitFor(() => {
         const found = document.querySelector<HTMLElement>('[data-rule="build-alerts"]');
@@ -672,7 +672,7 @@ describe('Events → Deliveries', () => {
         return found;
       }),
     );
-    const rulePage = await screen.findByRole('region', { name: 'Rule build-alerts' });
+    const rulePage = await screen.findByRole('region', { name: 'Workflow build-alerts' });
     fireEvent.click(await within(rulePage).findByRole('button', { name: 'See its deliveries' }));
     const view = await screen.findByRole('region', { name: 'Deliveries' });
     expect((await screen.findByRole('tab', { name: /^Deliveries\b/ })).getAttribute('aria-selected')).toBe('true');
@@ -688,7 +688,7 @@ describe('Events → Deliveries', () => {
     await openTab('Deliveries');
     const page = await openDelivery('dlv-odd');
     const why = within(page).getByRole('region', { name: 'Why it was passed on' });
-    expect(why.textContent).toContain('Rule rule with spaces');
+    expect(why.textContent).toContain('Workflow rule with spaces');
     expect(within(why).queryByRole('button')).toBeNull();
   });
 

@@ -37,10 +37,10 @@ function rulesBridge(fixtures: Partial<Record<Call['kind'], Fixture>> = {}, hand
 }
 
 async function openRulesTab(): Promise<HTMLElement> {
-  const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
+  const tab = await screen.findByRole('tab', { name: /^Workflows\b/ });
   fireEvent.click(tab);
   await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
-  return screen.findByRole('region', { name: 'Rules' });
+  return screen.findByRole('region', { name: 'Workflows' });
 }
 
 /** A rule's card, once its versions are read. */
@@ -74,7 +74,7 @@ function rawWordsIn(element: HTMLElement): string[] {
 
 async function openRule(id: string): Promise<HTMLElement> {
   fireEvent.click(await card(id));
-  return screen.findByRole('region', { name: `Rule ${id}` });
+  return screen.findByRole('region', { name: `Workflow ${id}` });
 }
 
 describe('Events → Rules', () => {
@@ -82,9 +82,11 @@ describe('Events → Rules', () => {
     const bridge = rulesBridge();
     renderApp(bridge, { screen: 'events' });
     // The tab counts rules: invoices has two versions and is one rule.
-    expect(await screen.findByRole('tab', { name: 'Rules 6' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Workflows 6' })).toBeTruthy();
     const view = await openRulesTab();
-    expect(within(view).getByText(/A rule watches one account, picks out the messages it cares about/)).toBeTruthy();
+    expect(
+      within(view).getByText(/A workflow watches one account, picks out the messages it cares about/),
+    ).toBeTruthy();
     await card('newsletters');
     // On first, then the one not switched on, then the one off; each group by name.
     expect(cards(view)).toEqual([
@@ -197,7 +199,7 @@ describe('Events → Rules', () => {
       "What's keptIt keeps the sender, the subject, the preview, the message idIn the Queue for 30 days, then deleted",
     );
     expect(panel('The limit').textContent).toBe(
-      'The limitAt most 60 an hourThe limit you approved with the rule · its judge is asked at most 30 times an hour',
+      'The limitAt most 60 an hourThe limit you approved with the workflow · its judge is asked at most 30 times an hour',
     );
 
     const week = panel('The last 7 days');
@@ -232,9 +234,9 @@ describe('Events → Rules', () => {
     expect(within(page).queryByRole('button', { name: /Try it/ })).toBeNull();
 
     // Back to the list, as it was.
-    fireEvent.click(within(page).getByRole('button', { name: 'All rules' }));
+    fireEvent.click(within(page).getByRole('button', { name: 'All workflows' }));
     expect(await card('invoices')).toBeTruthy();
-    expect(screen.queryByRole('region', { name: 'Rule invoices' })).toBeNull();
+    expect(screen.queryByRole('region', { name: 'Workflow invoices' })).toBeNull();
   });
 
   it('a rule without a judge, a webhook, a dry run and one never switched on each say so in plain words', async () => {
@@ -250,7 +252,7 @@ describe('Events → Rules', () => {
     expect(within(page).getByRole('region', { name: 'Where they go' }).textContent).toBe(
       'Where they goWebhook, hooks.ci.exampleSigned with the target’s key · tries up to 5 times',
     );
-    fireEvent.click(within(page).getByRole('button', { name: 'All rules' }));
+    fireEvent.click(within(page).getByRole('button', { name: 'All workflows' }));
 
     page = await openRule('mail-subject');
     expect(within(page).getByText('Dry run')).toBeTruthy();
@@ -260,7 +262,7 @@ describe('Events → Rules', () => {
     expect(within(page).getByRole('region', { name: "What's kept" }).textContent).toContain(
       'The dry-run log keeps each entry for 24 hours',
     );
-    fireEvent.click(within(page).getByRole('button', { name: 'All rules' }));
+    fireEvent.click(within(page).getByRole('button', { name: 'All workflows' }));
 
     page = await openRule('deploy-alerts');
     expect(within(page).getByText('Not switched on')).toBeTruthy();
@@ -318,7 +320,7 @@ describe('Events → Rules', () => {
     // No dialog: a tightening applies at once. The list is read again, and the rule says Off.
     expect(screen.queryByRole('alertdialog')).toBeNull();
     await waitFor(() => expect(cliKinds(bridge).filter((kind) => kind === 'eventsRules').length).toBe(before + 1));
-    const after = await screen.findByRole('region', { name: 'Rule build-alerts' });
+    const after = await screen.findByRole('region', { name: 'Workflow build-alerts' });
     await waitFor(() => expect(within(after).getByText('Off')).toBeTruthy());
     expect(within(after).queryByRole('button', { name: 'Turn off' })).toBeNull();
   });
@@ -409,7 +411,7 @@ describe('Events → Rules', () => {
       },
     );
     renderApp(bridge, { screen: 'events' });
-    expect(await screen.findByRole('tab', { name: 'Rules 7' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Workflows 7' })).toBeTruthy();
     await openRulesTab();
     await waitFor(async () =>
       expect((await card('newsletters')).textContent).toContain('the event service did not answer'),
@@ -460,7 +462,7 @@ describe('Events → Rules', () => {
   it('an empty list says so, and a list in a shape the app does not know says it could not be read', async () => {
     const first = renderApp(rulesBridge({ eventsRules: [] }), { screen: 'events' });
     let view = await openRulesTab();
-    expect(await within(view).findByText('No rules yet.')).toBeTruthy();
+    expect(await within(view).findByText('No workflows yet.')).toBeTruthy();
     first.unmount();
     renderApp(rulesBridge({ eventsRules: { rules: 'not a list' } }), { screen: 'events' });
     view = await openRulesTab();
