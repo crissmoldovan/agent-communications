@@ -91,7 +91,10 @@ export interface DeliveryDispatcherOptions {
   readonly queue?: DeliveryDispatchHandler | undefined;
   /** The agent-session adapter (0.33.0 §3.5); a session delivery is refused, never claimed by another, without it. */
   readonly session?: DeliveryDispatchHandler | undefined;
-  /** The Linear target's adapter (0.33.0); a Linear delivery is refused, never claimed by another, when it is absent. */
+  /**
+   * The Linear target's adapter (0.33.0), and a Linear change's (0.36); a Linear delivery is refused, never claimed by
+   * another, when it is absent.
+   */
   readonly linear?: DeliveryDispatchHandler | undefined;
   /** Told after each try of a delivery returns, so a workflow step waiting on it looks again (0.36); never throws. */
   readonly onDispatched?: ((deliveryId: string) => void) | undefined;
@@ -193,7 +196,8 @@ export class DeliveryDispatcher {
         throw new CommsError('CONFIG', 'this owner has no session adapter for a session delivery');
       return this.#session;
     }
-    if (targetKey.startsWith('linear:')) {
+    // A Linear change (0.36) goes through the Linear target's own adapter: its fences, its key, its one endpoint.
+    if (targetKey.startsWith('linear:') || targetKey.startsWith('linear-change:')) {
       if (this.#linear === undefined)
         throw new CommsError('CONFIG', 'this owner has no Linear adapter for a Linear delivery');
       return this.#linear;

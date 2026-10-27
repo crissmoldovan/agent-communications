@@ -1102,7 +1102,7 @@ const DELIVERY_ROW_FIELDS = [
   'deliveredAt',
   'deadLetteredAt',
 ];
-const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'];
+const DELIVERY_TARGET_KINDS = ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session', 'linear-change'];
 
 function assertNullable<T>(value: unknown, check: (value: unknown, name: string) => T, name: string): void {
   if (value !== null) check(value, name);
@@ -1117,10 +1117,14 @@ function assertEventSource(value: unknown, name: string): void {
   for (const key of keys) assertText(value[key], `${name} ${key}`);
 }
 
-/** A Linear delivery's issue (0.33.0 design §3.4): its identifier and its linear.app address, and only on one. */
+/**
+ * A Linear delivery's issue (0.33.0 design §3.4), or the one a workflow's Linear change changed (0.36): its identifier
+ * and its linear.app address, and only on one of those.
+ */
 function assertDeliveryRowLinear(row: unknown): void {
   if (!isRecord(row) || !Object.hasOwn(row, 'linear')) return;
-  if (row.targetKind !== 'linear') throw new TypeError('only a Linear delivery shows a Linear issue');
+  if (row.targetKind !== 'linear' && row.targetKind !== 'linear-change')
+    throw new TypeError('only a Linear delivery shows a Linear issue');
   assertClosedRecord(row.linear, ['identifier', 'url'], 'a delivery’s Linear issue');
   if (typeof row.linear.identifier !== 'string' || !/^[A-Za-z0-9_]{1,32}-[0-9]{1,10}$/u.test(row.linear.identifier))
     throw new TypeError('a Linear issue identifier is a team key and a number');

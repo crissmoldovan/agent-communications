@@ -52,10 +52,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `enable-all-approve` owner wire, which approves switching the event service on — the activation `enable-all` prepared —
  * from the app after its preview, its arguments (the approval and the digest the preview showed) and its result, whose
  * `approvedBy` names `desktop-app` or `desktop-app (test build)`. No existing branch changed.
+ *
+ * 0.36.0 (workflows, design §6.7) is another, also only additive: a delivery's target kind, in `deliveries list`,
+ * `delivery show` and a message's deliveries, gains the value `linear-change` — a workflow's change of the Linear issue
+ * its run made — and such a row may carry the optional `linear: { identifier, url }` of that issue. No existing branch
+ * changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '9a56ff368dfa81031a3a448eab6df020fb457ca0d7542a0e5b0b5248f3619eaf',
+    'ebb9fc4789dca82bba110ea32f2946f19eeb3412db91f0e901992abe92441a63',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':

@@ -23,10 +23,16 @@ export const MESSAGE_DECISION_OUTCOMES: readonly [
 ] = Object.freeze(['matched', 'no-match', 'mapping-rejected', 'retention-expired', 'hold'] as const);
 export type MessageDecisionOutcome = (typeof MESSAGE_DECISION_OUTCOMES)[number];
 
-/** A delivery's target kind, as the deliveries table keeps it. */
-export const MESSAGE_TARGET_KINDS: readonly ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] = Object.freeze(
-  ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] as const,
-);
+/** A delivery's target kind, as the deliveries table keeps it; `linear-change` is a workflow's only (0.36). */
+export const MESSAGE_TARGET_KINDS: readonly [
+  'dry-run',
+  'webhook',
+  'sse',
+  'queue',
+  'linear',
+  'session',
+  'linear-change',
+] = Object.freeze(['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session', 'linear-change'] as const);
 export type MessageTargetKind = (typeof MESSAGE_TARGET_KINDS)[number];
 
 /** A delivery's state, as the deliveries table keeps it (`store/schema-v1.ts`). */

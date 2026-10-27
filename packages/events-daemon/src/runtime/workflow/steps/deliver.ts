@@ -1,6 +1,8 @@
 import type { FlowStep, JsonValue } from '@agentcomms/events';
+import type { LinearChangeTargetDocument } from '../../../domain/linear-change-target.ts';
 import type { EventDatabase } from '../../../store/database.ts';
 import { insertFlowDeliveryInTransaction, type PreparedFlowDelivery, prepareFlowDelivery } from '../../deliveries.ts';
+import { linearChangeKinds } from '../../linear-change-dispatcher.ts';
 import type { ProjectionCipher } from '../../projections.ts';
 import { openRunRecord } from '../context.ts';
 import type { FlowDeliveryRequest, Output, StepContext, StepExecutor, StepResult, WakeReason } from '../contracts.ts';
@@ -56,8 +58,11 @@ interface DeliveryRow {
   readonly linear_url: string | null;
 }
 
-/** The step's closed output for its settled delivery (plan I5), by the delivery's target kind. */
-function deliveredOutput(store: EventDatabase, row: DeliveryRow): Output {
+/**
+ * The step's closed output for its settled delivery (plan I5), by the delivery's target kind. A Linear change's says
+ * what its approved target changes and the state it sets — by name, and by type for its event's word (`closed`).
+ */
+function deliveredOutput(store: EventDatabase, row: DeliveryRow, change: LinearChangeTargetDocument | null): Output {
   const base = { delivery: row.id };
   switch (row.target_kind) {
     case 'session': {
@@ -67,14 +72,20 @@ function deliveredOutput(store: EventDatabase, row: DeliveryRow): Output {
       return { ...base, session: chosen?.relay_session_id ?? null, turn: chosen?.run_id ?? null, ahead: 0 };
     }
     case 'linear':
-    case 'linear-change':
+    case 'linear-change': {
+      const issue =
+        row.linear_issue_id === null || row.linear_identifier === null || row.linear_url === null
+          ? null
+          : { id: row.linear_issue_id, identifier: row.linear_identifier, url: row.linear_url };
+      if (row.target_kind === 'linear') return { ...base, issue };
       return {
         ...base,
-        issue:
-          row.linear_issue_id === null || row.linear_identifier === null || row.linear_url === null
-            ? null
-            : { id: row.linear_issue_id, identifier: row.linear_identifier, url: row.linear_url },
+        issue,
+        changed: change === null ? [] : [...linearChangeKinds(change)],
+        state: change?.state?.name ?? null,
+        stateType: change?.state?.type ?? null,
       };
+    }
     case 'webhook':
       return { ...base, status: row.last_status };
     default:
@@ -83,7 +94,7 @@ function deliveredOutput(store: EventDatabase, row: DeliveryRow): Output {
 }
 
 /** What a deliver step's delivery came to (§5), once it has settled. */
-function settled(store: EventDatabase, deliveryId: string): StepResult {
+function settled(store: EventDatabase, deliveryId: string, ctx: StepContext): StepResult {
   const row = store.database
     .prepare(
       `SELECT id, target_kind, state, last_error_code, last_status, linear_issue_id, linear_identifier, linear_url
@@ -91,7 +102,9 @@ function settled(store: EventDatabase, deliveryId: string): StepResult {
     )
     .get(deliveryId) as DeliveryRow | undefined;
   if (row === undefined) return { kind: 'settled', outcome: 'failed', output: { delivery: deliveryId } };
-  const output = deliveredOutput(store, row);
+  const step = ctx.step.kind === 'deliver' ? ctx.step : null;
+  const document = step === null ? undefined : targetOf(ctx, step);
+  const output = deliveredOutput(store, row, document?.kind === 'linear-change' ? document : null);
   if (row.state === DELIVERED)
     return {
       kind: 'settled',
@@ -101,12 +114,17 @@ function settled(store: EventDatabase, deliveryId: string): StepResult {
   return { kind: 'settled', outcome: 'failed', output };
 }
 
+/** The workflow's target version a deliver step names. */
+function targetOf(ctx: StepContext, step: DeliverStep) {
+  return ctx.rule.targets.find(
+    (candidate) => candidate.targetId === step.target.targetId && candidate.version === step.target.version,
+  );
+}
+
 async function request(ctx: StepContext): Promise<StepResult> {
   if (ctx.step.kind !== 'deliver') return { kind: 'failed', code: 'STEP_KIND_MISMATCH' };
   const step = ctx.step;
-  const target = ctx.rule.targets.find(
-    (candidate) => candidate.targetId === step.target.targetId && candidate.version === step.target.version,
-  );
+  const target = targetOf(ctx, step);
   if (target === undefined) return { kind: 'failed', code: 'TARGET_UNKNOWN' };
   const session = target.kind === 'session' && 'flow' in target.find ? chosenSession(ctx, step) : null;
   if (target.kind === 'session' && 'flow' in target.find && session === null)
@@ -138,7 +156,7 @@ export function createDeliverExecutor(deps: { readonly store: EventDatabase }): 
     kind: 'deliver',
     run: request,
     async resume(ctx: StepContext, wake: WakeReason): Promise<StepResult> {
-      if (wake.kind === 'delivery') return settled(deps.store, wake.deliveryId);
+      if (wake.kind === 'delivery') return settled(deps.store, wake.deliveryId, ctx);
       return request(ctx);
     },
   };

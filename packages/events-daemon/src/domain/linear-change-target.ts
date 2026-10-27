@@ -1,5 +1,9 @@
+import { createHash } from 'node:crypto';
+import { canonicalJson } from '@agentcomms/core';
+import { getPointer, type JsonValue } from '@agentcomms/events';
 import { EventDomainError } from './lifecycle.ts';
 import {
+  escapeMarkdown,
   isLinearId,
   LINEAR_DESCRIPTION_TEMPLATE_MAX,
   LINEAR_LABELS_MAX,
@@ -8,6 +12,11 @@ import {
   type LinearLabel,
   type LinearTemplate,
   linearTemplateSlots,
+  type MappedFieldOrigin,
+  outsideBlock,
+  type SlotAuthor,
+  slotOrigin,
+  slotPointer,
 } from './linear-target.ts';
 
 /*
@@ -208,4 +217,63 @@ export function linearChangeTargetDisclosure(target: LinearChangeTargetDocument)
           : `assigns it to the Linear user ${target.assignee.id}`,
     );
   return `Linear change ${target.targetId}@${target.version}: on the issue this run created in team ${target.team.key} (${target.team.id}), and no other, through Linear's API (api.linear.app), with your Linear key, it ${changes.join('; ')}.`;
+}
+
+/**
+ * The comment's own id, chosen from the delivery's: every try of one delivery makes, or finds, the same comment, so a
+ * retry after a lost answer cannot add a second one. A UUID in v4 form, as Linear's `commentCreate` takes it (its
+ * `CommentCreateInput.id`, Linear's GraphQL schema, read 2026-10-27).
+ */
+export function linearCommentId(deliveryId: string): string {
+  const bytes = createHash('sha256').update(`agentcomms-linear-comment:v1:${deliveryId}`).digest().subarray(0, 16);
+  bytes[6] = ((bytes[6] as number) & 0x0f) | 0x40;
+  bytes[8] = ((bytes[8] as number) & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/** A value as text: a string as it is, anything else as JSON; nothing for a field the message did not have. */
+function valueText(value: JsonValue | undefined): string {
+  if (value === undefined || value === null) return '';
+  return typeof value === 'string' ? value : canonicalJson(value);
+}
+
+/**
+ * The comment a Linear change adds (workflows design §6.7), rendered once from the approved target, the run's mapped
+ * data, its steps' closed outputs and its sealed summaries: the template's own words as the person approved them, and
+ * each slot's value a quoted code block labelled by who wrote it — the sender, the workflow's mapping, Agent Comms (the
+ * run's own values), or an agent (a session's summary, "Written by an agent, not checked") — so no slot can mention a
+ * person, link an issue or format anything. It ends with the workflow and delivery that added it. Null when the target
+ * comments not.
+ */
+export function renderLinearComment(input: {
+  readonly target: LinearChangeTargetDocument;
+  readonly ruleId: string;
+  readonly ruleVersion: number;
+  readonly deliveryId: string;
+  readonly data: JsonValue;
+  readonly fields: ReadonlyMap<string, MappedFieldOrigin>;
+  /** A slot naming the run's own values (`{{steps.issue.identifier}}`, `{{run}}`): its text; undefined otherwise. */
+  readonly closed?: ((slot: string) => string | undefined) | undefined;
+  /** A slot naming a session's summary (`{{steps.<wait>.summary}}`): its text; undefined otherwise. */
+  readonly summary?: ((slot: string) => string | undefined) | undefined;
+}): string | null {
+  if (input.target.comment === undefined) return null;
+  const lookup = (name: string): { readonly text: string; readonly author: SlotAuthor } => {
+    const summary = input.summary?.(name);
+    if (summary !== undefined) return { text: summary, author: 'agent' };
+    const closed = input.closed?.(name);
+    if (closed !== undefined) return { text: closed, author: 'agent-comms' };
+    const found = getPointer(input.data, slotPointer(name));
+    return {
+      text: valueText(found.found ? found.value : undefined),
+      author: slotOrigin(input.fields, name) === 'constant' ? 'rule' : 'sender',
+    };
+  };
+  const body = input.target.comment.text.replace(SLOT, (_slot, name: string) => {
+    const { text, author } = lookup(name);
+    return `\n\n${outsideBlock(name, text, author)}\n\n`;
+  });
+  const footer = `_Added by Agent Comms: workflow ${escapeMarkdown(input.ruleId)}, version ${input.ruleVersion}; delivery ${escapeMarkdown(input.deliveryId)}._`;
+  return `${body.replace(/\n{3,}/gu, '\n\n').trim()}${body.trim().length === 0 ? '' : '\n\n'}${footer}`;
 }

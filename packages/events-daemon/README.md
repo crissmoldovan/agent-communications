@@ -236,6 +236,14 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   code (`LINEAR_INVALID_INPUT`, `LINEAR_AUTHENTICATION_ERROR`, …). The issue's id is chosen from the delivery's, and each
   try first looks for it, so a retry after a lost answer never adds a second issue. With no key, a delivery waits
   (`LINEAR_KEY_MISSING`) and sends nothing.
+- **A change, in a workflow.** A workflow's `linear-change` target comments on, moves, labels or assigns the issue an
+  earlier step of the same run created (its deliver step's `to.issue`), and no other: the issue comes from that step's
+  own output, never from a message, and it must still be in the target's team. It goes through the same address, key
+  and checks as an issue. The comment's id is chosen from the delivery's, so a retry after a lost answer finds it
+  instead of adding a second; a state, labels and an assignee are one `issueUpdate`, which a retry repeats harmlessly.
+  Each slot in the comment is quoted as an issue's are, and a session's summary (`{{steps.<wait>.summary}}`, a
+  comment's slot only) is labelled "Written by an agent, not checked". Each change counts the workflow's
+  `linearWritesPerHour`, as an issue does.
 - **What is kept.** The rendered title and description wait on the delivery, encrypted, only until the issue is
   added or the delivery's retention (`retention.deliveryMs`) ends; a failed one's are kept as a webhook's dead letter
   is, for `retention.deadLetterMs`. After that the delivery keeps only its issue's id, identifier and address, for the

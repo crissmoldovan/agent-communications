@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { type ApprovalStore, CommsError, type ConfigStore, sha256Hex } from '@agentcomms/core';
+import { canonicalLinearChangeTarget, type LinearChangeTargetDocument } from '../domain/linear-change-target.ts';
 import { canonicalLinearTarget, type LinearTargetDocument, linearIssueId } from '../domain/linear-target.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { type EventSecretStore, providerSecretOwner } from '../store/event-secrets.ts';
@@ -16,12 +17,13 @@ import {
 } from './delivery-claim.ts';
 import { type ActiveDisclosableRequest, assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatchHandler, DispatchResult } from './dispatcher.ts';
+import { changeLinearIssue, type LinearChangeDeliveryRecord, linearChangeRecord } from './linear-change-dispatcher.ts';
 import {
   type LinearClient,
   LinearGateRefused,
   type LinearGates,
-  type LinearOutcome,
   type LinearPhase,
+  linearFailure,
 } from './linear-client.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
@@ -37,6 +39,9 @@ import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
  * another. A rate limit, a 5xx or no usable answer retries, as a webhook's failure does; Linear refusing the request
  * (a 4xx, or a GraphQL error) fails at once with Linear's code. The delivery records the issue's id, its identifier and
  * its address without the title's words — content-free — and nothing Linear said.
+ *
+ * A workflow's Linear change (0.36, §6.7) is delivered here too, inside this same boundary: a comment on and an
+ * update of the issue its run made (`linear-change-dispatcher.ts`), recorded as the issue it changed.
  */
 
 /** How many tries a Linear delivery gets before it fails for good. */
@@ -92,7 +97,8 @@ interface DeliveryRow {
 }
 
 interface LoadedTarget {
-  readonly document: LinearTargetDocument;
+  /** A Linear target's, or — a workflow's delivery (0.36) — a Linear change's. */
+  readonly document: LinearTargetDocument | LinearChangeTargetDocument;
   readonly digest: string;
 }
 
@@ -131,24 +137,6 @@ export function linearIssueRecord(value: unknown): LinearIssueRecord | null {
       ? `https://linear.app/${match[1]}/issue/${identifier}`
       : `https://linear.app/issue/${identifier}`;
   return { id, identifier, url: address };
-}
-
-/** Linear's answer as a settled try's code: `LINEAR_` and Linear's code, or the HTTP status. */
-function failure(outcome: Exclude<LinearOutcome, { kind: 'data' }>): LinearDeliveryOutcome {
-  switch (outcome.kind) {
-    case 'rate-limited':
-      return { kind: 'retry', code: 'LINEAR_RATELIMITED', status: outcome.status };
-    case 'server':
-      return { kind: 'retry', code: `LINEAR_HTTP_${outcome.status}`, status: outcome.status };
-    case 'network':
-      return { kind: 'retry', code: 'LINEAR_NETWORK', status: null };
-    case 'refused':
-      return {
-        kind: 'failed',
-        code: (outcome.code.startsWith('LINEAR_') ? outcome.code : `LINEAR_${outcome.code}`).slice(0, 48),
-        status: outcome.status === 0 ? null : outcome.status,
-      };
-  }
 }
 
 export class LinearDispatcher implements DeliveryDispatchHandler {
@@ -210,7 +198,7 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
     // One deadline for both requests, before the lease ends, so recovery never starts a second try beside this one.
     const deadline =
       Math.min(Date.now() + this.#leaseMs, Date.now() + (claim.leaseUntil - this.#now())) - LEASE_MARGIN_MS;
-    let record: LinearDeliveryRecord;
+    let record: LinearDeliveryRecord | LinearChangeDeliveryRecord;
     let target: LoadedTarget;
     try {
       record = parseRecord(await this.#cipher.decrypt(deliveryLocation(claim.id), claim.encryptedRecord));
@@ -231,6 +219,27 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
     }
     const issueId = linearIssueId(claim.id);
     try {
+      // A workflow's Linear change (0.36 §6.7): on the issue its run made, with this boundary's fences on each request.
+      if (record.kind === 'linear-change' || target.document.kind === 'linear-change') {
+        if (record.kind !== 'linear-change' || target.document.kind !== 'linear-change')
+          return this.#settle(claim, { kind: 'failed', code: 'LINEAR_RECORD_MISMATCH', status: null });
+        const changed = await changeLinearIssue({
+          client: this.#client,
+          key: key.material,
+          target: target.document,
+          record,
+          deliveryId: claim.id,
+          gates: (write) => this.#gates(claim, target, key, write ? whatsappMessageId : null),
+          deadline,
+          failpoint: (point) =>
+            this.#testFailpoint?.(point === 'after-lookup' ? 'after-lookup' : 'after-create', claim),
+        });
+        return this.#settle(
+          claim,
+          changed.kind === 'changed' ? { kind: 'created', issue: changed.issue, status: changed.status } : changed,
+        );
+      }
+      const document = target.document;
       // 1. The issue a try of this delivery made already, if any: found, it is the delivery's, and nothing is created.
       const lookup = await this.#client.request({
         key: key.material,
@@ -240,7 +249,7 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
         deadline,
       });
       this.#testFailpoint?.('after-lookup', claim);
-      if (lookup.kind !== 'data') return this.#settle(claim, failure(lookup));
+      if (lookup.kind !== 'data') return this.#settle(claim, linearFailure(lookup));
       const nodes = (lookup.data.issues as { nodes?: unknown } | null)?.nodes;
       const existing = Array.isArray(nodes)
         ? nodes.find((node) => (node as { id?: unknown })?.id === issueId)
@@ -252,21 +261,17 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
         return this.#settle(claim, { kind: 'created', issue, status: lookup.status });
       }
       const viewer = (lookup.data.viewer as { id?: unknown } | null)?.id;
-      if (target.document.assignee === 'me' && typeof viewer !== 'string')
+      if (document.assignee === 'me' && typeof viewer !== 'string')
         return this.#settle(claim, { kind: 'retry', code: 'LINEAR_ANSWER_INVALID', status: lookup.status });
       // 2. The issue, created with its own id: a retry after a lost answer finds it in step 1.
       const assigneeId =
-        target.document.assignee === null
-          ? undefined
-          : target.document.assignee === 'me'
-            ? (viewer as string)
-            : target.document.assignee.id;
+        document.assignee === null ? undefined : document.assignee === 'me' ? (viewer as string) : document.assignee.id;
       const input = {
         id: issueId,
-        teamId: target.document.team.id,
+        teamId: document.team.id,
         title: record.title,
         description: record.description,
-        ...(target.document.labels.length === 0 ? {} : { labelIds: target.document.labels.map((label) => label.id) }),
+        ...(document.labels.length === 0 ? {} : { labelIds: document.labels.map((label) => label.id) }),
         ...(assigneeId === undefined ? {} : { assigneeId }),
       };
       const created = await this.#client.request({
@@ -277,7 +282,7 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
         deadline,
       });
       this.#testFailpoint?.('after-create', claim);
-      if (created.kind !== 'data') return this.#settle(claim, failure(created));
+      if (created.kind !== 'data') return this.#settle(claim, linearFailure(created));
       const result = created.data.issueCreate as { success?: unknown; issue?: unknown } | null;
       const issue = result?.success === true ? linearIssueRecord(result.issue) : null;
       if (issue === null || issue.id !== issueId)
@@ -435,9 +440,10 @@ export class LinearDispatcher implements DeliveryDispatchHandler {
       | { document: string; digest: string; revoked_at: number | null }
       | undefined;
     if (!row || row.revoked_at !== null) throw new CommsError('APPROVAL_VOID', 'the Linear target is no longer live');
-    let document: LinearTargetDocument;
+    let document: LinearTargetDocument | LinearChangeTargetDocument;
     try {
-      document = canonicalLinearTarget(JSON.parse(row.document));
+      const parsed = JSON.parse(row.document) as Record<string, unknown>;
+      document = parsed.kind === 'linear-change' ? canonicalLinearChangeTarget(parsed) : canonicalLinearTarget(parsed);
     } catch {
       throw new CommsError('APPROVAL_VOID', 'the stored Linear target is invalid');
     }
@@ -726,9 +732,14 @@ function deliveryLocation(id: string) {
   return { table: 'deliveries', column: 'encryptedRecord', key: [{ type: 'text' as const, value: id }] };
 }
 
-function parseRecord(value: Buffer): LinearDeliveryRecord {
+function parseRecord(value: Buffer): LinearDeliveryRecord | LinearChangeDeliveryRecord {
   try {
     const parsed = JSON.parse(value.toString('utf8')) as Partial<LinearDeliveryRecord>;
+    if ((parsed as { kind?: unknown }).kind === 'linear-change') {
+      const change = linearChangeRecord(parsed);
+      if (change === null) throw new Error('invalid');
+      return change;
+    }
     if (parsed.kind !== 'linear-issue' || typeof parsed.title !== 'string' || typeof parsed.description !== 'string')
       throw new Error('invalid');
     return parsed as LinearDeliveryRecord;

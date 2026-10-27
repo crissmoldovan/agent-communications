@@ -12,12 +12,14 @@ import {
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument, TargetDocument } from '../domain/activation-documents.ts';
 import { closedSlotText, isClosedSlot } from '../domain/flow.ts';
+import { type LinearChangeTargetDocument, renderLinearComment } from '../domain/linear-change-target.ts';
 import { mappedFields, renderLinearIssue } from '../domain/linear-target.ts';
 import { type QueueItemContent, queueItemContent } from '../domain/queue-target.ts';
 import { sseDeliveryTarget } from '../domain/sse-subscriber.ts';
 import { webhookDeliveryTarget } from '../domain/webhook-target.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { allocateDeliveryOrderSequence } from './delivery-claim.ts';
+import type { LinearChangeDeliveryRecord } from './linear-change-dispatcher.ts';
 import type { ProjectionCipher } from './projections.ts';
 import {
   constructTargetDelivery,
@@ -336,6 +338,63 @@ export interface PreparedFlowDelivery {
   readonly session: string | null;
 }
 
+/**
+ * A Linear change's sealed record (workflows design §6.7, plan B5): the run's own issue, and the comment rendered once —
+ * from the target as approved, the run's mapped fields, its steps' closed outputs and its sealed summaries — each slot's
+ * value a quoted block labelled by who wrote it, a session's summary "Written by an agent, not checked".
+ */
+export function prepareLinearChangeDelivery(input: {
+  readonly rule: CanonicalFullRuleDocument;
+  readonly target: LinearChangeTargetDocument;
+  readonly deliveryId: string;
+  readonly issue: NonNullable<FlowDeliveryRequest['issue']>;
+  readonly record: RunRecord;
+  readonly runId: string;
+  readonly output: (stepId: string) => Readonly<Record<string, JsonValue>> | null;
+}): LinearChangeDeliveryRecord {
+  const { rule, record } = input;
+  const flow = rule.flow;
+  let comment: string | null = null;
+  if (input.target.comment !== undefined) {
+    const definition = catalogueEntry(rule.event.type, rule.event.version);
+    if (!definition.ok) throw new CommsError('BAD_DATA', "the workflow's event definition is unavailable");
+    const compiled = compileMapping(definition.value, rule.mapping);
+    if (!compiled.ok) throw new Error("the workflow's approved mapping no longer compiles");
+    comment = renderLinearComment({
+      target: input.target,
+      ruleId: rule.ruleId,
+      ruleVersion: rule.version,
+      deliveryId: input.deliveryId,
+      data: record.fields,
+      fields: mappedFields(compiled.value),
+      // A session's summary, an agent's words: from the run's sealed record, never a step's output.
+      summary: (slot) => {
+        const named = /^steps\.([^.]+)\.summary$/u.exec(slot)?.[1];
+        if (named === undefined || flow?.steps[named]?.kind !== 'wait') return undefined;
+        return record.summaries?.[named] ?? '';
+      },
+      ...(flow === undefined
+        ? {}
+        : {
+            closed: (slot: string) =>
+              isClosedSlot(slot)
+                ? closedSlotText(slot, {
+                    runId: input.runId,
+                    flow,
+                    output: input.output,
+                    trigger: record.trigger ?? null,
+                  })
+                : undefined,
+          }),
+    });
+  }
+  return {
+    kind: 'linear-change',
+    issue: { id: input.issue.id, identifier: input.issue.identifier, url: input.issue.url },
+    comment,
+  };
+}
+
 export async function prepareFlowDelivery(input: {
   readonly cipher: ProjectionCipher;
   readonly run: {
@@ -359,16 +418,28 @@ export async function prepareFlowDelivery(input: {
     (target) => target.targetId === request.target.targetId && target.version === request.target.version,
   );
   if (document === undefined) throw new CommsError('APPROVAL_VOID', "the deliver step's target is not the workflow's");
-  if (document.kind === 'linear-change')
-    throw new CommsError('CONFIG', 'a Linear change is delivered by its own adapter', {
-      details: { reason: 'LINEAR_CHANGE_UNAVAILABLE' },
-    });
-  const target = documentDeliveryTarget(rule, document);
+  const target: DeliveryTarget =
+    document.kind === 'linear-change'
+      ? { kind: 'linear-change', targetId: document.targetId, targetVersion: document.version, representation: 'plain' }
+      : documentDeliveryTarget(rule, document);
   const id = (input.newId ?? (() => crypto.randomUUID()))();
   const key = `${document.targetId}@${document.version}`;
   const data = record.fields;
   let sealed: unknown;
-  if (target.kind === 'session') {
+  if (document.kind === 'linear-change') {
+    // The issue is the one the step's `to.issue` names, from that create step's closed output: never a message's.
+    if (request.issue === undefined)
+      throw new CommsError('BAD_DATA', 'a Linear change acts on the issue its run made, and the run made none');
+    sealed = prepareLinearChangeDelivery({
+      rule,
+      target: document,
+      deliveryId: id,
+      issue: request.issue,
+      record,
+      runId: input.run.id,
+      output: input.output,
+    });
+  } else if (target.kind === 'session') {
     const sessionRecord: SessionDeliveryRecord = {
       kind: 'session-message',
       values: contextFieldValues(target.document.context, data),
@@ -419,7 +490,7 @@ export async function prepareFlowDelivery(input: {
     const source = record.source;
     const definition = catalogueEntry(rule.event.type, rule.event.version);
     if (source === undefined || !definition.ok)
-      throw new CommsError('BAD_DATA', "the run kept nothing to build its step's CloudEvent from");
+      throw new CommsError('BAD_DATA', "the run kept none of what its step's CloudEvent is built of");
     const constructed = constructTargetDelivery({
       target,
       definition: { ...definition.value, subject: () => source.subject } as never,

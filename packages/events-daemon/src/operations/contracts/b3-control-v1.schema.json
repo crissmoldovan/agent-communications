@@ -2311,7 +2311,7 @@
     },
     "nullableCount": { "oneOf": [{ "type": "null" }, { "type": "integer", "minimum": 0 }] },
     "nullableId": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/id" }] },
-    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session"] },
+    "deliveryTargetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session", "linear-change"] },
     "milliseconds": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
     "eventId": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
     "messagesCursor": { "type": "string", "pattern": "^[0-9]{1,16}:[0-9a-f]{32}$" },
@@ -2438,7 +2438,7 @@
             "required": ["deliveryId", "targetKind", "targetId", "lane", "state"],
             "properties": {
               "deliveryId": { "$ref": "#/$defs/id" },
-              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session"] },
+              "targetKind": { "enum": ["dry-run", "webhook", "sse", "queue", "linear", "session", "linear-change"] },
               "targetId": { "$ref": "#/$defs/id" },
               "lane": { "anyOf": [{ "$ref": "#/$defs/laneName" }, { "type": "null" }] },
               "state": {
