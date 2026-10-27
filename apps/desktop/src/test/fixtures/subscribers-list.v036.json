@@ -9,6 +9,7 @@
     "state": "active",
     "listening": { "host": "127.0.0.1", "port": 4801 },
     "listenError": null,
+    "address": null,
     "backlog": 0,
     "lastDeliveredAt": 1792915201900
   },
@@ -22,6 +23,7 @@
     "state": "inert",
     "listening": null,
     "listenError": null,
+    "address": { "url": "https://hooks.example.test:443/agentcomms/events" },
     "backlog": 0,
     "lastDeliveredAt": null
   },

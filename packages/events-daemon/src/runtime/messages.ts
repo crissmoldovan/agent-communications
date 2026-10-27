@@ -6,7 +6,6 @@ import {
   MESSAGES_LIST_DEFAULT_LIMIT,
   MESSAGES_LIST_DEFAULT_SPAN_MS,
   MESSAGES_LIST_MAX_LIMIT,
-  type MessageDecisionOutcome,
   type MessageDecisionV1,
   type MessageDeliveryState,
   type MessageDeliveryV1,
@@ -15,6 +14,7 @@ import {
   type MessageKeptV1,
   type MessageQueueItemV1,
   type MessageShowResultV1,
+  type MessageStoryOutcome,
   type MessagesListResultV1,
   type MessageTargetKind,
   messagesCursor,
@@ -93,7 +93,7 @@ interface DecisionRow {
   readonly event_id: string;
   readonly rule_id: string;
   readonly rule_version: number;
-  readonly outcome: MessageDecisionOutcome;
+  readonly outcome: MessageStoryOutcome;
   readonly metadata_state: string;
   readonly encrypted_record: Uint8Array | null;
   readonly judge_kind: string | null;

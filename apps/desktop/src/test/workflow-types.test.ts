@@ -191,12 +191,21 @@ describe("workflows' results, read (0.36.0, plan I8)", () => {
       content: 'none',
     });
     expect(subscribers[0]?.listening).toEqual({ host: '127.0.0.1', port: 4801 });
+    // A webhook's public address; a live one has none; a service before 0.36's address says nothing, and still reads.
+    expect(subscribers.map((each) => each.address)).toEqual([
+      null,
+      { url: 'https://hooks.example.test:443/agentcomms/events' },
+      undefined,
+    ]);
+    expect(Object.hasOwn(subscribers[2] ?? {}, 'address')).toBe(false);
     for (const change of [
       (list: typeof subscribersFixture) => Object.assign(list[0] ?? {}, { kind: 'socket' }),
       (list: typeof subscribersFixture) => Object.assign(list[0] ?? {}, { state: 'on' }),
       (list: typeof subscribersFixture) => Object.assign(list[0] ?? {}, { listenError: 'EACCES' }),
       (list: typeof subscribersFixture) =>
         Object.assign(list[0] ?? {}, { events: { namespaces: ['acme'], patterns: [], content: 'all' } }),
+      (list: typeof subscribersFixture) => Object.assign(list[1] ?? {}, { address: { url: 42 } }),
+      (list: typeof subscribersFixture) => Object.assign(list[1] ?? {}, { address: 'https://hooks.example.test' }),
     ]) {
       expect(() => readSubscribers(changed(subscribersFixture, change))).toThrow(UnknownShapeError);
     }

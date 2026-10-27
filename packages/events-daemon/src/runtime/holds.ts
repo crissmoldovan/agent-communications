@@ -7,6 +7,7 @@ import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.
 import { commitHeldDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from './decisions.ts';
 import { prepareDeliveries } from './deliveries.ts';
 import type { DisclosureSnapshot } from './disclosure-fence.ts';
+import { chainStartForMessage } from './events/chains.ts';
 import { evaluateRuleProjection } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher, type ProjectionReference } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
@@ -484,7 +485,18 @@ export class HoldResolver {
       beforeAuthorisation.authorizationActivationId !== authorisation.authorizationActivationId
     )
       return { kind: 'stale' };
-    const evaluated = input.decision === 'accept' ? evaluateRuleProjection(after.rule, projection.event) : null;
+    // A chained workflow's held message starts from the chain that was waiting for it (W34): with its trigger gone,
+    // there is nothing to start, and the release makes no run.
+    const chained =
+      after.rule.flow?.on === undefined
+        ? undefined
+        : await chainStartForMessage(this.#store.database, this.#cipher, {
+            eventId: after.reference.eventId,
+            ruleId: after.reference.ruleId,
+            ruleVersion: after.reference.ruleVersion,
+          });
+    const evaluated =
+      input.decision === 'accept' && chained !== null ? evaluateRuleProjection(after.rule, projection.event) : null;
     const outcome =
       input.decision === 'reject'
         ? 'no-match'
@@ -526,6 +538,7 @@ export class HoldResolver {
             },
             // The message and its thread, for a flow that finds the session that took the conversation (W36).
             message: runMessageOf(after.rule, projection.event),
+            ...(chained ?? {}),
           });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({

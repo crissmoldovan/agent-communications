@@ -161,9 +161,8 @@ import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
-import { composeWorkflowEvents } from './workflow/compose-events.ts';
+import { composeOwnerWorkflowEvents } from './workflow/compose-events.ts';
 import { composeProjects } from './workflow/compose-projects.ts';
-import { openRunFields } from './workflow/context.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowFailpoint } from './workflow/engine.ts';
 import { flowJudge } from './workflow/judge-call.ts';
@@ -296,8 +295,9 @@ export interface EventOwnerOptions {
   readonly eventsWebSocket?: WebSocketTiming | undefined;
   /**
    * Workflows (0.36), test seams only: more compositions than the owner's own — a stand-in executor for a kind another
-   * track adds — the notifier a notify step raises its notice through, and a crash at a point of a step's life.
-   * Production composes every track's part and raises notices on the person's own screen.
+   * track adds, which takes the place of the owner's own executor of that kind — the notifier a notify step raises its
+   * notice through, and a crash at a point of a step's life. Production composes every track's part and raises notices
+   * on the person's own screen.
    */
   readonly workflows?:
     | {
@@ -1614,12 +1614,9 @@ async function startOwnerWithLock(
       // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
       // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
       composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
-      // Track D: the Raise step and the sink every transition's ticked events go through.
-      composeWorkflowEvents({
-        cipher,
-        installationId: database.installationId,
-        fields: (run) => openRunFields(database, cipher, run.id),
-      }),
+      // Track D: the Raise step, the sink every transition's ticked events go through — a Raise step's declared
+      // fields opened from the run's record — and the chains each raised event asks for (W34).
+      composeOwnerWorkflowEvents({ store: database, cipher }),
       ...(options.workflows?.parts ?? []).map((part) => ({ ...part, executors: [] })),
     ],
   );

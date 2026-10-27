@@ -23,6 +23,18 @@ export const MESSAGE_DECISION_OUTCOMES: readonly [
 ] = Object.freeze(['matched', 'no-match', 'mapping-rejected', 'retention-expired', 'hold'] as const);
 export type MessageDecisionOutcome = (typeof MESSAGE_DECISION_OUTCOMES)[number];
 
+/**
+ * The outcomes only a chained workflow's decision has (workflows design W34): waiting for a run about the message to
+ * raise what starts it, and the wait ended with none. A message's story names them; an analysis of judged decisions,
+ * which a chain's wait never is, does not.
+ */
+export const CHAIN_DECISION_OUTCOMES: readonly ['awaiting-chain', 'not-chained'] = Object.freeze([
+  'awaiting-chain',
+  'not-chained',
+] as const);
+/** A decision's outcome in a message's story. */
+export type MessageStoryOutcome = MessageDecisionOutcome | (typeof CHAIN_DECISION_OUTCOMES)[number];
+
 /** A delivery's target kind, as the deliveries table keeps it; `linear-change` is a workflow's only (0.36). */
 export const MESSAGE_TARGET_KINDS: readonly [
   'dry-run',
@@ -108,7 +120,7 @@ export interface MessageJudgeV1 {
 export interface MessageDecisionV1 {
   readonly ruleId: string;
   readonly ruleVersion: number;
-  readonly outcome: MessageDecisionOutcome;
+  readonly outcome: MessageStoryOutcome;
   readonly judge: MessageJudgeV1 | null;
 }
 

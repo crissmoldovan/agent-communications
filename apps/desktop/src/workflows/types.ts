@@ -250,6 +250,11 @@ export interface SubscriberEntryV2 {
   state: 'inert' | 'active' | 'superseded' | null;
   listening: { host: string; port: number } | null;
   listenError: 'PORT_IN_USE' | null;
+  /**
+   * A webhook subscriber's public address: scheme, host, port and a plain URL's path, never a secret URL's path or a
+   * token. Null for a live one; absent from a service before it said so.
+   */
+  address?: { url: string } | null;
   backlog: number;
   lastDeliveredAt: number | null;
 }
@@ -565,6 +570,14 @@ function readSubscriber(value: unknown, what: string): SubscriberEntryV2 {
     listening,
     listenError:
       fields.listenError === null ? null : word(fields.listenError, ['PORT_IN_USE'] as const, `${what}.listenError`),
+    ...(fields.address === undefined
+      ? {}
+      : {
+          address:
+            fields.address === null
+              ? null
+              : { url: text(object(fields.address, `${what}.address`).url, `${what}.address.url`) },
+        }),
     backlog: whole(fields.backlog, `${what}.backlog`),
     lastDeliveredAt: wholeOrNull(fields.lastDeliveredAt, `${what}.lastDeliveredAt`),
   };

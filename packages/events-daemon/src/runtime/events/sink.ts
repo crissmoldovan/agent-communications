@@ -55,11 +55,12 @@ export interface WorkflowEventSinkDeps {
   /** Test seam: the ids of automatic events. A Raise step's id is its settled output's. */
   readonly newEventId?: (() => string) | undefined;
   /**
-   * D6's seam: runs in the same transaction, after each raised event is written, for chain requests. Absent until
-   * chains land.
+   * Chains (W34): runs in the same transaction for each event raised, and returns how many chained workflows it asked
+   * to start from it (`chainRequestsInTransaction`). An event a chain may start from keeps its sealed record, open,
+   * until the chain has read it or its wait has passed, even when no subscriber receives it.
    */
   readonly onRaisedInTransaction?:
-    | ((database: DatabaseSync, event: PreparedWorkflowEvent, now: number) => void)
+    | ((database: DatabaseSync, event: PreparedWorkflowEvent, now: number) => number)
     | undefined;
 }
 
@@ -79,6 +80,8 @@ export interface PreparedWorkflowEvent {
 }
 
 const HOUR_MS = 3_600_000;
+/** A raised event's id (§4.3): `wfe_` and 26 lowercase Crockford characters. */
+const EVENT_ID = /^wfe_[0-9a-hjkmnp-tv-z]{26}$/u;
 const OUTCOME_LESS: readonly string[] = ['started', 'waiting', 'retrying', 'skipped'];
 
 const RUN_WORDS: Readonly<Record<RunTransition, string>> = Object.freeze({
@@ -202,6 +205,8 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
           const raise = step?.kind === 'raise';
           const id =
             raise && typeof transition.output?.event === 'string' ? (transition.output.event as string) : nextId();
+          // A Raise step's event takes the id its settled output names; one that names no event id raises nothing.
+          if (!EVENT_ID.test(id)) continue;
           // W.2: no outcome for started, waiting, retrying and skipped, nor for a run's own words; a duration for a
           // settle (succeeded, failed and the outcome words) only.
           const outcomeLess = schema === 'run' || (isStandard(word) && OUTCOME_LESS.includes(word));
@@ -308,6 +313,9 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
           continue;
         }
         const matching = subscriptions.filter((subscription) => subscriptionMatches(subscription.events, row.type));
+        const chained = deps.onRaisedInTransaction?.(database, row, row.raisedAt) ?? 0;
+        // An event no subscription receives and no chain starts from is raised all the same, content-free.
+        const kept = matching.length > 0 || chained > 0;
         const { sequence } = database
           .prepare('SELECT COALESCE(MAX(sequence), 0) + 1 AS sequence FROM workflow_events WHERE run_id = ?')
           .get(row.run.id) as { sequence: number };
@@ -330,9 +338,8 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
             sequence,
             row.raisedAt,
             row.expiresAt,
-            // An event no subscription receives is raised all the same, content-free: there is nothing to keep.
-            matching.length === 0 ? 'done' : 'open',
-            matching.length === 0 ? null : row.sealed,
+            kept ? 'open' : 'done',
+            kept ? row.sealed : null,
           );
         database
           .prepare("INSERT INTO workflow_effects (rule_id, kind, at) VALUES (?, 'event', ?)")
@@ -353,7 +360,6 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
             .run(row.id, subscription.subscriberId, subscription.version, subscription.kind, row.raisedAt, ordering);
           expireSubscriberBacklogInTransaction(database, subscription.subscriberId, subscription.version, row.raisedAt);
         }
-        deps.onRaisedInTransaction?.(database, row, row.raisedAt);
       }
     },
   };
