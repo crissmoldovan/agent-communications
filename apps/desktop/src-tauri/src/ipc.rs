@@ -11,11 +11,12 @@ use std::fmt;
 pub use crate::allowlist::{
     AccountName, ActivityChannel, ActivityKind, ActivityOutcome, ActivitySince, Acts, ApprovalId,
     Call, ConversationId, EndpointJudgeKind, FinishedApprovalState, KeyProvider, LaneName,
-    PauseDays, QueueChannel, QueueItemId, QueueLimit, QueueState, RuleId, SessionKey, StartOfToday,
-    UpdateLevel, WindowId,
+    PauseDays, QueueChannel, QueueItemId, QueueLimit, QueueState, RuleId, SecretAction, SessionKey,
+    StartOfToday, SubscriberId, UpdateLevel, WindowId,
 };
 pub use crate::launchers::Product;
 pub use crate::paths::{FolderOverrides, Folders};
+pub use crate::rule_editor::RuleVersion;
 
 /// What one CLI call came to, read from its output (`runner::parse_output`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -177,8 +178,9 @@ pub enum TerminalCommand {
     /// Approving, at a terminal, a rule's activation the rule editor prepared (0.33.0), or switching the event service
     /// on that Events → Service prepared (0.34.0), where the app cannot attest the person (Windows and Linux): the events
     /// service's `approve <approval-id>`, which shows the activation's preview and asks for its challenge there. Only an
-    /// approval `eventsRuleEnable` or `eventsEnableAll` recorded opens; nothing is revoked first, and the record is kept,
-    /// so the review's Back or the preview's Cancel can still revoke it. The app never answers the challenge.
+    /// approval `eventsRuleEnable`, `eventsEnableAll` or (0.36.0) `eventsSubscriberEnable` recorded opens; nothing is
+    /// revoked first, and the record is kept, so the review's Back or the preview's Cancel can still revoke it. The app
+    /// never answers the challenge.
     RuleApprove { approval_id: ApprovalId },
     /// A person-only setup, done at a terminal where the app cannot attest the person (Windows and Linux; 0.33.0): the
     /// events service's `judge setup …`, `provider key remove <provider>` or `integration set agent-sessions
@@ -188,6 +190,27 @@ pub enum TerminalCommand {
     /// Setting a provider's key at a terminal (0.33.0): the events service's `provider key set <provider>`, which asks
     /// for the key there, hidden. The app never has the key: this takes no key, only which provider's.
     ProviderKeySet { provider: KeyProvider },
+    /// A live subscriber's token, made or made again at a terminal (0.36.0, spec W29): the events service's
+    /// `subscriber token create|rotate <subscriber> --version <n>`, which shows the token there, once. The app never
+    /// has it, and records, revokes and answers nothing.
+    SubscriberToken {
+        subscriber_id: SubscriberId,
+        version: RuleVersion,
+        action: SecretAction,
+    },
+    /// A webhook subscriber's signing secret, made or made again at a terminal (0.36.0): the events service's
+    /// `subscriber secret create|rotate <subscriber> --version <n>`, as a token is.
+    SubscriberSecret {
+        subscriber_id: SubscriberId,
+        version: RuleVersion,
+        action: SecretAction,
+    },
+    /// A webhook subscriber's secret URL, set at a terminal (0.36.0): the events service's `subscriber url set
+    /// <subscriber> --version <n>`, which asks for the URL there, hidden. The app never has it.
+    SubscriberUrl {
+        subscriber_id: SubscriberId,
+        version: RuleVersion,
+    },
 }
 
 /// What opening the terminal came to.

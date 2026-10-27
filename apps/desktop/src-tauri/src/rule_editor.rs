@@ -5,6 +5,10 @@
 //! enable` prepares is the app's own, recorded with its digest (`terminal::Prepared`), and only that one is approved in
 //! the app (`rule approve`), once, after the person pressed Approve. The approval view the preview reads reaches the
 //! window without its challenges: only the CLI ever answers one.
+//!
+//! Workflows (0.36.0, plan 2026-10-27-workflows-0360 I7) hand their documents over the same way: a workflow to check or
+//! try, a subscriber (`subscriber add|update -`), a project (`project add|update -`) and what Describe it is asked
+//! (`workflow describe`), each checked here first and refused otherwise. A Linear change is a target the editor makes.
 
 use crate::grammar;
 use crate::ipc::AppError;
@@ -22,8 +26,31 @@ pub const TARGET_DOCUMENT_LIMIT: usize = 16 * 1024;
 pub const VERSION_LIMIT: u64 = 1_000_000;
 
 /// The target kinds the editor makes or changes (design §3.4–§3.6): the dry-run log, the Queue, a Linear issue and an
-/// agent session. A webhook or a stream is never one: its URL and signing secret are set at the terminal.
-pub const TARGET_KINDS: [&str; 4] = ["dry-run", "queue", "linear", "session"];
+/// agent session; and since 0.36.0 a Linear change, which comments on, updates or closes the issue a workflow made
+/// (spec 2026-10-27-workflows §4.2). A webhook or a stream is never one: its URL and signing secret are set at the
+/// terminal.
+pub const TARGET_KINDS: [&str; 5] = ["dry-run", "queue", "linear", "session", "linear-change"];
+
+/// The most a subscriber document may be, in bytes of compact JSON (0.36.0): as a target's.
+pub const SUBSCRIBER_DOCUMENT_LIMIT: usize = 16 * 1024;
+
+/// The subscriber kinds (0.36.0, spec §4.2): one live on this Mac, and a signed webhook off it.
+pub const SUBSCRIBER_KINDS: [&str; 2] = ["sse", "webhook"];
+
+/// The most a project document may be, in bytes of compact JSON (0.36.0): its profile is at most 2,000 characters.
+pub const PROJECT_DOCUMENT_LIMIT: usize = 8 * 1024;
+
+/// The most of the person's words Describe it sends, in characters (0.36.0, spec §11.4).
+pub const DESCRIBE_WORDS_LIMIT: usize = 4000;
+
+/// The most answers Describe it is given back in one round: one for each of its at most five questions.
+pub const DESCRIBE_ANSWERS_LIMIT: usize = 5;
+
+/// The most the current draft sent along may be, in bytes of compact JSON: a rule document's bound.
+pub const DESCRIBE_DRAFT_LIMIT: usize = RULE_DOCUMENT_LIMIT;
+
+/// The most a whole Describe it request may be, in bytes of compact JSON: inside the 64 KB the model is sent.
+pub const DESCRIBE_REQUEST_LIMIT: usize = 64 * 1024;
 
 fn whole_version(value: Option<&Value>) -> bool {
     value
@@ -115,7 +142,7 @@ impl TryFrom<Value> for TargetDocument {
         let kind = map.get("kind").and_then(Value::as_str);
         if !kind.is_some_and(|kind| TARGET_KINDS.contains(&kind)) {
             return Err(AppError::refused(
-                "the app makes a dry-run log, a Queue, a Linear issue or an agent session target, and no other",
+                "the app makes a dry-run log, a Queue, a Linear issue, a Linear change or an agent session target, and no other",
             ));
         }
         if compact(&value).len() > TARGET_DOCUMENT_LIMIT {
@@ -133,6 +160,181 @@ impl From<TargetDocument> for Value {
 
 impl TargetDocument {
     /// The document as the CLI reads it on stdin: compact JSON.
+    pub fn bytes(&self) -> Vec<u8> {
+        compact(&self.0)
+    }
+}
+
+/// A subscriber document (0.36.0, spec §4.2): one JSON object, its `subscriberId` an id the app's grammar takes, its
+/// `version` a whole number from 1, its `kind` `sse` or `webhook`, and at most `SUBSCRIBER_DOCUMENT_LIMIT` bytes. A
+/// token, a signing secret or a secret URL is never one's: each is made at the terminal. The event service checks the
+/// rest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Value", into = "Value")]
+pub struct SubscriberDocument(Value);
+
+impl TryFrom<Value> for SubscriberDocument {
+    type Error = AppError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let Value::Object(map) = &value else {
+            return Err(AppError::refused(
+                "a subscriber document is one JSON object",
+            ));
+        };
+        if !map
+            .get("subscriberId")
+            .and_then(Value::as_str)
+            .is_some_and(grammar::subscriber_id)
+        {
+            return Err(AppError::refused(
+                "a subscriber document names its subscriber by an id the app takes",
+            ));
+        }
+        if !whole_version(map.get("version")) {
+            return Err(AppError::refused(
+                "a subscriber document's version is a whole number from 1",
+            ));
+        }
+        let kind = map.get("kind").and_then(Value::as_str);
+        if !kind.is_some_and(|kind| SUBSCRIBER_KINDS.contains(&kind)) {
+            return Err(AppError::refused(
+                "a subscriber is live on this Mac (sse) or a webhook, and no other",
+            ));
+        }
+        if compact(&value).len() > SUBSCRIBER_DOCUMENT_LIMIT {
+            return Err(AppError::refused("a subscriber document is at most 16 KiB"));
+        }
+        Ok(SubscriberDocument(value))
+    }
+}
+
+impl From<SubscriberDocument> for Value {
+    fn from(document: SubscriberDocument) -> Value {
+        document.0
+    }
+}
+
+impl SubscriberDocument {
+    /// The document as the CLI reads it on stdin: compact JSON.
+    pub fn bytes(&self) -> Vec<u8> {
+        compact(&self.0)
+    }
+}
+
+/// A project document (0.36.0, spec §8.1): one JSON object of at most `PROJECT_DOCUMENT_LIMIT` bytes, its `projectId`,
+/// when it names one, an id the app's grammar takes. The event service checks the rest: its folders, its profile and
+/// its hints.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Value", into = "Value")]
+pub struct ProjectDocument(Value);
+
+impl TryFrom<Value> for ProjectDocument {
+    type Error = AppError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let Value::Object(map) = &value else {
+            return Err(AppError::refused("a project document is one JSON object"));
+        };
+        if map
+            .get("projectId")
+            .is_some_and(|id| !id.as_str().is_some_and(grammar::project_id))
+        {
+            return Err(AppError::refused(
+                "a project document names its project by an id the app takes",
+            ));
+        }
+        if compact(&value).len() > PROJECT_DOCUMENT_LIMIT {
+            return Err(AppError::refused("a project document is at most 8 KiB"));
+        }
+        Ok(ProjectDocument(value))
+    }
+}
+
+impl From<ProjectDocument> for Value {
+    fn from(document: ProjectDocument) -> Value {
+        document.0
+    }
+}
+
+impl ProjectDocument {
+    /// The document as the CLI reads it on stdin: compact JSON.
+    pub fn bytes(&self) -> Vec<u8> {
+        compact(&self.0)
+    }
+}
+
+/// What Describe it is asked (0.36.0, spec §11.4, plan I7): one JSON object of `words`, the person's description, 1 to
+/// `DESCRIBE_WORDS_LIMIT` characters; `answers`, when it has them, at most `DESCRIBE_ANSWERS_LIMIT`, each a JSON object
+/// or a string; and `draft`, the current draft sent along, its text or its document, at most `DESCRIBE_DRAFT_LIMIT`
+/// bytes. Nothing else is taken, and the whole is at most `DESCRIBE_REQUEST_LIMIT` bytes. The event service checks
+/// the rest.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Value", into = "Value")]
+pub struct DescribeRequest(Value);
+
+impl TryFrom<Value> for DescribeRequest {
+    type Error = AppError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        let Value::Object(map) = &value else {
+            return Err(AppError::refused(
+                "what Describe it is asked is one JSON object",
+            ));
+        };
+        if map
+            .keys()
+            .any(|key| !["words", "answers", "draft"].contains(&key.as_str()))
+        {
+            return Err(AppError::refused(
+                "Describe it is asked your words, your answers and the draft, and nothing else",
+            ));
+        }
+        let words = map.get("words").and_then(Value::as_str).unwrap_or("");
+        if words.trim().is_empty() || words.chars().count() > DESCRIBE_WORDS_LIMIT {
+            return Err(AppError::refused(
+                "Describe it is given your words: 1 to 4,000 characters",
+            ));
+        }
+        if let Some(answers) = map.get("answers") {
+            let fits = answers.as_array().is_some_and(|answers| {
+                answers.len() <= DESCRIBE_ANSWERS_LIMIT
+                    && answers
+                        .iter()
+                        .all(|answer| answer.is_object() || answer.is_string())
+            });
+            if !fits {
+                return Err(AppError::refused(
+                    "Describe it is given at most five answers",
+                ));
+            }
+        }
+        if let Some(draft) = map.get("draft") {
+            if !(draft.is_string() || draft.is_object())
+                || compact(draft).len() > DESCRIBE_DRAFT_LIMIT
+            {
+                return Err(AppError::refused(
+                    "the draft sent along is its text or its document, at most 48 KiB",
+                ));
+            }
+        }
+        if compact(&value).len() > DESCRIBE_REQUEST_LIMIT {
+            return Err(AppError::refused(
+                "what Describe it is asked is at most 64 KiB",
+            ));
+        }
+        Ok(DescribeRequest(value))
+    }
+}
+
+impl From<DescribeRequest> for Value {
+    fn from(request: DescribeRequest) -> Value {
+        request.0
+    }
+}
+
+impl DescribeRequest {
+    /// The request as the CLI reads it on stdin: compact JSON.
     pub fn bytes(&self) -> Vec<u8> {
         compact(&self.0)
     }
@@ -205,15 +407,39 @@ impl AnalyseProvider {
     }
 }
 
-/// Where the event service finds the person's claude-stream relay, as `integration set agent-sessions --relay-home`
-/// takes it (design §3.5): `default` — claude-stream's own home, then the Pilot app's — or the relay's home folder,
-/// written whole: absolute, with no `.` or `..` step, no repeated or trailing `/`, no control or format character, and
-/// at most 1,024 bytes, as the event service checks it again. The folder is a setting; the token in it is never read
-/// here.
-pub fn relay_home_setting(value: &str) -> bool {
-    if value == "default" {
-        return true;
+/// Who drafts a workflow for Describe it (0.36.0, spec §11.4, `workflow describe --provider`): the person's own Claude
+/// on this Mac, or OpenRouter or Anthropic with the key already kept for Analyse. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DescribeProvider {
+    #[serde(rename = "claude-cli")]
+    ClaudeCli,
+    #[serde(rename = "openrouter")]
+    Openrouter,
+    #[serde(rename = "anthropic")]
+    Anthropic,
+}
+
+impl DescribeProvider {
+    pub const ALL: [DescribeProvider; 3] = [
+        DescribeProvider::ClaudeCli,
+        DescribeProvider::Openrouter,
+        DescribeProvider::Anthropic,
+    ];
+
+    /// The provider as `workflow describe --provider` takes it.
+    pub fn word(self) -> &'static str {
+        match self {
+            DescribeProvider::ClaudeCli => "claude-cli",
+            DescribeProvider::Openrouter => "openrouter",
+            DescribeProvider::Anthropic => "anthropic",
+        }
     }
+}
+
+/// A folder on this Mac written whole, as a scan's root or the relay's home is: absolute, not `/` itself, with no `.`
+/// or `..` step, no repeated or trailing `/`, no control or format character, and at most 1,024 bytes. The event
+/// service checks it again.
+pub fn whole_folder(value: &str) -> bool {
     value.len() <= 1024
         && value.starts_with('/')
         && value != "/"
@@ -225,6 +451,15 @@ pub fn relay_home_setting(value: &str) -> bool {
         && value[1..]
             .split('/')
             .all(|step| step != "." && step != "..")
+}
+
+/// Where the event service finds the person's claude-stream relay, as `integration set agent-sessions --relay-home`
+/// takes it (design §3.5): `default` — claude-stream's own home, then the Pilot app's — or the relay's home folder,
+/// written whole: absolute, with no `.` or `..` step, no repeated or trailing `/`, no control or format character, and
+/// at most 1,024 bytes, as the event service checks it again. The folder is a setting; the token in it is never read
+/// here.
+pub fn relay_home_setting(value: &str) -> bool {
+    value == "default" || whole_folder(value)
 }
 
 /// Unicode's format characters (Cf): bidi controls, zero-width text, the BOM.
@@ -372,6 +607,183 @@ mod tests {
             json!(["dry-run"]),
         ] {
             assert!(TargetDocument::try_from(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    /// A Linear change is a target the editor makes (0.36.0): it takes a team and what it changes, and nothing secret.
+    #[test]
+    fn a_linear_change_is_a_target_the_editor_makes() {
+        let value = json!({
+            "targetId": "close-issue",
+            "version": 1,
+            "kind": "linear-change",
+            "team": { "id": "0b1c2d3e-0000-4000-8000-00000000c0e1", "key": "CUE" },
+            "state": { "id": "0b1c2d3e-0000-4000-8000-00000000c0e2", "name": "Done", "type": "completed" }
+        });
+        assert!(TargetDocument::try_from(value).is_ok());
+        assert_eq!(TARGET_KINDS.len(), 5);
+        assert!(TargetDocument::try_from(
+            json!({ "targetId": "close-issue", "version": 1, "kind": "linear-close" })
+        )
+        .is_err());
+    }
+
+    /// A subscriber (0.36.0): one object with its id, a whole version and a kind of the two, at most 16 KiB.
+    #[test]
+    fn a_subscriber_document_is_live_on_this_mac_or_a_webhook() {
+        let live = json!({
+            "subscriberId": "events-dashboard",
+            "version": 1,
+            "kind": "sse",
+            "authority": { "host": "127.0.0.1", "port": 4801 },
+            "origins": [],
+            "retentionMs": 86400000,
+            "events": { "namespaces": ["acme"], "patterns": ["acme.*.*.failed"], "content": "none" }
+        });
+        let document = SubscriberDocument::try_from(live.clone()).expect("a live subscriber");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&document.bytes()).expect("json"),
+            live
+        );
+        let webhook = json!({
+            "subscriberId": "crm-hook",
+            "version": 2,
+            "kind": "webhook",
+            "url": { "kind": "plain", "url": "https://hooks.example/agentcomms" },
+            "approvedAddressSet": ["192.0.2.10"],
+            "signing": "standard-webhooks",
+            "retryLimit": 5,
+            "events": { "namespaces": ["acme"], "patterns": ["acme.client-asks.issue.created"], "content": "none" }
+        });
+        assert!(SubscriberDocument::try_from(webhook).is_ok());
+        for bad in [
+            json!(null),
+            json!(["sse"]),
+            json!("events-dashboard"),
+            json!({ "version": 1, "kind": "sse" }),
+            json!({ "subscriberId": "--json", "version": 1, "kind": "sse" }),
+            json!({ "subscriberId": "sub 1", "version": 1, "kind": "sse" }),
+            json!({ "subscriberId": "events-dashboard", "kind": "sse" }),
+            json!({ "subscriberId": "events-dashboard", "version": 0, "kind": "sse" }),
+            json!({ "subscriberId": "events-dashboard", "version": 1 }),
+            json!({ "subscriberId": "events-dashboard", "version": 1, "kind": "websocket" }),
+            json!({ "subscriberId": "events-dashboard", "version": 1, "kind": "SSE" }),
+            json!({ "subscriberId": "events-dashboard", "version": 1, "kind": "sse", "padding": "x".repeat(SUBSCRIBER_DOCUMENT_LIMIT) }),
+        ] {
+            assert!(SubscriberDocument::try_from(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    /// A project (0.36.0): one object, its id the grammar's when it names one, at most 8 KiB.
+    #[test]
+    fn a_project_document_is_one_object_of_at_most_8_kib() {
+        let project = json!({
+            "projectId": "acme-site",
+            "name": "acme-site",
+            "repo": "github.com/example/acme-site",
+            "profile": "The Acme site: the marketing pages and the booking form.",
+            "hints": { "senderDomains": ["acme.example"], "slackConversations": [], "people": [] },
+            "folders": [{ "folder": "/example/home/work/acme-site", "kind": "checkout", "defaultBranch": "main", "worktreeRoot": null }]
+        });
+        let document = ProjectDocument::try_from(project.clone()).expect("a project");
+        assert_eq!(
+            serde_json::from_slice::<Value>(&document.bytes()).expect("json"),
+            project
+        );
+        assert!(ProjectDocument::try_from(json!({ "name": "acme-site" })).is_ok());
+        for bad in [
+            json!(null),
+            json!(["acme-site"]),
+            json!("acme-site"),
+            json!({ "projectId": "Acme" }),
+            json!({ "projectId": "--json" }),
+            json!({ "projectId": "acme/site" }),
+            json!({ "projectId": 7 }),
+            json!({ "projectId": null }),
+            json!({ "name": "acme-site", "profile": "x".repeat(PROJECT_DOCUMENT_LIMIT) }),
+        ] {
+            assert!(ProjectDocument::try_from(bad.clone()).is_err(), "{bad}");
+        }
+    }
+
+    /// Describe it (0.36.0, spec §11.4): the words, up to five answers and the draft; nothing else, and within bounds.
+    #[test]
+    fn describe_it_is_asked_words_answers_and_a_draft_and_nothing_else() {
+        for good in [
+            json!({ "words": "When a client asks, find their project and open an issue." }),
+            json!({ "words": "x".repeat(DESCRIBE_WORDS_LIMIT) }),
+            json!({ "words": "é".repeat(DESCRIBE_WORDS_LIMIT) }),
+            json!({
+                "words": "When a client asks, open an issue.",
+                "answers": [{ "question": "Which team?", "answer": "CUE" }, "the CUE team"],
+                "draft": "workflow client-asks"
+            }),
+            json!({ "words": "Open an issue.", "draft": { "ruleId": "client-asks", "version": 1 } }),
+            json!({ "words": "Open an issue.", "answers": [] }),
+        ] {
+            let request = DescribeRequest::try_from(good.clone()).expect("a request");
+            assert_eq!(
+                serde_json::from_slice::<Value>(&request.bytes()).expect("json"),
+                good
+            );
+        }
+        let five: Vec<Value> = (0..5).map(|n| json!(format!("answer {n}"))).collect();
+        let six: Vec<Value> = (0..6).map(|n| json!(format!("answer {n}"))).collect();
+        assert!(
+            DescribeRequest::try_from(json!({ "words": "Open an issue.", "answers": five }))
+                .is_ok()
+        );
+        for bad in [
+            json!(null),
+            json!("Open an issue."),
+            json!({}),
+            json!({ "words": "" }),
+            json!({ "words": "   " }),
+            json!({ "words": 7 }),
+            json!({ "words": "x".repeat(DESCRIBE_WORDS_LIMIT + 1) }),
+            json!({ "words": "Open an issue.", "answers": six }),
+            json!({ "words": "Open an issue.", "answers": "CUE" }),
+            json!({ "words": "Open an issue.", "answers": [7] }),
+            json!({ "words": "Open an issue.", "draft": 7 }),
+            json!({ "words": "Open an issue.", "draft": ["workflow"] }),
+            json!({ "words": "Open an issue.", "draft": "x".repeat(DESCRIBE_DRAFT_LIMIT) }),
+            json!({ "words": "Open an issue.", "provider": "anthropic" }),
+            json!({ "words": "Open an issue.", "key": "fake-key" }),
+            json!({ "words": "Open an issue.", "profile": "fake-profile" }),
+        ] {
+            assert!(DescribeRequest::try_from(bad.clone()).is_err(), "{bad}");
+        }
+        let words: Vec<&str> = DescribeProvider::ALL.iter().map(|p| p.word()).collect();
+        assert_eq!(words, ["claude-cli", "openrouter", "anthropic"]);
+        for bad in ["claude", "typesafe", "OpenRouter", ""] {
+            assert!(
+                serde_json::from_value::<DescribeProvider>(json!(bad)).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// A scan's root (0.36.0) is a folder written whole, as the relay's home is.
+    #[test]
+    fn a_whole_folder_is_absolute_and_normal() {
+        for good in ["/example/home/work", "/example/home/code/acme site"] {
+            assert!(whole_folder(good), "{good}");
+        }
+        for bad in [
+            "",
+            "/",
+            "default",
+            "~/work",
+            "work",
+            "--json",
+            "/example/home/",
+            "/example//home",
+            "/example/home/../etc",
+            "/example/./home",
+            "/example/home\n",
+            "/example/home\u{202e}",
+        ] {
+            assert!(!whole_folder(bad), "{bad:?}");
         }
     }
 

@@ -1,0 +1,22 @@
+{
+  "ruleId": "client-asks",
+  "version": 4,
+  "path": ["route", "issue"],
+  "steps": [
+    {
+      "stepId": "route",
+      "kind": "route",
+      "outcome": "chosen",
+      "would": [{ "text": "would choose acme-site, by its sender's domain", "kind": "plain" }],
+      "events": []
+    },
+    {
+      "stepId": "issue",
+      "kind": "deliver",
+      "outcome": "done",
+      "would": [{ "text": "would make an issue in CUE", "kind": "plain" }],
+      "issue": { "title": "A change to the booking form", "description": "Asked by a client." },
+      "events": [{ "type": "acme.client-asks.issue.created", "data": { "issue": { "identifier": "CUE-1" } } }]
+    }
+  ]
+}

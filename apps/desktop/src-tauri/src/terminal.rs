@@ -290,8 +290,12 @@ pub fn applescript_string(text: &str) -> String {
 ///   `integration set agent-sessions --relay-home …` (the call's own words), or `provider key set <provider>`, which
 ///   asks for the key there, hidden (0.33.0, where the app cannot attest the person). No other call; never a key.
 /// - **Approving a rule at a terminal:** the events service's `approve <approval-id>` (0.33.0), for a rule's activation
-///   the editor prepared: the terminal shows its preview and takes its challenge; `open_with` opens only one `Prepared`
-///   recorded.
+///   the editor prepared, or (0.36.0) a subscription Events → Subscribers prepared: the terminal shows its preview and
+///   takes its challenge; `open_with` opens only one `Prepared` recorded.
+/// - **A subscriber's secrets (0.36.0):** the events service's `subscriber token create|rotate <subscriber> --version
+///   <n>`, `subscriber secret create|rotate <subscriber> --version <n>` and `subscriber url set <subscriber> --version
+///   <n>`, each shown or asked for there, never in the app. The id is a checked word, the version whole, the action
+///   closed.
 pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>), AppError> {
     Ok(match command {
         TerminalCommand::Approve {
@@ -395,7 +399,47 @@ pub fn command_words(command: &TerminalCommand) -> Result<(Product, Vec<String>)
                 window.as_str().to_string(),
             ],
         ),
+        TerminalCommand::SubscriberToken {
+            subscriber_id,
+            version,
+            action,
+        } => (
+            Product::EventsDaemon,
+            subscriber_words(&["token", action.word()], subscriber_id, *version),
+        ),
+        TerminalCommand::SubscriberSecret {
+            subscriber_id,
+            version,
+            action,
+        } => (
+            Product::EventsDaemon,
+            subscriber_words(&["secret", action.word()], subscriber_id, *version),
+        ),
+        TerminalCommand::SubscriberUrl {
+            subscriber_id,
+            version,
+        } => (
+            Product::EventsDaemon,
+            subscriber_words(&["url", "set"], subscriber_id, *version),
+        ),
     })
+}
+
+/// `subscriber <noun> <verb> <subscriber> --version <n>`: a subscriber's secret, made at a terminal (0.36.0).
+fn subscriber_words(
+    command: &[&str],
+    subscriber_id: &crate::allowlist::SubscriberId,
+    version: crate::rule_editor::RuleVersion,
+) -> Vec<String> {
+    std::iter::once("subscriber")
+        .chain(command.iter().copied())
+        .map(str::to_string)
+        .chain([
+            subscriber_id.as_str().to_string(),
+            "--version".to_string(),
+            u64::from(version).to_string(),
+        ])
+        .collect()
 }
 
 /// The located line: the launcher's program and leading words, `words`, and the four pins. There is no `--json`: a
@@ -450,11 +494,14 @@ impl Prepared {
     /// Records what `call` came to, when it is a change the app prepares and it came back waiting for approval; or,
     /// when it is a rule's activation the rule editor prepared (0.33.0), the approval that came back and its digest, as
     /// the `eventsRuleApprove` that alone may answer it in the app; or, when it is switching the event service on that
-    /// Events → Service prepared (`eventsEnableAll`, 0.34.0), as the `eventsCollectionApprove` that alone may.
+    /// Events → Service prepared (`eventsEnableAll`, 0.34.0), as the `eventsCollectionApprove` that alone may; or, when it
+    /// is a subscription Events → Subscribers prepared (`eventsSubscriberEnable`, 0.36.0), as the
+    /// `eventsSubscriberApprove` that alone may.
     pub fn record(&self, call: &Call, result: &CliResult) {
         let answered_by = match call {
             Call::EventsRuleEnable { .. } => Some("eventsRuleApprove"),
             Call::EventsEnableAll {} => Some("eventsCollectionApprove"),
+            Call::EventsSubscriberEnable { .. } => Some("eventsSubscriberApprove"),
             _ => None,
         };
         if let (Some(kind), CliResult::Ok { data, .. }) = (answered_by, result) {
@@ -492,14 +539,15 @@ impl Prepared {
         ))
     }
 
-    /// Whether `id` is an activation the app prepared (`record`): a rule's, for `eventsRuleEnable`, or switching the
-    /// event service on, for `eventsEnableAll` (0.34.0). Only those open in the terminal for their approval, the events
-    /// service's `approve <approval-id>`. The record is kept.
+    /// Whether `id` is an activation the app prepared (`record`): a rule's, for `eventsRuleEnable`, switching the event
+    /// service on, for `eventsEnableAll` (0.34.0), or a subscription, for `eventsSubscriberEnable` (0.36.0). Only those
+    /// open in the terminal for their approval, the events service's `approve <approval-id>`. The record is kept.
     pub fn rule_activation(&self, id: &ApprovalId) -> Result<(), AppError> {
         match self.map().get(id.as_str()) {
             Some(
                 Call::EventsRuleApprove { approval_id, .. }
-                | Call::EventsCollectionApprove { approval_id, .. },
+                | Call::EventsCollectionApprove { approval_id, .. }
+                | Call::EventsSubscriberApprove { approval_id, .. },
             ) if approval_id == id => Ok(()),
             _ => Err(AppError::refused(
                 "that approval is not an activation the app prepared: review it again",
@@ -580,6 +628,9 @@ pub fn open_with(
         | TerminalCommand::RuleApprove { .. }
         | TerminalCommand::AtTerminal { .. }
         | TerminalCommand::ProviderKeySet { .. }
+        | TerminalCommand::SubscriberToken { .. }
+        | TerminalCommand::SubscriberSecret { .. }
+        | TerminalCommand::SubscriberUrl { .. }
         | TerminalCommand::EventsJudgeKindEnable { .. } => None,
     };
     let planned = plan(ctx.platform, &words, &|name| effects.found(name));
@@ -2730,6 +2781,147 @@ mod tests {
                 "{value}"
             );
         }
+    }
+
+    /// A subscriber's secrets (0.36.0, spec W29) are made at a terminal only: its token, its signing secret and its
+    /// secret URL, each the events service's own launcher, its words, the version and the pins, without `--json`. Nothing
+    /// is revoked or recorded, and no shape carries a secret or a free word.
+    #[test]
+    fn subscriber_secrets_open_only_at_a_terminal_with_their_words() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        for (value, words) in [
+            (
+                serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 2, "action": "create" }),
+                &[
+                    "subscriber",
+                    "token",
+                    "create",
+                    "events-dashboard",
+                    "--version",
+                    "2",
+                ][..],
+            ),
+            (
+                serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 2, "action": "rotate" }),
+                &[
+                    "subscriber",
+                    "token",
+                    "rotate",
+                    "events-dashboard",
+                    "--version",
+                    "2",
+                ][..],
+            ),
+            (
+                serde_json::json!({ "kind": "subscriberSecret", "subscriberId": "crm-hook", "version": 1, "action": "create" }),
+                &[
+                    "subscriber",
+                    "secret",
+                    "create",
+                    "crm-hook",
+                    "--version",
+                    "1",
+                ][..],
+            ),
+            (
+                serde_json::json!({ "kind": "subscriberSecret", "subscriberId": "crm-hook", "version": 3, "action": "rotate" }),
+                &[
+                    "subscriber",
+                    "secret",
+                    "rotate",
+                    "crm-hook",
+                    "--version",
+                    "3",
+                ][..],
+            ),
+            (
+                serde_json::json!({ "kind": "subscriberUrl", "subscriberId": "crm-hook", "version": 1 }),
+                &["subscriber", "url", "set", "crm-hook", "--version", "1"][..],
+            ),
+        ] {
+            let command: TerminalCommand = serde_json::from_value(value.clone())
+                .unwrap_or_else(|error| panic!("{value}: {error}"));
+            let built = argv_for(&command, &ctx).expect("words");
+            assert_eq!(
+                built,
+                located(&ctx, Product::EventsDaemon, words),
+                "{value}"
+            );
+            assert!(!built.iter().any(|word| word == "--json"), "{value}");
+            let effects = Fake::new(true);
+            let prepared = Prepared::default();
+            let outcome = open_with(command, &ctx, &effects, &prepared).expect("an outcome");
+            assert!(
+                matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+                "{outcome:?}"
+            );
+            assert_eq!(*effects.log.borrow(), strings(&["spawn"]), "{value}");
+            assert!(prepared.map().is_empty(), "{value} records nothing");
+        }
+        for bad in [
+            serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 2 }),
+            serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 2, "action": "show" }),
+            serde_json::json!({ "kind": "subscriberToken", "subscriberId": "--json", "version": 2, "action": "create" }),
+            serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 0, "action": "create" }),
+            serde_json::json!({ "kind": "subscriberToken", "subscriberId": "events-dashboard", "version": 2, "action": "create", "token": "fake-token" }),
+            serde_json::json!({ "kind": "subscriberSecret", "subscriberId": "crm hook", "version": 1, "action": "create" }),
+            serde_json::json!({ "kind": "subscriberSecret", "subscriberId": "crm-hook", "version": 1, "action": "create", "secret": "fake-secret" }),
+            serde_json::json!({ "kind": "subscriberUrl", "subscriberId": "crm-hook", "version": 1, "url": "https://hooks.example" }),
+            serde_json::json!({ "kind": "subscriberUrl", "subscriberId": "crm-hook" }),
+            serde_json::json!({ "kind": "subscriberUrl", "subscriberId": "crm-hook", "version": 1, "action": "set" }),
+        ] {
+            assert!(
+                serde_json::from_value::<TerminalCommand>(bad.clone()).is_err(),
+                "{bad}"
+            );
+        }
+    }
+
+    /// Approve in Terminal opens for a subscription Events → Subscribers prepared (0.36.0), where the app cannot attest
+    /// the person: the same `approve <approval-id>`, for an approval `eventsSubscriberEnable` recorded, and only that one.
+    #[test]
+    fn rule_approve_opens_for_a_subscription_the_app_prepared() {
+        let (_dir, ctx) = installation(&[Product::Core, Product::EventsDaemon]);
+        let command: TerminalCommand =
+            serde_json::from_value(serde_json::json!({ "kind": "ruleApprove", "approvalId": ID }))
+                .expect("Approve in Terminal's shape");
+        let effects = Fake::new(true);
+        let enable = serde_json::from_value::<Call>(serde_json::json!({
+            "kind": "eventsSubscriberEnable",
+            "subscriberId": "events-dashboard",
+            "version": 2
+        }))
+        .expect("enable");
+        let unread = Prepared::default();
+        unread.record(
+            &enable,
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::json!({ "approvalId": ID, "binding": {} }),
+            },
+        );
+        assert!(open_with(command.clone(), &ctx, &effects, &unread).is_err());
+        assert!(effects.log.borrow().is_empty(), "nothing ran");
+        let prepared = Prepared::default();
+        prepared.record(
+            &enable,
+            &CliResult::Ok {
+                exit: 0,
+                data: serde_json::json!({
+                    "approvalId": ID,
+                    "binding": { "digest": "0f".repeat(32), "activationKind": "subscription" },
+                    "kind": "subscription",
+                    "status": "pending"
+                }),
+            },
+        );
+        let outcome = open_with(command, &ctx, &effects, &prepared).expect("an outcome");
+        assert!(
+            matches!(outcome, TerminalOutcome::Opened { revoked: None, .. }),
+            "{outcome:?}"
+        );
+        assert_eq!(*effects.log.borrow(), strings(&["spawn"]));
+        assert_eq!(prepared.map().len(), 1, "kept for Cancel's revoke");
     }
 
     /// Do it in Terminal for switching the event service on (0.34.0 design B4), where the app cannot attest the person:

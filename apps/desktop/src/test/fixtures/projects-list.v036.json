@@ -1,0 +1,29 @@
+{
+  "projects": [
+    {
+      "projectId": "acme-site",
+      "name": "acme-site",
+      "repo": "github.com/example/acme-site",
+      "profile": "The Acme site: its pages and its booking form.",
+      "profileBy": "person",
+      "profileAt": 1792828800000,
+      "hints": { "senderDomains": ["acme.example"], "slackConversations": ["C0123ABCD"], "people": ["@jo"] },
+      "folders": [
+        {
+          "folder": "/example/home/work/acme-site",
+          "kind": "checkout",
+          "defaultBranch": "main",
+          "worktreeRoot": "/example/home/work/acme-site-wt"
+        },
+        {
+          "folder": "/example/home/work/acme-site-wt/ac-acme-123",
+          "kind": "worktree",
+          "defaultBranch": null,
+          "worktreeRoot": null
+        }
+      ],
+      "createdAt": 1792828800000,
+      "updatedAt": 1792828800000
+    }
+  ]
+}

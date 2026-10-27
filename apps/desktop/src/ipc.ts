@@ -134,6 +134,36 @@ export type McpServers = McpServer | McpServer[];
 /** How an agent's messages look in a Slack workspace (`allowlist.rs`, `SlackStyle`): as the app, or as you, tagged. */
 export type SlackStyle = 'app' | 'labelled';
 
+/** A workflow run's state (0.36.0, `allowlist.rs`, `RunState`), as `runs list --state` takes it. Closed. */
+export const RUN_STATES = ['held', 'running', 'waiting', 'done', 'failed', 'cancelled', 'expired'] as const;
+export type RunState = (typeof RUN_STATES)[number];
+
+/**
+ * Who drafts a workflow for Describe it (0.36.0, `rule_editor.rs`, `DescribeProvider`): the person's own Claude on this
+ * Mac, or OpenRouter or Anthropic on the key kept for Analyse. Closed.
+ */
+export const DESCRIBE_PROVIDERS = ['claude-cli', 'openrouter', 'anthropic'] as const;
+export type DescribeProvider = (typeof DESCRIBE_PROVIDERS)[number];
+
+/** An answer to one of Describe it's questions, given back in the next round (0.36.0). */
+export interface DescribeAnswer {
+  question: string;
+  answer: string;
+}
+
+/**
+ * What Describe it is asked (0.36.0, `rule_editor.rs`, `DescribeRequest`), on stdin: the person's words, 1 to 4,000
+ * characters; up to five answers; and the current draft sent along, its text or its document, at most 48 KiB.
+ */
+export interface DescribeRequest {
+  words: string;
+  answers?: DescribeAnswer[];
+  draft?: string | JsonDocument;
+}
+
+/** Whether a subscriber's terminal-only secret is made for the first time or again (0.36.0, `SecretAction`). */
+export type SecretAction = 'create' | 'rotate';
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -292,6 +322,31 @@ export type Call =
   | { kind: 'labelStyleApproved'; account: string; style: 'labelled'; approvalId: string }
   | { kind: 'behaviourAllowApproved'; account: string; acts: string; conversation?: string; approvalId: string }
   | { kind: 'behaviourClearApproved'; account: string; conversation?: string; approvalId: string }
+  // Workflows (0.36.0, plan 2026-10-27-workflows-0360 I7): check, one version, and a try with chosen outcomes, each
+  // document on stdin. Runs listed, shown and cancelled. Projects, listed, shown, added, changed, removed and found on
+  // this Mac. Describe it, written nowhere. The step event catalogue. Subscribers, added and changed on stdin, removed
+  // at once, and a subscription prepared, then approved by the person's press in the app, only for the one the app
+  // prepared, for that digest. A run is wfr_ and 26 of Crockford's lowercase letters, a project 1 to 64 of [a-z0-9-].
+  | { kind: 'eventsRuleCheck'; document: JsonDocument }
+  | { kind: 'eventsRuleShowVersion'; ruleId: string; version: number }
+  | { kind: 'eventsRuleTestFlow'; document: JsonDocument; example: string; outcomes: Record<string, string> }
+  | { kind: 'eventsRunsList'; ruleId?: string; state?: RunState }
+  | { kind: 'eventsRunShow'; runId: string }
+  | { kind: 'eventsRunCancel'; runId: string; interrupt: boolean }
+  | { kind: 'eventsProjectsList' }
+  | { kind: 'eventsProjectShow'; projectId: string }
+  | { kind: 'eventsProjectAdd'; document: JsonDocument }
+  | { kind: 'eventsProjectUpdate'; document: JsonDocument }
+  | { kind: 'eventsProjectRemove'; projectId: string }
+  | { kind: 'eventsProjectScan'; roots: string[] }
+  | { kind: 'eventsWorkflowDescribe'; request: DescribeRequest; provider: DescribeProvider }
+  | { kind: 'eventsWorkflowEventsList' }
+  | { kind: 'eventsSubscribersList' }
+  | { kind: 'eventsSubscriberAdd'; document: JsonDocument }
+  | { kind: 'eventsSubscriberUpdate'; document: JsonDocument }
+  | { kind: 'eventsSubscriberRemove'; subscriberId: string }
+  | { kind: 'eventsSubscriberEnable'; subscriberId: string; version: number }
+  | { kind: 'eventsSubscriberApprove'; approvalId: string; digest: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -361,7 +416,15 @@ export type TerminalCommand =
       kind: 'atTerminal';
       call: Extract<Call, { kind: 'judgeSetup' | 'providerKeyRemove' | 'integrationSetAgentSessions' }>;
     }
-  | { kind: 'providerKeySet'; provider: KeyProvider };
+  | { kind: 'providerKeySet'; provider: KeyProvider }
+  /**
+   * A subscriber's secrets, made at a terminal only (0.36.0): a live subscriber's token, `subscriber token
+   * create|rotate`, a webhook's signing secret, `subscriber secret create|rotate`, and its secret URL, `subscriber url
+   * set`, each for one subscriber version. The terminal shows or asks for each; the app never has one.
+   */
+  | { kind: 'subscriberToken'; subscriberId: string; version: number; action: SecretAction }
+  | { kind: 'subscriberSecret'; subscriberId: string; version: number; action: SecretAction }
+  | { kind: 'subscriberUrl'; subscriberId: string; version: number };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 

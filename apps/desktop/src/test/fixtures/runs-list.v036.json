@@ -1,0 +1,38 @@
+{
+  "runs": [
+    {
+      "runId": "wfr_0123456789abcdefghjkmnpqrs",
+      "ruleId": "client-asks",
+      "ruleVersion": 4,
+      "state": "waiting",
+      "startedAt": 1792915200000,
+      "updatedAt": 1792915262000,
+      "endCode": null,
+      "eventId": "0123456789abcdef0123456789abcdef",
+      "parentRunId": null,
+      "depth": 0,
+      "shadow": false,
+      "waiting": {
+        "stepId": "queue",
+        "kind": "session-idle",
+        "since": 1792915262000,
+        "ahead": 1,
+        "needsYouInClaudeStream": false
+      }
+    },
+    {
+      "runId": "wfr_zyxwvtsrqpnmkjhgfedcba9876",
+      "ruleId": "client-asks",
+      "ruleVersion": 3,
+      "state": "done",
+      "startedAt": 1792828800000,
+      "updatedAt": 1792830000000,
+      "endCode": "DONE",
+      "eventId": "fedcba9876543210fedcba9876543210",
+      "parentRunId": null,
+      "depth": 0,
+      "shadow": false,
+      "waiting": null
+    }
+  ]
+}

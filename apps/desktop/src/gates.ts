@@ -21,6 +21,8 @@
  * prepares Switch on…, which is then approved in Terminal.
  * `accountAppApproval` is core's (`ACCOUNT_APP_APPROVAL_VERSION`, 0.34.0): an account page's loosenings — what agents
  * may do there, and a Slack workspace's style — approved in the app; before it, each is approved in Terminal.
+ * `workflows` is the events service's (`WORKFLOWS_VERSION`, 0.36.0): workflows checked, tried and drawn, their runs,
+ * projects, Describe it, the step event catalogue, and subscribers given events and approved in the app.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -40,6 +42,7 @@ export const GATES = {
   bringUpToDate: '0.34.0',
   collectionSwitch: '0.34.0',
   accountAppApproval: '0.34.0',
+  workflows: '0.36.0',
 } as const;
 
 export type Feature = keyof typeof GATES;
