@@ -14,6 +14,8 @@ export type EventDomainErrorCode =
   // A Linear target whose team key or label name is not, in Linear, the one its id names (second look of 0.33.0).
   | 'LINEAR_LABEL_MISMATCH'
   | 'LINEAR_TEAM_MISMATCH'
+  // A route step's candidate that is no longer the person's project as it is now: gone, or its folders moved (0.36).
+  | 'PROJECT_CHANGED'
   | 'QUEUE_MAPPING_INCOMPLETE'
   | 'SOURCE_CHANNEL_UNSUPPORTED'
   // A target template (0.33.0 design §3.4, §3.6): a slot that names a field the rule does not map, and a model-written
