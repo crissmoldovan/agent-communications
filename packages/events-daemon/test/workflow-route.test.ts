@@ -313,7 +313,7 @@ test("C's composition holds the route executor and the candidates' activation ch
       const composition = composeProjects({ store, sessions } as unknown as Parameters<typeof composeProjects>[0]);
       assert.deepEqual(
         composition.executors.map((entry) => entry.kind),
-        ['route', 'find-session', 'start-session'],
+        ['route', 'find-session', 'start-session', 'worktree'],
       );
       assert.deepEqual(composition.activationChecks, [routeCandidatesCheck]);
       assert.equal(profileHash(''), createHash('sha256').update('').digest('hex'));
