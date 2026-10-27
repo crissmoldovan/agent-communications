@@ -116,6 +116,7 @@ export class EventDispatcher {
   readonly #now: () => number;
   /** The attempts `pump` started that are still going, one at most per subscriber version. */
   readonly #inFlight = new Map<string, Promise<void>>();
+  #stopped = false;
 
   constructor(options: EventDispatcherOptions) {
     this.#options = options;
@@ -144,31 +145,55 @@ export class EventDispatcher {
    * The owner's pass (W33: delivery never touches the run): `tick`'s, except that each due head's attempt is started
    * apart and never waited for here, at most one at a time per subscriber version. A subscriber that hangs holds back
    * neither the owner's tick — the engine, the sources, the targets — nor another subscriber; its own later events wait
-   * behind it, in order. Returns how many attempts it started.
+   * behind it, in order. Each queue drains without waiting for the owner's next tick: an attempt that settles delivered
+   * starts its subscriber version's next due event at once. Returns how many attempts it started.
    */
   pump(): number {
+    if (this.#stopped) return 0;
     this.#recover();
-    const apart = this.#options.apart ?? ((work) => work());
     let started = 0;
-    for (const row of this.#due()) {
-      const key = JSON.stringify([row.subscriber_id, row.subscriber_version]);
-      if (this.#inFlight.has(key)) continue;
-      const attempt = apart(() => this.#attempt(row))
-        // One delivery's failure is its own: it is retried, or settled, by its next claim.
-        .then(
-          () => undefined,
-          () => undefined,
-        )
-        .finally(() => this.#inFlight.delete(key));
-      this.#inFlight.set(key, attempt);
-      started += 1;
-    }
+    for (const row of this.#due()) if (this.#start(row)) started += 1;
     return started;
   }
 
-  /** Resolves once no attempt `pump` started is still going: the owner's stop, and its tick seam, wait for this. */
+  /**
+   * Starts one attempt apart, under its own writer lease, unless its subscriber version has one going. Only a delivered
+   * one starts the next at once: a retry keeps its backoff, and a dead letter or a refusal waits for the next pass.
+   */
+  #start(row: DeliveryRow): boolean {
+    const key = JSON.stringify([row.subscriber_id, row.subscriber_version]);
+    if (this.#inFlight.has(key)) return false;
+    const apart = this.#options.apart ?? ((work) => work());
+    const attempt = apart(() => this.#attempt(row))
+      // One delivery's failure is its own: it is retried, or settled, by its next claim.
+      .then(
+        (attempted) => attempted,
+        () => false,
+      )
+      .then((attempted) => {
+        this.#inFlight.delete(key);
+        if (!attempted || this.#stopped) return;
+        try {
+          if (!this.#delivered(row)) return;
+          const next = this.#head(row.subscriber_id, row.subscriber_version);
+          if (next !== undefined) this.#start(next);
+        } catch {
+          // The store could not be read just now: the owner's next pass takes this queue up again.
+        }
+      });
+    this.#inFlight.set(key, attempt);
+    return true;
+  }
+
+  /** Resolves once no attempt `pump` started — nor any it went on to — is still going: the owner's tick seam waits. */
   async idle(): Promise<void> {
     while (this.#inFlight.size > 0) await Promise.all(this.#inFlight.values());
+  }
+
+  /** Starts no more attempts, and resolves once those going have finished: the owner's stop, before its store closes. */
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    await this.idle();
   }
 
   /** Settles what time ended, and gives back the leases that lapsed: at least once, so a lapsed attempt goes again. */
@@ -207,9 +232,31 @@ export class EventDispatcher {
           LIMIT ?`,
       )
       .all(this.#options.batchSize ?? 64) as unknown as DeliveryRow[];
-    return heads.filter(
-      (row) => row.state === 'queued' || (row.state === 'retryable' && (row.next_at === null || row.next_at <= now)),
-    );
+    return heads.filter((row) => this.#isDue(row, now));
+  }
+
+  #isDue(row: DeliveryRow, now: number): boolean {
+    return row.state === 'queued' || (row.state === 'retryable' && (row.next_at === null || row.next_at <= now));
+  }
+
+  /** The head of one subscriber version's queue, when it is due. */
+  #head(subscriberId: string, subscriberVersion: number): DeliveryRow | undefined {
+    const head = this.#options.store.database
+      .prepare(
+        `SELECT event_id, subscriber_id, subscriber_version, kind, state, attempts, next_at FROM event_deliveries
+          WHERE subscriber_id = ? AND subscriber_version = ? AND state IN ('queued', 'retryable', 'disclosing')
+          ORDER BY ordering_sequence LIMIT 1`,
+      )
+      .get(subscriberId, subscriberVersion) as DeliveryRow | undefined;
+    return head !== undefined && this.#isDue(head, this.#now()) ? { ...head } : undefined;
+  }
+
+  /** Whether this row's delivery is settled delivered. */
+  #delivered(row: DeliveryRow): boolean {
+    const settled = this.#options.store.database
+      .prepare('SELECT state FROM event_deliveries WHERE event_id = ? AND subscriber_id = ? AND subscriber_version = ?')
+      .get(row.event_id, row.subscriber_id, row.subscriber_version) as { state: string } | undefined;
+    return settled?.state === 'delivered';
   }
 
   #claim(row: DeliveryRow): EventDeliveryClaim | null {
