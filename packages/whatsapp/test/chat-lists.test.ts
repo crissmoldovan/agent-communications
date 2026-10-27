@@ -194,7 +194,7 @@ test('allow, deny and clear are a person’s: refused to an agent, unchanged by 
     assert.equal(
       result.json().error?.hint,
       // The refusal names the marker and how a person clears it (0.35.0 re-review, LOW 3).
-      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal. ${agentMarkerHint('CLAUDECODE', process.platform)}`,
+      `Ask the person to run ${ownInline(harness.env, [...argv, '--account', ACCOUNT])} in their own terminal. ${agentMarkerHint('CLAUDECODE', 'darwin')}`,
     );
   }
   assert.deepEqual(readFileSync(configPath), config, 'nothing was written');
