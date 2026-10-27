@@ -513,7 +513,17 @@ export class HoldResolver {
     const run =
       evaluated === null || 'rejected' in evaluated
         ? undefined
-        : await prepareFlowRun({ cipher: this.#cipher, rule: after.rule, data: evaluated.mapped.data, createdAt });
+        : await prepareFlowRun({
+            cipher: this.#cipher,
+            rule: after.rule,
+            data: evaluated.mapped.data,
+            createdAt,
+            matched: {
+              definition: evaluated.definition,
+              event: projection.event,
+              classification: evaluated.classification,
+            },
+          });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({
         eventId: after.reference.eventId,

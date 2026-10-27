@@ -209,7 +209,7 @@ test('E3: what a sender wrote reaches Linear as text only — no link, mention, 
   // The template's own words come through as written; the constant the rule maps is quoted as the rule's, as text.
   assert.match(issue.description, /^Check it against Stripe\.\n\nSubject: /u);
   assert.ok(issue.description.includes(`Kind: \n\n${outsideBlock('kind', 'invoice', 'rule')}`));
-  assert.match(issue.description, /\n\n_Added by Agent Comms: rule invoices, version 4; delivery dl\\-1\._$/u);
+  assert.match(issue.description, /\n\n_Added by Agent Comms: workflow invoices, version 4; delivery dl\\-1\._$/u);
   // Every line of the sender's text is inside one quoted, fenced block, whose fence outruns their backticks.
   const block = outsideBlock('subject', hostile);
   assert.ok(issue.description.includes(block));
@@ -239,7 +239,7 @@ test('E3: what a sender wrote reaches Linear as text only — no link, mention, 
   assert.match(long, /_Shortened to its first 2000 characters\._$/u);
   // A title with nothing to show still has a title.
   const blank = rendered(canonicalLinearTarget(linear({ title: { text: '{{subject}}' } })), { subject: ' ' });
-  assert.equal(blank.title, 'Agent Comms: rule invoices');
+  assert.equal(blank.title, 'Agent Comms: workflow invoices');
 });
 
 test('E3 second look: a constant the rule maps is quoted as text too — an agent-written rule cannot mention or link through one', () => {
@@ -263,7 +263,7 @@ test('E3 second look: a constant the rule maps is quoted as text too — an agen
   assert.equal(issue.title, `${mapping.note} second line`);
   // In the description the constant is a quoted code block, labelled as the rule's, never Markdown.
   const lines = issue.description.split('\n');
-  assert.ok(lines.includes("> **From the rule's mapping: a fixed value, shown as text** (`note`)"));
+  assert.ok(lines.includes("> **From the workflow's mapping: a fixed value, shown as text** (`note`)"));
   assert.ok(lines.includes('> ```text'));
   for (const line of lines.filter((entry) => !entry.startsWith('>')))
     for (const word of ['profiles', '@ceo', 'CUE-12', 'evil.example', '[this]'])

@@ -111,6 +111,8 @@ export interface WorkflowEngineOptions {
   readonly judgeFor?: ((attempt: JudgedAttempt) => StepContext['judge']) | undefined;
   /** B4's deliveries; until they are composed, a deliver step fails closed. */
   readonly deliveries?: FlowDeliveries | undefined;
+  /** Told after a step starts waiting on the relay — a turn's end or a free session — so its follower follows. */
+  readonly onRelayWait?: (() => void) | undefined;
   /** B6's turn interrupt through the relay, for `runs cancel --interrupt`. */
   readonly interrupt?: ((run: RunView) => Promise<boolean>) | undefined;
   /** The owner's writer lease, held by the ticks a wake starts, as by the scheduler's own. */
@@ -159,6 +161,7 @@ export class WorkflowEngine {
   readonly #judgeFor: WorkflowEngineOptions['judgeFor'];
   readonly #deliveries: FlowDeliveries | undefined;
   readonly #interrupt: WorkflowEngineOptions['interrupt'];
+  readonly #onRelayWait: WorkflowEngineOptions['onRelayWait'];
   readonly #quiescer: WriterQuiescer | undefined;
   readonly #now: () => number;
   readonly #newId: () => string;
@@ -168,6 +171,7 @@ export class WorkflowEngine {
   readonly #rules = new Map<string, CanonicalFullRuleDocument>();
   #queue: Promise<unknown> = Promise.resolve();
   #wakeScheduled = false;
+  #stopped = false;
 
   constructor(options: WorkflowEngineOptions) {
     this.#store = options.store;
@@ -181,6 +185,7 @@ export class WorkflowEngine {
     this.#judgeFor = options.judgeFor;
     this.#deliveries = options.deliveries;
     this.#interrupt = options.interrupt;
+    this.#onRelayWait = options.onRelayWait;
     this.#quiescer = options.writerQuiescer;
     this.#now = options.now ?? Date.now;
     this.#newId = options.newId ?? (() => randomBytes(16).toString('hex'));
@@ -194,20 +199,30 @@ export class WorkflowEngine {
    * expiry runs whatever the switch; nothing is claimed while collection is off or paused. Returns how many steps ran.
    */
   tick(): Promise<number> {
-    const work = this.#queue.then(() => this.#tick());
+    if (this.#stopped) return Promise.resolve(0);
+    const work = this.#queue.then(() => (this.#stopped ? 0 : this.#tick()));
     this.#queue = work.catch(() => undefined);
     return work;
   }
 
   /** Something a run waits on changed: look again soon, under the owner's writer lease. Never throws. */
   wake(_runId: string): void {
-    if (this.#wakeScheduled) return;
+    if (this.#wakeScheduled || this.#stopped) return;
     this.#wakeScheduled = true;
     setImmediate(() => {
       this.#wakeScheduled = false;
       const pass = () => this.tick();
       void (this.#quiescer === undefined ? pass() : withEventWriterLease(this.#quiescer, pass)).catch(() => undefined);
     });
+  }
+
+  /**
+   * The service stops: no pass starts after this, and the one in flight finishes while the database is still open — a
+   * step a wake claimed as the follower stopped settles, rather than holding its claim's lease into the next start.
+   */
+  async stop(): Promise<void> {
+    this.#stopped = true;
+    await this.#queue;
   }
 
   /**
@@ -454,7 +469,16 @@ export class WorkflowEngine {
       if (this.#deliveries === undefined || step.kind !== 'deliver')
         result = { kind: 'failed', code: 'DELIVER_NOT_COMPOSED' };
       else {
-        delivery = await this.#deliveries.prepare({ run: runViewOf(row), rule, request: result.delivery, context });
+        try {
+          delivery = await this.#deliveries.prepare({ run: runViewOf(row), rule, request: result.delivery, context });
+        } catch (error) {
+          if (isAuthorityGone(error)) {
+            await this.#cancelForAuthority(row, rule, reasonOf(error));
+            return true;
+          }
+          // A delivery the run's record cannot make — its target, its source — fails the step, closed.
+          result = { kind: 'failed', code: error instanceof CommsError ? reasonOf(error) : 'DELIVERY_UNPREPARED' };
+        }
       }
     }
     await this.#settle(row, rule, claim, result, delivery);
@@ -518,6 +542,9 @@ export class WorkflowEngine {
       if (settled) {
         if (planned.settle.run.state === 'done' || planned.settle.run.state === 'failed')
           await this.#ended(row, rule, planned.settle.run.state);
+        const waited = planned.settle.step;
+        if (waited.state === 'waiting' && (waited.wait?.kind === 'turn-end' || waited.wait?.kind === 'session-idle'))
+          this.#onRelayWait?.();
         return;
       }
       // Lost to a later attempt, or to the run's end: the settle is dropped. Otherwise a step moved: plan again.

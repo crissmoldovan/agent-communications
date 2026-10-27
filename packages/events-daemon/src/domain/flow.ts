@@ -549,33 +549,33 @@ export interface ClosedSlotValues {
 }
 
 /**
- * The text a closed slot fills with (§4.1): `{{run}}` is the run's id, `{{steps.<step>.<name>}}` that step's closed
- * output — a Linear issue's `id`, `identifier` and `url` by name — and `{{trigger.…}}` a chained run's trigger data.
- * A value that is not there fills with nothing. Never a session's summary, which only a Linear change renders.
+ * The value a closed slot names in one run (§4.1; the one slot resolver every step and target uses): `{{run}}` is the
+ * run's id; `{{steps.<step>.<name>}}` that step's closed output by name — or, as a Linear step nests its issue under
+ * `issue` (plan I5), the issue's `id`, `identifier` or `url`; `{{trigger.…}}` a chained run's trigger data. Undefined
+ * when there is none yet, and always for a session's summary, which only a Linear change renders, sealed.
  */
-export function closedSlotText(slot: string, values: ClosedSlotValues): string {
+export function closedSlotValue(slot: string, values: ClosedSlotValues): JsonValue | undefined {
   if (slot === 'run') return values.runId;
   const [root, ...rest] = slot.split('.');
-  let found: JsonValue | undefined;
   if (root === 'trigger') {
     const got = values.trigger === null ? undefined : getPointer(values.trigger as JsonValue, `/${rest.join('/')}`);
-    found = got?.found ? got.value : undefined;
-  } else if (root === 'steps') {
-    const [stepId, name] = rest as [string, string];
-    if (name === 'summary') return '';
-    const output = values.output(stepId);
-    const step = values.flow.steps[stepId];
-    const issue = output?.issue;
-    if (
-      step?.kind === 'deliver' &&
-      ['id', 'identifier', 'url'].includes(name) &&
-      typeof issue === 'object' &&
-      issue !== null &&
-      !Array.isArray(issue)
-    )
-      found = (issue as Record<string, JsonValue>)[name];
-    else found = output?.[name];
+    return got?.found ? got.value : undefined;
   }
+  if (root !== 'steps' || rest.length !== 2) return undefined;
+  const [stepId, name] = rest as [string, string];
+  if (name === 'summary') return undefined;
+  const output = values.output(stepId);
+  if (output === null) return undefined;
+  if (Object.hasOwn(output, name)) return output[name];
+  const issue = output.issue;
+  return typeof issue === 'object' && issue !== null && !Array.isArray(issue)
+    ? (issue as Readonly<Record<string, JsonValue>>)[name]
+    : undefined;
+}
+
+/** A closed slot's value as text: a string as it is, anything else as JSON, and nothing for none (§4.1). */
+export function closedSlotText(slot: string, values: ClosedSlotValues): string {
+  const found = closedSlotValue(slot, values);
   if (found === undefined || found === null) return '';
   return typeof found === 'string' ? found : canonicalJson(found);
 }

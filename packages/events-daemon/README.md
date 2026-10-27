@@ -177,7 +177,7 @@ agent-events lane unbind david       # at once; the window's watches end
   folder). One window per lane, and one lane per window. The app's Lanes panel opens your terminal with the command.
 - **What the window gets.** `events_watch({ lane })` answers with an MCP task (protocol 2026-07-28, the tasks
   extension) that completes on the lane's next new item: Claude Code wakes an idle window for it. The wake is a
-  pointer the event service writes — "1 new item in lane david (Slack, rule david-on-slack): read it with
+  pointer the event service writes — "1 new item in lane david (Slack, workflow david-on-slack): read it with
   events_lane_item, item qi_…" — never a sender, subject or text. The window reads the item with
   `events_lane_item({ item })`, every field its sender wrote inside an untrusted-content envelope, then watches again.
   A client without the tasks extension waits with `events_wait({ lane, seconds })`, up to 50 seconds at a time.
@@ -222,7 +222,7 @@ agent-events target add '{"targetId":"billing-issues","version":1,"kind":"linear
   addresses and issue ids, and reads the description as Markdown. So in the description every slot's value is a block
   quote, its text inside a code block, where Linear makes no link, mention or formatting: a value from the message is
   labelled "From outside: written by the sender, not checked", and a constant the workflow's mapping sets "From the
-  rule's mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain
+  workflow's mapping: a fixed value, shown as text" — an agent may have written that constant. In the title, which is plain
   text, each is one line. The templates' own words are written as they are, as you approved them, and the description
   ends with the workflow and delivery that added the issue.
 - **Checked against Linear.** When you enable a workflow and a Linear key is kept, the event service asks Linear (as

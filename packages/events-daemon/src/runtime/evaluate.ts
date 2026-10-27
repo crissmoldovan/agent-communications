@@ -373,6 +373,11 @@ export class EventEvaluator {
                   rule,
                   data: evaluated.mapped.data,
                   createdAt: this.#now(),
+                  matched: {
+                    definition: evaluated.definition,
+                    event: projection.event,
+                    classification: evaluated.classification,
+                  },
                 });
           // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
           // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
@@ -480,7 +485,17 @@ export class EventEvaluator {
     const run =
       evaluated === null
         ? undefined
-        : await prepareFlowRun({ cipher: this.#cipher, rule, data: evaluated.mapped.data, createdAt: now });
+        : await prepareFlowRun({
+            cipher: this.#cipher,
+            rule,
+            data: evaluated.mapped.data,
+            createdAt: now,
+            matched: {
+              definition: evaluated.definition,
+              event: projection.event,
+              classification: evaluated.classification,
+            },
+          });
     // Taint is part of the disclosure boundary. A failed flush retains the projection and creates no outbox row.
     if (evaluated !== null)
       await this.#taint.record({

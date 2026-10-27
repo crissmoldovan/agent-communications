@@ -1,7 +1,16 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { CommsError } from '@agentcomms/core';
-import type { FlowDocumentV1, FlowLimits, JsonValue, StepId } from '@agentcomms/events';
+import {
+  type AnyEventDefinition,
+  type FlowDocumentV1,
+  type FlowLimits,
+  type JsonValue,
+  type MappedClassification,
+  type StepId,
+  targetQueues,
+} from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../../domain/activation-documents.ts';
+import { type QueueItemContent, queueItemContent } from '../../domain/queue-target.ts';
 import type { ProjectionCipher } from '../projections.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from '../target-version-references.ts';
 import type { Output, RunView, WaitKind, WakeReason } from './contracts.ts';
@@ -18,10 +27,27 @@ import { chargeInTransaction, concurrencyAllowsInTransaction, globalConcurrencyA
 /** How long a claimed step is this attempt's before another may claim it again. */
 export const RUN_STEP_LEASE_MS = 30_000;
 
-/** A run's sealed record: the mapped values its steps read, and later a session's summary and a chain's trigger. */
+/**
+ * What a deliver step needs of the message beyond its mapped values, kept from the decision: what a CloudEvent's
+ * attributes are made of — the account, when it happened, its subject — and which mapped values a sender wrote.
+ */
+export interface RunSource {
+  readonly accountId: string;
+  readonly occurredAt: string;
+  readonly subject: string;
+  readonly classification: MappedClassification;
+}
+
+/**
+ * A run's sealed record: the mapped values its steps read; what its deliveries need of the message — the source and,
+ * for each target that can leave a Queue item, that item, by `targetId@version`; and later a session's summary and a
+ * chain's trigger.
+ */
 export interface RunRecord {
   readonly kind: 'workflow-run';
   readonly fields: JsonValue;
+  readonly source?: RunSource;
+  readonly items?: Readonly<Record<string, QueueItemContent>>;
   readonly summaries?: Readonly<Record<StepId, string>>;
   readonly trigger?: Output;
 }
@@ -61,6 +87,14 @@ export async function prepareFlowRun(input: {
   readonly rule: CanonicalFullRuleDocument;
   readonly data: JsonValue;
   readonly createdAt: number;
+  /** The matched message, as evaluated: what its deliveries need of it beyond the mapped values, kept with them. */
+  readonly matched?:
+    | {
+        readonly definition: AnyEventDefinition;
+        readonly event: Record<string, unknown>;
+        readonly classification: MappedClassification;
+      }
+    | undefined;
   /** A chained run's: the raised event's closed data, sealed with the fields as `/trigger` (W34). */
   readonly trigger?: Output | undefined;
   readonly parentRunId?: string | undefined;
@@ -72,6 +106,7 @@ export async function prepareFlowRun(input: {
   const sealedRecord = await sealRunRecord(input.cipher, runId, {
     kind: 'workflow-run',
     fields: input.data,
+    ...(input.matched === undefined ? {} : matchedParts(input.rule, input.matched)),
     ...(input.trigger === undefined ? {} : { trigger: input.trigger }),
   });
   return {
@@ -81,6 +116,68 @@ export async function prepareFlowRun(input: {
     createdAt: input.createdAt,
     ...(input.parentRunId === undefined ? {} : { parentRunId: input.parentRunId, depth: input.depth ?? 1 }),
   };
+}
+
+/** The source and Queue items a run's deliveries need, from the message as it was evaluated. */
+function matchedParts(
+  rule: CanonicalFullRuleDocument,
+  message: NonNullable<Parameters<typeof prepareFlowRun>[0]['matched']>,
+): Pick<RunRecord, 'source' | 'items'> {
+  const event = message.event as { readonly account?: { readonly id?: unknown }; readonly occurredAt?: unknown };
+  const items: Record<string, QueueItemContent> = {};
+  for (const target of rule.targets) {
+    const show =
+      target.kind === 'queue' ? target.show : target.kind === 'session' && targetQueues(target) ? 'summary' : null;
+    if (show === null) continue;
+    items[`${target.targetId}@${target.version}`] = queueItemContent({
+      eventType: rule.event.type,
+      mapping: rule.mapping,
+      event: message.event as JsonValue,
+      show,
+    });
+  }
+  return {
+    source: {
+      accountId: typeof event.account?.id === 'string' ? event.account.id : '',
+      occurredAt: typeof event.occurredAt === 'string' ? event.occurredAt : '',
+      subject: (message.definition as { subject(event: unknown): string }).subject(message.event),
+      classification: message.classification,
+    },
+    ...(Object.keys(items).length === 0 ? {} : { items }),
+  };
+}
+
+/**
+ * Adds a session's summary to a live run's sealed record (workflows design §6.4): sealed, never in a step's output,
+ * and purged with the record when the run ends. The record is opened, changed and sealed again through the leased
+ * cipher, and written only if it is still the one read. False when the run has ended or moved on meanwhile.
+ */
+export async function addRunSummary(
+  store: { readonly database: DatabaseSync },
+  cipher: ProjectionCipher,
+  runId: string,
+  stepId: StepId,
+  summary: string,
+): Promise<boolean> {
+  const row = store.database.prepare('SELECT encrypted_record FROM workflow_runs WHERE id = ?').get(runId) as
+    | { encrypted_record: Uint8Array | null }
+    | undefined;
+  if (row?.encrypted_record === null || row?.encrypted_record === undefined) return false;
+  const record = JSON.parse(
+    (await cipher.decrypt(runRecordLocation(runId), row.encrypted_record)).toString('utf8'),
+  ) as RunRecord;
+  const sealed = await sealRunRecord(cipher, runId, {
+    ...record,
+    summaries: { ...(record.summaries ?? {}), [stepId]: summary },
+  });
+  return (
+    store.database
+      .prepare(
+        `UPDATE workflow_runs SET encrypted_record = ?
+          WHERE id = ? AND encrypted_record = ? AND state IN ('held', 'running', 'waiting')`,
+      )
+      .run(sealed, runId, row.encrypted_record).changes === 1
+  );
 }
 
 /** A `workflow_runs` row, as the engine reads it. */
@@ -357,8 +454,8 @@ export function claimStepInTransaction(
     .get(input.runId, input.stepId) as StepRow | undefined;
   if (step === undefined) return 'none';
   const wait = database
-    .prepare('SELECT kind, wake_at FROM workflow_waits WHERE run_id = ? AND step_id = ?')
-    .get(input.runId, input.stepId) as { kind: WaitKind; wake_at: number } | undefined;
+    .prepare('SELECT kind, key, wake_at FROM workflow_waits WHERE run_id = ? AND step_id = ?')
+    .get(input.runId, input.stepId) as { kind: WaitKind; key: string | null; wake_at: number } | undefined;
   const delivery =
     step.delivery_id === null
       ? undefined
@@ -371,7 +468,17 @@ export function claimStepInTransaction(
   if (step.state === 'ready') {
     if (step.next_at !== null && step.next_at > input.now) return 'none';
   } else if (waiting && (wait !== undefined || step.delivery_id !== null)) {
-    if (wait !== undefined && wait.wake_at <= input.now) wake = { kind: wait.kind === 'limit' ? 'limit' : 'time' };
+    if (wait !== undefined && wait.wake_at <= input.now)
+      wake =
+        wait.wake_at === 0 && (wait.kind === 'turn-end' || wait.kind === 'session-idle')
+          ? // The relay ended it (`RelayWaits`): the step reads how from the relay itself.
+            {
+              kind: 'relay',
+              event: wait.kind === 'turn-end' ? 'run-ended' : 'session-idle',
+              key: wait.key ?? '',
+              detail: {},
+            }
+          : { kind: wait.kind === 'limit' ? 'limit' : 'time' };
     else if (step.delivery_id !== null && deliveryOver)
       wake = {
         kind: 'delivery',

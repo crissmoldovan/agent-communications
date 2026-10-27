@@ -93,6 +93,8 @@ export interface DeliveryDispatcherOptions {
   readonly session?: DeliveryDispatchHandler | undefined;
   /** The Linear target's adapter (0.33.0); a Linear delivery is refused, never claimed by another, when it is absent. */
   readonly linear?: DeliveryDispatchHandler | undefined;
+  /** Told after each try of a delivery returns, so a workflow step waiting on it looks again (0.36); never throws. */
+  readonly onDispatched?: ((deliveryId: string) => void) | undefined;
   readonly now?: (() => number) | undefined;
   /** B3 exact-slot gate, checked before the handler claims or renders a delivery. */
   readonly assertObjectSecretReady?:
@@ -118,6 +120,7 @@ export class DeliveryDispatcher {
   readonly #queue: DeliveryDispatchHandler | undefined;
   readonly #session: DeliveryDispatchHandler | undefined;
   readonly #linear: DeliveryDispatchHandler | undefined;
+  readonly #onDispatched: DeliveryDispatcherOptions['onDispatched'];
   readonly #now: () => number;
   readonly #assertObjectSecretReady: DeliveryDispatcherOptions['assertObjectSecretReady'];
 
@@ -129,6 +132,7 @@ export class DeliveryDispatcher {
     this.#queue = options.queue;
     this.#session = options.session;
     this.#linear = options.linear;
+    this.#onDispatched = options.onDispatched;
     this.#now = options.now ?? Date.now;
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
   }
@@ -158,7 +162,13 @@ export class DeliveryDispatcher {
           owner: { kind: 'subscriber', id: row.subscriber_id, version: row.subscriber_version },
         });
     }
-    return this.#handler(row.target_key).dispatch(deliveryId);
+    const result = await this.#handler(row.target_key).dispatch(deliveryId);
+    try {
+      this.#onDispatched?.(deliveryId);
+    } catch {
+      // A waiting step looks again at the next tick whatever this does.
+    }
+    return result;
   }
 
   /** Recovery uses the same kind router, so a later adapter cannot be claimed by the dry-run path. */
