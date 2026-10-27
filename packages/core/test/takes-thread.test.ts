@@ -103,6 +103,31 @@ test('threadHolder names the newest session to take the thread, and skips the me
   );
 });
 
+test("threadHolder names the session that took the conversation's first message before anyone replied to it", async () => {
+  // Slack's own take records no thread for a message with no replies yet (`slack/src/operations/take.ts`), and nor
+  // does a delivery's offer: the first message of a conversation is its thread's id, so its take is in the thread.
+  const { store } = storeAt();
+  const parent = message('1729936800.000100', null);
+  await store.take(parent, holder('a', ALICE_SESSION));
+  const reply = message('1729936900.000200');
+  assert.deepEqual(await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: THREAD, except: reply }), {
+    sessionId: ALICE_SESSION,
+    state: 'taken',
+    at: '2026-10-26T10:00:00.000Z',
+  });
+  // The first message itself is never "an earlier one", and another conversation's first message is not in this one.
+  assert.equal(
+    await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: THREAD, except: parent }),
+    null,
+  );
+  const other = message('1729936000.000900', null);
+  await store.take(other, holder('b', BOB_SESSION));
+  assert.deepEqual(
+    (await store.threadHolder({ channel: 'slack', accountId: ACCOUNT, thread: THREAD, except: reply }))?.sessionId,
+    ALICE_SESSION,
+  );
+});
+
 test('threadHolder is null for the person, for a holder with no session id, and for a thread nobody took', async () => {
   const { store } = storeAt();
   const kept = message('1729936800.000100');
