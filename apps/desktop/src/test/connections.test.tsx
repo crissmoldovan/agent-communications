@@ -135,8 +135,8 @@ const terminals = (bridge: FakeBridge): TerminalCommand[] =>
 async function openConnections(bridge: FakeBridge) {
   renderApp(bridge);
   const navigation = await screen.findByRole('navigation', { name: 'Sections' });
-  fireEvent.click(within(navigation).getByRole('button', { name: /^Connections/ }));
-  expect(await screen.findByRole('heading', { level: 1, name: 'Connections' })).toBeTruthy();
+  fireEvent.click(within(navigation).getByRole('button', { name: /^MCP connections/ }));
+  expect(await screen.findByRole('heading', { level: 1, name: 'MCP connections' })).toBeTruthy();
   return within(main());
 }
 
@@ -165,11 +165,11 @@ describe('Connections (spec §3.3)', () => {
       const names = within(navigation)
         .getAllByRole('button')
         .map((button) => button.textContent?.trim());
-      expect(names.indexOf('Connections New')).toBe(names.indexOf('Accounts') + 1);
-      const item = within(navigation).getByRole('button', { name: /^Connections/ });
+      expect(names.indexOf('MCP connections New')).toBe(names.indexOf('Accounts') + 1);
+      const item = within(navigation).getByRole('button', { name: /^MCP connections/ });
       expect(item.querySelector('[data-slot="new-tag"]')?.textContent).toBe(' New');
       fireEvent.click(item);
-      expect(await screen.findByRole('heading', { level: 1, name: 'Connections' })).toBeTruthy();
+      expect(await screen.findByRole('heading', { level: 1, name: 'MCP connections' })).toBeTruthy();
       expect(item.getAttribute('aria-current')).toBe('page');
       expect(within(main()).getByText(CONNECTIONS_COPY.intro)).toBeTruthy();
       expect(CONNECTIONS_COPY.intro).toContain('An app sees a change after you restart it.');

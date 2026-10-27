@@ -34,7 +34,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Messages New',
     'People New',
     'Accounts',
-    'Connections New',
+    'MCP connections New',
     'Approvals',
     'Activity',
     'Your agents',

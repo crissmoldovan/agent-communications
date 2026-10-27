@@ -1,0 +1,159 @@
+{
+  "core": "0.35.0",
+  "channels": [
+    {
+      "channel": "core",
+      "kind": "channel",
+      "label": "agentcomms (core)",
+      "package": "@agentcomms/core",
+      "binary": "agentcomms",
+      "serverName": "agentcomms",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "cursor",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.cursor/mcp.json",
+          "launcher": "managed",
+          "version": "0.35.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false,
+          "connection": null
+        }
+      ],
+      "viaConnections": []
+    },
+    {
+      "channel": "gmail",
+      "kind": "channel",
+      "label": "Gmail",
+      "package": "@agentcomms/gmail",
+      "binary": "agent-gmail",
+      "serverName": "gmail",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "cursor",
+          "name": "gmail",
+          "scope": "user",
+          "path": "/example/home/.cursor/mcp.json",
+          "launcher": "managed",
+          "version": "0.35.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false,
+          "connection": null
+        },
+        {
+          "client": "claude-code",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.cursor/mcp.json",
+          "launcher": "managed",
+          "version": "0.35.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false,
+          "connection": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D"
+        }
+      ],
+      "viaConnections": []
+    },
+    {
+      "channel": "resend",
+      "kind": "channel",
+      "label": "Resend",
+      "package": "@agentcomms/resend",
+      "binary": "agent-resend",
+      "serverName": "resend",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [],
+      "viaConnections": []
+    },
+    {
+      "channel": "slack",
+      "kind": "channel",
+      "label": "Slack",
+      "package": "@agentcomms/slack",
+      "binary": "agent-slack",
+      "serverName": "slack",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.cursor/mcp.json",
+          "launcher": "managed",
+          "version": "0.35.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false,
+          "connection": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D"
+        }
+      ],
+      "viaConnections": []
+    },
+    {
+      "channel": "whatsapp",
+      "kind": "channel",
+      "label": "WhatsApp",
+      "package": "@agentcomms/whatsapp",
+      "binary": "agent-whatsapp",
+      "serverName": "whatsapp",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [],
+      "viaConnections": []
+    },
+    {
+      "channel": "events",
+      "kind": "service",
+      "label": "events",
+      "package": "@agentcomms/events-daemon",
+      "binary": "agent-events",
+      "serverName": "events",
+      "installs": "0.35.0",
+      "installed": true,
+      "runtimes": [],
+      "onPath": null,
+      "registered": [
+        {
+          "client": "claude-code",
+          "name": "agentcomms",
+          "scope": "user",
+          "path": "/example/home/.cursor/mcp.json",
+          "launcher": "managed",
+          "version": "0.35.0",
+          "narrowing": [],
+          "pathPins": {},
+          "missing": null,
+          "behindCore": false,
+          "connection": "cn_01JB8Y3K7Q2M9XRF84TZWP8C5D"
+        }
+      ],
+      "viaConnections": []
+    }
+  ],
+  "unreadable": []
+}

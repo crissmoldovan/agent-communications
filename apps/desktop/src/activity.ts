@@ -33,6 +33,11 @@ export interface SessionView {
   folder: string | null;
   /** The client as it said it is, never proof of what it is (§4.3). */
   client: { name: string; version: string | null } | null;
+  /**
+   * The MCP connection its calls came through (0.35.0, single-server design D11, §7): its id, and its name when the line
+   * was written. A gateway checked that connection's key, so "used by" it is exact. Absent or null through none.
+   */
+  connection?: ConnectionNamed | null;
   firstSeen: string;
   lastSeen: string;
   processes: number;
@@ -69,6 +74,14 @@ export interface LineView {
   recipients: string[];
   approvalId: string | null;
   told: { rule: string; target: string } | null;
+  /** The MCP connection this call came through (0.35.0, D11), from its session; null through none. */
+  connection?: ConnectionNamed | null;
+}
+
+/** A connection as an activity line names it: by id, and by the name it had when the line was written (D11). */
+export interface ConnectionNamed {
+  id: string;
+  name: string;
 }
 
 export interface SessionsView {
@@ -90,6 +103,14 @@ const strings = (value: unknown): string[] =>
   Array.isArray(value) ? value.filter((each): each is string => typeof each === 'string') : [];
 const whole = (value: unknown): number | null =>
   typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.round(value) : null;
+
+/** A line's or a session's connection: kept only with an id that is a connection's and a name. */
+function connectionOf(value: unknown): ConnectionNamed | null {
+  if (!isRecord(value)) return null;
+  const id = text(value.id);
+  const name = text(value.name);
+  return id !== null && /^cn_[0-9A-HJKMNP-TV-Z]{26}$/.test(id) && name !== null && name !== '' ? { id, name } : null;
+}
 
 function countsOf<K extends string>(value: unknown, names: readonly K[]): Record<K, number> {
   const given = isRecord(value) ? value : {};
@@ -114,6 +135,7 @@ function sessionOf(value: unknown): SessionView | null {
     surfaces: strings(value.surfaces),
     folder: text(value.folderShown),
     client: client === null ? null : { name: client.name as string, version: text(client.version) },
+    connection: connectionOf(value.connection),
     firstSeen,
     lastSeen,
     processes: whole(value.processes) ?? 1,
@@ -173,7 +195,15 @@ function lineOf(value: unknown): LineView | null {
     recipients: strings(value.recipients),
     approvalId: text(value.approvalId),
     told: told === null ? null : { rule: text(told.rule) ?? '', target: text(told.target) ?? '' },
+    connection: isRecord(value.session) ? connectionOf(value.session.connection) : null,
   };
+}
+
+/** The connection a session's calls came through: its own, or the newest a line of its timeline names. */
+export function connectionOfSession(session: SessionView, lines: readonly LineView[] = []): ConnectionNamed | null {
+  if (session.connection) return session.connection;
+  const named = [...lines].sort((a, b) => Date.parse(b.at) - Date.parse(a.at)).find((line) => line.connection);
+  return named?.connection ?? null;
 }
 
 /** `activity show --json`, read: null when it is not that answer at all. */
@@ -249,8 +279,15 @@ export function channelLabel(channel: string): string {
 
 // ── Who ran a session ──────────────────────────────────────────────────────────────────────────────────────────
 
-/** Who ran a session, in a few words: its client as it said, the event service, a command, or nobody named. */
-export function runnerOf(session: SessionView): { said: string; asTheClientSays: boolean } {
+/**
+ * Who ran a session, in a few words: the MCP connection it came through ("Used by Work — Claude Code", 0.35.0), exact
+ * since a gateway checked its key; else its client as it said, the event service, a command, or nobody named.
+ */
+export function runnerOf(
+  session: SessionView,
+  connection: ConnectionNamed | null = session.connection ?? null,
+): { said: string; asTheClientSays: boolean } {
+  if (connection !== null) return { said: `Used by ${connection.name}`, asTheClientSays: false };
   if (session.client !== null) {
     const said = session.client.version ? `${session.client.name} ${session.client.version}` : session.client.name;
     return { said, asTheClientSays: true };

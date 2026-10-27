@@ -219,6 +219,47 @@ export type SearchQueryCall = {
 };
 
 /**
+ * The apps an MCP connection is made for (0.35.0, `mcp_connections.rs`, `ConnectionApp`): core's six that it registers
+ * with, then Manual, a snippet the person pastes into any other app. In core's order.
+ */
+export const CONNECTION_APPS = [
+  'claude-code',
+  'claude-desktop',
+  'codex',
+  'cursor',
+  'gemini',
+  'vscode',
+  'manual',
+] as const;
+export type ConnectionApp = (typeof CONNECTION_APPS)[number];
+
+/**
+ * One part of an MCP connection, as `--parts` names it (0.35.0, `mcp_connections.rs`, `ConnectionPart`): a declared
+ * server's word, which core checks against its snapshot; the one account it is kept to, left out for every account;
+ * and read-only, sent only when on.
+ */
+export interface ConnectionPartRequest {
+  server: string;
+  account?: string;
+  readOnly?: true;
+}
+
+/**
+ * `connection add` (0.35.0): the app, the name, every part, and for Claude Code one project's folder, or another Claude
+ * profile's or Codex home's. Without `appApproval` it is prepared; with it, the person approved in the app the addition
+ * the app prepared, word for word.
+ */
+export type ConnectionAddCall = {
+  kind: 'connectionAdd';
+  app: ConnectionApp;
+  name: string;
+  parts: ConnectionPartRequest[];
+  folder?: string;
+  profile?: string;
+  appApproval?: string;
+};
+
+/**
  * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
  * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
  * union up to the first line that ends in `;`, and anchors on its disable as that line.
@@ -368,6 +409,19 @@ export type Call =
   | { kind: 'searchModelSet'; address: string; model: SearchModelName; appApproval?: string }
   | { kind: 'searchModelNone' }
   | { kind: 'searchDeleteAll' }
+  // MCP connections (0.35.0, single-server design §11, `mcp_connections.rs`): core's `connection …`. The list and one
+  // connection, read; adding one, changing its parts, moving separate entries into one and undoing it, each prepared
+  // without `appApproval` and approved by the person's press in the app with it, only for the approval the app prepared
+  // for that same change (a change that only takes away applies at once); renaming, a new key and removing, at once.
+  | { kind: 'connectionList' }
+  | { kind: 'connectionShow'; connectionId: string }
+  | ConnectionAddCall
+  | { kind: 'connectionChange'; connectionId: string; parts: ConnectionPartRequest[]; appApproval?: string }
+  | { kind: 'connectionRename'; connectionId: string; name: string }
+  | { kind: 'connectionKeyReplace'; connectionId: string }
+  | { kind: 'connectionRemove'; connectionId: string }
+  | { kind: 'connectionMigrate'; client?: McpClient; appApproval?: string }
+  | { kind: 'connectionMigrateUndo'; connectionId: string; appApproval?: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
