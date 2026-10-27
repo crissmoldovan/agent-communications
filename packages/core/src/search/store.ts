@@ -7,15 +7,18 @@ import { FILE_MODE } from '../fs.ts';
 import type { SearchChannel, SearchDirection, SearchInboxLine, SearchSeenBy } from './capture.ts';
 import { openSearchRecord, type SearchKey, sealSearchRecord } from './crypto.ts';
 import type { SearchPaths } from './folder.ts';
-import { loadSearchSqlite, probeSearchSqlite, WORDS_TABLE_OPTIONS } from './sqlite.ts';
+import { loadSearchSqlite, probeSearchSqlite, WORDS_TABLE_COLUMNS, WORDS_TABLE_OPTIONS } from './sqlite.ts';
+import { WordHasher } from './words.ts';
 
 /**
  * The index (design 2026-10-26-local-search §4): one SQLite file, written by the indexer alone (S8).
  *
  * - `messages`: one row a message, its id the words index's rowid, its text, subject, sender's name and line sealed
  *   in `encrypted_record` — bound to the row by its source id, channel, account and direction.
- * - `words`: FTS5, contentless (`content=''`), so it holds the tokens and never the text, and deletes
- *   (`contentless_delete=1`), so a deleted row leaves nothing behind.
+ * - `words`: FTS5, contentless (`content=''`), deleting (`contentless_delete=1`) and with no positions (`detail=none`).
+ *   It holds keyed hashes of each message's words (`words.ts`), never the words: the review of 2026-10-27 (M2) read a
+ *   message back, in order, from the tokens of the table schema 1 kept. An index of schema 1 — a 0.35 test build's — is
+ *   rebuilt on its first open (`openSearchStore`).
  * - `vectors`: one Float32 vector a message for each generation — a model and its digest — so the vectors of the last
  *   complete set can serve while a new one is made (§5). The design draws one vector a message; this keeps two while
  *   a rebuild runs, and drops the old set the moment the new one is complete.
@@ -26,7 +29,8 @@ import { loadSearchSqlite, probeSearchSqlite, WORDS_TABLE_OPTIONS } from './sqli
  * the file is made owner-only before SQLite opens it, and SQLite gives its WAL and SHM the same mode.
  */
 
-export const SEARCH_SCHEMA_VERSION = 1;
+/** 2 from 2026-10-27: the words index holds keyed hashes, with no positions (1 held the words). */
+export const SEARCH_SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) STRICT;
@@ -66,7 +70,6 @@ CREATE INDEX IF NOT EXISTS messages_account_at ON messages(account_id, at);
 CREATE INDEX IF NOT EXISTS messages_handle ON messages(handle);
 CREATE INDEX IF NOT EXISTS messages_reply_to ON messages(reply_to);
 CREATE INDEX IF NOT EXISTS messages_seen_at ON messages(seen_at);
-CREATE VIRTUAL TABLE IF NOT EXISTS words USING fts5(subject, text, ${WORDS_TABLE_OPTIONS});
 CREATE TABLE IF NOT EXISTS vectors (
   message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
@@ -75,6 +78,21 @@ CREATE TABLE IF NOT EXISTS vectors (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS vectors_generation ON vectors(generation);
 `;
+
+/** The words index, as schema 2 makes it. */
+const WORDS_TABLE = `CREATE VIRTUAL TABLE IF NOT EXISTS words USING fts5(${WORDS_TABLE_COLUMNS}, ${WORDS_TABLE_OPTIONS})`;
+
+/** Set while the words index waits to be made again from the sealed text: it needs the key, which upkeep never asks for. */
+const WORDS_REBUILD = 'wordsRebuild';
+
+/**
+ * A word's weight in a search: how rare it is among the kept messages, as bm25 weighs it — `ln((N − n + ½) / (n + ½))`,
+ * and never less than a millionth, as FTS5's own bm25 has it.
+ */
+function rarity(total: number, holding: number): number {
+  const weight = Math.log((total - holding + 0.5) / (holding + 0.5));
+  return weight > 0 ? weight : 1e-6;
+}
 
 /** Slack's two flags, as `flags` keeps them. */
 export const FLAG_MISMATCH = 1;
@@ -183,6 +201,7 @@ export class SearchStore {
   readonly db: DatabaseSync;
   /** Null for upkeep that opens no record — a prune — which needs no key. */
   readonly #key: SearchKey | null;
+  #hasher: WordHasher | null = null;
 
   constructor(db: DatabaseSync, master: SearchKey | null) {
     this.db = db;
@@ -193,6 +212,12 @@ export class SearchStore {
   get #master(): SearchKey {
     if (this.#key === null) throw new CommsError('UNEXPECTED', 'the search index was opened without its key');
     return this.#key;
+  }
+
+  /** The words index's hashes, under this key. */
+  get #words(): WordHasher {
+    this.#hasher ??= new WordHasher(this.#master);
+    return this.#hasher;
   }
 
   close(): void {
@@ -290,9 +315,7 @@ export class SearchStore {
           flags,
           this.#seal(line),
         );
-      this.db
-        .prepare('INSERT INTO words(rowid, subject, text) VALUES (?, ?, ?)')
-        .run(Number(inserted.lastInsertRowid), line.subject ?? '', line.text);
+      this.#putWords(Number(inserted.lastInsertRowid), line.subject, line.text);
       return 'inserted';
     }
     const row = rowOf(held);
@@ -328,10 +351,43 @@ export class SearchStore {
         this.#seal(line),
         row.id,
       );
-    this.db
-      .prepare('INSERT INTO words(rowid, subject, text) VALUES (?, ?, ?)')
-      .run(row.id, line.subject ?? '', line.text);
+    this.#putWords(row.id, line.subject, line.text);
     return 'replaced';
+  }
+
+  /** A message's words, as the index keeps them: keyed hashes, each once, sorted. */
+  #putWords(id: number, subject: string | undefined, text: string): void {
+    this.db
+      .prepare(`INSERT INTO words(rowid, ${WORDS_TABLE_COLUMNS}) VALUES (?, ?)`)
+      .run(id, this.#words.document(subject, text));
+  }
+
+  /**
+   * The words index made again from every row's sealed text, when it waits for that: once, after an index of schema 1
+   * — whose words index held the words — was opened. A record that no longer opens is never shown, and gives no words.
+   * Its own transaction; returns how many rows were given words, or null when nothing waited.
+   */
+  rebuildWordsIfWaiting(): number | null {
+    if (this.meta(WORDS_REBUILD) === undefined) return null;
+    return this.transaction(() => {
+      if (this.meta(WORDS_REBUILD) === undefined) return null;
+      this.db.exec("INSERT INTO words(words) VALUES ('delete-all')");
+      let given = 0;
+      const rows = this.db.prepare(`SELECT ${ROW_COLUMNS} FROM messages`).all() as Record<string, SQLInputValue>[];
+      for (const raw of rows) {
+        const row = rowOf(raw);
+        let record: SearchRecord;
+        try {
+          record = this.record(row);
+        } catch {
+          continue;
+        }
+        this.#putWords(row.id, record.subject, record.text);
+        given += 1;
+      }
+      this.setMeta(WORDS_REBUILD, undefined);
+      return given;
+    });
   }
 
   #touchHandle(handle: string, name: string | undefined, seenAt: number): void {
@@ -376,6 +432,11 @@ export class SearchStore {
   /**
    * Deletes every row first in hand before `keptFrom`, and every row of an account not in `accounts`; then every
    * person left with no message, unless the person linked or labelled them. Returns how many rows went.
+   *
+   * When any went, the words index is optimised too (the review of 2026-10-27, M3): a contentless table's delete only
+   * marks a row's tokens deleted, and they stay in the file until FTS5 merges the segments that hold them — days of
+   * Activity's retention later, or never. Optimising merges every segment into one now, without them; `secure_delete`
+   * zeroes the pages that frees, and every caller checkpoints the WAL after.
    */
   prune(keptFrom: number, accounts: readonly string[]): number {
     const old = this.db
@@ -385,7 +446,13 @@ export class SearchStore {
       .all(keptFrom, ...accounts) as { id: number }[];
     const deleted = this.deleteRows(old.map((row) => Number(row.id)));
     this.pruneEmptyPeople();
+    if (deleted > 0) this.optimizeWords();
     return deleted;
+  }
+
+  /** Merges the words index into one segment, leaving out every token of a deleted row. */
+  optimizeWords(): void {
+    this.db.exec("INSERT INTO words(words) VALUES ('optimize')");
   }
 
   /** People no message names any more, neither linked nor labelled by the person: deleted, with their handles. */
@@ -484,16 +551,34 @@ export class SearchStore {
     return { sql: parts.join(' AND '), args };
   }
 
-  /** The best `limit` rows for a words expression, by bm25 (lower is better), newer first on ties. */
-  wordsMatch(expression: string, filter: RowFilter, limit: number): number[] {
+  /**
+   * The best `limit` rows holding any word of `query` (§6, step 2): each word hashed as the index keeps it, the last
+   * whole or as a prefix. A row scores the weight of each word it holds — the rarer among all kept messages, the more —
+   * as bm25 weighs a word, without the counts and positions the index no longer keeps; best first, newer first on ties.
+   */
+  wordsMatch(query: string, filter: RowFilter, limit: number): number[] {
+    const terms = this.#words.terms(query);
+    if (terms.length === 0) return [];
+    const total = Number((this.db.prepare('SELECT count(*) AS n FROM messages').get() as { n: number }).n);
+    const holding = this.db.prepare('SELECT count(*) AS n FROM words WHERE words MATCH ?');
+    const weights = terms.map((term) => rarity(total, Number((holding.get(term) as { n: number }).n)));
     const where = this.#where(filter);
+    const score = terms
+      .map(() => 'CASE WHEN m.id IN (SELECT rowid FROM words WHERE words MATCH ?) THEN ? ELSE 0 END')
+      .join(' + ');
     return (
       this.db
         .prepare(
-          `SELECT m.id AS id FROM words JOIN messages m ON m.id = words.rowid
-           WHERE words MATCH ? AND ${where.sql} ORDER BY bm25(words), m.at DESC LIMIT ?`,
+          `SELECT m.id AS id, (${score}) AS score FROM messages m
+           WHERE m.id IN (SELECT rowid FROM words WHERE words MATCH ?) AND ${where.sql}
+           ORDER BY score DESC, m.at DESC LIMIT ?`,
         )
-        .all(expression, ...where.args, limit) as { id: number }[]
+        .all(
+          ...terms.flatMap((term, index) => [term, weights[index] ?? 1e-6]),
+          terms.join(' OR '),
+          ...where.args,
+          limit,
+        ) as { id: number }[]
     ).map((row) => Number(row.id));
   }
 
@@ -782,8 +867,14 @@ export async function openSearchStore(
     db.exec(SCHEMA);
     const store = new SearchStore(db, master);
     const schema = store.meta('schema');
-    if (schema === undefined) store.setMeta('schema', String(SEARCH_SCHEMA_VERSION));
-    else if (schema !== String(SEARCH_SCHEMA_VERSION)) {
+    if (schema === undefined) {
+      db.exec(WORDS_TABLE);
+      store.setMeta('schema', String(SEARCH_SCHEMA_VERSION));
+    } else if (schema === '1') {
+      upgradeWords(store);
+    } else if (schema === String(SEARCH_SCHEMA_VERSION)) {
+      db.exec(WORDS_TABLE);
+    } else {
       throw new CommsError('NEEDS_NEWER_RELEASE', 'the search index was made by a later release of Agent Comms', {
         hint: 'Update Agent Comms, or delete everything Search keeps and start again.',
       });
@@ -797,9 +888,28 @@ export async function openSearchStore(
         details: { reason: 'SEARCH_KEY_UNKNOWN' },
       });
     }
+    store.rebuildWordsIfWaiting();
     return store;
   } catch (error) {
     db.close();
     throw error;
   }
+}
+
+/**
+ * Schema 1 → 2 (a 0.35 test build's index; 0.35.0 was never released with schema 1): its words index, which held the
+ * words with their positions, is dropped at once — `secure_delete` zeroes what it held, and the WAL is checkpointed —
+ * and made again empty, waiting for the key. Upkeep opens with no key, so the hashes are made at the first open that
+ * has one (`rebuildWordsIfWaiting`), before anything is searched. One transaction, read again inside it, so two
+ * processes opening it at once upgrade it once.
+ */
+function upgradeWords(store: SearchStore): void {
+  store.transaction(() => {
+    if (store.meta('schema') !== '1') return;
+    store.db.exec('DROP TABLE IF EXISTS words');
+    store.db.exec(WORDS_TABLE);
+    store.setMeta(WORDS_REBUILD, 'waiting');
+    store.setMeta('schema', String(SEARCH_SCHEMA_VERSION));
+  });
+  store.checkpoint();
 }

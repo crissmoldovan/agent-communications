@@ -10,10 +10,11 @@ import { captureForSearch, resetCaptureForTests, type SearchCapture } from '../s
 import { ensureSearchKey, readSearchKey, SEARCH_KEY_REF, searchSecretStore } from '../src/search/crypto.ts';
 import { searchEndpoint } from '../src/search/endpoint-rule.ts';
 import { searchPaths } from '../src/search/folder.ts';
-import { runSearchIndex } from '../src/search/indexer.ts';
+import { pruneSearchIndex, runSearchIndex } from '../src/search/indexer.ts';
 import { isCloudModelName, searchModelName } from '../src/search/models.ts';
 import { OllamaClient } from '../src/search/ollama.ts';
 import { loadSearchSqlite } from '../src/search/sqlite.ts';
+import { WordHasher } from '../src/search/words.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import {
   MAIL,
@@ -96,6 +97,8 @@ const PERSON_ONLY: readonly (readonly string[])[] = [
   ['search', 'on'],
   ['search', 'accounts', 'add', MAIL.alias],
   ['search', 'model', 'set', 'http://127.0.0.1:11434'],
+  // The person's alone (review 2026-10-27): an irreversible delete of their store, and its key, is not an agent's.
+  ['search', 'delete', '--all', '--confirm'],
 ];
 
 const ANYWHERE: readonly (readonly string[])[] = [
@@ -103,7 +106,6 @@ const ANYWHERE: readonly (readonly string[])[] = [
   ['search', 'off'],
   ['search', 'accounts', 'remove', SLACK.alias],
   ['search', 'model', 'none'],
-  ['search', 'delete', '--all', '--confirm'],
 ];
 
 for (const [marker, value, reason] of [
@@ -163,6 +165,16 @@ test('GUARD: the operations refuse by themselves, whatever surface calls them', 
   assert.doesNotThrow(() =>
     searchSettingsChange(machine.core, { enabled: 'off' }, 'cli', { env: { GEMINI_CLI: '1' } }),
   );
+  // Delete everything is the person's: refused before the folder or the key is touched.
+  await capture(machine, MAIL, [mail()]);
+  for (const env of [{ CLAUDECODE: '1' }, { AGENTCOMMS_MCP_SERVER: 'core' }]) {
+    await assert.rejects(
+      searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env, deps: machine.deps }),
+      { code: 'APPROVAL_REQUIRED' },
+    );
+  }
+  assert.equal(existsSync(searchPaths(machine.stateDir).inbox), true);
+  assert.equal(machine.secrets.values.has(SEARCH_KEY_REF), true);
 });
 
 test('GUARD: no MCP tool reads what Search keeps: every search command is an exception row with no tool', () => {
@@ -339,11 +351,19 @@ test('GUARD: inbox lines and kept records are ciphertext: a planted name, subjec
         assert.equal(bytes.includes(Buffer.from(marker, 'utf8')), false, `${file} holds ${marker}`);
       }
     }
-    // What is not encrypted, and is pinned here: the words index holds the tokens, and finds them.
+    // The words as the words index would have folded them are in no file either: it holds keyed hashes (M2). The
+    // sender's address is a handle, kept plain for lookups (S11), so its words are not looked for here.
+    for (const file of files) {
+      const bytes = readFileSync(file);
+      for (const token of ['tangerine', 'kettle', 'zephyrine', 'quillon', 'budget', 'recap']) {
+        assert.equal(bytes.includes(Buffer.from(token, 'utf8')), false, `${file} holds ${token}`);
+      }
+    }
+    // What is not encrypted, and is pinned here: the vectors. The words index finds nothing by a word without the key.
     const sqlite = await loadSearchSqlite();
     const db = new sqlite.DatabaseSync(searchPaths(machine.stateDir).database, { readOnly: true });
     try {
-      assert.equal(db.prepare("SELECT count(*) AS n FROM words WHERE words MATCH 'tangerine'").get()?.n, 1);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM words WHERE words MATCH 'tangerine'").get()?.n, 0);
       assert.equal(db.prepare('SELECT count(*) AS n FROM vectors').get()?.n, 1);
       const record = db.prepare('SELECT encrypted_record FROM messages').get()?.encrypted_record as Uint8Array;
       assert.equal(Buffer.from(record).includes(Buffer.from('TANGERINE')), false);
@@ -361,6 +381,103 @@ test('GUARD: inbox lines and kept records are ciphertext: a planted name, subjec
   } finally {
     await ollama.close();
   }
+});
+
+/** The words index read as someone without the key would read it: each term, and where it stood, row by row. */
+async function wordsWithoutTheKey(machine: SearchMachine): Promise<{ doc: number; term: string; offset: unknown }[]> {
+  const sqlite = await loadSearchSqlite();
+  const raw = new sqlite.DatabaseSync(searchPaths(machine.stateDir).database);
+  try {
+    raw.exec("CREATE VIRTUAL TABLE temp.v USING fts5vocab(main, words, 'instance')");
+    return raw.prepare('SELECT doc, term, offset FROM temp.v ORDER BY doc, col, offset').all() as {
+      doc: number;
+      term: string;
+      offset: unknown;
+    }[];
+  } finally {
+    raw.close();
+  }
+}
+
+test('GUARD: the words index holds keyed hashes of words, never the words: without the key no message is read back from it, in order or out of it (review 2026-10-27, M2)', async () => {
+  const machine = searchMachine(on());
+  // The review's scenario: a message whose subject and text were rebuilt, in order, from `fts5vocab 'instance'`.
+  const secret = 'The new salary for Ioana is 9731 lei and the door code is marmotlantern';
+  await capture(machine, MAIL, [
+    mail({ sourceId: '18c00000000000m1', subject: 'Quarterly salaries', text: secret }),
+    ...Array.from({ length: 30 }, (_, at) =>
+      mail({ sourceId: `18c00000000001${String(at).padStart(2, '0')}`, subject: `lunch ${at}`, text: `note ${at}` }),
+    ),
+  ]);
+  assert.equal((await index(machine)).inserted, 31);
+  const terms = await wordsWithoutTheKey(machine);
+  assert.ok(terms.length > 0);
+  const words = new Set(terms.map((entry) => entry.term));
+  for (const word of ['salary', 'ioana', '9731', 'lei', 'door', 'code', 'marmotlantern', 'quarterly', 'salaries']) {
+    assert.equal(words.has(word), false, `the words index holds "${word}"`);
+  }
+  for (const entry of terms) {
+    assert.match(entry.term, /^[0-9a-f]{32}$/u, 'a term is a keyed hash, nothing a word can be read from');
+    assert.equal(entry.offset, null, 'no position is kept: the order of the words is not in the file');
+  }
+  for (const file of filesBelow(searchPaths(machine.stateDir).dir)) {
+    const bytes = readFileSync(file);
+    for (const word of ['salary', 'ioana', 'marmotlantern', 'salaries']) {
+      assert.equal(bytes.includes(Buffer.from(word, 'utf8')), false, `${file} holds ${word}`);
+    }
+  }
+  // With the key, the words still find it — whole, folded, and the last one as a prefix.
+  for (const words of ['marmotlantern', 'IOANA salary', 'door marmotlan', 'Quarterly']) {
+    const found = await searchQuery(machine.core, { text: words }, { env: {}, deps: machine.deps });
+    assert.equal(found.hits[0]?.sourceId, '18c00000000000m1', words);
+  }
+});
+
+test('GUARD: an index a 0.35 test build made, whose words index held the words, is rebuilt with keyed hashes on its first open — the words leave the file, and the same words find the same message (M2)', async () => {
+  const machine = searchMachine(on());
+  await capture(machine, MAIL, [
+    mail({ sourceId: '18c00000000000n1', subject: 'Gate code', text: 'the gate code is plumquandary' }),
+    mail({ sourceId: '18c00000000000n2', subject: 'Lunch', text: 'lunch on friday' }),
+  ]);
+  await index(machine);
+  // The file as that build left it: its words table, holding the words, and schema 1.
+  const paths = searchPaths(machine.stateDir);
+  const sqlite = await loadSearchSqlite();
+  const old = new sqlite.DatabaseSync(paths.database);
+  old.exec('DROP TABLE words');
+  old.exec(
+    "CREATE VIRTUAL TABLE words USING fts5(subject, text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2')",
+  );
+  const ids = old.prepare('SELECT id, source_id FROM messages').all() as { id: number; source_id: string }[];
+  for (const row of ids) {
+    const [subject, text] =
+      row.source_id === '18c00000000000n1'
+        ? ['Gate code', 'the gate code is plumquandary']
+        : ['Lunch', 'lunch on friday'];
+    old.prepare('INSERT INTO words(rowid, subject, text) VALUES (?, ?, ?)').run(row.id, subject, text);
+  }
+  old.exec("UPDATE meta SET value = '1' WHERE key = 'schema'");
+  old.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  old.close();
+  const holds = () => filesBelow(paths.dir).some((file) => readFileSync(file).includes(Buffer.from('plumquandary')));
+  assert.equal(holds(), true, 'the old words index holds the word');
+  // Upkeep with no key opens it first — a prune — and the words go at once; their hashes need the key, so they wait.
+  await pruneSearchIndex(machine.core, machine.deps);
+  assert.equal(holds(), false, 'the words left the file at the first open, before any key was asked for');
+  // The first open with the key makes the hashes from the sealed text, and the same words find the same message.
+  const found = await searchQuery(machine.core, { text: 'plumquandary' }, { env: {}, deps: machine.deps });
+  assert.deepEqual(
+    found.hits.map((hit) => hit.sourceId),
+    ['18c00000000000n1'],
+  );
+  assert.equal(holds(), false);
+  const after = new sqlite.DatabaseSync(paths.database, { readOnly: true });
+  try {
+    assert.equal(after.prepare("SELECT value FROM meta WHERE key = 'schema'").get()?.value, '2');
+  } finally {
+    after.close();
+  }
+  assert.ok((await wordsWithoutTheKey(machine)).every((entry) => /^[0-9a-f]{32}$/u.test(entry.term)));
 });
 
 test('GUARD: a record moved to another row does not open, and a line sealed with another key is not kept', async () => {
@@ -519,6 +636,84 @@ test('GUARD: what is past Activity’s days is deleted — rows, words and vecto
   }
 });
 
+test('GUARD: a pruned or removed message leaves no word in the file: the words index is optimised after each prune, and what it freed zeroed (review 2026-10-27, M3)', async () => {
+  const machine = searchMachine(on());
+  const now = Date.now();
+  await capture(
+    machine,
+    MAIL,
+    [mail({ sourceId: '18c00000000000p1', text: 'the vault word is quokkazebrine' })],
+    now - 10 * DAY,
+  );
+  await capture(machine, MAIL, [mail({ sourceId: '18c00000000000p2', text: 'fresh invoice' })], now - DAY);
+  await capture(machine, SLACK, [
+    {
+      channel: 'slack',
+      direction: 'in',
+      sourceId: 'C0GENERAL/1700000009.000100',
+      from: { userId: 'U0DAVID' },
+      text: 'the other vault word is slothmeridian',
+      at: now - DAY,
+      partial: false,
+    },
+  ]);
+  await index(machine);
+  const master = await readSearchKey(machine.secrets);
+  assert.ok(master);
+  const hasher = new WordHasher(master);
+  // A token as the file holds it: FTS5 keeps a term's start shared with the term before it, so its end is looked for.
+  const inFile = (token: string) =>
+    filesBelow(searchPaths(machine.stateDir).dir).some((file) =>
+      readFileSync(file).includes(Buffer.from(token.slice(8))),
+    );
+  for (const token of [hasher.word('quokkazebrine'), hasher.prefix('quokkazeb'), hasher.word('slothmeridian')]) {
+    assert.equal(inFile(token), true, 'the token is in the file while its message is kept');
+  }
+  // Fewer days: the ten-day-old message is pruned at once, and its words leave the bytes with it.
+  await gatedChange(machine.core, activitySettingsChange(machine.core, { retentionDays: 7 }, 'cli'), {
+    surface: 'cli',
+    channel: 'core',
+  });
+  assert.equal(inFile(hasher.word('quokkazebrine')), false, 'a pruned message’s word is gone from the file');
+  assert.equal(inFile(hasher.prefix('quokkazeb')), false, 'and its prefixes');
+  assert.equal(inFile(hasher.word('slothmeridian')), true);
+  // An account taken out of Search: its messages go, and their words with them.
+  const removed = searchSettingsChange(machine.core, { account: SLACK.alias, include: false }, 'cli', { env: {} });
+  await gatedChange(machine.core, removed, { surface: 'cli', channel: 'core' });
+  assert.equal(inFile(hasher.word('slothmeridian')), false, 'a removed account’s word is gone from the file');
+  const found = await searchQuery(machine.core, { text: 'invoice' }, { env: {}, deps: machine.deps });
+  assert.deepEqual(
+    found.hits.map((hit) => hit.sourceId),
+    ['18c00000000000p2'],
+  );
+});
+
+test('GUARD: more of Activity’s days, while Search keeps words, says in its preview that Search keeps them for as long (review 2026-10-27, M6)', async () => {
+  const longer = (machine: SearchMachine, days: number) =>
+    gatedChange(machine.core, activitySettingsChange(machine.core, { retentionDays: days }, 'cli'), {
+      surface: 'cli',
+      channel: 'core',
+    });
+  const line = /keeps the words of the messages Search on this machine holds for as long too: 365 days, not 30/u;
+  // On: the person approving a year of activity is told it is a year of message words too.
+  const machine = searchMachine(on());
+  const asked = await longer(machine, 365);
+  assert.equal(asked.status, 'approval-required');
+  assert.match(asked.status === 'approval-required' ? asked.prepared.preview : '', line);
+  // Off, with words still kept until their days pass: the same.
+  await capture(machine, MAIL, [mail()]);
+  await index(machine);
+  machine.write({ enabled: 'off', accounts: [MAIL.id] });
+  const off = await longer(machine, 365);
+  assert.match(off.status === 'approval-required' ? off.prepared.preview : '', line);
+  // Never used here: nothing about Search.
+  const never = await longer(searchMachine(), 365);
+  assert.equal(never.status, 'approval-required');
+  assert.doesNotMatch(never.status === 'approval-required' ? never.prepared.preview : '', /Search/u);
+  // Fewer days still applies at once, Search or not: a tightening carries no such line.
+  assert.equal((await longer(machine, 7)).status, 'applied');
+});
+
 test('GUARD: an account taken out of Search loses its rows at once', async () => {
   const machine = searchMachine(on());
   await capture(machine, MAIL, [mail()]);
@@ -582,7 +777,7 @@ test('GUARD: after Delete everything, a process that kept the old key in memory 
     });
   assert.equal(await keep('18c00000000000c1'), 1);
   const first = await readSearchKey(machine.secrets);
-  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env: {}, deps: machine.deps });
   // The same process captures again, without being told: the old key is gone from the store and from its memory.
   assert.equal(await keep('18c00000000000c2'), 1);
   const second = await readSearchKey(machine.secrets);
@@ -593,7 +788,7 @@ test('GUARD: after Delete everything, a process that kept the old key in memory 
   assert.equal(run.inserted, 1);
   // A key made by another process is seen too: its id is noted beside the folder.
   machine.secrets.values.delete(SEARCH_KEY_REF);
-  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { deps: machine.deps });
+  await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', { env: {}, deps: machine.deps });
   await index(machine);
   const third = await readSearchKey(machine.secrets);
   assert.ok(third);
@@ -611,10 +806,11 @@ test('GUARD: delete everything leaves no file and no key, and a later run starts
   await capture(machine, MAIL, [mail({ sourceId: '18c0000000000009' })]);
   const before = await readSearchKey(machine.secrets);
   assert.ok(before);
-  await assert.rejects(searchDeleteEverything(machine.core, { all: true }, 'cli', { deps: machine.deps }), {
+  await assert.rejects(searchDeleteEverything(machine.core, { all: true }, 'cli', { env: {}, deps: machine.deps }), {
     code: 'USAGE',
   });
   const result = await searchDeleteEverything(machine.core, { all: true, confirm: true }, 'cli', {
+    env: {},
     deps: machine.deps,
   });
   assert.equal(result.keyDeleted, true);

@@ -444,9 +444,9 @@ on, and only you search it: at your terminal, or in the app.
   and never WhatsApp or Resend, or a message from your own address or Slack user. It is kept for as long as Activity
   keeps its days, 30 by default.
 - **Where:** `<state>/search/` on this machine, owner-only, left out of Time Machine on macOS. Each message's text,
-  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store). The words
-  index and the vectors are not encrypted, and vectors can be turned back into text close to the original: treat
-  this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
+  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store), and the words
+  index holds keyed hashes of the words under that key, not the words. The vectors are not encrypted, and vectors can
+  be turned back into text close to the original: treat this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
   whether FileVault is on.
 - **Meaning, on this machine only:** `agentcomms search model set http://127.0.0.1:11434` uses your own Ollama, at a
   literal `127.0.0.1` or `[::1]` address, with `qwen3-embedding:0.6b` (the default), `embeddinggemma` or `bge-m3`.
@@ -457,7 +457,7 @@ on, and only you search it: at your terminal, or in the app.
   `search query <words…>`, `search people`, `search person <id>`, `search show <id>`, `search link` and `unlink`
   (only you join a Gmail address and a Slack user as one person; names never join anyone), `search index` and
   `rebuild`. `search off`, `accounts remove`, `model none` and `search delete --all --confirm` apply at once —
-  Delete everything removes the folder and its key.
+  Delete everything removes the folder and its key, and only you can run it: it is refused to an agent.
 - **No agent searches it.** No MCP tool reads it, and every search command but `status` and the tightenings is
   refused inside an MCP server's process and from an agent's shell — a speed bump against agents, not a boundary
   against code running as you. Agents keep their own live searches, `gmail_search` and `slack_search`.

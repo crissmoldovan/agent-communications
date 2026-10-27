@@ -45,7 +45,7 @@ import {
 } from '../search/indexer.ts';
 import { DEFAULT_SEARCH_MODEL, SEARCH_MODELS, searchModelName } from '../search/models.ts';
 import { OllamaClient, type SearchModelCheck, type SearchModelState } from '../search/ollama.ts';
-import { excerpt, fuse, nearest, queryTerms, wordsExpression } from '../search/rank.ts';
+import { excerpt, fuse, nearest, queryTerms } from '../search/rank.ts';
 import { readSearchSettings, type SearchModelSetting, type SearchSettings, storedSearch } from '../search/settings.ts';
 import { loadSearchSqlite, probeSearchSqlite } from '../search/sqlite.ts';
 import {
@@ -64,9 +64,10 @@ import type { DoctorCheck } from './maintenance.ts';
  * Search on this machine (design 2026-10-26-local-search): what each person asked, found by words and by meaning, from
  * what Agent Comms already had in hand — the person's view, at a terminal and in the app, and nobody else's.
  *
- * **Who may (S13).** Every command here but `status` and the tightenings — `off`, `accounts remove`, `model none`,
- * `delete` — is refused inside an MCP server's process (its marker, `AGENTCOMMS_MCP_SERVER`) and under an agent's
- * environment marker, as `activity items` and the event service's person-only reads are. No MCP tool reads the index:
+ * **Who may (S13).** Every command here but `status` and the tightenings — `off`, `accounts remove`, `model none` —
+ * is refused inside an MCP server's process (its marker, `AGENTCOMMS_MCP_SERVER`) and under an agent's environment
+ * marker; so is Delete everything, a tightening that cannot be undone and the person's alone (the review of
+ * 2026-10-27), as `activity items` and the event service's person-only reads are. No MCP tool reads the index:
  * a year of everyone's mail, searchable by meaning, is the widest read there is. The marker check is a speed bump
  * against agents, not a boundary: a shell runs as the person, and code running as the person can read what the person
  * can. `status` is content-free, so doctor — and `comms_doctor` — may show it.
@@ -158,6 +159,12 @@ export interface SearchStatus {
     readonly pull: string;
     /** Whether Ollama's local-only mode is set where this can see it: `OLLAMA_NO_CLOUD`, or `disable_ollama_cloud`. */
     readonly localOnly: boolean;
+    /**
+     * The digest of the weights the vectors in use were made with, when they were made by this model; null before
+     * any are. Unlike `digest` — what the server runs now — a new `ollama pull` leaves it as it was until every kept
+     * message is made again with the new weights, which the indexer does without asking (§5): the notes say so.
+     */
+    readonly vectorsDigest: string | null;
   } | null;
   /** The reviewed models, the default first. */
   readonly models: readonly { readonly name: string; readonly download: string; readonly licence: string }[];
@@ -214,10 +221,18 @@ async function waitingLines(paths: SearchPaths): Promise<number> {
   return lines;
 }
 
-/** Counts kept, read without opening any record: the database's own numbers. Null when there is none. */
-async function heldCounts(
-  paths: SearchPaths,
-): Promise<{ messages: number; in: number; out: number; people: number; oldestSeenAt: number | null } | null> {
+/**
+ * Counts kept, read without opening any record: the database's own numbers, and the model and digest the vectors in
+ * use were made with. Null when there is none.
+ */
+async function heldCounts(paths: SearchPaths): Promise<{
+  messages: number;
+  in: number;
+  out: number;
+  people: number;
+  oldestSeenAt: number | null;
+  serving: { name: string; digest: string } | null;
+} | null> {
   try {
     await stat(paths.database);
   } catch {
@@ -244,12 +259,31 @@ async function heldCounts(
       out: Number(row.outbound ?? 0),
       people: Number(row.people),
       oldestSeenAt: row.oldest === null ? null : Number(row.oldest),
+      serving: servingOf(db.prepare("SELECT value FROM meta WHERE key = 'serving'").get() as { value?: unknown }),
     };
   } catch {
     return null;
   } finally {
     db.close();
   }
+}
+
+/** The model and digest of the complete set of vectors in use, as the index notes them; null when there is none. */
+function servingOf(row: { value?: unknown } | undefined): { name: string; digest: string } | null {
+  if (typeof row?.value !== 'string') return null;
+  try {
+    const parsed = JSON.parse(row.value) as { name?: unknown; digest?: unknown };
+    return typeof parsed.name === 'string' && typeof parsed.digest === 'string'
+      ? { name: parsed.name, digest: parsed.digest }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A digest as a sentence shows it: its first 12 hex digits. */
+function shortDigest(digest: string): string {
+  return digest.replace(/^sha256:/u, '').slice(0, 12);
 }
 
 async function localOnlyMode(env: NodeJS.ProcessEnv): Promise<boolean> {
@@ -324,8 +358,18 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
       detail: check.detail,
       pull: `ollama pull ${settings.model.name}`,
       localOnly: await localOnlyMode(env),
+      vectorsDigest: held?.serving?.name === settings.model.name ? held.serving.digest : null,
     };
   }
+  // A model's new weights under the same name (a new `ollama pull`) are used at once: every kept message is made again
+  // with them, without asking (§5; S9 said it would ask for Rebuild). Said here, while it is so (the review of
+  // 2026-10-27).
+  const newWeights =
+    model !== null &&
+    model.state === 'running' &&
+    model.digest !== null &&
+    model.vectorsDigest !== null &&
+    model.digest !== model.vectorsDigest;
   let lastCaptureFailure: SearchStatus['lastCaptureFailure'] = null;
   try {
     const failure = JSON.parse(await readFile(join(paths.dir, CAPTURE_FAILURE_FILE), 'utf8')) as {
@@ -342,7 +386,7 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
   const backups = await backupState(paths, system);
   const diskEncryption = await diskEncryptionState(system);
   const notes = [
-    'Treat this folder like your mail: the words index and the vectors are not encrypted, and vectors can be turned back into text close to what was said.',
+    'Treat this folder like your mail: the words index holds keyed hashes of the words, not the words, but the vectors are not encrypted, and vectors can be turned back into text close to what was said.',
     ...(keyStore === 'file'
       ? [
           'The key is kept in a file beside the data, so the encryption protects only a copy of the search folder alone.',
@@ -350,6 +394,11 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
       : []),
     ...(system.platform === 'darwin' ? [] : ['Backups and disk encryption are not checked on this platform.']),
     ...(diskEncryption === 'off' ? ['FileVault is off: the disk itself is not encrypted.'] : []),
+    ...(newWeights && model !== null
+      ? [
+          `The model ${model.name} has new weights (digest ${shortDigest(model.digest ?? '')}; the vectors in use were made with ${shortDigest(model.vectorsDigest ?? '')}): Search makes every kept message's vectors again with them, sending each message's words to it once more, and the vectors made before serve until that is done.`,
+        ]
+      : []),
   ];
   return {
     on: settings.enabled === 'on',
@@ -659,8 +708,7 @@ export async function searchQuery(
         ...(person === undefined ? {} : { handles: handlesOfPerson(store, person, own) }),
       };
       const terms = queryTerms(text);
-      const expression = wordsExpression(terms);
-      const words = expression === undefined ? [] : store.wordsMatch(expression, filter, MAX_SEARCH_LIMIT);
+      const words = store.wordsMatch(text, filter, MAX_SEARCH_LIMIT);
       let meaning: number[] = [];
       let mode: SearchQueryResult['mode'] = 'words';
       let modelNote: string | null = null;
@@ -1146,7 +1194,7 @@ function searchableAccount(config: Config, alias: string): { id: string; alias: 
 }
 
 const SEARCH_SUMMARIES = {
-  on: 'Keep the words of new messages agents read, and the replies sent, on this machine — encrypted, for as long as Activity keeps its days — so you can search them',
+  on: 'Keep the words of new messages agents read, and the replies sent, on this machine for as long as Activity keeps its days — the text encrypted, the words as keyed hashes — so you can search them',
   off: 'Stop keeping the words of new messages on this machine for Search',
 } as const;
 
@@ -1205,7 +1253,7 @@ export function searchSettingsChange(
     }
     return model === null || model === undefined
       ? 'Search by words only: no model, and no vector kept'
-      : `Make kept messages searchable by meaning with ${model.name}, run by the model server at ${model.address} on this machine`;
+      : `Make kept messages searchable by meaning with ${model.name}, run by the model server at ${model.address} on this machine — the vectors it makes are kept unencrypted`;
   };
   const same = (before: Config, after: Config): boolean =>
     JSON.stringify(storedSearch(before) ?? {}) === JSON.stringify(storedSearch(after) ?? {}) &&
@@ -1293,10 +1341,14 @@ async function filesIn(dir: string): Promise<string[]> {
 }
 
 /**
- * Delete everything (§7): a tightening, from anywhere, once `--all --confirm` (or the app's confirm) says so. Stops a
- * run in progress; deletes the inbox, the database, its WAL and SHM — the whole folder; deletes the `search-index` key;
+ * Delete everything (§7): the person's alone, once `--all --confirm` (or the app's confirm) says so. Stops a run in
+ * progress; deletes the inbox, the database, its WAL and SHM — the whole folder; deletes the `search-index` key;
  * writes a content-free audit line. Search stays on or off as it was: what it keeps from now on starts empty, under a
  * new key.
+ *
+ * It tightens, but it cannot be undone, so it is refused inside an MCP server's process and under an agent's marker,
+ * as the person's searches are (the review of 2026-10-27): an agent's shell could otherwise erase what the person
+ * kept, and its key, at once. `off` stops keeping and deletes nothing, and stays anyone's.
  */
 export async function searchDeleteEverything(
   core: Core,
@@ -1304,6 +1356,7 @@ export async function searchDeleteEverything(
   surface: ChangeSurface,
   options: SearchOptions = {},
 ): Promise<SearchDeleteResult> {
+  refuseSearchToAgents(envOf(options), 'delete everything Search on this machine keeps');
   if (request.all !== true || request.confirm !== true) {
     throw new CommsError('USAGE', 'deleting everything Search keeps needs both --all and --confirm', {
       hint: 'It deletes every message, person, vector and capture Search keeps, and its key. Nothing in Slack or Gmail is touched.',

@@ -712,7 +712,7 @@ function meaning(field: string, after: SettingValue, scope: 'inboxes' | 'account
     case 'activity.retentionDays':
       return 'what agent sessions read and sent — subjects, senders, searches, recipients — will be kept on this machine for longer';
     case 'search.enabled':
-      return 'the words of new messages agents read in the accounts Search keeps, and of replies sent, will be kept on this machine, encrypted, for Activity’s days; Activity keeps no message’s words, and this does';
+      return 'the words of new messages agents read, and of replies sent, will be kept on this machine for Activity’s days — the text encrypted, the words index as keyed hashes; Activity keeps no message’s words, and this does';
     case 'search.accounts':
       return 'the words of new messages agents read in these accounts will be kept on this machine while Search is on, so you can search them';
     case 'search.model':

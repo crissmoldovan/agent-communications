@@ -238,8 +238,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 the second person is the first: their handles join; only you join people
   search unlink <handle>        an address or a Slack user becomes a person of its own again
   search label <person> <name>  the name you know someone by
-  search on [--approval <id>]   keep the words of new messages agents read, encrypted, for Activity's
-                                days: approved first
+  search on [--approval <id>]   keep the words of new messages agents read for Activity's days, the text
+                                encrypted and the words as keyed hashes: approved first
   search off                    keep nothing new: applies at once; what is kept goes when its days pass
   search accounts add <account> [--approval <id>]
                                 keep a Gmail mailbox's or a Slack workspace's messages: approved first
@@ -251,7 +251,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 embeddinggemma or bge-m3: approved first
   search model none             words only: applies at once, and drops every vector
   search delete --all --confirm
-                                delete everything Search keeps, and its key: applies at once
+                                delete everything Search keeps, and its key: applies at once, and is
+                                refused to an agent
   approvals list [--inbox <alias>] [--state <state>]
   approvals revoke <approvalId>
   approval wait <approvalId> [--wait-seconds <n>]
@@ -422,9 +423,9 @@ the command says to approve it at your terminal instead. It never goes with --ap
 neither: it applies at once.
 
 Search on this machine keeps the words of messages agents read, so you can find what each person asked. It is
-yours alone: every search command but status, off, accounts remove, model none and delete is refused inside an MCP
-server's process and from an agent's shell, and no MCP tool reads what it keeps. That refusal is a speed bump against
-agents, not a boundary against code running as you.
+yours alone: every search command but status, off, accounts remove and model none — delete too, since it cannot be
+undone — is refused inside an MCP server's process and from an agent's shell, and no MCP tool reads what it keeps.
+That refusal is a speed bump against agents, not a boundary against code running as you.
 
 A standing approval lets an agent acknowledge a message that has just arrived without asking, within the contents,
 places, limits and days you set. Slack's own standing add prepares one, and it is approved only with approve and the

@@ -132,16 +132,18 @@ days. It holds ids, subjects, senders and file names, and never a message body, 
 `agentcomms search status`, `search query` and the other `search` commands keep the words of the messages agents read, for the accounts the person chose, so they can find
 what each person asked (design 2026-10-26-local-search). Off by default; `search on`, `search accounts add` and
 `search model set` are loosenings, approved at a terminal or in the attested app with `--app-approval`; `search off`,
-`accounts remove`, `model none` and `delete --all --confirm` apply at once.
+`accounts remove`, `model none` and `delete --all --confirm` apply at once; Delete everything, which cannot be undone,
+is the person's alone, refused to an agent as their searches are.
 
 - **Capture:** a channel hands `captureForSearch(core, account, captures)` what an ok call had in hand; core keeps it
   only while Search keeps that account, never from the account's own handles, as one sealed line in
   `<state>/search/inbox/<UTC day>-<pid>.jsonl`. It never throws and never changes a result.
 - **The store:** `<state>/search/search.sqlite` through `node:sqlite`, opened only by the person's search commands —
   the indexer is its one writer, run by `search index`, before every search for two seconds, and by the app. Full-text
-  search is probed (FTS5, contentless, `unicode61 remove_diacritics 2`), so a Node without it — before 22.18 — says
-  so and keeps nothing. Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index`
-  in the configured secret store; the words index, the vectors and the handles are not.
+  search is probed (FTS5, contentless, deleting), so a Node without it — before 22.18 — says so and keeps nothing.
+  Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index` in the configured
+  secret store. The words index holds no word: each word, folded, is an HMAC under a subkey of that key, with no
+  position kept. The vectors and the handles are not encrypted.
 - **Meaning:** a loopback Ollama only, a reviewed model only (`qwen3-embedding:0.6b`, `embeddinggemma`, `bge-m3`),
   checked against `/api/tags` before any word is sent; words only without one.
 - **Who reads it:** the person alone. Every command but `status` and the tightenings is refused inside an MCP

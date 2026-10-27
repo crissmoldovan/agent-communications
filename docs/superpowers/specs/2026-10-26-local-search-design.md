@@ -80,6 +80,13 @@ Today nothing can answer "what did David ask about invoices?":
   only counts for it (activity spec S4). **Never Resend in v1.**
 - **Never the person's own messages.** A message from the account's own address, its send-as addresses or its own Slack
   user is not an ask.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding; L).** 0.35's Gmail capture never passed the
+  > send-as addresses, so a message from one was kept as someone's ask. Now Gmail's capture reads the mailbox's
+  > send-as list (`users.settings.sendAs.list`, which fetches no message). It reads it only while Search keeps that
+  > mailbox and a read holds someone's message, keeps it for 15 minutes in the process (1 minute after a failure),
+  > and waits for it at most 2 seconds. A message labelled `SENT` or `DRAFT` is the person's own too, which still
+  > keeps out what the mailbox sent should the list not come.
 - *Rejected:* indexing whole mailboxes and workspaces. That is a new reader of all mail, against Gmail quota and Slack
   rate limits, and the widest store possible. It is open question 1, as a per-person fill-in.
 - *Rejected:* indexing only activity's subjects and senders. That is too thin to find "about invoices".
@@ -171,6 +178,15 @@ open question 4).**
   - before each run, `/api/tags` must list the model **without** `remote_model`/`remote_host`, and a name ending in
     `cloud` is refused;
   - the model's `digest` is recorded, and a new digest asks for Rebuild;
+
+    > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding).** This line and §5 disagree: §5 (and §9's
+    > test) say a model change, a new digest among them, starts generation n+1 at once. 0.35 does what §5 says, so a
+    > new `ollama pull` under the approved name sends every kept message's words to the new weights again without
+    > asking. The narrow change, for now: `search status` gives `model.vectorsDigest`, the digest the vectors in use
+    > were made with, beside `model.digest`, and while the two differ a note says the new weights are making every
+    > vector again. The app's Settings shows that note. Whether a new digest should instead wait for the person's
+    > Rebuild, as this line says, is open for the owner. The server is the same loopback one the person approved,
+    > and the not-remote checks still run each time.
   - doctor recommends Ollama's local-only mode (`OLLAMA_NO_CLOUD=1`, or `disable_ollama_cloud` in
     `~/.ollama/server.json`) and says whether it is set.
 - **No model:** search works by words only, and says so.
@@ -213,11 +229,40 @@ open question 4).**
 - *Rejected:* whole-database encryption. SQLCipher is not in `node:sqlite`, and it is a native build.
 - *Rejected:* plaintext text, as activity keeps subjects. A body is more than a subject.
 
+> **Note, 2026-10-27 (the security review of 0.35.0, finding M2; L).** "A contentless table keeps the tokens but not
+> the text" was false. FTS5's default `detail=full` keeps each token's position, and `fts5vocab 'instance'` gave a
+> message's subject and text back in order, with no key. The words index is changed, and it is now encrypted in all
+> but name:
+> - **Keyed hashes, not words.** The words are made into tokens in JS: case and diacritics are folded as
+>   `unicode61 remove_diacritics 2` folded them for English and Romanian (`Factură` = `factura`, `înțeles` = `INTELES`),
+>   and each run of letters and digits is one word. Each word is replaced by HMAC-SHA256 under the `words` subkey of
+>   `search-index` (HKDF, `agentcomms-search/words/v1`), cut to 128 bits as 32 hex digits. FTS5 sees only those
+>   tokens (`tokenize='ascii'`), each once a message, sorted. A search's words are hashed the same way.
+> - **No positions:** `detail=none`. Each word of a search is looked for alone, so no phrase needs them.
+> - **Prefixes are kept.** The last word of a search still matches as a prefix: each word is also kept by its first 3
+>   to 24 characters, under a hash of their own kind. A last word of one or two letters now matches whole only.
+> - **Ranking:** bm25 needs positions in a contentless table, so a row scores the bm25 weight of each word it holds,
+>   `ln((N − n + ½)/(n + ½))`, without counts or length; newer first on ties.
+> - **What the file still shows without the key:** which rows share a token, and how many tokens a row has. It shows no
+>   word, and no word's place. With the key a guessed word can be tested, but the key opens the sealed text anyway.
+> - **An index of schema 1** (only a 0.35 test build made one; 0.35.0 was never released with it) is upgraded on its
+>   first open. Its words table is dropped at once, under `secure_delete`, and the WAL is checkpointed. Then the hashes
+>   are made from the sealed text at the first open that has the key, before anything is searched. Schema is now 2.
+>
+> The words index therefore moves out of "not encrypted" above. The vectors and the handles stay there, and the
+> approval for `on` and `model set`, `search status`, doctor and the app's notes now say exactly that.
+
 **S12. Retention follows Activity's days (L; open question 5).**
 - A message is kept while Activity keeps its day: `activity.retentionDays`, 30 by default, 1–365
   (`activity-settings.ts:21-22`), counted from `seen_at`.
 - The story beside a hit comes from activity lines (S4), so a hit kept longer would have no story.
 - Lowering the days prunes at once.
+
+> **Note, 2026-10-27 (the security review of 0.35.0, finding M6; L).** Raising Activity's days kept Search's message
+> words longer too, and the preview a person approved said nothing about Search. Now, while Search keeps words — on,
+> or off with an index still holding what was kept — the preview for more days gains a line: "keeps the words of the
+> messages Search on this machine holds for as long too: N days, not M". It is only on more days. A line on fewer
+> days would make that tightening wait for an approval.
 
 **S13. No agent searches. CLI and app only (L; open question 3).**
 - **Every `search` command except `status` and the tightenings is refused:**
@@ -273,6 +318,8 @@ CREATE TABLE messages (
 ) STRICT;
 CREATE VIRTUAL TABLE words USING fts5(subject, text,
   content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+  -- 2026-10-27 (S11's note): fts5(tokens, content='', contentless_delete=1, detail=none, tokenize='ascii'),
+  -- holding keyed hashes of the words
 CREATE TABLE vectors (
   message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
@@ -294,6 +341,14 @@ CREATE TABLE handles (
   would add is noise.
 - **A full read replaces a partial row,** never the reverse.
 - **A deleted row leaves nothing behind:** its words row goes too (contentless delete), and its vector by cascade.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, finding M3; L).** It did leave something: a contentless
+  > delete only marks a row's tokens deleted, and they stay in the file until FTS5 merges the segments holding them.
+  > So every prune that deletes a row also optimises the words index (`'optimize'`: one segment, without them).
+  > Prunes are retention, an account taken out of Search, and the day's first command. `secure_delete` zeroes the
+  > pages that frees, and the WAL is checkpointed after. Measured on this Mac, under load: about 1 s for 5,000
+  > synthetic messages of 150 words. It runs only when a row went, and an edit that replaces a row's words leaves
+  > the old ones to FTS5's own merging, since that message is still kept.
 - A person with no messages left is deleted, unless the person linked or labelled them.
 
 ## 5. Indexing: what, when, how
@@ -332,7 +387,8 @@ in the background, and the old vectors serve until the new set is complete. Word
 **`agentcomms search query <text> [--person <id>] [--account <alias>…] [--channel gmail|slack] [--since] [--until]
 [--limit ≤50] --json`:**
 1. **Filter first, in SQL:** account, channel, time, and the person's handles; `direction = 'in'` unless asked.
-2. **Words:** FTS5 `MATCH` on the query's terms (each quoted, the last as a prefix), ranked by `bm25`.
+2. **Words:** FTS5 `MATCH` on the query's terms (each quoted, the last as a prefix), ranked by `bm25`. (2026-10-27:
+   the terms are keyed hashes, and the rank is bm25's weight of each word without counts; S11's note.)
 3. **Meaning:** embed the query with the profile's query template, then an exact cosine over the filtered rows' current
    vectors.
 4. **Fuse** the two top-50 lists by reciprocal rank (k = 60), newer first on ties. With no model, or one that fails its
@@ -388,6 +444,12 @@ in the background, and the old vectors serve until the new set is complete. Word
   4. write a content-free audit line.
 
   A test then finds no planted marker under `<state>`.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding; L).** "Applies from anywhere" let an agent's
+  > shell run `search delete --all --confirm` and erase what the person kept, and its key, at once. It cannot be
+  > undone, so it is now the person's alone. It is refused inside an MCP server's process and under an agent's
+  > marker, as the person's searches are (S13), and the app's confirm still runs it. `off`, `accounts remove` and
+  > `model none` stay anyone's: they stop keeping, or drop vectors that Rebuild makes again.
 - **Who reads what:**
   - the person alone, in the app and at a terminal (S13);
   - no MCP tool reads the index;
@@ -408,7 +470,7 @@ in the background, and the old vectors serve until the new set is complete. Word
 | `index [--budget]`, `rebuild` | upkeep; S13 refusals |
 | `link <p> <p>`, `unlink <handle>`, `label <p> <name>` | the person's own data; no approval; S13 refusals |
 | `on`, `accounts add <alias>`, `model set <address> <name>`, `summaries on <model>` | loosening: the change policy, `--app-approval` from the attested app |
-| `off`, `accounts remove`, `model none`, `summaries off`, `delete --all --confirm` | tightening: at once |
+| `off`, `accounts remove`, `model none`, `summaries off`, `delete --all --confirm` | tightening: at once (2026-10-27: `delete` is the person's alone, §7's note) |
 
 **MCP:** none. Each command gets an exception row in `capabilities.json`, giving its reason, as `core.activity.items`
 has. `pnpm verify:parity` checks them.
