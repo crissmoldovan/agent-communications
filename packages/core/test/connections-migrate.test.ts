@@ -23,6 +23,7 @@ import {
   type MigrationUndoResult,
 } from '../src/operations/connection-migrate.ts';
 import { connectionList } from '../src/operations/connections.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -152,7 +153,7 @@ test(
     const effects = first.prepared.effects.join('\n');
     assert.match(
       effects,
-      /moves "agentcomms", "gmail", "slack", "events" in .*\.claude\.json into one connection, "Claude Code"/,
+      /moves "agentcomms", "gmail", "slack", "events" in .*\.claude\.json into one connection, "Claude Code" \(Claude Code, every folder, new\)/,
     );
     assert.match(effects, /Gmail, the mailbox acme\/gmail, read-only/);
     assert.match(effects, /leaves "gmail-2" .*a connection holds one Gmail/);
@@ -311,7 +312,7 @@ test('a connection no migration made says so, and its undo is refused before any
     revokedAt: null,
   };
   await m.core.config.update((config) => ({ ...config, connections: withConnection(config, { put: made }) }), {
-    consent: { kind: 'loosening-consent' as const, paths: [`connections["${made.name}"]`] },
+    consent: connectionConsent(made),
   });
   const [view] = (await connectionList(m.core, m.env)).connections;
   assert.equal(view?.migratedFrom, null);

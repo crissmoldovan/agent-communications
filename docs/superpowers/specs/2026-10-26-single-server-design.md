@@ -477,7 +477,10 @@ does not protect.
 - **Note, 2026-10-27 (0.35.0 security review, M1):** over MCP, from an agent's shell and inside an MCP server's
   process, rename, rotate and remove act only on the caller's own connection — the one whose part it is, as its gateway
   reports it (§7) — and any other is refused with the person's way: at their terminal, or in the app. An agent renamed
-  two others so that a later preview named the wrong one, and could cut any app off at once.
+  two others so that a later preview named the wrong one, and could cut any app off at once. And every preview line
+  that names a connection — its summary, each loosening's path, each effect — names it by name, app, place (its folder,
+  its profile, or "every folder") and short id: `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)`, with
+  "new" in place of the id for one being added, which has none until it is.
 - **`--app-approval` is extended to** `connection add|update|migrate`, in `takesAppApproval` (`cli.ts:535-547`) and in
   `appliedFromApp`'s list (`change-flow.ts:401-411`).
 - **`AppReach`** (`change-flow.ts:523-556`) also names a connection's `configDir`, so that a test build approves only

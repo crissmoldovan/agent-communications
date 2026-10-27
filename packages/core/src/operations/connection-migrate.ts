@@ -9,6 +9,7 @@ import {
   type ConnectionRecord,
   connectionById,
   connectionKeyHash,
+  connectionLabel,
   newConnectionId,
   newConnectionKey,
   partFacts,
@@ -292,7 +293,7 @@ export function connectionMigrateChange(
       const effects: string[] = [];
       for (const group of plan.groups) {
         effects.push(
-          `moves ${group.entries.map((entry) => `"${entry.name}"`).join(', ')} in ${shortenHome(group.path, home)} into one connection, "${group.name}": one entry, "${group.entryName}", that starts ${group.parts.map((part) => partText(part.server, { pin: part.pin ?? null, readOnly: part.readOnly === true })).join('; ')}; each entry it removes is saved first`,
+          `moves ${group.entries.map((entry) => `"${entry.name}"`).join(', ')} in ${shortenHome(group.path, home)} into one connection, ${connectionLabel({ name: group.name, app: group.app, where: { scope: 'user', folder: null, configDir: null } }, null)}: one entry, "${group.entryName}", that starts ${group.parts.map((part) => partText(part.server, { pin: part.pin ?? null, readOnly: part.readOnly === true })).join('; ')}; each entry it removes is saved first`,
         );
       }
       for (const each of plan.left)
@@ -482,9 +483,9 @@ export function connectionMigrateUndoChange(
             (part) =>
               `registers the ${serverLabel(part.server)} MCP server with ${read.record.app} as "${names.get(part.server) ?? serverFacts(part.server).defaultServerName}"${part.pin === undefined ? '' : `, pinned to ${part.pin.alias}`}${part.readOnly ? ', read-only' : ''}`,
           ),
-          `takes the connection "${read.record.name}" and its entry out of ${read.record.app}`,
+          `takes the connection ${connectionLabel(read.record, read.record.id)} and its entry out of ${read.record.app}`,
         ],
-        summary: `Undo the connection "${read.record.name}": its parts as entries of their own again`,
+        summary: `Undo the connection ${connectionLabel(read.record, read.record.id)}: its parts as entries of their own again`,
       };
     },
     apply: async (): Promise<MigrationUndoResult> => {

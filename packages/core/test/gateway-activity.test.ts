@@ -21,6 +21,7 @@ import {
 } from '../src/connections.ts';
 import { openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { asPartOf } from './helpers/gateway/as-part.ts';
 import { tempDir } from './helpers/temp.ts';
 
@@ -119,7 +120,7 @@ test('D11: a line a part records names its connection by id and by its name now;
   };
   const put = (next: ConnectionRecord, consent: boolean) =>
     core.config.update((config: Config) => ({ ...config, connections: withConnection(config, { put: next }) }), {
-      ...(consent ? { consent: { kind: 'loosening-consent' as const, paths: [`connections["${next.name}"]`] } } : {}),
+      ...(consent ? { consent: connectionConsent(next) } : {}),
     });
   await put(held, true);
   const session: ActivitySession = {

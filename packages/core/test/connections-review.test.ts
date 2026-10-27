@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { type GatedChange, type GatedOutcome, gatedChange } from '../src/change-flow.ts';
@@ -11,6 +11,7 @@ import {
   type ConnectionAddRequest,
   type ConnectionAddResult,
   connectionAddChange,
+  connectionChangeChange,
   connectionKeyReplaceChange,
   connectionRemoveChange,
   connectionRenameChange,
@@ -139,5 +140,65 @@ test(
     // The person at a terminal: any connection.
     assert.equal((await rename(m.env, 'cli')).status, 'applied');
     assert.deepEqual(await names(m), ['Everywhere', 'Elsewhere']);
+  },
+);
+
+test(
+  'M1: every preview line that names a connection names it by name, app, place and short id — new for one being added',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { project, everywhere, acme } = await twoConnections(m);
+    // The reviewer's names, given by the person at a terminal (an agent can no longer rename another connection).
+    for (const [id, name] of [
+      [acme.id, 'tmp'],
+      [everywhere.id, 'Untrusted repo'],
+      [acme.id, 'My main Claude Code'],
+    ] as const) {
+      assert.equal((await run(m, connectionRenameChange(m.core, m.env, { id, name }, 'cli'), 'cli')).status, 'applied');
+    }
+    // The agent in the project asks to widen its own connection: the preview says which one that is, past its name.
+    const asked = await run(
+      m,
+      connectionChangeChange(
+        m.core,
+        partEnv(m.env, acme.id),
+        { id: acme.id, parts: parsePartsSpec('core,events') },
+        'mcp',
+      ),
+      'mcp',
+    );
+    assert.equal(asked.status, 'approval-required');
+    if (asked.status !== 'approval-required') return;
+    const label = `"My main Claude Code" (Claude Code, ${realpathSync(project)}, ${acme.id.slice(0, 7)}…)`;
+    assert.equal(asked.prepared.summary, `Let agents in ${label} reach more`);
+    assert.deepEqual(
+      asked.prepared.loosened.map((loosening) => loosening.path),
+      [`connections[${label}].parts.events`],
+    );
+    assert.ok(asked.prepared.preview.includes(`connections[${label}].parts.events`), asked.prepared.preview);
+    // One being added has no id until it is: its name, its app and its place, and "new".
+    const adding = await run(
+      m,
+      connectionAddChange(
+        m.core,
+        m.env,
+        { app: 'claude-code', name: 'Third', parts: parsePartsSpec('core'), launcher: 'local', noVerify: true },
+        'cli',
+      ),
+      'cli',
+    );
+    assert.equal(adding.status, 'approval-required');
+    if (adding.status !== 'approval-required') return;
+    const added = '"Third" (Claude Code, every folder, new)';
+    assert.equal(adding.prepared.summary, `Add the connection ${added}`);
+    assert.deepEqual(
+      adding.prepared.loosened.map((loosening) => loosening.path),
+      [`connections[${added}]`],
+    );
+    assert.ok(
+      adding.prepared.effects.some((effect) => effect.startsWith(`registers the connection ${added} with claude-code`)),
+      adding.prepared.effects.join('\n'),
+    );
   },
 );

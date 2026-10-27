@@ -484,9 +484,52 @@ export function connectionReach(read: ConnectionRead | undefined): ReadonlyMap<s
   return reach;
 }
 
-/** The path a change to a connection is named by: by its name, so two plans of one new connection agree (no id yet). */
-export function connectionPath(name: string, ...rest: string[]): string {
-  return [`connections["${name}"]`, ...rest].join('.');
+/** How a person names an app in a sentence. */
+export const CONNECTION_APP_LABELS: Readonly<Record<ConnectionApp, string>> = Object.freeze({
+  'claude-code': 'Claude Code',
+  'claude-desktop': 'Claude Desktop',
+  codex: 'Codex',
+  cursor: 'Cursor',
+  gemini: 'Gemini',
+  vscode: 'VS Code',
+  manual: 'the app you paste it into',
+});
+
+/** A connection's id as a preview shortens it: `cn_` and its first four letters, `cn_ABCD…`. */
+export function shortConnectionId(id: string): string {
+  return `${id.slice(0, 'cn_'.length + 4)}…`;
+}
+
+/** Where a connection's entry is, in a preview's words: its one project's folder, another profile, or every folder. */
+export function connectionPlace(record: Pick<ConnectionRecord, 'app' | 'where'>): string {
+  const { where } = record;
+  const profile = where.configDir === null ? null : `profile ${where.configDir}`;
+  if (where.scope === 'local') return [where.folder ?? '', ...(profile === null ? [] : [profile])].join(', ');
+  if (record.app === 'manual') return 'a snippet you paste';
+  return profile ?? 'every folder';
+}
+
+/**
+ * A connection as every preview line names it (0.35.0 security review, M1): its name, its app, its place and its short
+ * id — `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)` — so a name an agent chose, or two connections
+ * swapping names, cannot make a preview name the wrong one. `id` null for one being added, which has none until it is:
+ * "new" in its place, so two plans of the same addition agree.
+ */
+export function connectionLabel(record: Pick<ConnectionRecord, 'name' | 'app' | 'where'>, id: string | null): string {
+  return `"${record.name}" (${CONNECTION_APP_LABELS[record.app]}, ${connectionPlace(record)}, ${id === null ? 'new' : shortConnectionId(id)})`;
+}
+
+/** A connection that cannot be read, as a preview line names it: the name it had, if any, and its short id. */
+function unreadableLabel(read: { readonly id: string; readonly name: string | null }): string {
+  return `${read.name === null ? '' : `"${read.name}" `}(cannot be read, ${shortConnectionId(read.id)})`;
+}
+
+/**
+ * The path a change to a connection is named by, in the preview and in the approval it binds: by its label
+ * (`connectionLabel`) — for one being added without its id, so two plans of one new connection agree.
+ */
+export function connectionPath(label: string, ...rest: string[]): string {
+  return [`connections[${label}]`, ...rest].join('.');
 }
 
 /** One part in a preview's words: "Gmail, pinned to the mailbox cue/gmail, read-only", "Slack, every workspace". */
@@ -524,7 +567,7 @@ export interface ConnectionLoosening {
  * What a change to the connections loosens (§6.2): a connection added — or one cut off, or unreadable, that serves again
  * — a part added, a part's pin taken away or moved to another account, read-only turned off. Everything else — a
  * connection or part removed, a pin added, read-only on, cut off, renamed, its key replaced — loosens nothing.
- * Connections are matched by id; a path names the connection by its name on the after side.
+ * Connections are matched by id; a path names the connection by its label on the after side (`connectionLabel`).
  */
 export function classifyConnectionChange(
   before: { readonly connections?: unknown },
@@ -540,15 +583,16 @@ export function classifyConnectionChange(
     const previous = was.get(record.id);
     const reachBefore = connectionReach(previous);
     const reachAfter = connectionReach(read);
+    const label = connectionLabel(record, previous === undefined ? null : record.id);
     if (previous === undefined || !previous.readable || previous.record.revokedAt !== null) {
-      changes.push({ path: connectionPath(record.name), before: null, after: connectionText(record) });
+      changes.push({ path: connectionPath(label), before: null, after: connectionText(record) });
       continue;
     }
     for (const [server, now] of reachAfter) {
       const then = reachBefore.get(server);
       if (then === undefined) {
         changes.push({
-          path: connectionPath(record.name, 'parts', server),
+          path: connectionPath(label, 'parts', server),
           before: null,
           after: partText(server, now),
           id: record.id,
@@ -558,7 +602,7 @@ export function classifyConnectionChange(
       if (then.pin !== null && (now.pin === null || now.pin.id !== then.pin.id)) {
         const noun = partFacts(server)?.noun ?? 'account';
         changes.push({
-          path: connectionPath(record.name, 'parts', server, 'pin'),
+          path: connectionPath(label, 'parts', server, 'pin'),
           before: then.pin.alias,
           after: now.pin === null ? `every ${noun}` : now.pin.alias,
           id: record.id,
@@ -566,7 +610,7 @@ export function classifyConnectionChange(
       }
       if (then.readOnly && !now.readOnly) {
         changes.push({
-          path: connectionPath(record.name, 'parts', server, 'readOnly'),
+          path: connectionPath(label, 'parts', server, 'readOnly'),
           before: true,
           after: false,
           id: record.id,
@@ -579,8 +623,8 @@ export function classifyConnectionChange(
 
 /**
  * Every setting of every connection that differs between `before` and `after`, loosened or tightened — what a change
- * approval binds beside its loosenings, so a claim cannot drop a narrowing the person read. By the name on the after
- * side, as the loosenings are, and without the id, the key or a time: a new connection's are made fresh on each plan.
+ * approval binds beside its loosenings, so a claim cannot drop a narrowing the person read. By the label on the after
+ * side, as the loosenings are, and without the key or a time — nor the id of a new connection, made fresh on each plan.
  */
 export function changedConnectionSettings(
   before: { readonly connections?: unknown },
@@ -600,7 +644,6 @@ export function changedConnectionSettings(
     };
   };
   const idOf = (read: ConnectionRead) => (read.readable ? read.record.id : read.id);
-  const nameOf = (read: ConnectionRead) => (read.readable ? read.record.name : (read.name ?? read.id));
   const was = new Map(readConnections(before).connections.map((read) => [idOf(read), read] as const));
   const now = new Map(readConnections(after).connections.map((read) => [idOf(read), read] as const));
   const changes: { path: string; before: SettingValue; after: SettingValue }[] = [];
@@ -609,12 +652,15 @@ export function changedConnectionSettings(
     const next = settings(now.get(id));
     const shown = now.get(id) ?? was.get(id);
     if (shown === undefined) continue;
-    const name = nameOf(shown);
+    // Labelled as the loosenings are: one being added without its id, made fresh on each plan.
+    const label = shown.readable
+      ? connectionLabel(shown.record, was.has(id) ? shown.record.id : null)
+      : unreadableLabel(shown);
     for (const key of [...new Set([...Object.keys(then), ...Object.keys(next)])].sort()) {
       const a = then[key] ?? null;
       const b = next[key] ?? null;
       if (JSON.stringify(a) !== JSON.stringify(b))
-        changes.push({ path: connectionPath(name, key), before: a, after: b });
+        changes.push({ path: connectionPath(label, key), before: a, after: b });
     }
   }
   return changes;

@@ -20,6 +20,7 @@ import type { PartSpec } from '../src/gateway/router.ts';
 import { connectionRefusal, runGateway } from '../src/gateway/serve.ts';
 import { runningGateways } from '../src/gateway/status.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -73,7 +74,7 @@ function record(over: Partial<ConnectionRecord> & { key: string }): ConnectionRe
 
 async function put(m: Machine, held: ConnectionRecord, consent = true): Promise<void> {
   await m.core.config.update((config: Config) => ({ ...config, connections: withConnection(config, { put: held }) }), {
-    ...(consent ? { consent: { kind: 'loosening-consent' as const, paths: [`connections["${held.name}"]`] } } : {}),
+    ...(consent ? { consent: connectionConsent(held) } : {}),
   });
 }
 

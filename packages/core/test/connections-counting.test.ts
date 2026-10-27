@@ -25,6 +25,7 @@ import {
   serverProduct,
   serverUninstallChange,
 } from '../src/operations/servers.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -100,7 +101,7 @@ async function connected(
   await m.core.config.update(
     (config: Config) => ({ ...config, connections: withConnection(config, { put: record }) }),
     {
-      consent: { kind: 'loosening-consent', paths: ['connections["Work — Cursor"]'] },
+      consent: connectionConsent(record),
     },
   );
   const { configDir, stateDir, dataDir, secretsDir } = m.core.paths;

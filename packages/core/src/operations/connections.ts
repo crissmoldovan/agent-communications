@@ -6,6 +6,7 @@ import { channelManifest, serverFacts, serverLabel } from '../channel-servers.ts
 import { agentMarker } from '../cli-runtime.ts';
 import { type Config, classifyChange, connectedAccounts } from '../config.ts';
 import {
+  CONNECTION_APP_LABELS,
   CONNECTION_APPS,
   CONNECTION_ID_PATTERN,
   CONNECTION_KEY_ENV,
@@ -18,6 +19,7 @@ import {
   connectionById,
   connectionKeyHash,
   connectionKeyMatches,
+  connectionLabel,
   connectionNameProblem,
   connectionOfThisProcess,
   connectionReach,
@@ -120,15 +122,7 @@ const APP_CLIENT: Readonly<Record<Exclude<ConnectionApp, 'manual'>, SupportedCli
 });
 
 /** How a person names an app in a sentence. */
-const APP_LABELS: Readonly<Record<ConnectionApp, string>> = Object.freeze({
-  'claude-code': 'Claude Code',
-  'claude-desktop': 'Claude Desktop',
-  codex: 'Codex',
-  cursor: 'Cursor',
-  gemini: 'Gemini',
-  vscode: 'VS Code',
-  manual: 'the app you paste it into',
-});
+const APP_LABELS: Readonly<Record<ConnectionApp, string>> = CONNECTION_APP_LABELS;
 
 /** One part as a request names it: a server, the account it is kept to, and read-only. */
 export interface PartRequest {
@@ -635,7 +629,21 @@ export function connectionAddChange(
             name,
             launcher,
             ...(request.noVerify ? { noVerify: true } : {}),
-            connection: { id, name: request.name, key, scope, ...(folder === undefined ? {} : { folder }) },
+            connection: {
+              id,
+              name: request.name,
+              label: connectionLabel(
+                {
+                  name: request.name,
+                  app: request.app,
+                  where: { scope, folder: folder ?? null, configDir: request.profile ?? null },
+                },
+                null,
+              ),
+              key,
+              scope,
+              ...(folder === undefined ? {} : { folder }),
+            },
           },
           undefined,
           deps,
@@ -651,7 +659,8 @@ export function connectionAddChange(
         before: config,
         after: { ...config, connections: withConnection(config, { put: record }) } as Config,
         effects,
-        summary: `Add the connection "${request.name}" for ${APP_LABELS[request.app]}`,
+        // Named as every preview line names a connection; this one's id is made fresh on each plan, so "new".
+        summary: `Add the connection ${connectionLabel(record, null)}`,
       };
     },
     apply: async (consent): Promise<ConnectionAddResult> => {
@@ -968,7 +977,7 @@ function partsChange(
           effects,
           // What narrowed at once is bound beside what waits, and the preview lists it apart, done already.
           ...(doneAtOnce.length > 0 ? { doneAtOnce } : {}),
-          summary: `Let agents in "${record.name}" reach more${doneAtOnce.length > 0 ? '; what narrows was applied at once' : ''}`,
+          summary: `Let agents in ${connectionLabel(record, record.id)} reach more${doneAtOnce.length > 0 ? '; what narrows was applied at once' : ''}`,
         };
       } catch (error) {
         throw saidNarrowed(error, doneNow);
@@ -1425,7 +1434,7 @@ export function connectionRenameChange(
       return {
         before: config,
         after: { ...config, connections: withConnection(config, { put: { ...record, name: request.name } }) } as Config,
-        summary: `Rename the connection "${record.name}" to "${request.name}"`,
+        summary: `Rename the connection ${connectionLabel(record, record.id)} to "${request.name}"`,
       };
     },
     apply: async (_consent, planned) => {
@@ -1475,7 +1484,7 @@ export function connectionKeyReplaceChange(
             put: { ...record, keyHash: connectionKeyHash(key), keyIssuedAt: new Date().toISOString() },
           }),
         } as Config,
-        summary: `Replace the key of the connection "${record.name}"`,
+        summary: `Replace the key of the connection ${connectionLabel(record, record.id)}`,
       };
     },
     apply: async (_consent, planned) => {
@@ -1552,7 +1561,7 @@ export function connectionRemoveChange(
       return {
         before: config,
         after: { ...config, connections: withConnection(config, { remove: request.id }) } as Config,
-        summary: `Remove the connection ${held.readable ? `"${held.record.name}"` : request.id}`,
+        summary: `Remove the connection ${held.readable ? connectionLabel(held.record, held.record.id) : request.id}`,
       };
     },
     apply: async () => {

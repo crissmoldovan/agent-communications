@@ -33,6 +33,7 @@ import {
 } from '../src/operations/update.ts';
 import { runBackgroundUpdate } from '../src/update-background.ts';
 import { readUpdateCheck } from '../src/update-state.ts';
+import { connectionConsent } from './helpers/connection-consent.ts';
 import { type MainDeps, runMain } from './helpers/main-in-process.ts';
 import {
   attestationsEndpoint,
@@ -785,7 +786,7 @@ test('D19: a Gmail reached only through an MCP connection is updated — its lau
     revokedAt: null,
   };
   await m.core.config.update((config) => ({ ...config, connections: withConnection(config, { put: record }) }), {
-    consent: { kind: 'loosening-consent', paths: ['connections["Work — Claude Code"]'] },
+    consent: connectionConsent(record),
   });
   const { launcher } = launcherPaths(m.dataDir, 'gmail');
   const deps = fakes(m, LATEST);

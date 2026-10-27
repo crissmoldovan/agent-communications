@@ -45,7 +45,7 @@ test('D17: mcp install puts Gmail into a connection it makes for the app, approv
   const asked = await cli(harness, words, { env });
   const approvalId = pendingApproval(asked);
   const preview = String(asked.envelope().error?.details?.preview);
-  assert.match(preview, /Add the connection "Cursor" for Cursor/);
+  assert.match(preview, /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(preview, /Agent Comms itself; Gmail, every mailbox/);
   assert.equal(existsSync(cursor), false, 'nothing written while it waits');
   const done = await cli(harness, [...words, '--approval', approvalId], { env });
@@ -182,7 +182,7 @@ test('D17: setup --mcp-client puts Gmail into the app’s connection — approve
   }>().data;
   assert.equal(report?.blocked.step, 'mcp');
   assert.equal(report?.blocked.needs, "a person's approval to put Gmail into cursor's MCP connection");
-  assert.match(String(report?.blocked.preview), /Add the connection "Cursor" for Cursor/);
+  assert.match(String(report?.blocked.preview), /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(String(report?.blocked.preview), /Agent Comms itself; Gmail, every mailbox/);
   assert.doesNotMatch(String(report?.blocked.preview), /registers the Gmail MCP server/);
   assert.match(
@@ -230,7 +230,7 @@ test('D17: the finish of a sign-in setup handed off prepares Gmail into the conn
     registration: { client: string; status: string; approvalId: string; preview: string; claim: string };
   }>().data?.registration;
   assert.equal(registration?.status, 'approval-required');
-  assert.match(String(registration?.preview), /Add the connection "Cursor" for Cursor/);
+  assert.match(String(registration?.preview), /Add the connection "Cursor" \(Cursor, every folder, new\)/);
   // This installation's own `mcp install`, with no --standalone: the same change, located.
   assert.equal(
     registration?.claim,
@@ -253,7 +253,7 @@ test('D17: the finish of a sign-in setup handed off prepares Gmail into the conn
   const other = await clientOnly();
   const plain = await cli(other.harness, gmailRetryWords((await handedOff(other)).handoff.finish), { env: other.env });
   assert.equal(plain.code, EXIT_CODES.APPROVAL, `${plain.stdout}${plain.stderr}`);
-  assert.match(plain.stdout, /CHANGE PREVIEW[\s\S]*Add the connection "Cursor" for Cursor/);
+  assert.match(plain.stdout, /CHANGE PREVIEW[\s\S]*Add the connection "Cursor" \(Cursor, every folder, new\)/);
   assert.match(plain.stdout, /run `[^`]* mcp install --client cursor --launcher local --approval ap_\w+`/);
 });
 
