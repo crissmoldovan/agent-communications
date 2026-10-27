@@ -11,6 +11,7 @@ import type { AadComponent } from '../store/aad.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { sanitiseSenderFields } from './untrusted.ts';
+import { threadPointers } from './workflow/run-message.ts';
 
 export interface ProjectionCipher {
   encrypt(
@@ -78,6 +79,8 @@ export function minimiseProjection(rule: CanonicalFullRuleDocument, event: Recor
     throw new Error(definition.issues[0]?.message ?? 'the projection event definition is unavailable');
   const pointers = new Set<string>(['/id', '/type', '/version', '/occurredAt', '/observedAt', '/account/id']);
   for (const pointer of definition.value.identityPointers) pointers.add(pointer);
+  // A flow that finds the session that took the conversation keeps the thread's id too, and nothing else (W36).
+  for (const pointer of threadPointers(rule)) pointers.add(pointer);
   for (const pointer of conditionPointers(rule.condition)) pointers.add(pointer);
   mappingPointers(rule.mapping, pointers);
   const projection: Record<string, unknown> = {};

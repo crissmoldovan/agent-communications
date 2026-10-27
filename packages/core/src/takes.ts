@@ -1589,6 +1589,38 @@ export class TakeStore {
     return listed;
   }
 
+  /**
+   * Who took this conversation (workflows 0.36 W36): the newest take in `accountId` on `channel` whose thread is
+   * `thread`, other than `except` (the message a workflow is about), that is `taken` or `done` and held by a session
+   * with a Claude Code session id. Null when there is none, the person holds it, or its holder had no session id. It
+   * reads the account's records once, as `list` does, and writes nothing; it never reads another account. Only the
+   * session id leaves it: never the holder's folder, client or key.
+   */
+  async threadHolder(input: {
+    readonly channel: TakeChannel;
+    readonly accountId: string;
+    readonly thread: string;
+    readonly except: TakeMessageRef;
+  }): Promise<{ sessionId: string; state: 'taken' | 'done'; at: string } | null> {
+    if (typeof input.thread !== 'string' || input.thread.length === 0) return null;
+    const except = takeMessageKey(input.except);
+    let newest: { sessionId: string; state: 'taken' | 'done'; at: string } | null = null;
+    for (const listed of await this.list({ accountId: input.accountId })) {
+      if (!('record' in listed)) continue;
+      const { record } = listed;
+      const message = record.message;
+      if (message.channel !== input.channel || message.accountId !== input.accountId) continue;
+      if (message.thread !== input.thread || takeMessageKey(message) === except) continue;
+      if (record.state !== 'taken' && record.state !== 'done') continue;
+      const held = record.holder;
+      if (held === null || isPerson(held) || !isClaudeCodeSessionId(held.sessionId)) continue;
+      const at = record.takenAt ?? record.updatedAt;
+      if (newest === null || Date.parse(at) > Date.parse(newest.at))
+        newest = { sessionId: held.sessionId, state: record.state, at };
+    }
+    return newest;
+  }
+
   // ── Retention ───────────────────────────────────────────────────────────────────────────────────────────────
 
   /** Once a day per process, after a write: never awaited by the act, and never failing it. */

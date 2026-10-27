@@ -4,7 +4,7 @@ import type { FlowDocumentV1, FlowLimits, JsonValue, StepId } from '@agentcomms/
 import type { CanonicalFullRuleDocument } from '../../domain/activation-documents.ts';
 import type { ProjectionCipher } from '../projections.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from '../target-version-references.ts';
-import type { Output, RunView, WaitKind, WakeReason } from './contracts.ts';
+import type { Output, RunMessage, RunView, WaitKind, WakeReason } from './contracts.ts';
 import { newRunId } from './ids.ts';
 import { chargeInTransaction, concurrencyAllowsInTransaction, globalConcurrencyAllowsInTransaction } from './limits.ts';
 
@@ -24,6 +24,8 @@ export interface RunRecord {
   readonly fields: JsonValue;
   readonly summaries?: Readonly<Record<StepId, string>>;
   readonly trigger?: Output;
+  /** The message the run is about, for a flow that finds the session that took its conversation (W36). */
+  readonly message?: RunMessage;
 }
 
 /** Where a run's sealed record lives: bound to its table, column and primary key, the run's id. */
@@ -63,6 +65,8 @@ export async function prepareFlowRun(input: {
   readonly createdAt: number;
   /** A chained run's: the raised event's closed data, sealed with the fields as `/trigger` (W34). */
   readonly trigger?: Output | undefined;
+  /** For a flow that finds by thread: the message's and its thread's ids (`run-message.ts`), sealed with the fields. */
+  readonly message?: RunMessage | undefined;
   readonly parentRunId?: string | undefined;
   readonly depth?: number | undefined;
   readonly newRunId?: (() => string) | undefined;
@@ -73,6 +77,7 @@ export async function prepareFlowRun(input: {
     kind: 'workflow-run',
     fields: input.data,
     ...(input.trigger === undefined ? {} : { trigger: input.trigger }),
+    ...(input.message === undefined ? {} : { message: input.message }),
   });
   return {
     runId,
