@@ -41,6 +41,7 @@ import { cardSteps, type StoryContext, whereWords } from '../messages/story.ts';
 import { takeDestination } from '../navigation.tsx';
 import { Problem, Said, Sender, StatusChip } from './MessageParts.tsx';
 import { MessageByEvent, MessageStory } from './MessageStory.tsx';
+import { MessagesTabs } from './search/parts.tsx';
 
 /** The screen's words (spec 2026-10-26-owner-feedback-0320 §3.6, prototype row 4). */
 export const MESSAGES_COPY = {
@@ -129,7 +130,7 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const word = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
 
 /** The accounts `accounts` lists for Gmail and Slack, read for their names; a read that fails names none. */
-async function readAccounts(bridge: Bridge, present: readonly Product[]): Promise<AccountsInfo> {
+export async function readAccounts(bridge: Bridge, present: readonly Product[]): Promise<AccountsInfo> {
   const aliases = new Map<string, string>();
   const gmailAddresses = new Map<string, string>();
   const slackTeams = new Map<string, string>();
@@ -314,14 +315,14 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
   const mode = useEventsMode();
   if (!supports(core, 'messages')) {
     return (
-      <Frame>
+      <Frame onScreen={onScreen}>
         <NeedsNewerCli feature="messages" installed={core} />
       </Frame>
     );
   }
   if (mode === 'loading') {
     return (
-      <Frame>
+      <Frame onScreen={onScreen}>
         <Spinner label={COPY.loading} />
       </Frame>
     );
@@ -336,10 +337,14 @@ export function Messages({ onScreen }: { onScreen?: (screen: Screen) => void }) 
   );
 }
 
-function Frame({ children }: { children: ReactNode }) {
+function Frame({ children, onScreen }: { children: ReactNode; onScreen?: ((screen: Screen) => void) | undefined }) {
   return (
     <PageShell title={MESSAGES_COPY.title} subtitle={MESSAGES_COPY.about} width="wide">
-      <div className="flex flex-col gap-(--cue-space-4)">{children}</div>
+      <div className="flex flex-col gap-(--cue-space-4)">
+        {/* Asking about past messages is Messages' second part (0.35.0, Search on this Mac). */}
+        <MessagesTabs current="messages" onScreen={onScreen} />
+        {children}
+      </div>
     </PageShell>
   );
 }
@@ -411,7 +416,7 @@ function MessagesView({
     );
   }
   return (
-    <Frame>
+    <Frame onScreen={onScreen}>
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <SegmentedControl
           indicator

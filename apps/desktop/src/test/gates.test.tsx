@@ -12,10 +12,14 @@ async function advance(ms: number): Promise<void> {
   });
 }
 
-const LABELS: Record<Screen, string> = {
+const LABELS: Record<Screen, string | RegExp> = {
   overview: 'Overview',
   queue: 'Queue',
   messages: 'Messages New',
+  // People (0.35.0), with its "New" tag, whose space is a screen reader's; Search has no row of its own: it is
+  // Messages' second part.
+  people: /^People ?New$/,
+  search: /^Messages ?New$/,
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).
   connections: 'Connections New',
@@ -136,6 +140,8 @@ describe('the gated sections', () => {
       ['activity', ['Needs 0.29.0 or later; this machine has 0.21.0.']],
       // The queue is gated on the events service's own version, which the fake bridge gives as 0.24.0.
       ['queue', ['Needs 0.30.0 or later; this machine has 0.24.0.']],
+      // People is Search on this machine's, core's from 0.35.0.
+      ['people', ['Needs 0.35.0 or later; this machine has 0.21.0.']],
     ];
     for (const [name, lines] of expectations) {
       const main = await open(name);

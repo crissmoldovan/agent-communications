@@ -17,13 +17,15 @@ import type { Screen } from './copy.ts';
  * is, from an account page's line about the exceptions that live there.
  */
 export type Destination =
-  | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' }
+  | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' | 'search' }
   | { readonly screen: 'events'; readonly tab: 'judges' }
   | { readonly screen: 'messages'; readonly eventId: string }
   // Accounts at one account's page (0.34.0), from Your agents' line for it; with no account, the list.
   | { readonly screen: 'accounts'; readonly account?: string }
   // Your agents as it opens, from an account page's line about what is set there for every account (0.34.0).
-  | { readonly screen: 'agent' };
+  | { readonly screen: 'agent' }
+  // People at one person's page (0.35.0), from a message Search found; with no person, the list.
+  | { readonly screen: 'people'; readonly person?: string | undefined };
 
 /** The destination asked for, until the screen it names reads it. */
 let pending: Destination | null = null;

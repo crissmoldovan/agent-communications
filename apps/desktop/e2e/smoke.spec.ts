@@ -32,6 +32,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Overview',
     'Queue',
     'Messages New',
+    'People New',
     'Accounts',
     'Connections New',
     'Approvals',
@@ -43,7 +44,8 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Settings',
   ]);
   // Only the allowed commands were invoked, and only reads: the events service's version among them, which says whether
-  // it has the queue (0.30.0), and which build the app is (0.32.0).
+  // it has the queue (0.30.0), and which build the app is (0.32.0); and from core 0.35.0, Search's upkeep, which runs
+  // while the app is open.
   const commands = await page.evaluate(() =>
     ((window as unknown as { __calls: { cmd: string; args: { call?: { kind: string } } }[] }).__calls ?? []).map(
       (call) => (call.cmd === 'cli' ? `cli:${call.args.call?.kind}` : call.cmd),
@@ -53,7 +55,7 @@ test('opens on Overview with its sections', async ({ page }) => {
   expect(commands).toContain('cli:approvalsPending');
   for (const command of commands) {
     expect(command).toMatch(
-      /^(installation|take_deep_link|event_service_state|app_build|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor|version))$/,
+      /^(installation|take_deep_link|event_service_state|app_build|plugin:event\|listen|cli:(approvalsPending|updateStatus|eventsStatus|standingList|doctor|version|searchIndex))$/,
     );
   }
 });
