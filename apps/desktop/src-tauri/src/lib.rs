@@ -17,6 +17,7 @@ pub mod provider_keys;
 pub mod rule_editor;
 pub mod runner;
 pub mod settings;
+pub mod taking;
 pub mod terminal;
 pub mod tray;
 pub mod updater;

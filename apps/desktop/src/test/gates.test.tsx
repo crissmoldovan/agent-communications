@@ -55,7 +55,12 @@ describe('what each CLI version supports', () => {
       bringUpToDate: '0.34.0',
       collectionSwitch: '0.34.0',
       accountAppApproval: '0.34.0',
+      taking: '0.35.0',
     });
+    // Taking messages is core's from 0.35.0, a pull request's build of it included.
+    expect(supports('0.34.0', 'taking')).toBe(false);
+    expect(supports('0.35.0', 'taking')).toBe(true);
+    expect(supports('0.35.0-feat-0.35-take-app', 'taking')).toBe(true);
     // Events → Service's Switch on… approved in the app, and Switch off, are the event service's from 0.34.0.
     expect(supports('0.33.0', 'collectionSwitch')).toBe(false);
     expect(supports('0.34.0', 'collectionSwitch')).toBe(true);
@@ -161,6 +166,12 @@ describe('the gated sections', () => {
       'labelName',
       'labelRuleAdd',
       'labelRuleRemove',
+      'takesList',
+      'takesRelease',
+      'takesGive',
+      'takesKeep',
+      'taking',
+      'takingChange',
     ];
     expect(cliKinds(bridge).filter((kind) => gated.includes(kind))).toEqual([]);
     // The ungated reads still ran.

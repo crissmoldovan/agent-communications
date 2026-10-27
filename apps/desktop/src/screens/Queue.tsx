@@ -16,12 +16,13 @@ import { useBridge } from '../bridge-context.tsx';
 import { NeedsNewerCli } from '../components/NeedsNewerCli.tsx';
 import { OutsideText } from '../components/OutsideText.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
-import { COPY } from '../copy.ts';
+import { COPY, type Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
 import { supports } from '../gates.ts';
 import { useReloadOnReturn } from '../hooks/use-reload-on-return.ts';
 import { type Call, type CliResult, errorMessage, type QueueChannel } from '../ipc.ts';
 import { filterLanes, itemLane, type LaneView, narrowingRule, readLaneList } from '../lanes.ts';
+import { NavigationProvider } from '../navigation.tsx';
 import {
   FILTER_CHANNELS,
   filterRules,
@@ -38,6 +39,7 @@ import {
   readStateChange,
 } from '../queue.ts';
 import { LANES_COPY, LaneChip, LanesView } from './QueueLanes.tsx';
+import { NOT_TAKEN_COPY, NotTakenView, useNotTakenCount } from './QueueNotTaken.tsx';
 import { ScreenFrame } from './Screen.tsx';
 
 /** The screen's words (design 2026-10-25-action-queue §4.5): a few each, with what only explains in a hint. */
@@ -170,11 +172,14 @@ function Problem({ message }: { message: string }) {
  * itself (DA10), as Reopen and Clear. Read only through the allow-listed `queue` calls, and only once the events
  * service's own version is one that has them (0.30.0).
  */
-export function Queue() {
+export function Queue({ onScreen }: { onScreen?: ((screen: Screen) => void) | undefined } = {}) {
   return (
     <ScreenFrame title={QUEUE_COPY.title}>
       <QueueGate>
-        <QueueViews />
+        {/* Not taken's cards open a message's story in Messages (0.35.0). */}
+        <NavigationProvider onScreen={onScreen}>
+          <QueueViews />
+        </NavigationProvider>
       </QueueGate>
     </ScreenFrame>
   );
@@ -229,8 +234,8 @@ function listCall(tab: QueueTab, filters: Filters, lanes: readonly LaneView[]): 
   };
 }
 
-/** The screen's views: the three tabs of items, then its lanes (0.31.0). */
-type QueueView = QueueTab | 'lanes';
+/** The screen's views: the three tabs of items, then its lanes (0.31.0), then the messages nobody took (0.35.0). */
+type QueueView = QueueTab | 'lanes' | 'not-taken';
 
 /**
  * Reads the events service's `lane list` (0.31.0) when it has lanes, and again whenever `reload` is called, keeping
@@ -267,7 +272,8 @@ function useLanes(supported: boolean): { lanes: Loadable<LaneView[]> | 'unsuppor
 }
 
 function QueueViews() {
-  const { queueCounts, refresh, eventsVersion } = useAppData();
+  const { queueCounts, refresh, eventsVersion, notTaken } = useAppData();
+  const notTakenCount = useNotTakenCount();
   const version = eventsVersion !== 'absent' && eventsVersion.state === 'ready' ? eventsVersion.value : '';
   const [view, setView] = useState<QueueView>('open');
   // The items' tab last shown: its list stays read while the lanes are.
@@ -288,7 +294,8 @@ function QueueViews() {
 
   const counts = typeof queueCounts === 'string' || queueCounts.state !== 'ready' ? null : queueCounts.value;
 
-  if (counts !== null && noQueueYet(counts)) {
+  // A message nobody took may wait where nothing sends to the queue: a session target's (0.35.0).
+  if (counts !== null && noQueueYet(counts) && (notTakenCount ?? 0) === 0) {
     return (
       <Panel>
         <EmptyState title={QUEUE_COPY.noQueue} hint={QUEUE_COPY.noQueueHint} />
@@ -306,7 +313,7 @@ function QueueViews() {
         onValueChange={(value) => {
           const next = value as QueueView;
           setView(next);
-          if (next !== 'lanes') setTab(next);
+          if (next !== 'lanes' && next !== 'not-taken') setTab(next);
         }}
         className="flex flex-col gap-(--cue-space-4)"
       >
@@ -327,10 +334,17 @@ function QueueViews() {
               {LANES_COPY.tab}
               <QuietCount count={known.length} />
             </Tabs.Tab>
+            {notTaken === 'off' ? null : (
+              <Tabs.Tab value={'not-taken' satisfies QueueView}>
+                {NOT_TAKEN_COPY.tab} <WaitingCount count={notTakenCount} />
+              </Tabs.Tab>
+            )}
             <Tabs.Indicator />
           </Tabs.List>
           {view === 'lanes' ? (
             <InfoTip label="About lanes" text={LANES_COPY.about} />
+          ) : view === 'not-taken' ? (
+            <InfoTip label="About Not taken" text={NOT_TAKEN_COPY.about} />
           ) : (
             <InfoTip label="About the queue" text={QUEUE_COPY.about} />
           )}
@@ -346,10 +360,16 @@ function QueueViews() {
                 onFailed={setClearProblem}
               />
             )}
-            <IconButton aria-label={QUEUE_COPY.refresh} icon={RefreshCw} size="sm" onClick={() => void again()} />
+            <IconButton
+              aria-label={QUEUE_COPY.refresh}
+              icon={RefreshCw}
+              size="sm"
+              // Read again reads Not taken at once too; the shared reads keep it current once a minute otherwise.
+              onClick={() => void Promise.all([again(), refresh('notTaken')])}
+            />
           </span>
         </div>
-        {view === 'lanes' ? null : (
+        {view === 'lanes' || view === 'not-taken' ? null : (
           <FilterBar counts={counts} lanes={filterLanes(known)} filters={filters} onChange={setFilters} />
         )}
         {cleared === null ? null : (
@@ -382,6 +402,13 @@ function QueueViews() {
             />
           </section>
         </Tabs.Panel>
+        {notTaken === 'off' ? null : (
+          <Tabs.Panel value={'not-taken' satisfies QueueView}>
+            <section aria-label={NOT_TAKEN_COPY.tab} className="flex flex-col gap-(--cue-space-3)">
+              <NotTakenView onChanged={() => refresh('notTaken')} />
+            </section>
+          </Tabs.Panel>
+        )}
       </Tabs.Root>
     </div>
   );
@@ -396,6 +423,17 @@ function OpenCount({ counts }: { counts: QueueCounts | null }) {
     <Chip tone="neutral" variant="tag" data-slot="tab-count">
       <span aria-hidden="true">{counts.open}</span>
       <span className="sr-only">{`${counts.open} waiting`}</span>
+    </Chip>
+  );
+}
+
+/** Not taken's count, said in full to a screen reader, as Open's is: it counts toward the badge too (0.35.0). */
+function WaitingCount({ count }: { count: number | null }) {
+  if (count === null) return null;
+  return (
+    <Chip tone="neutral" variant="tag" data-slot="tab-count">
+      <span aria-hidden="true">{count}</span>
+      <span className="sr-only">{`${count} nobody took`}</span>
     </Chip>
   );
 }

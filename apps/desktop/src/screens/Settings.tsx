@@ -19,6 +19,7 @@ import { useBridge } from '../bridge-context.tsx';
 import { AiProviders } from '../components/AiProviders.tsx';
 import { Integrations } from '../components/Integrations.tsx';
 import { ScreenState } from '../components/ScreenState.tsx';
+import { TakingMessages } from '../components/TakingSettings.tsx';
 import { UntrustedText } from '../components/UntrustedText.tsx';
 import type { Screen } from '../copy.ts';
 import { type Loadable, useAppData } from '../data.tsx';
@@ -477,6 +478,8 @@ export function Settings({ onScreen }: { onScreen?: ((screen: Screen) => void) |
         </NavigationProvider>
         {/* Integrations (0.33.0): Linear and agent sessions, the tools a rule can act in. */}
         <Integrations />
+        {/* Taking messages (0.35.0): per account, whether a session must take a message before it acts on it. */}
+        <TakingMessages />
       </div>
     </ScreenFrame>
   );

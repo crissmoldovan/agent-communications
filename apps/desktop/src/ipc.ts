@@ -174,6 +174,19 @@ export type LabelRuleCall<K extends 'labelRuleAdd' | 'labelRuleRemove'> = {
   appApproval?: string;
 };
 
+/** What a take says to the sender (0.35.0, `taking.rs`, `TakingAcknowledge`): a 👀 under a Slack message, or nothing. */
+export type TakingAcknowledge = 'eyes' | 'nothing';
+
+/**
+ * One change to an account's taking settings (0.35.0, `taking.rs`, `TakingSetting`): exactly one setting. `require`
+ * off and `acknowledge` eyes loosen, and are approved first; the rest apply at once. `minutes` is 5 to 240.
+ */
+export type TakingSetting =
+  | { setting: 'require'; on: boolean }
+  | { setting: 'acknowledge'; acknowledge: TakingAcknowledge }
+  | { setting: 'unclaimed'; minutes: number }
+  | { setting: 'notify'; on: boolean };
+
 /**
  * Every call the app may make: the allow-list, row by row (`allowlist.rs`). Arguments are checked in Rust. Each row is
  * one line, the calls of more than one line named above it, and Laya's two calls end it: E2's frozen boundary reads the
@@ -292,6 +305,17 @@ export type Call =
   | { kind: 'labelStyleApproved'; account: string; style: 'labelled'; approvalId: string }
   | { kind: 'behaviourAllowApproved'; account: string; acts: string; conversation?: string; approvalId: string }
   | { kind: 'behaviourClearApproved'; account: string; conversation?: string; approvalId: string }
+  // Taking messages (0.35.0, design 2026-10-26-taking-messages §5, §9): every take, the person's read; Take back, Give
+  // to… and I'll handle it, which move only the person's own coordination, applied at once (DA10); each account's
+  // settings, read; and one change, a loosening prepared, then approved by the person in the app with `appApproval`,
+  // only for the approval the app prepared for that very change. The account is a checked name, the message an id
+  // `activity items` takes, the window a session key or a Claude Code session id, all checked in Rust.
+  | { kind: 'takesList'; since: ActivitySince }
+  | { kind: 'takesRelease'; account: string; message: string }
+  | { kind: 'takesGive'; account: string; message: string; window: string }
+  | { kind: 'takesKeep'; account: string; message: string }
+  | { kind: 'taking' }
+  | { kind: 'takingChange'; account: string; change: TakingSetting; appApproval?: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };

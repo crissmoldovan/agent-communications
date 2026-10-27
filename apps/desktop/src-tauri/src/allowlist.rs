@@ -21,6 +21,7 @@ use crate::label::{
 };
 use crate::launchers::Product;
 use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
+use crate::taking::{self, TakingSetting, TAKING_VERSION};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::LazyLock;
@@ -1200,6 +1201,41 @@ pub enum Call {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         app_approval: Option<ApprovalId>,
     },
+    /// Core `takes list --since <since>` (0.35.0, design 2026-10-26-taking-messages §5, `taking`): every take record —
+    /// who has each message, each holder's folder and client, each line of its history, notes enveloped. The person's
+    /// read, refused inside an MCP server's process; the range is a closed word.
+    TakesList { since: ActivitySince },
+    /// Core `takes release <account> <message>` (0.35.0, Take back): ends whoever has the message, at once. It moves
+    /// only the person's own coordination, so the app applies it itself (DA10).
+    TakesRelease {
+        account: AccountName,
+        message: ItemId,
+    },
+    /// Core `takes give <account> <message> --window <id>` (0.35.0, Give to…): offers the message to one agent window
+    /// for 15 minutes, which must still take it. Applied as Take back is; the window is a checked id.
+    TakesGive {
+        account: AccountName,
+        message: ItemId,
+        window: WindowId,
+    },
+    /// Core `takes keep <account> <message>` (0.35.0, I'll handle it): the person has the message, and every session is
+    /// refused it until they release it. Applied as Take back is.
+    TakesKeep {
+        account: AccountName,
+        message: ItemId,
+    },
+    /// Core `taking` (0.35.0): each account's taking settings. Read-only; it takes no argument.
+    Taking {},
+    /// Core `taking <account> <option> <word> [--app-approval <id>]` (0.35.0): one change to one account's settings.
+    /// Letting sessions act without taking, and a 👀 on taking, loosen: without `appApproval` core answers with their
+    /// preview; with it, the person approved in the app the change the app prepared (`connections::run_app_approval`),
+    /// once. Every other change applies at once, and is refused with an approval (`taking::change_words`).
+    TakingChange {
+        account: AccountName,
+        change: TakingSetting,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
 }
 
 /// The first release of the events service that ships phase E2's Laya calls (DA12): an older one says "Update
@@ -1822,6 +1858,34 @@ impl Call {
                     app_approval,
                 ),
             ),
+            Call::TakesList { since } => with(core(&["takes", "list", "--since"]), [since.word()]),
+            Call::TakesRelease { account, message } => {
+                core(&["takes", "release", account.as_str(), message.as_str()])
+            }
+            Call::TakesGive {
+                account,
+                message,
+                window,
+            } => core(&[
+                "takes",
+                "give",
+                account.as_str(),
+                message.as_str(),
+                "--window",
+                window.as_str(),
+            ]),
+            Call::TakesKeep { account, message } => {
+                core(&["takes", "keep", account.as_str(), message.as_str()])
+            }
+            Call::Taking {} => core(&["taking"]),
+            Call::TakingChange {
+                account,
+                change,
+                app_approval,
+            } => with(
+                core(&[]),
+                taking::change_words(account.as_str(), *change, app_approval)?,
+            ),
         })
     }
 
@@ -1844,7 +1908,8 @@ impl Call {
 
     /// Whether the call may come back `APPROVAL_PENDING` with a change the app prepared, to be opened in the terminal
     /// (DA10): the six change shapes, `update` (0.34.0), the label's four changes without the app's approval (0.34.0),
-    /// and a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and only those.
+    /// a Slack style of `labelled` (0.34.0's account page; `app` applies at once), and a taking change that loosens,
+    /// without the app's approval (0.35.0), and only those.
     pub fn prepares_change(&self) -> bool {
         matches!(
             self,
@@ -1875,6 +1940,13 @@ impl Call {
                     style: SlackStyle::Labelled,
                     ..
                 }
+        ) || matches!(
+            self,
+            Call::TakingChange {
+                change,
+                app_approval: None,
+                ..
+            } if change.loosens()
         )
     }
 
@@ -1951,6 +2023,12 @@ impl Call {
             | Call::LabelName { .. }
             | Call::LabelRuleAdd { .. }
             | Call::LabelRuleRemove { .. } => Some(LABEL_APP_APPROVAL_VERSION),
+            Call::TakesList { .. }
+            | Call::TakesRelease { .. }
+            | Call::TakesGive { .. }
+            | Call::TakesKeep { .. }
+            | Call::Taking {}
+            | Call::TakingChange { .. } => Some(TAKING_VERSION),
             _ => None,
         }
     }
@@ -2142,6 +2220,18 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsEnableAll" }),
         json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
         json!({ "kind": "eventsDisableAll" }),
+        json!({ "kind": "takesList", "since": "30d" }),
+        json!({ "kind": "takesRelease", "account": "example/slack", "message": "C0123ABCD/1792886400.000100" }),
+        json!({ "kind": "takesGive", "account": "example/gmail", "message": "18c2f0a1b2c3d4e5", "window": SESSION }),
+        json!({ "kind": "takesKeep", "account": "example/resend", "message": "4f1c2d3e-5a6b-4c7d-8e9f-0a1b2c3d4e5f" }),
+        json!({ "kind": "taking" }),
+        json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": true } }),
+        json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false } }),
+        json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false }, "appApproval": ID }),
+        json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "eyes" } }),
+        json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "nothing" } }),
+        json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "unclaimed", "minutes": 15 } }),
+        json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "notify", "on": false } }),
     ];
     values
         .into_iter()
@@ -2955,6 +3045,8 @@ mod tests {
                 json!({ "kind": "labelName", "name": "Jo Example" }),
                 json!({ "kind": "labelRuleAdd", "account": "example/slack", "kinds": "reaction", "as": "me" }),
                 json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
+                json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false } }),
+                json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "eyes" } }),
             ]
         );
     }

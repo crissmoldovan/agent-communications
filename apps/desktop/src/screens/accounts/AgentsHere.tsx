@@ -29,6 +29,7 @@ import { Fact, Facts } from '../../components/Facts.tsx';
 import { Gated } from '../../components/NeedsNewerCli.tsx';
 import { ScreenState } from '../../components/ScreenState.tsx';
 import { SectionPanel } from '../../components/SectionPanel.tsx';
+import { TakingHere } from '../../components/TakingSettings.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import type { Loadable } from '../../data.tsx';
 import { isApprovalId, isMailConversation, isSlackConversation } from '../../grammar.ts';
@@ -129,6 +130,8 @@ export function AgentsHere({
       <Gated feature="behaviour">
         <MaySection channel={channel} account={account} read={behaviour} />
       </Gated>
+      {/* Taking messages (0.35.0), as Settings has it for every account: shown once core takes messages. */}
+      <TakingHere account={account} />
       {channel === 'slack' ? (
         <>
           <LookSection account={account} read={label} />

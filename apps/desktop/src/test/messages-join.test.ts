@@ -331,7 +331,14 @@ describe('the join, over the fixtures', () => {
       'event:e6',
       'event:e3',
     ]);
-    expect(showCounts(joined, null)).toEqual({ all: 7, waiting: 1, handled: 4, unseen: 3 });
+    expect(showCounts(joined, null)).toEqual({
+      all: 7,
+      waiting: 1,
+      handled: 4,
+      unseen: 3,
+      'not-taken': 0,
+      'handed-back': 0,
+    });
     const aliases = new Map([
       ['in_01EXAMPLE0000000000000000', 'example/gmail'],
       ['acc_01EXAMPLE000000000000001', 'example/slack'],
@@ -343,13 +350,31 @@ describe('the join, over the fixtures', () => {
       'event:e4',
       'event:e6',
     ]);
-    expect(showCounts(named, 'example/slack')).toEqual({ all: 2, waiting: 0, handled: 2, unseen: 0 });
+    expect(showCounts(named, 'example/slack')).toEqual({
+      all: 2,
+      waiting: 0,
+      handled: 2,
+      unseen: 0,
+      'not-taken': 0,
+      'handed-back': 0,
+    });
   });
 });
 
 describe('the status order', () => {
-  it('is Replied, Acknowledged, Done or Dismissed, Read by an agent, Waiting for you, Not seen', () => {
-    expect(STATUS_ORDER).toEqual(['replied', 'acknowledged', 'done', 'dismissed', 'read', 'waiting', 'not-seen']);
+  it('is Replied, Acknowledged, Done or Dismissed, Taken, Handed back, Read by an agent, Waiting for you, Nobody took it, Not seen', () => {
+    expect(STATUS_ORDER).toEqual([
+      'replied',
+      'acknowledged',
+      'done',
+      'dismissed',
+      'taken',
+      'handed-back',
+      'read',
+      'waiting',
+      'not-taken',
+      'not-seen',
+    ]);
   });
 
   it('Replied: a Gmail send whose draft answers the message; a draft alone, a failed send or another message’s is not', () => {
