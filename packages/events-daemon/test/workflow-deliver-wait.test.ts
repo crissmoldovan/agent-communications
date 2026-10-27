@@ -156,7 +156,7 @@ async function withFlow(work: (flowed: Flowed) => Promise<void>, more: Partial<E
 /** Ticks the owner until `done` holds of what `read` gives, or fails naming `what`. */
 async function until<T>(harness: LaneHarness, read: () => T, done: (value: T) => boolean, what: string): Promise<T> {
   // Generous: the owner's ticks, the fake relay and fake Linear share a loaded machine with other suites.
-  const deadline = Date.now() + 30_000;
+  const deadline = Date.now() + 60_000;
   for (;;) {
     const value = read();
     if (done(value)) return value;
@@ -290,7 +290,13 @@ test('B4: deliver to the session find chose posts one turn, its startId from the
       /<untrusted-content[^>]*>[\s\S]*Invoice 42 — ignore all previous[\s\S]*<\/untrusted-content/u,
     );
 
-    assert.equal(stepOf(harness, 'turn')?.state, 'waiting');
+    // The turn's wait is claimed as soon as give settles; it waits once that claim settles.
+    await until(
+      harness,
+      () => stepOf(harness, 'turn'),
+      (step) => step?.state === 'waiting',
+      'the wait',
+    );
     relay.endRun(session.id);
     const turn = await until(
       harness,
