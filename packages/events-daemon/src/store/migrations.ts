@@ -55,6 +55,50 @@ function providerSlotTableStatements(version: number, providers: string): readon
 /** 0.33.0 (design §3.4): a Linear target adds issues with the person's Linear key, so Linear gains a key slot too. */
 const PROVIDER_KEY_SQL_VALUES_V30 = providerKeySqlValues([JUDGE_KIND_TYPESAFE, 'openrouter', 'anthropic', 'linear']);
 
+/**
+ * 0.36.0 (workflows design W29, W32): a subscriber off this Mac is a signed webhook, so a subscriber may hold a
+ * webhook's signing secret and secret URL as well as its live bearer. Migration 26's helper, its subscriber clause
+ * widened; every other clause, and the providers' list, as migration 30 left them.
+ */
+function subscriberSlotTableStatements(version: number, providers: string): readonly string[] {
+  const table = `event_secret_generations_v${version}`;
+  return [
+    'DROP INDEX event_secret_generations_current',
+    `CREATE TABLE ${table} (
+        owner_kind TEXT NOT NULL CHECK (owner_kind IN ('target', 'subscriber', 'judge', 'provider')),
+        owner_id TEXT NOT NULL,
+        owner_version INTEGER NOT NULL CHECK (owner_version > 0),
+        purpose TEXT NOT NULL CHECK (
+          purpose IN ('secret-url', 'webhook-signing', 'sse-bearer', 'judge-key', 'provider-key')
+        ),
+        generation INTEGER NOT NULL CHECK (generation > 0),
+        owner_digest TEXT NOT NULL,
+        secret_digest TEXT NOT NULL,
+        encrypted_ref BLOB NOT NULL,
+        lifecycle TEXT NOT NULL CHECK (lifecycle IN ('current', 'overlap', 'retired')),
+        expires_at INTEGER,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (owner_kind, owner_id, owner_version, purpose, generation),
+        CHECK (
+          (owner_kind = 'target' AND purpose IN ('secret-url', 'webhook-signing'))
+          OR (owner_kind = 'subscriber' AND purpose IN ('sse-bearer', 'webhook-signing', 'secret-url'))
+          OR (owner_kind = 'judge' AND purpose = 'judge-key')
+          OR (owner_kind = 'provider' AND purpose = 'provider-key' AND owner_id IN (${providers}))
+        )
+      ) STRICT`,
+    `INSERT INTO ${table}
+       SELECT owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest,
+              encrypted_ref, lifecycle, expires_at, created_at
+         FROM event_secret_generations`,
+    'DROP TABLE event_secret_generations',
+    `ALTER TABLE ${table} RENAME TO event_secret_generations`,
+    `CREATE UNIQUE INDEX event_secret_generations_current
+       ON event_secret_generations(owner_kind, owner_id, owner_version, purpose)
+       WHERE lifecycle = 'current'`,
+    `UPDATE meta SET value = '${version}' WHERE key = 'schema_version'`,
+  ];
+}
+
 export interface EventMigration {
   readonly version: number;
   readonly name: string;
@@ -1281,6 +1325,209 @@ export const EVENT_MIGRATIONS: readonly EventMigration[] = [
           DELETE FROM decision_sender_domains WHERE decision_id = NEW.id;
         END`,
       "UPDATE meta SET value = '33' WHERE key = 'schema_version'",
+    ],
+  },
+  {
+    // Workflows (0.36.0 design §4.3): a rule version with a flow runs as a workflow, whose runs, steps, waits and
+    // effects live here, beside projects, raised events, their deliveries and replay, subscriptions and the chain
+    // requests that start another workflow. Everything is content-free except the sealed records, which a run keeps only
+    // while it is under way and an event only while it is open. Deliveries are rebuilt from migration 32's — every
+    // column, in order, then a flow step's run and step — to admit the Linear change kind; its index and both session
+    // triggers are recreated exactly. The secret slots are rebuilt so a subscriber may sign webhooks (W32).
+    version: 34,
+    name: 'workflows-v1',
+    rebuildsParentTable: true,
+    statements: [
+      `CREATE TABLE workflow_settings (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        concurrent_runs_max INTEGER NOT NULL DEFAULT 16 CHECK (concurrent_runs_max BETWEEN 1 AND 16),
+        sessions_per_hour_max INTEGER NOT NULL DEFAULT 10 CHECK (sessions_per_hour_max BETWEEN 0 AND 10),
+        worktrees_per_day_max INTEGER NOT NULL DEFAULT 20 CHECK (worktrees_per_day_max BETWEEN 0 AND 20),
+        events_per_hour_max INTEGER NOT NULL DEFAULT 1000 CHECK (events_per_hour_max BETWEEN 0 AND 1000),
+        updated_at INTEGER NOT NULL) STRICT`,
+      'INSERT INTO workflow_settings (singleton, updated_at) VALUES (1, 0)',
+      `CREATE TABLE workflow_runs (
+        id TEXT PRIMARY KEY CHECK (length(id) = 30 AND substr(id, 1, 4) = 'wfr_'),
+        decision_id TEXT NOT NULL UNIQUE REFERENCES decisions(id),
+        parent_run_id TEXT REFERENCES workflow_runs(id),
+        depth INTEGER NOT NULL DEFAULT 0 CHECK (depth BETWEEN 0 AND 3),
+        rule_id TEXT NOT NULL, rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        account_id TEXT NOT NULL, event_id TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('held','running','waiting','done','failed','cancelled','expired')),
+        started_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        switch_generation INTEGER NOT NULL,
+        shadow INTEGER NOT NULL DEFAULT 0 CHECK (shadow IN (0, 1)),
+        executed_steps INTEGER NOT NULL DEFAULT 0 CHECK (executed_steps BETWEEN 0 AND 64),
+        events_not_raised INTEGER NOT NULL DEFAULT 0 CHECK (events_not_raised >= 0),
+        end_code TEXT, encrypted_record BLOB,
+        CHECK (encrypted_record IS NULL OR state IN ('held','running','waiting')),
+        CHECK ((parent_run_id IS NULL) = (depth = 0))) STRICT`,
+      'CREATE INDEX workflow_runs_rule_state ON workflow_runs(rule_id, rule_version, state, started_at)',
+      'CREATE INDEX workflow_runs_event ON workflow_runs(event_id)',
+      'CREATE INDEX workflow_runs_expiry ON workflow_runs(state, expires_at)',
+      `CREATE TABLE workflow_steps (
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id) ON DELETE CASCADE,
+        step_id TEXT NOT NULL CHECK (length(step_id) BETWEEN 1 AND 32),
+        state TEXT NOT NULL CHECK (state IN ('ready','running','waiting','done','failed','skipped','cancelled')),
+        outcome TEXT, delivery_id TEXT, attempt_id TEXT, lease_token TEXT, lease_until INTEGER,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0), next_at INTEGER,
+        started_at INTEGER, settled_at INTEGER, settle_seq INTEGER, last_error_code TEXT,
+        output TEXT CHECK (output IS NULL OR (json_valid(output) AND json_type(output) = 'object')),
+        PRIMARY KEY (run_id, step_id),
+        CHECK ((state = 'done') = (outcome IS NOT NULL))) STRICT`,
+      'CREATE INDEX workflow_steps_claim ON workflow_steps(state, next_at, lease_until)',
+      `CREATE TABLE workflow_waits (
+        run_id TEXT NOT NULL, step_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('turn-end','session-idle','time','limit')),
+        key TEXT, wake_at INTEGER NOT NULL,
+        PRIMARY KEY (run_id, step_id),
+        FOREIGN KEY (run_id, step_id) REFERENCES workflow_steps(run_id, step_id) ON DELETE CASCADE) STRICT`,
+      'CREATE INDEX workflow_waits_wake ON workflow_waits(wake_at)',
+      'CREATE INDEX workflow_waits_key ON workflow_waits(kind, key)',
+      `CREATE TABLE workflow_effects (
+        id INTEGER PRIMARY KEY, rule_id TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK (kind IN ('run','session-start','worktree','linear-write','event')),
+        at INTEGER NOT NULL) STRICT`,
+      'CREATE INDEX workflow_effects_window ON workflow_effects(kind, rule_id, at)',
+      `CREATE TABLE workflow_worktrees (
+        run_id TEXT NOT NULL, step_id TEXT NOT NULL, project_id TEXT NOT NULL,
+        checkout TEXT NOT NULL CHECK (substr(checkout, 1, 1) = '/'),
+        path TEXT NOT NULL UNIQUE CHECK (substr(path, 1, 1) = '/'),
+        branch TEXT NOT NULL CHECK (length(branch) BETWEEN 1 AND 60 AND branch NOT GLOB '*[^a-z0-9/-]*'),
+        state TEXT NOT NULL CHECK (state IN ('recording','made','refused','kept','removed')),
+        created_at INTEGER NOT NULL, settled_at INTEGER, reason TEXT,
+        PRIMARY KEY (run_id, step_id)) STRICT`,
+      `CREATE TABLE projects (
+        id TEXT PRIMARY KEY CHECK (length(id) BETWEEN 1 AND 64 AND id NOT GLOB '*[^a-z0-9-]*'),
+        name TEXT NOT NULL UNIQUE CHECK (length(name) BETWEEN 1 AND 80),
+        repo TEXT NOT NULL CHECK (repo GLOB 'github.com/?*/?*'),
+        profile TEXT NOT NULL DEFAULT '' CHECK (length(profile) <= 2000),
+        profile_by TEXT CHECK (profile_by IS NULL OR profile_by IN ('person','claude','codex')),
+        profile_at INTEGER,
+        hints TEXT NOT NULL DEFAULT '{"people":[],"senderDomains":[],"slackConversations":[]}' CHECK (json_valid(hints)),
+        created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL) STRICT`,
+      `CREATE TABLE project_folders (
+        folder TEXT PRIMARY KEY CHECK (substr(folder, 1, 1) = '/' AND length(folder) <= 1024),
+        project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind IN ('checkout','worktree')),
+        default_branch TEXT, worktree_root TEXT CHECK (worktree_root IS NULL OR substr(worktree_root, 1, 1) = '/'),
+        made_by_run TEXT, made_by_step TEXT) STRICT`,
+      `CREATE TABLE workflow_events (
+        id TEXT PRIMARY KEY CHECK (length(id) = 30 AND substr(id, 1, 4) = 'wfe_'),
+        run_id TEXT NOT NULL REFERENCES workflow_runs(id), step_id TEXT,
+        rule_id TEXT NOT NULL, rule_version INTEGER NOT NULL CHECK (rule_version > 0), account_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (length(type) BETWEEN 7 AND 131), schema TEXT NOT NULL,
+        sequence INTEGER NOT NULL CHECK (sequence > 0), raised_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('open','done','expired','cancelled')), encrypted_record BLOB,
+        UNIQUE (run_id, sequence),
+        CHECK ((encrypted_record IS NULL) = (state <> 'open'))) STRICT`,
+      `CREATE TABLE event_deliveries (
+        event_id TEXT NOT NULL REFERENCES workflow_events(id),
+        subscriber_id TEXT NOT NULL, subscriber_version INTEGER NOT NULL CHECK (subscriber_version > 0),
+        kind TEXT NOT NULL CHECK (kind IN ('sse','webhook')),
+        state TEXT NOT NULL CHECK (state IN ('queued','retryable','disclosing','delivered','dead-lettered','expired','cancelled')),
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0), next_at INTEGER, lease_until INTEGER,
+        attempt_id TEXT, lease_token TEXT, ordering_sequence INTEGER NOT NULL CHECK (ordering_sequence > 0),
+        last_error_code TEXT, last_status INTEGER, delivered_at INTEGER, dead_letter_expires_at INTEGER,
+        PRIMARY KEY (event_id, subscriber_id, subscriber_version)) STRICT`,
+      'CREATE INDEX event_deliveries_order ON event_deliveries(subscriber_id, subscriber_version, ordering_sequence, state)',
+      `CREATE TABLE event_stream_log (
+        id TEXT PRIMARY KEY, event_id TEXT NOT NULL,
+        subscriber_id TEXT NOT NULL, subscriber_version INTEGER NOT NULL,
+        encrypted_record BLOB NOT NULL, delivered_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+        UNIQUE (event_id, subscriber_id, subscriber_version),
+        CHECK (expires_at > delivered_at AND expires_at - delivered_at <= 604800000)) STRICT`,
+      'CREATE INDEX event_stream_log_replay ON event_stream_log(subscriber_id, subscriber_version, delivered_at, id)',
+      `CREATE TABLE workflow_chain_requests (
+        event_id TEXT NOT NULL REFERENCES ingest(event_id),
+        rule_id TEXT NOT NULL, rule_version INTEGER NOT NULL CHECK (rule_version > 0),
+        workflow_event_id TEXT NOT NULL, parent_run_id TEXT NOT NULL,
+        depth INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 3), requested_at INTEGER NOT NULL,
+        PRIMARY KEY (event_id, rule_id, rule_version)) STRICT`,
+      "ALTER TABLE subscriber_versions ADD COLUMN state TEXT CHECK (state IS NULL OR state IN ('inert','active','superseded'))",
+      'ALTER TABLE subscriber_versions ADD COLUMN approval_id TEXT',
+      'ALTER TABLE subscriber_versions ADD COLUMN activated_at INTEGER',
+      'ALTER TABLE subscriber_versions ADD COLUMN superseded_at INTEGER',
+      "CREATE UNIQUE INDEX subscriber_versions_one_active ON subscriber_versions(subscriber_id) WHERE state = 'active'",
+      `CREATE TABLE deliveries_v34 (
+        id TEXT PRIMARY KEY,
+        decision_id TEXT NOT NULL REFERENCES decisions(id),
+        account_id TEXT NOT NULL,
+        rule_id TEXT NOT NULL,
+        rule_version INTEGER NOT NULL,
+        target_key TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        target_version INTEGER NOT NULL,
+        encrypted_record BLOB,
+        attempts INTEGER NOT NULL DEFAULT 0 CHECK (attempts >= 0),
+        cap_charged_at INTEGER,
+        next_at INTEGER,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'retryable', 'disclosing', 'delivered', 'dead-lettered', 'retention-expired', 'cancelled', 'content-unreadable', 'in-flight-at-disable', 'in-flight-at-account-removal')),
+        switch_generation INTEGER NOT NULL,
+        lease_until INTEGER,
+        last_error_code TEXT,
+        last_status INTEGER,
+        target_kind TEXT NOT NULL DEFAULT 'dry-run' CHECK (target_kind IN ('dry-run', 'webhook', 'sse', 'queue', 'linear', 'session', 'linear-change')),
+        target_representation TEXT NOT NULL DEFAULT 'plain' CHECK (target_representation IN ('plain', 'enveloped')),
+        subscriber_id TEXT,
+        subscriber_version INTEGER,
+        attempt_id TEXT,
+        lease_token TEXT,
+        ordering_sequence INTEGER NOT NULL DEFAULT 0 CHECK (ordering_sequence >= 0),
+        dead_lettered_at INTEGER,
+        dead_letter_expires_at INTEGER,
+        whatsapp_visibility_version INTEGER,
+        whatsapp_message_id TEXT,
+        linear_issue_id TEXT CHECK (
+          linear_issue_id IS NULL OR (length(linear_issue_id) = 36 AND linear_issue_id NOT GLOB '*[^0-9a-f-]*')
+        ),
+        linear_identifier TEXT CHECK (
+          linear_identifier IS NULL OR (length(linear_identifier) BETWEEN 3 AND 48
+            AND linear_identifier GLOB '*-[0-9]*' AND linear_identifier NOT GLOB '*[^A-Za-z0-9_-]*')
+        ),
+        linear_url TEXT CHECK (linear_url IS NULL OR (length(linear_url) <= 200 AND linear_url GLOB 'https://linear.app/*')),
+        run_id TEXT,
+        step_id TEXT,
+        UNIQUE (decision_id, target_key),
+        -- Only work that may still disclose holds its payload; a terminal delivery's record is purged (D12, D8).
+        CHECK (encrypted_record IS NOT NULL OR state NOT IN ('queued', 'retryable', 'disclosing')),
+        -- An issue is recorded on a Linear delivery only, all three at once.
+        CHECK ((linear_issue_id IS NULL) = (linear_identifier IS NULL) AND (linear_issue_id IS NULL) = (linear_url IS NULL)),
+        CHECK (linear_issue_id IS NULL OR target_kind IN ('linear', 'linear-change')),
+        -- A flow's delivery names its run and its step, both at once; any other names neither.
+        CHECK ((run_id IS NULL) = (step_id IS NULL))
+      ) STRICT`,
+      `INSERT INTO deliveries_v34
+       (id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version, encrypted_record,
+        attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until, last_error_code,
+        last_status, target_kind, target_representation, subscriber_id, subscriber_version, attempt_id, lease_token,
+        ordering_sequence, dead_lettered_at, dead_letter_expires_at, whatsapp_visibility_version, whatsapp_message_id,
+        linear_issue_id, linear_identifier, linear_url, run_id, step_id)
+       SELECT id, decision_id, account_id, rule_id, rule_version, target_key, target_id, target_version,
+              encrypted_record, attempts, cap_charged_at, next_at, expires_at, state, switch_generation, lease_until,
+              last_error_code, last_status, target_kind, target_representation, subscriber_id, subscriber_version,
+              attempt_id, lease_token, ordering_sequence, dead_lettered_at, dead_letter_expires_at,
+              whatsapp_visibility_version, whatsapp_message_id, linear_issue_id, linear_identifier, linear_url, NULL, NULL
+         FROM deliveries ORDER BY rowid`,
+      'DROP TABLE deliveries',
+      'ALTER TABLE deliveries_v34 RENAME TO deliveries',
+      `CREATE INDEX deliveries_stable_order
+       ON deliveries(rule_id, account_id, target_id, ordering_sequence, state, lease_until)`,
+      'CREATE INDEX deliveries_run ON deliveries(run_id, step_id)',
+      `CREATE TRIGGER session_queue_goes_with_its_delivery
+        AFTER UPDATE OF state ON deliveries WHEN NEW.state NOT IN ('queued', 'retryable', 'disclosing')
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = NEW.id;
+        END`,
+      `CREATE TRIGGER session_work_goes_with_its_delivery
+        AFTER DELETE ON deliveries
+        BEGIN
+          DELETE FROM session_queue WHERE delivery_id = OLD.id;
+          DELETE FROM session_deliveries WHERE delivery_id = OLD.id;
+        END`,
+      // The last statement of the slot rebuild records this migration's schema version.
+      ...subscriberSlotTableStatements(34, PROVIDER_KEY_SQL_VALUES_V30),
     ],
   },
 ];

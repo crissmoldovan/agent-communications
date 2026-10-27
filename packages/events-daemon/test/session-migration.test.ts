@@ -61,8 +61,13 @@ test('SESSION-M1: v32 rebuilds deliveries to admit the session kind, keeping eve
       String(EVENT_MIGRATIONS.at(-1)?.version),
     );
     assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'agent-session-target-v1')?.version, 32);
-    assert.deepEqual(columns(database, 'deliveries'), beforeColumns);
-    assert.deepEqual(database.prepare('SELECT * FROM deliveries ORDER BY rowid').all(), before);
+    // Migration 34 (0.36.0, workflows) rebuilds the table once more and appends a flow delivery's run and step.
+    const FLOW_COLUMNS = { run_id: null, step_id: null };
+    assert.deepEqual(columns(database, 'deliveries'), [...beforeColumns, ...Object.keys(FLOW_COLUMNS)]);
+    assert.deepEqual(
+      database.prepare('SELECT * FROM deliveries ORDER BY rowid').all(),
+      (before as readonly object[]).map((row) => Object.assign(Object.create(null), row, FLOW_COLUMNS)),
+    );
     insertSessionDelivery(database, 'delivery-session');
     assert.deepEqual(database.prepare('PRAGMA foreign_key_check').all(), []);
     // Every column of the new tables is an id, a number or a time: nothing a sender wrote.
