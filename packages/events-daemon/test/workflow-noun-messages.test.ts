@@ -51,9 +51,11 @@ async function sourceFiles(directory: string): Promise<string[]> {
 const REGEX_BEFORE = new Set([...'(,=:[!&|?{};+-*%<>~^']);
 const REGEX_AFTER_WORD = new Set(['return', 'typeof', 'case', 'in', 'of', 'delete', 'void', 'throw', 'new', 'else']);
 const ESCAPES: Readonly<Record<string, string>> = { n: '\n', t: '\t', r: '\r', '0': '\0' };
+/** Where a template's expression was, in the text read from it. */
+const HOLE = '…';
 
 /**
- * Every string a TypeScript file writes — quoted strings, and each template with `${…}` where its expressions were —
+ * Every string a TypeScript file writes — quoted strings, and each template with `…` where its expressions were —
  * with comments and regular expressions passed over. A small lexer, enough for this source; it is checked below on
  * the cases it must get right.
  */
@@ -95,7 +97,7 @@ function stringsOf(source: string, file = '<source>'): Literal[] {
         advance(2);
         code('}');
         advance();
-        text += '${}';
+        text += HOLE;
       } else {
         text += source[index];
         advance();
@@ -170,10 +172,13 @@ function isSentence(text: string): boolean {
 }
 
 test('the lexer reads strings and templates, and passes over comments and regular expressions', () => {
+  // TypeScript source, as data: its `${…}` are the text a template holds, not placeholders here.
   const source = [
     "const a = 'it\\'s a rule'; // 'not this rule'",
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is deliberate source text for the lexer.
     '/* "nor this rule" */ const b = /["\'`]rule/u.test(x) ? `the ${y ? \'inner rule\' : `${z}`} rule` : "x";',
     'const c = (n / 2) / 3; const d = "after division"; return /a"b/u;',
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: this is deliberate source text for the lexer.
     "const e = `x${'{'}y`; const f = 'last rule';",
   ].join('\n');
   assert.deepEqual(
@@ -181,12 +186,12 @@ test('the lexer reads strings and templates, and passes over comments and regula
     [
       [1, "it's a rule"],
       [2, 'inner rule'],
-      [2, '${}'],
-      [2, 'the ${} rule'],
+      [2, '…'],
+      [2, 'the … rule'],
       [2, 'x'],
       [3, 'after division'],
       [4, '{'],
-      [4, 'x${}y'],
+      [4, 'x…y'],
       [4, 'last rule'],
     ],
   );
