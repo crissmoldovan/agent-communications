@@ -1538,7 +1538,7 @@
       "operation": "connectionPartChange",
       "argv": ["--client", "claude-code"],
       "args": { "app": "claude-code", "add": { "server": "gmail" } },
-      "expect": { "request.server": "gmail" },
+      "expect": { "request.server": "gmail", "request.app": "claude-code" },
       "reason": "From 0.35.0 a channel's own `mcp install` puts that channel into the app's MCP connection, or makes the app one with Agent Comms itself and that channel (single-server design D17, §10): from chat that is the core server's comms_connection_change with `add: { server: \"gmail\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other. Kept to an account and read-only as the command's own flags say; where the app has several connections for every folder it goes into none until `--connection` (`id`) names one."
     },
     {
@@ -1620,9 +1620,9 @@
       "status": "both",
       "operation": "connectionPartChange",
       "via": "setupState",
-      "argv": ["--inbox", "parity/gmail", "--mcp-client", "claude-code"],
-      "args": { "app": "claude-code", "add": { "server": "gmail" } },
-      "expect": { "request.server": "gmail" },
+      "argv": ["--inbox", "parity/gmail", "--mcp-client", "cursor"],
+      "args": { "app": "cursor", "add": { "server": "gmail" } },
+      "expect": { "request.server": "gmail", "request.app": "cursor" },
       "reason": "From 0.35.0 `setup --mcp-client <client>` puts Gmail into the app's MCP connection as `mcp install` does, or makes the app one with Agent Comms itself and Gmail (single-server design D17); from chat that step is the core server's comms_connection_change with `add: { server: \"gmail\" }` and `app` — the same change, `connectionPartChange`, so an approval either one prepared is claimed by the other."
     },
     {
