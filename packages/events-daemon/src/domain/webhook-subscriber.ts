@@ -1,5 +1,9 @@
 import { canonicalJson } from '@agentcomms/core';
-import { canonicalEventSubscription, type EventSubscriptionV1 } from './event-subscription.ts';
+import {
+  canonicalEventSubscription,
+  type EventSubscriptionV1,
+  type WebhookSubscriptionWhere,
+} from './event-subscription.ts';
 import { EventDomainError } from './lifecycle.ts';
 import {
   canonicalAddressSet,
@@ -99,12 +103,17 @@ export function webhookSubscriberAddress(document: WebhookSubscriberDocument): s
   return `${document.url.scheme}://${host}:${document.url.port}`;
 }
 
-/** The public authority a webhook subscriber posts to, as its preview names it: never a secret URL's path or query. */
-export function webhookSubscriberAuthority(document: WebhookSubscriberDocument): string {
-  if (document.url.kind === 'plain') {
-    const parsed = new URL(document.url.value);
-    return `${parsed.protocol}//${parsed.host}`;
-  }
-  const host = document.url.host.includes(':') ? `[${document.url.host}]` : document.url.host;
-  return `${document.url.scheme}://${host}:${document.url.port}`;
+/**
+ * Where a webhook subscriber posts, as its subscription's approval names it (W29; security review of 0.36.0, M4): the
+ * address `subscribers list` shows — a plain URL's scheme, host, port and path, or a secret URL's authority alone,
+ * never its path or query — with the addresses it may connect to and its retry limit.
+ */
+export function webhookSubscriptionWhere(document: WebhookSubscriberDocument): WebhookSubscriptionWhere {
+  return {
+    kind: 'webhook',
+    address: webhookSubscriberAddress(document),
+    secret: document.url.kind === 'secret',
+    approvedAddressSet: document.approvedAddressSet,
+    retryLimit: document.retryLimit,
+  };
 }

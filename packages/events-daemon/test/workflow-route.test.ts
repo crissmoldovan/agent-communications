@@ -251,23 +251,31 @@ test('activation refuses candidates that differ from the projects as they are no
         );
     }
     assert.doesNotThrow(() => routeCandidatesCheck(OWNER_EXAMPLE, db));
-    const refused = (pattern: RegExp) => (error: unknown) =>
-      error instanceof EventDomainError && error.code === 'PROJECT_CHANGED' && pattern.test(error.message);
+    // One fixed wording for a project changed and a project gone (security review of 0.36.0, M3): it names the step,
+    // never a project's id or folders, so an agent that enables a workflow learns nothing of the person's projects.
+    const said: string[] = [];
+    const refused = (error: unknown) => {
+      if (!(error instanceof EventDomainError) || error.code !== 'PROJECT_CHANGED') return false;
+      said.push(error.message);
+      return true;
+    };
     db.prepare(
       "UPDATE project_folders SET worktree_root = '/example/home/work/billing-trees' WHERE project_id = 'billing'",
     ).run();
-    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused(/billing's folders or worktree root/u));
+    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused);
     db.prepare('UPDATE project_folders SET worktree_root = NULL').run();
     db.prepare(
       "INSERT INTO project_folders (folder, project_id, kind) VALUES ('/example/home/work/billing-2', 'billing', 'worktree')",
     ).run();
-    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused(/billing's folders/u));
+    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused);
     db.prepare("DELETE FROM projects WHERE id = 'billing'").run();
+    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused);
     db.prepare("DELETE FROM projects WHERE id = 'acme-site'").run();
-    assert.throws(
-      () => routeCandidatesCheck(OWNER_EXAMPLE, db),
-      refused(/acme-site, which is not one of your projects/u),
-    );
+    assert.throws(() => routeCandidatesCheck(OWNER_EXAMPLE, db), refused);
+    assert.equal(new Set(said).size, 1, `one wording: ${said.join(' | ')}`);
+    assert.match(said[0] ?? '', /the step route/u, 'it names the step');
+    for (const word of ['acme-site', 'billing', '/example/'])
+      assert.equal((said[0] ?? '').includes(word), false, `it names no project or folder: ${said[0]}`);
     // A workflow with no flow has no candidates to check.
     const { flow: _flow, ...straight } = OWNER_EXAMPLE;
     assert.doesNotThrow(() => routeCandidatesCheck(straight as CanonicalFullRuleDocument, db));

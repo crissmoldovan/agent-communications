@@ -138,6 +138,68 @@ describe('Describe it', () => {
     },
   );
 
+  it(
+    'a note counts as your words only when it quotes your description or an answer you typed, never a choice it offered',
+    DESIGNER_SLOW,
+    async () => {
+      // Security review of 0.36.0, L7: a two-letter quote, or the words of a choice the model itself offered, showed as
+      // "From your words" in place of the warning-coloured "Added by the model".
+      const choice = 'Slack too, and by email as well';
+      const rounds = [
+        {
+          ...ANSWER,
+          questions: [
+            { step: 'tell', question: 'Should it tell you on Slack too?', choices: ['Only here', choice] },
+            { step: 'wait', question: 'How long should it wait?', choices: [] },
+          ],
+        },
+        {
+          ...ANSWER,
+          text: (() => {
+            const document = JSON.parse(JSON.stringify(REMINDERS)) as typeof REMINDERS & {
+              flow: { steps: Record<string, unknown> };
+            };
+            document.flow.steps.tell = { kind: 'notify', text: 'Time to look at it again', next: { sent: 'remind' } };
+            document.flow.steps.remind = { kind: 'notify', text: 'Remind me', next: { sent: 'again' } };
+            document.flow.steps.again = { kind: 'notify', text: 'And again', next: {} };
+            return printRuleText(document);
+          })(),
+          notes: [
+            { step: 'wait', words: 'wait an hour' },
+            { step: 'tell', words: choice },
+            { step: 'remind', words: 'to' },
+            { step: 'again', words: 'ninety minutes, I think' },
+          ],
+          unnoted: [],
+          questions: [],
+        },
+      ];
+      let round = 0;
+      const fake = service(() => rounds[Math.min(round++, rounds.length - 1)]);
+      renderApp(fake.bridge, { screen: 'events' });
+      const editor = await openDesigner('reminders');
+      const panel = await openDescribe(editor);
+      await draft(panel);
+      const questions = within(panel).getByRole('region', { name: DESCRIBE_COPY.questions });
+      fireEvent.click(within(questions).getByRole('button', { name: /Slack too, and by email as well/ }));
+      fireEvent.change(
+        within(questions).getByRole('textbox', { name: `${DESCRIBE_COPY.answer}: How long should it wait?` }),
+        { target: { value: 'About ninety minutes, I think' } },
+      );
+      fireEvent.click(within(panel).getByRole('button', { name: DESCRIBE_COPY.again }));
+      await waitFor(() => expect(describeCalls(fake)).toHaveLength(2));
+      const said = async (step: string) => {
+        const steps = await within(panel).findByRole('region', { name: DESCRIBE_COPY.steps });
+        await waitFor(() => expect(steps.querySelector(`[data-describe-step="${step}"]`)).not.toBeNull());
+        return steps.querySelector(`[data-describe-step="${step}"]`)?.textContent ?? '';
+      };
+      await waitFor(async () => expect(await said('remind')).toContain(DESCRIBE_COPY.added));
+      expect(await said('wait')).toContain(DESCRIBE_COPY.fromWords);
+      expect(await said('tell')).toContain(DESCRIBE_COPY.added);
+      expect(await said('again')).toContain(DESCRIBE_COPY.fromWords);
+    },
+  );
+
   it('the draft, notes and questions render as outside text', DESIGNER_SLOW, async () => {
     const broken = {
       ...ANSWER,

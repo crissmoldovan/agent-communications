@@ -157,6 +157,7 @@ import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
+import { ruleShowForAgent } from '../runtime/rule-show.ts';
 import { withinTestProfile } from '../runtime/test-profile.ts';
 import { RUN_STATES, type RunState } from '../runtime/workflow/run-show.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
@@ -525,12 +526,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .option('--version <version>', 'that one version alone, as a run of it draws its graph')
     .action(async (ruleId: string, options: { readonly version?: string }) => {
       ran = true;
-      print(
-        await ruleShow(ruleId, {
-          ...controlOptions(program),
-          ...(options.version === undefined ? {} : { version: parseVersion(options.version) }),
-        }),
-      );
+      const shown = await ruleShow(ruleId, {
+        ...controlOptions(program),
+        ...(options.version === undefined ? {} : { version: parseVersion(options.version) }),
+      });
+      // An agent's shell, or a program inside the event service's MCP server, reads a route step's projects by id and
+      // name, without their folders, as events_rule_show gives them (security review of 0.36.0, M3).
+      print(agentMarker(env) !== null || (env[MCP_SERVER_MARKER] ?? '') !== '' ? ruleShowForAgent(shown) : shown);
     });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;

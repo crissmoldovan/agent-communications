@@ -139,7 +139,7 @@ function fieldList(cursor: Cursor, helpers: SessionParseHelpers, what: string): 
 function contextPart(child: TextLine, cursor: Cursor, helpers: SessionParseHelpers): JsonValue {
   const at = cursor.mark();
   helpers.noChildren(child, 'a context part');
-  if (cursor.take('raw')) {
+  if (cursor.takeRaw()) {
     const value = cursor.json('the raw context part');
     cursor.expectEnd('the raw context part');
     return value;

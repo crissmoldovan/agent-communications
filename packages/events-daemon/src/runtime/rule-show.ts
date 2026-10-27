@@ -142,3 +142,57 @@ export class RuleReader {
     };
   }
 }
+
+/**
+ * A workflow document as an agent reads it (security review of 0.36.0, M3; spec §8.1, taking design T7): a route
+ * step's candidates are bound by value (W12), and a project's folders and worktree root name a client, so each
+ * candidate keeps its `projectId` and `name`, its `folders` become `[]` and its `worktreeRoot` `null`, and it gains
+ * `foldersHidden`, how many folders it has. Everything else is as stored, and a document with no route step is returned
+ * as it is. The person's own view — no caller, no agent's marker — is never passed through here.
+ */
+export function withRouteFoldersHidden(document: unknown): unknown {
+  if (!isRecord(document) || !isRecord(document.flow) || !isRecord(document.flow.steps)) return document;
+  const steps = document.flow.steps;
+  let changed = false;
+  const shown = Object.fromEntries(
+    Object.entries(steps).map(([stepId, step]) => {
+      if (!isRecord(step) || step.kind !== 'route' || !Array.isArray(step.candidates)) return [stepId, step];
+      changed = true;
+      return [
+        stepId,
+        {
+          ...step,
+          candidates: step.candidates.map((candidate: unknown) =>
+            isRecord(candidate)
+              ? {
+                  ...candidate,
+                  folders: [],
+                  worktreeRoot: null,
+                  foldersHidden: Array.isArray(candidate.folders) ? candidate.folders.length : 0,
+                }
+              : candidate,
+          ),
+        },
+      ];
+    }),
+  );
+  return changed ? { ...document, flow: { ...document.flow, steps: shown } } : document;
+}
+
+/**
+ * `rule show`'s entries as an agent reads them (M3): each version's document with its route candidates' folders
+ * hidden. The owner gives an agent window's call this through `ruleVersionsForWindow`; an agent's shell, whose call
+ * names no window, gets it from the command line, as its approval view is.
+ */
+export function ruleShowForAgent(entries: unknown): unknown {
+  if (!Array.isArray(entries)) return entries;
+  return entries.map((entry: unknown) =>
+    isRecord(entry) && Object.hasOwn(entry, 'document')
+      ? { ...entry, document: withRouteFoldersHidden(entry.document) }
+      : entry,
+  );
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

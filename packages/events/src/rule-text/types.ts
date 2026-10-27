@@ -7,6 +7,12 @@ export interface RuleTextError {
   readonly message: string;
 }
 
+/** Where a rule's text wrote JSON for itself with `raw`: the line and column of the word, 1-based. */
+export interface RuleTextRawSite {
+  readonly line: number;
+  readonly column: number;
+}
+
 /**
  * What `parseRuleText` returns. A parsed document is the rule document the text says, field for field; it is not yet
  * checked against the catalogue, the accounts or the targets that exist. The event service does that when the

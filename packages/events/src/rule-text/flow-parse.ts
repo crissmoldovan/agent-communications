@@ -327,7 +327,7 @@ function stepLine(cursor: Cursor, line: TextLine, helpers: FlowParseHelpers): Wr
   }
   const kind = start[1];
   if (kind === 'raw') {
-    cursor.take('raw');
+    cursor.takeRaw();
     const step = cursor.json('the raw step');
     cursor.expectEnd('the raw step');
     helpers.noChildren(line, 'a raw step');

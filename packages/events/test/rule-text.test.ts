@@ -1,6 +1,13 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { CATALOGUE, type JsonObject, parseRuleText, printRuleText, RULE_RETENTION_DEFAULTS } from '../src/index.ts';
+import {
+  CATALOGUE,
+  type JsonObject,
+  parseRuleText,
+  printRuleText,
+  RULE_RETENTION_DEFAULTS,
+  ruleTextRawSites,
+} from '../src/index.ts';
 
 /**
  * The rule text (0.33.0 design §3.2): `printRuleText` writes a rule document as the prototype's small language, and
@@ -897,4 +904,25 @@ test('errors: a section given twice, and a field given by a section and by raw, 
       message: 'condition is given twice: by this raw line and by the match section on line 3',
     },
   ]);
+});
+
+test('raw sites: the parser says where the text wrote JSON for itself, however spaced, and the words never count', () => {
+  // Security review of 0.36.0, L6: Describe it refuses a model's draft with any raw site, and asks the parser for them.
+  const text = [
+    'rule spaced, version 1',
+    '',
+    'when mail arrives in ibx_SPACED',
+    'match not raw{"op":"exists","path":"/subject"}',
+    '',
+    'then',
+    '  raw{"targetId":"t","version":1,"kind":"dry-run"}',
+    'raw /retention = {}',
+  ].join('\n');
+  assert.deepEqual(ruleTextRawSites(text), [
+    { line: 4, column: 11 },
+    { line: 7, column: 3 },
+    { line: 8, column: 1 },
+  ]);
+  // Quoted words that only say raw are no raw site.
+  assert.deepEqual(ruleTextRawSites('match subject contains "raw{x}"\nmatch subject contains raw\n'), []);
 });
