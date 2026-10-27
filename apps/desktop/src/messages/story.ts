@@ -6,11 +6,23 @@
  * A part is the app's own words (`text`) or the rule author's (`untrusted`: a rule's id, a target's id, a judge's
  * question), which the screen shows through `UntrustedText`. What a sender wrote never reaches these words: the
  * screen shows the kept sender and subject through `OutsideText`, beside them.
+ *
+ * Takes (0.35.0, design 2026-10-26-taking-messages §9): who has the message and each take, hand-back and lapse, in the
+ * person's view — the window's folder and client, which an agent never sees of another session (T7). A take's note is
+ * an agent's words and may carry a sender's: it is an `untrusted` part, never the app's.
  */
 import { productLabel } from '../components/ApprovalCard.tsx';
 import { shownFolder } from '../lanes.ts';
-import type { JoinedMessage, Status, Touch } from './join.ts';
-import type { DecisionView, DeliveryView, JudgeAnswer, Millis, WindowRef } from './read.ts';
+import { isHandedBack, type JoinedMessage, type Status, type Touch } from './join.ts';
+import type {
+  DecisionView,
+  DeliveryView,
+  HandBackReason,
+  JudgeAnswer,
+  Millis,
+  TakeWindowView,
+  WindowRef,
+} from './read.ts';
 
 export type Part = { text: string } | { untrusted: string };
 
@@ -49,8 +61,14 @@ export function statusLabel(status: Status): { label: string; tone: ChipTone } {
       return { label: status.actor === null ? 'Dismissed' : `Dismissed by ${BY[status.actor]}`, tone: 'neutral' };
     case 'read':
       return { label: 'Read by an agent', tone: 'neutral' };
+    case 'taken':
+      return { label: status.by === 'person' ? 'You’re handling it' : 'Taken by an agent', tone: 'accent' };
+    case 'handed-back':
+      return { label: 'Handed back', tone: 'warn' };
     case 'waiting':
       return { label: 'Waiting for you', tone: 'warn' };
+    case 'not-taken':
+      return { label: 'Nobody took it', tone: 'warn' };
     case 'not-seen':
       return { label: 'Not seen', tone: 'neutral' };
   }
@@ -236,6 +254,172 @@ function searchWhere(operation: string | null): string {
   return operation === 'slack.search' ? 'Slack' : 'your mail';
 }
 
+// ── Takes (0.35.0) ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Why a session handed a message back, in a few words: core's closed reasons (T8). */
+export const REASON_WORDS: Readonly<Record<HandBackReason, string>> = {
+  'not-mine': 'not mine',
+  'wrong-account': 'wrong account',
+  'needs-the-person': 'it needs you',
+  duplicate: 'a duplicate',
+  other: 'another reason',
+};
+
+function reasonWords(reason: HandBackReason | null): string {
+  return reason === null ? 'no reason given' : REASON_WORDS[reason];
+}
+
+/** A take's window as a story names it: its folder and client, as the take recorded them, or the activity line's. */
+function takeWindowOf(touch: Touch): TakeWindowView | null {
+  if (touch.take?.window) return touch.take.window;
+  if (touch.window === null) return null;
+  return { key: touch.window.key, sessionId: null, folder: touch.window.folder, client: touch.window.client };
+}
+
+function takeClientWords(window: TakeWindowView | null): string | null {
+  const client = window?.client ?? null;
+  if (client === null) return null;
+  return client.version === null ? client.name : `${client.name} ${client.version}`;
+}
+
+/** "the agent in ~/acme", or "an agent window" when the take recorded no folder. */
+export function agentIn(window: TakeWindowView | null, home: string | null): string {
+  return window?.folder ? `the agent in ${shownFolder(window.folder, home)}` : 'an agent window';
+}
+
+/** A take's window in a few words: its folder and its client, as each was recorded. */
+function takeWindowWords(window: TakeWindowView | null, home: string | null): string | null {
+  const said = [window?.folder ? shownFolder(window.folder, home) : null, takeClientWords(window)]
+    .filter(Boolean)
+    .join(' · ');
+  return said === '' ? null : said;
+}
+
+/** Where a person's act came from: this app, or a terminal, in a folder when it was read (§10). */
+function fromWords(touch: Touch, home: string | null): string | null {
+  const from = touch.take?.from ?? null;
+  if (from === null) return null;
+  if (from === 'app') return 'In this app';
+  return from.terminal === null ? 'At a terminal' : `At a terminal in ${shownFolder(from.terminal, home)}`;
+}
+
+const capital = (text: string) => `${text.charAt(0).toUpperCase()}${text.slice(1)}`;
+
+/** Whether an `expired` line ended an offer, rather than a take: what came before it was an offer. */
+function endedAnOffer(touches: readonly Touch[], touch: Touch): boolean {
+  const before = touches.filter((each) => each.via === 'take' && each.at <= touch.at && each !== touch);
+  const last = before[before.length - 1];
+  return last?.kind === 'offered' || last?.kind === 'given';
+}
+
+/** A card's steps for a message's take: each offer, take, hand-back and the person's acts, in order. */
+function takeCardSteps(message: JoinedMessage, context: StoryContext): string[] {
+  const steps: string[] = [];
+  const lane = laneOf(message);
+  for (const touch of message.touches) {
+    if (touch.via !== 'take') continue;
+    const window = takeWindowOf(touch);
+    switch (touch.kind) {
+      case 'offered':
+        steps.push(
+          touch.actor === 'service' && lane !== null
+            ? `Offered to the agent bound to lane ${lane}`
+            : `Offered to ${agentIn(window, context.home)}`,
+        );
+        break;
+      case 'given':
+        steps.push(`You gave it to ${agentIn(window, context.home)}`);
+        break;
+      case 'taken':
+        steps.push(`Taken by ${agentIn(window, context.home)}${touch.take?.eyes ? ' (👀)' : ''}`);
+        break;
+      case 'handed-back':
+        steps.push(`Handed back: ${reasonWords(touch.take?.reason ?? null)}`);
+        break;
+      case 'take-done':
+        steps.push('Marked done by the agent that took it');
+        break;
+      case 'kept':
+        steps.push('You’re handling it');
+        break;
+      case 'released':
+        steps.push('You took it back');
+        break;
+      case 'expired':
+        steps.push(endedAnOffer(message.touches, touch) ? 'The offer ran out' : 'The take ran out');
+        break;
+      case 'ended':
+        steps.push('Its window closed');
+        break;
+      default:
+        break;
+    }
+  }
+  return steps;
+}
+
+/** The timeline's entry for one step of a message's take, in the person's view: the window's folder and client. */
+function takeEntry(touch: Touch, message: JoinedMessage, context: StoryContext): TimelineEntry {
+  const window = takeWindowOf(touch);
+  const where = takeWindowWords(window, context.home);
+  const who = capital(agentIn(window, context.home));
+  const from = fromWords(touch, context.home);
+  const joined = (...parts: (string | null)[]) => {
+    const said = parts.filter(Boolean).join(' · ');
+    return said === '' ? null : words(said);
+  };
+  const note = touch.take?.note ?? null;
+  /** A session's note, as it wrote it: an `untrusted` part, after what the app says of the window. */
+  const withNote = (before: string | null): Part[] | null =>
+    note === null ? joined(before) : [...(before === null ? [] : [{ text: `${before} · ` }]), { untrusted: note }];
+  const entry = (tone: EntryTone, what: string, sub: Part[] | null): TimelineEntry => ({
+    at: touch.at,
+    tone,
+    what: words(what),
+    sub,
+  });
+  switch (touch.kind) {
+    case 'offered': {
+      const lane = laneOf(message);
+      return entry(
+        'accent',
+        touch.actor === 'service' && lane !== null
+          ? `Offered to the agent window bound to ${lane}`
+          : `Offered to ${agentIn(window, context.home)}`,
+        joined(where, 'It must still take it before it acts on it'),
+      );
+    }
+    case 'given':
+      return entry(
+        'accent',
+        `You gave it to ${agentIn(window, context.home)}`,
+        joined(from, where, 'It must take it within 15 minutes'),
+      );
+    case 'taken':
+      return entry(
+        'accent',
+        `${who} took it${touch.take?.eyes ? ', and 👀 went under the message' : ''}`,
+        joined(where, 'From then on only this session may act on it'),
+      );
+    case 'handed-back':
+      return entry('warn', `${who} handed it back: ${reasonWords(touch.take?.reason ?? null)}`, withNote(where));
+    case 'take-done':
+      return entry('ok', `${who} marked it done`, withNote(where));
+    case 'kept':
+      return entry('accent', 'You said you’ll handle it', joined(from, 'Every session is refused it'));
+    case 'released':
+      return entry('idle', 'You took it back', joined(from, 'Any session may take it again'));
+    case 'expired':
+      return endedAnOffer(message.touches, touch)
+        ? entry('idle', 'The offer ran out', joined(where, 'It wasn’t taken in time'))
+        : entry('idle', 'The take ran out', joined(where, 'An hour passed with nothing done on it'));
+    case 'ended':
+      return entry('idle', `${who}’s window closed, so its take ended`, joined(where, 'Any session may take it again'));
+    default:
+      return entry('idle', 'Its take changed', joined(where));
+  }
+}
+
 // ── A card's steps ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -271,6 +455,7 @@ export function cardSteps(message: JoinedMessage, context: StoryContext): Part[]
       steps.push(words(`Read by the agent in ${folder}${searching}`));
     }
   }
+  for (const step of takeCardSteps(message, context)) steps.push(words(step));
   const ack = touches.find((touch) => touch.kind === 'acknowledged');
   if (ack !== undefined) steps.push(words(ack.replied ? 'Acknowledged with a reply' : 'Acknowledged with a reaction'));
   const sent = touches.find((touch) => touch.kind === 'sent');
@@ -291,7 +476,8 @@ export function cardSteps(message: JoinedMessage, context: StoryContext): Part[]
     const verb = state === 'done' ? 'Marked done' : 'Dismissed';
     steps.push(words(marked === undefined ? verb : `${verb} by ${marked.actor === 'person' ? 'you' : 'the agent'}`));
   }
-  if (!message.agentSeen) steps.push(words('No agent has read it'));
+  if (message.notTaken !== null) steps.push(words('Nobody took it'));
+  else if (!message.agentSeen) steps.push(words('No agent has read it'));
   else if (message.status.kind === 'acknowledged') steps.push(words('No reply yet'));
   return steps;
 }
@@ -359,6 +545,16 @@ function touchEntry(touch: Touch, message: JoinedMessage, context: StoryContext,
       return entry('idle', `${who} dismissed it in the Queue`, touch.actor === 'window' ? window : null);
     case 'reopened':
       return entry('idle', `${who} reopened it in the Queue`, touch.actor === 'window' ? window : null);
+    case 'offered':
+    case 'taken':
+    case 'handed-back':
+    case 'take-done':
+    case 'expired':
+    case 'ended':
+    case 'released':
+    case 'given':
+    case 'kept':
+      return takeEntry(touch, message, context);
   }
 }
 
@@ -431,6 +627,21 @@ export function timeline(message: JoinedMessage, context: StoryContext): Timelin
       sub: null,
     });
   }
+  // Nobody took it in time (0.35.0): when it counted, and why.
+  const late = message.notTaken;
+  if (late !== null) {
+    const minutes = Math.round((late.due - late.since) / 60_000);
+    after.push({
+      at: late.due,
+      tone: 'warn',
+      what: words('Nobody took it'),
+      sub: words(
+        late.why === 'needs-the-person'
+          ? 'A session handed it back saying it needs you'
+          : `No session took it within ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`,
+      ),
+    });
+  }
   after.sort((a, b) => (a.at ?? 0) - (b.at ?? 0));
   return [...entries, ...after];
 }
@@ -464,15 +675,18 @@ export function windowsOf(message: JoinedMessage, context: StoryContext): Window
       touches.find((touch) => touch.window?.folder)?.window ?? touches.find((touch) => touch.window)?.window ?? null;
     const count = (kind: Touch['kind']) => touches.filter((touch) => touch.kind === kind).length;
     const sent = count('sent');
+    const handedBack = [...touches].reverse().find((touch) => touch.kind === 'handed-back');
     const did = [
       count('woken') > 0 ? 'was woken for it' : null,
       count('read') > 0
         ? times(count('read'), 'read it once', (n) => (n === 2 ? 'read it twice' : `read it ${n} times`))
         : null,
+      count('taken') > 0 ? 'took it' : null,
       sent === 0 && count('drafted') + count('prepared') > 0 ? 'drafted a reply' : null,
       sent > 0 ? times(sent, 'sent one reply', (n) => `sent ${n} replies`) : null,
       count('acknowledged') > 0 ? 'acknowledged it' : null,
-      count('done') > 0 ? 'marked it done' : null,
+      handedBack === undefined ? null : `handed it back: ${reasonWords(handedBack.take?.reason ?? null)}`,
+      count('done') + count('take-done') > 0 ? 'marked it done' : null,
       count('dismissed') > 0 ? 'dismissed it' : null,
       count('reopened') > 0 ? 'reopened it' : null,
     ]
@@ -491,11 +705,26 @@ export function windowsOf(message: JoinedMessage, context: StoryContext): Window
 
 // ── The summary ────────────────────────────────────────────────────────────────────────────────────────────────
 
+const COUNTS = ['No', 'One', 'Two', 'Three', 'Four', 'Five'];
+
+/** A count to start a sentence with: "Two", or the number past five. */
+function countWords(count: number): string {
+  return COUNTS[count] ?? String(count);
+}
+
+/** " The agent in ~/acme has it." while a window has the message, after a summary of how far it got. */
+function holderSentence(message: JoinedMessage, context: StoryContext): string {
+  const record = message.take;
+  if (record?.state !== 'taken' || record.holder === null) return '';
+  if (record.holder === 'person') return ' You’re handling it.';
+  return ` ${capital(agentIn(record.holder, context.home))} has it.`;
+}
+
 /** The story's one line: how far the message got, in a sentence or two. */
 export function storySummary(message: JoinedMessage, context: StoryContext): string {
   const { status } = message;
   const item = message.event?.queueItem ?? null;
-  const done = item?.state === 'done' ? " It's done in the Queue." : '';
+  const done = `${item?.state === 'done' ? " It's done in the Queue." : ''}${holderSentence(message, context)}`;
   switch (status.kind) {
     case 'replied':
       if (status.via === 'slack-thread') return `An agent replied in the thread at ${context.time(status.at)}.${done}`;
@@ -504,6 +733,17 @@ export function storySummary(message: JoinedMessage, context: StoryContext): str
       return `An agent replied in the same thread at ${context.time(status.at)}, after you approved the reply.${done}`;
     case 'acknowledged':
       return `An agent acknowledged it with a reaction at ${context.time(status.at)}. No reply was sent through Agent Comms.${done}`;
+    case 'taken': {
+      const since = status.at === null ? '' : ` since ${context.time(status.at)}`;
+      if (status.by === 'person') return `You’re handling it${since}. No session may act on it until you let them.`;
+      return `${capital(agentIn(status.window, context.home))} has it${since}.`;
+    }
+    case 'handed-back':
+      return status.sessions >= 2
+        ? `${countWords(status.sessions)} sessions handed it back; nobody has it.`
+        : `A session handed it back: ${reasonWords(status.reason)}. Nobody has it now.`;
+    case 'not-taken':
+      return `Nobody took it. It has waited since ${context.time(status.since)}.`;
     case 'done':
     case 'dismissed': {
       const verb = status.kind === 'done' ? 'marked it done' : 'dismissed it';
@@ -512,10 +752,83 @@ export function storySummary(message: JoinedMessage, context: StoryContext): str
       return `${who} ${verb} in the Queue${when}.`;
     }
     case 'read':
-      return `An agent read it at ${context.time(status.at)}. No reply was sent through Agent Comms.`;
+      return `An agent read it at ${context.time(status.at)}. No reply was sent through Agent Comms.${holderSentence(message, context)}`;
     case 'waiting':
       return "It's waiting in the Queue. No agent has read it.";
     case 'not-seen':
       return 'No agent has read it through Agent Comms.';
   }
+}
+
+// ── Who has it (0.35.0) ────────────────────────────────────────────────────────────────────────────────────────
+
+export interface WhoHasIt {
+  /** Who has the message now, in a few words. */
+  title: string;
+  /** What that means, and since when. */
+  line: string;
+  /** Who it is: nobody, an offer, an agent window, the person, or done. */
+  state: 'nobody' | 'offered' | 'window' | 'person' | 'done';
+}
+
+/** The story's head: who has the message, what that means for the person, and since when (§9). */
+export function whoHasIt(message: JoinedMessage, context: StoryContext): WhoHasIt {
+  const record = message.take;
+  if (record === null || record.state === 'open') {
+    if (record !== null && isHandedBack(record)) {
+      const back = [...record.history].reverse().find((line) => line.kind === 'handed-back');
+      return {
+        state: 'nobody',
+        title: 'Nobody has it',
+        line: `A session handed it back: ${reasonWords(back?.reason ?? null)}. Any session may take it again, or you can give it to one.`,
+      };
+    }
+    if (message.notTaken !== null) {
+      return {
+        state: 'nobody',
+        title: 'Nobody has taken it',
+        line: `It has waited since ${context.time(message.notTaken.since)}. Give it to a window, or handle it yourself.`,
+      };
+    }
+    return {
+      state: 'nobody',
+      title: 'Nobody has it',
+      line: 'Any session that reads it may take it. You can give it to one, or handle it yourself.',
+    };
+  }
+  if (record.state === 'offered') {
+    const to = record.offer?.to ?? null;
+    const until = record.offer?.until ?? null;
+    return {
+      state: 'offered',
+      title: `Offered to ${agentIn(to, context.home)}${until === null ? '' : ` until ${context.time(until)}`}`,
+      line: 'It must take it before it acts on it. Until then, every other session is refused it.',
+    };
+  }
+  if (record.holder === 'person') {
+    return {
+      state: 'person',
+      title: 'You’re handling it',
+      line: 'Every session is refused it until you let them take it.',
+    };
+  }
+  const holder = record.holder;
+  const client = takeClientWords(holder);
+  const since = record.takenAt === null ? null : `Since ${context.time(record.takenAt)}`;
+  if (record.state === 'done') {
+    return {
+      state: 'done',
+      title: `${capital(agentIn(holder, context.home))} marked it done`,
+      line: [client, 'Other sessions are still refused it'].filter(Boolean).join(' · '),
+    };
+  }
+  const lease =
+    record.leaseUntil === null
+      ? 'Only this session may act on it'
+      : `Only this session may act on it. Its take runs out at ${context.time(record.leaseUntil)} unless it acts on it again`;
+  return {
+    state: 'window',
+    title: `${capital(agentIn(holder, context.home))} has it`,
+    line: [since, client, lease].filter(Boolean).join(' · '),
+  };
 }
