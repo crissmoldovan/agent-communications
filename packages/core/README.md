@@ -355,7 +355,10 @@ agentcomms connection migrate            # your app's separate entries into one 
   says which connection a call came through, so Activity says "used by <name>", and removing the connection or
   replacing its key stops every copy of it at once. Agent Comms keeps only its hash, writes it into the app's entry
   (in the entry's environment, never its arguments), and shows it only for a Manual snippet, once — at your terminal
-  or in the app, never to an agent. If Agent Comms is ever reachable over a network, the key becomes a real secret.
+  or in the app, never to an agent. The gateway takes it out of its own environment once it has checked it, and no
+  part is given it; but the environment a process started with stays readable while it runs, so `ps eww` shows the
+  key to programs running as you for as long as that gateway runs — accepted, since such a program can read the app's
+  config anyway. If Agent Comms is ever reachable over a network, the key becomes a real secret.
 - **One project** is Claude Code's own local scope, kept in `~/.claude.json` and never in a `.mcp.json`, which is
   often committed and would carry the key into the repository.
 - **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one

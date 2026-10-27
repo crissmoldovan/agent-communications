@@ -427,6 +427,10 @@ does not protect.
 - **What it does not do on this Mac.**
   - **It is no boundary against code that runs as the person.** Such code can read `~/.claude.json`, or start
     `agent-gmail mcp` with no gateway at all, exactly as it can today. The key adds no reach and takes none away.
+  - **It stays in the gateway's initial environment while the gateway runs** (2026-10-27, the 0.35.0 security review's
+    LOW, accepted). `delete process.env[…]` takes it out of what the gateway and its parts see, not out of the
+    environment the process started with, which `ps eww` shows to every process of the same user. That user can read
+    the app's config, which holds the key, already.
   - **It is not the thing that protects accounts.** The send gates, approvals and pins still do that.
 - **It passes through the argv of the app's own CLI for the moment it registers.** `claude mcp add-json` and
   `codex mcp add --env` take it there (`mcp-install.ts:1519-1524`), as every entry's environment passes today.
@@ -746,7 +750,8 @@ parts and fake transports. None talks to Gmail, Slack or Resend (AGENTS.md).
 - **Counting parts is a class of bug** (D19): every reader that asks "what is registered?" must also ask "what does a
   connection start?". Mitigation: one `registeredOrConnected()` source that update, prune, doctor, `channels` and the
   app all read, and a test that greps for `scanRegisteredServers` callers that skip it.
-- **The key in argv for about a second** during registration (§6.3).
+- **The key in argv for about a second** during registration (§6.3), and in the gateway's initial environment —
+  `ps eww`, to the same user — for as long as it runs (§6.3, accepted 2026-10-27).
 - **Windows process trees.** PID reuse, and children that outlive a gateway killed outright. Both have bitten this
   repository's Windows CI before. Mitigation: kill by handle, and the `kill -9` test on the Windows leg.
 - **Two Agent Comms in one app**, a standalone entry beside a connection, show the agent tools twice. Mitigation:
@@ -815,3 +820,6 @@ The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes 
   has now, found by its immutable id (D12), never the alias the record kept when it was pinned, which a rename can
   have given another account since; a part kept to an account no longer here refuses the undo before anything is
   prepared, since registered with no pin it would reach every account.
+- **Accepted, and documented: the key in the gateway's initial environment.** `ps eww` shows it to programs running
+  as the person while the gateway runs (§6.3, §14, core's README beside "the key is not a password"); they can read
+  the app's config, which holds it, already.
