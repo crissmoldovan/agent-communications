@@ -106,6 +106,20 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
   - a subscriber that hangs slows no run;
   - a held message let through into a workflow keeps its thread;
   - a message whose hold ran out or was cancelled can be read, and its story says so in words.
+- **Security review fixes before release** (an independent review of this release, 2026-10-27):
+  - A live listener the event service no longer needs closes within a moment, whatever its clients do. Before, a
+    request left half-sent on its port — which an agent could open from its shell before removing the subscriber —
+    stalled the whole event service until that client went away. A listener also cuts a request whose headers take
+    more than 10 seconds, and takes at most 64 connections.
+  - A live stream whose reader leaves more than 1 MiB unread is closed rather than buffered for; it replays what it
+    missed when it reconnects. A stream opened with the previous token closes when that token's five-minute overlap
+    ends, not at its next frame, and a listener writes only its own subscriber's frames.
+  - More than 64 subscribers waiting out a retry, or being sent to, no longer keep a later subscriber's events from
+    going out.
+  - A raised event's charge leaves after its hour, as other charges do, so raising stays quick however many events
+    came before. A run's history — its steps, its events and their deliveries — goes when its decision's metadata does
+    (90 days by default) instead of being kept for ever; a live run, an event still being delivered and a worktree that
+    may still be on disk stay.
 
 ## 0.35.0
 
