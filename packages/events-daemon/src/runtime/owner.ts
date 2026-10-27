@@ -107,6 +107,8 @@ import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
 import { workflowEventsListResult, workflowEventsShowResult } from './events/catalogue.ts';
+import { EventDispatcher, type EventDispatcherOptions } from './events/event-dispatcher.ts';
+import { SubscriberListeners } from './events/listeners.ts';
 import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { HoldResolver } from './holds.ts';
@@ -268,6 +270,8 @@ export interface EventOwnerOptions {
         readonly reconcileMs?: number | undefined;
       }
     | undefined;
+  /** Test seam only: a point inside one event delivery's attempt (0.36.0), after which its own gates decide. */
+  readonly eventDispatchTestPoint?: EventDispatcherOptions['testPoint'];
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -1282,6 +1286,36 @@ async function startOwnerWithLock(
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
   });
+  // Workflow events (0.36.0, W31–W33): the owner's live listeners — one per subscriber version something may deliver to
+  // — and the dispatcher that delivers raised events to them and to webhook subscribers, both run every tick.
+  const listeners = new SubscriberListeners({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    eventSecrets,
+    registry: sseStreams,
+    now,
+    visibilityGate: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+  });
+  const eventDispatcher = new EventDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    listeners,
+    now,
+    testPoint: options.eventDispatchTestPoint,
+    secretReader: async ({ subscriberId, subscriberVersion, subscriberDigest, purpose }) =>
+      (
+        await eventSecrets.readLiveGenerations({
+          owner: { kind: 'subscriber', id: subscriberId, version: subscriberVersion, digest: subscriberDigest },
+          purpose,
+          cipher,
+        })
+      ).map(({ generation, lifecycle, secretDigest, material }) => ({ generation, lifecycle, secretDigest, material })),
+  });
   // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
   const agentSessions = new AgentSessionService({
@@ -1638,6 +1672,10 @@ async function startOwnerWithLock(
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     writerQuiescer,
+    workflowWork: async () => {
+      await listeners.reconcile();
+      await eventDispatcher.tick();
+    },
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
@@ -1655,6 +1693,7 @@ async function startOwnerWithLock(
       whatsappVisibilityFence: whatsappComposition.visibilityFence,
     }),
     closeSubscriberStreams: (input) => sseStreams.closeSubscriberStreams(input),
+    subscriberListening: (subscriberId, subscriberVersion) => listeners.status(subscriberId, subscriberVersion),
   };
   const ownerB3Service =
     options.b3OwnerService ??
@@ -1774,6 +1813,7 @@ async function startOwnerWithLock(
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();
+        await listeners.close();
       } finally {
         unregisterLayaWorker();
         unregisterLayaInputs();
@@ -1844,6 +1884,8 @@ async function startOwnerWithLock(
       await verifyControlSocket(instance.endpoint);
     }
     await writeInstance(paths, instance);
+    // The live listeners start before the first tick, so an approved subscriber can connect at once.
+    await listeners.start();
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are

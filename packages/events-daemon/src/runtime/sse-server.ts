@@ -52,6 +52,12 @@ export interface SseServer {
       frame: string;
     }>,
   ): Promise<number>;
+  /**
+   * One raised event's frame, from this subscriber's event log (0.36.0, W31), to every open stream that is still
+   * current: the same bearer, subscriber and generation checks as `writeLive`, and W35's fence before and after the
+   * record is opened. Returns how many streams it reached.
+   */
+  writeEvent(input: Readonly<{ eventStreamLogId: string }>): Promise<number>;
   preflightCount(): number;
 }
 
@@ -249,6 +255,38 @@ class LoopbackSseServer implements SseServer {
       if (wrote) written += 1;
     }
     return written;
+  }
+
+  async writeEvent(input: Readonly<{ eventStreamLogId: string }>): Promise<number> {
+    let written = 0;
+    for (const connection of [...this.#connections]) {
+      if (!this.#connectionIsCurrent(connection)) {
+        // A rotated or expired-overlap stream has lost its bearer authority: end it rather than keep it open.
+        connection.close();
+        continue;
+      }
+      const wrote = await this.#replay.writeEvent({
+        eventStreamLogId: input.eventStreamLogId,
+        isStreamCurrent: () =>
+          this.#connections.has(connection) && this.#subscriberIsCurrent() && this.#connectionIsCurrent(connection),
+        writeFrame: (frame) => {
+          connection.response.write(frame);
+        },
+      });
+      if (wrote) written += 1;
+    }
+    return written;
+  }
+
+  #connectionIsCurrent(connection: LiveConnection): boolean {
+    return (
+      this.#streams.isCurrent({
+        subscriberId: this.#subscriber.document.subscriberId,
+        subscriberVersion: this.#subscriber.document.version,
+        generation: connection.generation,
+        authorizedUntil: connection.authorizedUntil,
+      }) && this.#bearerGenerationLive(connection.generation)
+    );
   }
 
   preflightCount(): number {

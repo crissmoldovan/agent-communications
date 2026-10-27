@@ -72,6 +72,12 @@ export interface EventSchedulerOptions {
   readonly whatsappVisibilityFence?: WhatsAppVisibilityFence | undefined;
   /** The same owner-wide lease held by every timer and explicit scheduler tick. */
   readonly writerQuiescer: WriterQuiescer;
+  /**
+   * Workflow work that runs every tick, paused or not (0.36.0, §7.6: pause stops claims, and events already raised keep
+   * going out): the owner's subscriber listeners and the event dispatcher. Its own fences refuse what a disabled switch
+   * no longer authorises.
+   */
+  readonly workflowWork?: (() => Promise<void>) | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly deliveryBatchSize?: number | undefined;
@@ -96,6 +102,7 @@ export class EventScheduler {
   readonly #sourceRegistry: LocalEventSourceRegistry;
   readonly #whatsappVisibilityFence: WhatsAppVisibilityFence | undefined;
   readonly #writerQuiescer: WriterQuiescer;
+  readonly #workflowWork: (() => Promise<void>) | undefined;
   readonly #tickMs: number;
   readonly #pollIntervalMs: number;
   readonly #deliveryBatchSize: number;
@@ -125,6 +132,7 @@ export class EventScheduler {
       visibilityFence: options.whatsappVisibilityFence,
     });
     this.#writerQuiescer = options.writerQuiescer;
+    this.#workflowWork = options.workflowWork;
     if ('writerQuiescer' in options.cipher && this.#writerQuiescer !== options.cipher.writerQuiescer)
       throw new Error('the scheduler and record cipher must use the same owner writer quiescer');
     this.#tickMs = positiveInterval(options.tickMs ?? DEFAULT_TICK_MS, 'tick interval');
@@ -169,6 +177,11 @@ export class EventScheduler {
       // An incomplete drain is deliberately retried by the next tick. Other failures remain content-free health.
       if (!(error instanceof CommsError && error.details?.reason === 'REPLACEMENT_DRAINING'))
         this.#recordFailure('activation', 'owner');
+    }
+    try {
+      await this.#workflowWork?.();
+    } catch {
+      this.#recordFailure('dispatch', 'workflow-events');
     }
 
     const status = this.#lifecycle.status();

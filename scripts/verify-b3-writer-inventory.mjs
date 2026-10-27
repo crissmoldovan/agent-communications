@@ -48,6 +48,8 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/stream-replay.ts',
   // Workflow events (0.36.0, §9.1): the sink seals each raised event through the centrally leased cipher.
   'packages/events-daemon/src/runtime/events/sink.ts',
+  // The event dispatcher opens a raised event, and seals each live subscriber's frame of it, through the same cipher.
+  'packages/events-daemon/src/runtime/events/event-dispatcher.ts',
   'packages/events-daemon/src/sources/source-worker.ts',
   'packages/events-daemon/src/sources/gmail.ts',
   'packages/events-daemon/src/sources/materialise.ts',
