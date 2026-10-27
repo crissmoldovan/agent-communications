@@ -50,6 +50,8 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
     'provider',
     'integration',
     'session-queue',
+    'projects',
+    'project',
     'collection',
   ]) {
     assert.match(help, new RegExp(`\\b${command}\\b`));
@@ -140,6 +142,10 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         !names.includes(personal),
         `${personal}: judge setup and AI provider keys are the person's, in the app or at a terminal (2026-10-26)`,
       );
+    assert.ok(
+      !names.some((name) => /project/u.test(name)),
+      'projects are the person’s: no MCP tool reads or changes one (0.36.0 §8.1, §10.1)',
+    );
     assert.ok(!names.includes('events_lane_bind'), 'binding a lane is the person’s act at a terminal (routing B1)');
     assert.ok(
       !names.some((name) => /message/u.test(name)),

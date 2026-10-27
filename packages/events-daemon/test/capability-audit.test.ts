@@ -184,6 +184,19 @@ const EXPECTED_SESSION_ROWS = [
   ['events-daemon.session-queue.drop', 'session-queue drop', null, 'exception', 'sessionQueueDrop'],
 ] as const;
 
+/**
+ * Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints —
+ * the person's alone, CLI-only, with no tool.
+ */
+const EXPECTED_PROJECT_ROWS = [
+  ['events-daemon.projects.list', 'projects list', null, 'exception', 'projectsList'],
+  ['events-daemon.project.show', 'project show', null, 'exception', 'projectShow'],
+  ['events-daemon.project.add', 'project add', null, 'exception', 'projectAdd'],
+  ['events-daemon.project.update', 'project update', null, 'exception', 'projectUpdate'],
+  ['events-daemon.project.remove', 'project remove', null, 'exception', 'projectRemove'],
+  ['events-daemon.project.scan', 'project scan', null, 'exception', 'projectScan'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -244,7 +257,9 @@ const expectedRows = [
   ...shapedRows(EXPECTED_RULE_APPROVAL_ROWS),
   ...shapedRows(EXPECTED_ANALYSE_ROWS),
   ...shapedRows(EXPECTED_INTEGRATION_ROWS),
-  ...shapedRows(EXPECTED_SESSION_ROWS),
+  ...shapedRows(EXPECTED_SESSION_ROWS.slice(0, 2)),
+  ...shapedRows(EXPECTED_PROJECT_ROWS),
+  ...shapedRows(EXPECTED_SESSION_ROWS.slice(2)),
   ...shapedRows(EXPECTED_JUDGE_SHOW_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
@@ -401,6 +416,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.integration.set',
     'events-daemon.session-queue.drop',
     'events-daemon.subscriber.approve',
+    ...EXPECTED_PROJECT_ROWS.map(([id]) => id),
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

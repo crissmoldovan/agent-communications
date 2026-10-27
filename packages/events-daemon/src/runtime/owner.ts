@@ -137,6 +137,7 @@ import {
   requirePhaseDWhatsAppVisibilitySeam,
 } from './phase-d-whatsapp-owner-composition.ts';
 import { EventProjectionStore } from './projections.ts';
+import { projectControl } from './projects.ts';
 import { type QueueScope, QueueStore } from './queue.ts';
 import { QueueDispatcher } from './queue-dispatcher.ts';
 import { PERSON, type QueueActor } from './queue-history.ts';
@@ -2189,6 +2190,15 @@ async function handleControl(
     }
     case OWNER_CONTROL_WIRES.sessionQueueDrop:
       return requireSessions(sessions).queue.drop(personOnly(request.args, 'session-queue drop').deliveryId);
+    // Projects (0.36.0 §8.1): the person's alone, from their origin; their folders are checked inside the same allowed
+    // roots and outside the same denied folders as a session's.
+    case OWNER_CONTROL_WIRES.projectsList:
+    case OWNER_CONTROL_WIRES.projectShow:
+    case OWNER_CONTROL_WIRES.projectAdd:
+    case OWNER_CONTROL_WIRES.projectUpdate:
+    case OWNER_CONTROL_WIRES.projectRemove:
+    case OWNER_CONTROL_WIRES.projectScan:
+      return projectControl({ store: database, sessions: requireSessions(sessions).service }, request);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {

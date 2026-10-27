@@ -1,19 +1,94 @@
 [
-  { "name": "status-request", "request": { "operation": "status", "args": {} } },
-  { "name": "stop-request", "request": { "operation": "stop", "args": {} } },
-  { "name": "pause-request", "request": { "operation": "pause", "args": {} } },
-  { "name": "resume-request", "request": { "operation": "resume", "args": {} } },
-  { "name": "disable-all-request", "request": { "operation": "disable-all", "args": {} } },
-  { "name": "enable-all-request", "request": { "operation": "enable-all", "args": {} } },
-  { "name": "catalogue-list-request", "request": { "operation": "catalogue-list", "args": {} } },
+  {
+    "name": "status-request",
+    "request": {
+      "operation": "status",
+      "args": {}
+    }
+  },
+  {
+    "name": "stop-request",
+    "request": {
+      "operation": "stop",
+      "args": {}
+    }
+  },
+  {
+    "name": "pause-request",
+    "request": {
+      "operation": "pause",
+      "args": {}
+    }
+  },
+  {
+    "name": "resume-request",
+    "request": {
+      "operation": "resume",
+      "args": {}
+    }
+  },
+  {
+    "name": "disable-all-request",
+    "request": {
+      "operation": "disable-all",
+      "args": {}
+    }
+  },
+  {
+    "name": "enable-all-request",
+    "request": {
+      "operation": "enable-all",
+      "args": {}
+    }
+  },
+  {
+    "name": "catalogue-list-request",
+    "request": {
+      "operation": "catalogue-list",
+      "args": {}
+    }
+  },
   {
     "name": "catalogue-show-request",
-    "request": { "operation": "catalogue-show", "args": { "type": "gmail.message.received" } }
+    "request": {
+      "operation": "catalogue-show",
+      "args": {
+        "type": "gmail.message.received"
+      }
+    }
   },
-  { "name": "sources-list-request", "request": { "operation": "sources-list", "args": {} } },
-  { "name": "source-show-request", "request": { "operation": "source-show", "args": { "source": "gmail" } } },
-  { "name": "rules-list-request", "request": { "operation": "rules-list", "args": {} } },
-  { "name": "rule-show-request", "request": { "operation": "rule-show", "args": { "ruleId": "rule-1" } } },
+  {
+    "name": "sources-list-request",
+    "request": {
+      "operation": "sources-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "source-show-request",
+    "request": {
+      "operation": "source-show",
+      "args": {
+        "source": "gmail"
+      }
+    }
+  },
+  {
+    "name": "rules-list-request",
+    "request": {
+      "operation": "rules-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "rule-show-request",
+    "request": {
+      "operation": "rule-show",
+      "args": {
+        "ruleId": "rule-1"
+      }
+    }
+  },
   {
     "name": "rule-create-request",
     "request": {
@@ -25,12 +100,26 @@
           "source": {
             "channel": "gmail",
             "accountIds": ["account-1"],
-            "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
           },
-          "event": { "type": "gmail.message.received", "version": 1 },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
           "condition": {},
           "mapping": {},
-          "targets": [{ "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 }],
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
           "subscribers": [],
           "judges": [],
           "deliveryRateCap": 1,
@@ -58,12 +147,26 @@
           "source": {
             "channel": "gmail",
             "accountIds": ["account-1"],
-            "options": { "channel": "gmail", "labels": "inbox", "includeSpamTrash": false }
+            "options": {
+              "channel": "gmail",
+              "labels": "inbox",
+              "includeSpamTrash": false
+            }
           },
-          "event": { "type": "gmail.message.received", "version": 1 },
+          "event": {
+            "type": "gmail.message.received",
+            "version": 1
+          },
           "condition": {},
           "mapping": {},
-          "targets": [{ "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 }],
+          "targets": [
+            {
+              "targetId": "target-1",
+              "version": 1,
+              "kind": "dry-run",
+              "retentionMs": 1
+            }
+          ],
           "subscribers": [],
           "judges": [],
           "deliveryRateCap": 1,
@@ -82,23 +185,65 @@
   },
   {
     "name": "rule-enable-request",
-    "request": { "operation": "rule-enable", "args": { "ruleId": "rule-1", "version": 1 } }
+    "request": {
+      "operation": "rule-enable",
+      "args": {
+        "ruleId": "rule-1",
+        "version": 1
+      }
+    }
   },
-  { "name": "rule-disable-request", "request": { "operation": "rule-disable", "args": { "ruleId": "rule-1" } } },
-  { "name": "rule-remove-request", "request": { "operation": "rule-remove", "args": { "ruleId": "rule-1" } } },
-  { "name": "targets-list-request", "request": { "operation": "targets-list", "args": {} } },
+  {
+    "name": "rule-disable-request",
+    "request": {
+      "operation": "rule-disable",
+      "args": {
+        "ruleId": "rule-1"
+      }
+    }
+  },
+  {
+    "name": "rule-remove-request",
+    "request": {
+      "operation": "rule-remove",
+      "args": {
+        "ruleId": "rule-1"
+      }
+    }
+  },
+  {
+    "name": "targets-list-request",
+    "request": {
+      "operation": "targets-list",
+      "args": {}
+    }
+  },
   {
     "name": "target-add-request",
     "request": {
       "operation": "target-add",
-      "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
+      "args": {
+        "document": {
+          "targetId": "target-1",
+          "version": 1,
+          "kind": "dry-run",
+          "retentionMs": 1
+        }
+      }
     }
   },
   {
     "name": "target-update-request",
     "request": {
       "operation": "target-update",
-      "args": { "document": { "targetId": "target-1", "version": 1, "kind": "dry-run", "retentionMs": 1 } }
+      "args": {
+        "document": {
+          "targetId": "target-1",
+          "version": 1,
+          "kind": "dry-run",
+          "retentionMs": 1
+        }
+      }
     }
   },
   {
@@ -110,95 +255,243 @@
           "targetId": "billing-issues",
           "version": 1,
           "kind": "linear",
-          "team": { "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11", "key": "CUE" },
-          "title": { "text": "Invoice from {{sender}}" },
-          "description": { "text": "{{subject}}" },
-          "labels": [{ "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60", "name": "Billing" }],
+          "team": {
+            "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+            "key": "CUE"
+          },
+          "title": {
+            "text": "Invoice from {{sender}}"
+          },
+          "description": {
+            "text": "{{subject}}"
+          },
+          "labels": [
+            {
+              "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+              "name": "Billing"
+            }
+          ],
           "assignee": "me"
         }
       }
     }
   },
-  { "name": "target-remove-request", "request": { "operation": "target-remove", "args": { "targetId": "target-1" } } },
+  {
+    "name": "target-remove-request",
+    "request": {
+      "operation": "target-remove",
+      "args": {
+        "targetId": "target-1"
+      }
+    }
+  },
   {
     "name": "approve-request",
-    "request": { "operation": "approve", "args": { "approvalId": "approval-1", "answer": "challenge-1" } }
+    "request": {
+      "operation": "approve",
+      "args": {
+        "approvalId": "approval-1",
+        "answer": "challenge-1"
+      }
+    }
   },
-  { "name": "dryrun-list-request", "request": { "operation": "dryrun-list", "args": {} } },
-  { "name": "dryrun-show-request", "request": { "operation": "dryrun-show", "args": { "deliveryId": "delivery-1" } } },
+  {
+    "name": "dryrun-list-request",
+    "request": {
+      "operation": "dryrun-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "dryrun-show-request",
+    "request": {
+      "operation": "dryrun-show",
+      "args": {
+        "deliveryId": "delivery-1"
+      }
+    }
+  },
   {
     "name": "delivery-show-request",
-    "request": { "operation": "delivery-show", "args": { "deliveryId": "delivery-1" } }
+    "request": {
+      "operation": "delivery-show",
+      "args": {
+        "deliveryId": "delivery-1"
+      }
+    }
   },
   {
     "name": "queue-list-request",
     "request": {
       "operation": "queue-list",
-      "args": { "state": "all", "rule": "rule-1", "channel": "gmail", "since": "7d", "limit": 20 }
+      "args": {
+        "state": "all",
+        "rule": "rule-1",
+        "channel": "gmail",
+        "since": "7d",
+        "limit": 20
+      }
     }
   },
   {
     "name": "queue-show-request",
-    "request": { "operation": "queue-show", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+    "request": {
+      "operation": "queue-show",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    }
   },
   {
     "name": "queue-items-request",
-    "request": { "operation": "queue-items", "args": { "state": "open", "channel": "slack", "limit": 50 } }
+    "request": {
+      "operation": "queue-items",
+      "args": {
+        "state": "open",
+        "channel": "slack",
+        "limit": 50
+      }
+    }
   },
-  { "name": "queue-counts-request", "request": { "operation": "queue-counts", "args": {} } },
+  {
+    "name": "queue-counts-request",
+    "request": {
+      "operation": "queue-counts",
+      "args": {}
+    }
+  },
   {
     "name": "queue-done-request",
-    "request": { "operation": "queue-done", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+    "request": {
+      "operation": "queue-done",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    }
   },
   {
     "name": "queue-dismiss-request",
-    "request": { "operation": "queue-dismiss", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+    "request": {
+      "operation": "queue-dismiss",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    }
   },
   {
     "name": "queue-reopen-request",
-    "request": { "operation": "queue-reopen", "args": { "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D" } }
+    "request": {
+      "operation": "queue-reopen",
+      "args": {
+        "itemId": "qi_01JBQZ8Y6W3T5N0M4K2H7G9F1D"
+      }
+    }
   },
-  { "name": "queue-clear-request", "request": { "operation": "queue-clear", "args": {} } },
-  { "name": "lane-list-request", "request": { "operation": "lane-list", "args": {} } },
+  {
+    "name": "queue-clear-request",
+    "request": {
+      "operation": "queue-clear",
+      "args": {}
+    }
+  },
+  {
+    "name": "lane-list-request",
+    "request": {
+      "operation": "lane-list",
+      "args": {}
+    }
+  },
   {
     "name": "lane-bind-request",
     "request": {
       "operation": "lane-bind",
-      "args": { "lane": "david", "window": "25f971a3-0c69-44e3-971c-3a4656afa986" }
+      "args": {
+        "lane": "david",
+        "window": "25f971a3-0c69-44e3-971c-3a4656afa986"
+      }
     }
   },
-  { "name": "lane-unbind-request", "request": { "operation": "lane-unbind", "args": { "lane": "david" } } },
-  { "name": "messages-list-request", "request": { "operation": "messages-list", "args": {} } },
+  {
+    "name": "lane-unbind-request",
+    "request": {
+      "operation": "lane-unbind",
+      "args": {
+        "lane": "david"
+      }
+    }
+  },
+  {
+    "name": "messages-list-request",
+    "request": {
+      "operation": "messages-list",
+      "args": {}
+    }
+  },
   {
     "name": "messages-list-page-request",
     "request": {
       "operation": "messages-list",
-      "args": { "since": 1790000000000, "before": "1792985903635:6b8502ee16adfda7d4608c3868750e08", "limit": 50 }
+      "args": {
+        "since": 1790000000000,
+        "before": "1792985903635:6b8502ee16adfda7d4608c3868750e08",
+        "limit": 50
+      }
     }
   },
   {
     "name": "message-show-request",
-    "request": { "operation": "message-show", "args": { "eventId": "6b8502ee16adfda7d4608c3868750e08" } }
+    "request": {
+      "operation": "message-show",
+      "args": {
+        "eventId": "6b8502ee16adfda7d4608c3868750e08"
+      }
+    }
   },
   {
     "name": "judge-setup-request",
-    "request": { "operation": "judge-setup", "args": { "kind": "typesafe", "provider": "openrouter" } }
+    "request": {
+      "operation": "judge-setup",
+      "args": {
+        "kind": "typesafe",
+        "provider": "openrouter"
+      }
+    }
   },
   {
     "name": "judge-setup-local-request",
     "request": {
       "operation": "judge-setup",
-      "args": { "kind": "local-endpoint", "url": "http://127.0.0.1:11434", "model": "nimble" }
+      "args": {
+        "kind": "local-endpoint",
+        "url": "http://127.0.0.1:11434",
+        "model": "nimble"
+      }
     }
   },
-  { "name": "provider-list-request", "request": { "operation": "provider-list", "args": {} } },
+  {
+    "name": "provider-list-request",
+    "request": {
+      "operation": "provider-list",
+      "args": {}
+    }
+  },
   {
     "name": "provider-key-set-request",
-    "request": { "operation": "provider-key-set", "args": { "provider": "openrouter" } }
+    "request": {
+      "operation": "provider-key-set",
+      "args": {
+        "provider": "openrouter"
+      }
+    }
   },
   {
     "name": "provider-key-remove-request",
-    "request": { "operation": "provider-key-remove", "args": { "provider": "openrouter" } }
+    "request": {
+      "operation": "provider-key-remove",
+      "args": {
+        "provider": "openrouter"
+      }
+    }
   },
   {
     "name": "rule-analyse-request",
@@ -212,15 +505,31 @@
   },
   {
     "name": "provider-key-set-linear-request",
-    "request": { "operation": "provider-key-set", "args": { "provider": "linear" } }
+    "request": {
+      "operation": "provider-key-set",
+      "args": {
+        "provider": "linear"
+      }
+    }
   },
   {
     "name": "integration-show-request",
-    "request": { "operation": "integration-show", "args": { "integration": "linear", "team": "CUE" } }
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "linear",
+        "team": "CUE"
+      }
+    }
   },
   {
     "name": "integration-show-agent-sessions-request",
-    "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } }
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "agent-sessions"
+      }
+    }
   },
   {
     "name": "integration-set-request",
@@ -234,10 +543,21 @@
       }
     }
   },
-  { "name": "session-queue-list-request", "request": { "operation": "session-queue-list", "args": {} } },
+  {
+    "name": "session-queue-list-request",
+    "request": {
+      "operation": "session-queue-list",
+      "args": {}
+    }
+  },
   {
     "name": "session-queue-drop-request",
-    "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } }
+    "request": {
+      "operation": "session-queue-drop",
+      "args": {
+        "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e"
+      }
+    }
   },
   {
     "name": "rule-approve-request",
@@ -302,6 +622,94 @@
       "operation": "workflow-events-show",
       "args": {
         "schema": "step.wait"
+      }
+    }
+  },
+  {
+    "name": "projects-list-request",
+    "request": {
+      "operation": "projects-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "project-show-request",
+    "request": {
+      "operation": "project-show",
+      "args": {
+        "projectId": "acme-site"
+      }
+    }
+  },
+  {
+    "name": "project-add-request",
+    "request": {
+      "operation": "project-add",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "project-update-request",
+    "request": {
+      "operation": "project-update",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "project-remove-request",
+    "request": {
+      "operation": "project-remove",
+      "args": {
+        "projectId": "acme-site"
+      }
+    }
+  },
+  {
+    "name": "project-scan-request",
+    "request": {
+      "operation": "project-scan",
+      "args": {
+        "roots": ["/example/home/work", "/example/home/code"]
       }
     }
   }

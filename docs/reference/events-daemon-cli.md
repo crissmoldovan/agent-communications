@@ -59,6 +59,8 @@ Scripts should read these rather than parse output.
 | [`provider`](#agent-events-provider) | the providers whose keys the event service keeps — TypeSafe, OpenRouter and Anthropic for Jev and Analyse, Linear for a Linear target — and whether each has a key |
 | [`collection`](#agent-events-collection) | the event service watching your accounts: switched on by the approval enable-all prepares, off at once with disable-all |
 | [`integration`](#agent-events-integration) | the services a workflow can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only) |
+| [`projects`](#agent-events-projects) | the GitHub repositories on this Mac a workflow can route to (a person only) |
+| [`project`](#agent-events-project) | add, show, change, remove or find a project: a GitHub repository, its folders on this Mac, a profile and hints (a person only) |
 | [`session-queue`](#agent-events-session-queue) | the matches waiting for a busy agent session, each passed on when the session’s run ends |
 | [`deliveries`](#agent-events-deliveries) | inspect content-free delivery metadata |
 | [`delivery`](#agent-events-delivery) | show, retry or drop one exact delivery |
@@ -836,6 +838,74 @@ agent-events integration set [options] <integration>
 | `--relay-port <port>` | the relay's port; default for the Pilot app's record, else 4318 | — |
 | `--allow-folder <path>` | a folder a session’s file parts may be read from (repeat for more) | `[]` |
 | `--remove-folder <path>` | a folder to take off that list (repeat for more) | `[]` |
+
+### `agent-events projects`
+
+the GitHub repositories on this Mac a workflow can route to (a person only)
+
+```
+agent-events projects [options] [command]
+```
+
+### `agent-events projects list`
+
+list every project, with its folders, profile and hints (a person only)
+
+```
+agent-events projects list [options]
+```
+
+### `agent-events project`
+
+add, show, change, remove or find a project: a GitHub repository, its folders on this Mac, a profile and hints (a person only)
+
+```
+agent-events project [options] [command]
+```
+
+### `agent-events project show`
+
+show one project (a person only)
+
+```
+agent-events project show [options] <project-id>
+```
+
+### `agent-events project add`
+
+add a project from its JSON document { projectId, name, repo, profile, hints, folders }, or - to read it from stdin (a person only)
+
+```
+agent-events project add [options] <document>
+```
+
+### `agent-events project update`
+
+change a project from its JSON document { projectId, name, repo, profile, hints, folders }, or - to read it from stdin (a person only)
+
+```
+agent-events project update [options] <document>
+```
+
+### `agent-events project remove`
+
+remove a project and its folders; a workflow that chose among them then finds it changed (a person only)
+
+```
+agent-events project remove [options] <project-id>
+```
+
+### `agent-events project scan`
+
+find the GitHub checkouts under the relay's allowed roots, else ~/work and ~/code, to 4 folders down; reads no file (a person only)
+
+```
+agent-events project scan [options]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--root <path>` | a folder to look under instead (repeat for more, at most 8) | `[]` |
 
 ### `agent-events session-queue`
 

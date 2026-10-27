@@ -929,7 +929,12 @@
   },
   {
     "name": "integration-show-agent-sessions-result",
-    "request": { "operation": "integration-show", "args": { "integration": "agent-sessions" } },
+    "request": {
+      "operation": "integration-show",
+      "args": {
+        "integration": "agent-sessions"
+      }
+    },
     "result": {
       "integration": "agent-sessions",
       "settings": {
@@ -983,7 +988,10 @@
   },
   {
     "name": "session-queue-list-result",
-    "request": { "operation": "session-queue-list", "args": {} },
+    "request": {
+      "operation": "session-queue-list",
+      "args": {}
+    },
     "result": {
       "items": [
         {
@@ -1003,8 +1011,16 @@
   },
   {
     "name": "session-queue-drop-result",
-    "request": { "operation": "session-queue-drop", "args": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e" } },
-    "result": { "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e", "dropped": true }
+    "request": {
+      "operation": "session-queue-drop",
+      "args": {
+        "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e"
+      }
+    },
+    "result": {
+      "deliveryId": "0f8fad5b-d9cb-469f-a165-70867728950e",
+      "dropped": true
+    }
   },
   {
     "name": "rule-approve-result",
@@ -1263,6 +1279,249 @@
       "standard": ["started", "succeeded", "waiting", "skipped"],
       "own": ["finished", "timed-out", "free", "elapsed"],
       "outputs": ["for", "reported"]
+    }
+  },
+  {
+    "name": "projects-list-result",
+    "request": {
+      "operation": "projects-list",
+      "args": {}
+    },
+    "result": {
+      "projects": [
+        {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "profileBy": "person",
+          "profileAt": 1793000000000,
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            },
+            {
+              "folder": "/example/home/work/acme-site/.claude/worktrees/booking",
+              "kind": "worktree",
+              "defaultBranch": null,
+              "worktreeRoot": null
+            }
+          ],
+          "createdAt": 1793000000000,
+          "updatedAt": 1793000000000
+        }
+      ]
+    }
+  },
+  {
+    "name": "project-show-result",
+    "request": {
+      "operation": "project-show",
+      "args": {
+        "projectId": "acme-site"
+      }
+    },
+    "result": {
+      "projectId": "acme-site",
+      "name": "acme-site",
+      "repo": "github.com/example/acme-site",
+      "profile": "The Acme site: its pages and its booking form.",
+      "profileBy": "person",
+      "profileAt": 1793000000000,
+      "hints": {
+        "senderDomains": ["acme.example"],
+        "slackConversations": [],
+        "people": []
+      },
+      "folders": [
+        {
+          "folder": "/example/home/work/acme-site",
+          "kind": "checkout",
+          "defaultBranch": "main",
+          "worktreeRoot": null
+        },
+        {
+          "folder": "/example/home/work/acme-site/.claude/worktrees/booking",
+          "kind": "worktree",
+          "defaultBranch": null,
+          "worktreeRoot": null
+        }
+      ],
+      "createdAt": 1793000000000,
+      "updatedAt": 1793000000000
+    }
+  },
+  {
+    "name": "project-add-result",
+    "request": {
+      "operation": "project-add",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "projectId": "acme-site",
+      "name": "acme-site",
+      "repo": "github.com/example/acme-site",
+      "profile": "The Acme site: its pages and its booking form.",
+      "profileBy": "person",
+      "profileAt": 1793000000000,
+      "hints": {
+        "senderDomains": ["acme.example"],
+        "slackConversations": [],
+        "people": []
+      },
+      "folders": [
+        {
+          "folder": "/example/home/work/acme-site",
+          "kind": "checkout",
+          "defaultBranch": "main",
+          "worktreeRoot": null
+        },
+        {
+          "folder": "/example/home/work/acme-site/.claude/worktrees/booking",
+          "kind": "worktree",
+          "defaultBranch": null,
+          "worktreeRoot": null
+        }
+      ],
+      "createdAt": 1793000000000,
+      "updatedAt": 1793000000000
+    }
+  },
+  {
+    "name": "project-update-result",
+    "request": {
+      "operation": "project-update",
+      "args": {
+        "document": {
+          "projectId": "acme-site",
+          "name": "acme-site",
+          "repo": "github.com/example/acme-site",
+          "profile": "The Acme site: its pages and its booking form.",
+          "hints": {
+            "senderDomains": ["acme.example"],
+            "slackConversations": [],
+            "people": []
+          },
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main",
+              "worktreeRoot": null
+            }
+          ]
+        }
+      }
+    },
+    "result": {
+      "projectId": "acme-site",
+      "name": "acme-site",
+      "repo": "github.com/example/acme-site",
+      "profile": "The Acme site: its pages and its booking form.",
+      "profileBy": "person",
+      "profileAt": 1793000000000,
+      "hints": {
+        "senderDomains": ["acme.example"],
+        "slackConversations": [],
+        "people": []
+      },
+      "folders": [
+        {
+          "folder": "/example/home/work/acme-site",
+          "kind": "checkout",
+          "defaultBranch": "main",
+          "worktreeRoot": null
+        },
+        {
+          "folder": "/example/home/work/acme-site/.claude/worktrees/booking",
+          "kind": "worktree",
+          "defaultBranch": null,
+          "worktreeRoot": null
+        }
+      ],
+      "createdAt": 1793000000000,
+      "updatedAt": 1793000000000
+    }
+  },
+  {
+    "name": "project-remove-result",
+    "request": {
+      "operation": "project-remove",
+      "args": {
+        "projectId": "acme-site"
+      }
+    },
+    "result": {
+      "projectId": "acme-site",
+      "removed": true
+    }
+  },
+  {
+    "name": "project-scan-result",
+    "request": {
+      "operation": "project-scan",
+      "args": {
+        "roots": ["/example/home/work", "/example/home/code"]
+      }
+    },
+    "result": {
+      "roots": ["/example/home/work", "/example/home/code"],
+      "repos": [
+        {
+          "repo": "github.com/example/acme-site",
+          "known": "acme-site",
+          "folders": [
+            {
+              "folder": "/example/home/work/acme-site",
+              "kind": "checkout",
+              "defaultBranch": "main"
+            },
+            {
+              "folder": "/example/home/work/acme-site/.claude/worktrees/booking",
+              "kind": "worktree",
+              "defaultBranch": null
+            }
+          ]
+        }
+      ],
+      "skipped": [
+        {
+          "folder": "/example/home/work/.archive",
+          "reason": "hidden"
+        },
+        {
+          "folder": "/example/home/work/clients",
+          "reason": "symlink"
+        }
+      ]
     }
   }
 ]
