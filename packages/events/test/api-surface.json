@@ -134,6 +134,7 @@
   "relatePointers",
   "resendEmailReceivedV1",
   "resendEmailStatusChangedV1",
+  "sessionOfferLine",
   "slackMessagePostedV1",
   "sourceSchema",
   "targetQueues",
