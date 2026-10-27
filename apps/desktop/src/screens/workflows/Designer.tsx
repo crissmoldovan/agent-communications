@@ -35,6 +35,7 @@ import {
   type CanvasEdge,
   type CanvasNode,
   connectable,
+  type Lit,
   moveNode,
   type Positions,
   toGraph,
@@ -43,7 +44,7 @@ import { type DesignerProblem, designerChecks, problemsByStep } from '../../work
 import { type DropContext, dropItem, PALETTE_MIME } from '../../workflows/palette.ts';
 import { readPositions, writePositions } from '../../workflows/positions.ts';
 import { Palette } from './Palette.tsx';
-import { BoxContext, GateNode, StepNode } from './StepNode.tsx';
+import { BoxContext, GateNode, StepNode, TryContext } from './StepNode.tsx';
 import { type SettingsContext, SettingsPanel } from './StepSettings.tsx';
 
 /** The box types the canvas draws: stable, as React Flow asks. */
@@ -73,6 +74,14 @@ export interface DesignerProps {
   /** The text view's canvas: drawn, not edited, and dimmed while the text has a mistake. */
   readOnly?: boolean;
   dimmed?: boolean;
+  /** Laid out afresh, every kept place ignored: Approve… draws the graph so (W20, Q13). */
+  fresh?: boolean;
+  /** Try it: each box's outcomes are a picker, and a try's path is drawn live. */
+  trying?: {
+    chosen: Readonly<Record<string, string>>;
+    choose: (stepId: string, outcome: string | null) => void;
+    lit: Lit | null;
+  };
 }
 
 /** The canvas, the palette beside it, and the settings of what is selected. */
@@ -84,7 +93,16 @@ export function Designer(props: DesignerProps) {
   );
 }
 
-function DesignerCanvas({ document, onChange, context, settings, readOnly = false, dimmed = false }: DesignerProps) {
+function DesignerCanvas({
+  document,
+  onChange,
+  context,
+  settings,
+  readOnly = false,
+  dimmed = false,
+  fresh = false,
+  trying,
+}: DesignerProps) {
   const bridge = useBridge();
   const flow = useReactFlow();
   const { nodeStyles: _nodeStyles, ...flowTheme } = useFlowTheme();
@@ -95,7 +113,7 @@ function DesignerCanvas({ document, onChange, context, settings, readOnly = fals
   const kept = useRef<Positions>({});
 
   useEffect(() => {
-    if (ruleId === null) return;
+    if (ruleId === null || fresh) return;
     let live = true;
     void readPositions(bridge, ruleId).then((read) => {
       if (!live) return;
@@ -105,7 +123,7 @@ function DesignerCanvas({ document, onChange, context, settings, readOnly = fals
     return () => {
       live = false;
     };
-  }, [bridge, ruleId]);
+  }, [bridge, fresh, ruleId]);
 
   const keep = useCallback(
     (next: Positions) => {
@@ -122,8 +140,8 @@ function DesignerCanvas({ document, onChange, context, settings, readOnly = fals
 
   const problems = useMemo(() => designerChecks(document), [document]);
   const graph = useMemo(
-    () => toGraph(document, positions, { problems: problemsByStep(problems), selected }),
-    [document, positions, problems, selected],
+    () => toGraph(document, positions, { problems: problemsByStep(problems), selected, lit: trying?.lit ?? null }),
+    [document, positions, problems, selected, trying?.lit],
   );
 
   // React Flow measures each box and moves it while it is dragged: its own copy of the boxes and wires carries that,
@@ -224,28 +242,30 @@ function DesignerCanvas({ document, onChange, context, settings, readOnly = fals
       className={`h-144 overflow-hidden rounded-surface border border-border bg-bg ${dimmed ? 'opacity-50' : ''}`}
     >
       <BoxContext.Provider value={{ document, names: context.names }}>
-        <ReactFlow<CanvasNode, CanvasEdge>
-          {...flowTheme}
-          aria-label={DESIGNER_COPY.canvas}
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={NODE_TYPES}
-          {...(readOnly
-            ? { onBeforeDelete: async () => false }
-            : { onNodesChange, onEdgesChange, onConnect, onBeforeDelete, onDragOver, onDrop })}
-          isValidConnection={isValidConnection}
-          onPaneClick={() => setSelected(null)}
-          nodesDraggable={!readOnly}
-          nodesConnectable={!readOnly}
-          elementsSelectable={!readOnly}
-          deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
-          proOptions={{ hideAttribution: true }}
-          fitView
-          minZoom={0.2}
-        >
-          <FlowBackground />
-          <FlowControls showInteractive={!readOnly} />
-        </ReactFlow>
+        <TryContext.Provider value={trying === undefined ? null : { chosen: trying.chosen, choose: trying.choose }}>
+          <ReactFlow<CanvasNode, CanvasEdge>
+            {...flowTheme}
+            aria-label={DESIGNER_COPY.canvas}
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={NODE_TYPES}
+            {...(readOnly
+              ? { onBeforeDelete: async () => false }
+              : { onNodesChange, onEdgesChange, onConnect, onBeforeDelete, onDragOver, onDrop })}
+            isValidConnection={isValidConnection}
+            onPaneClick={() => setSelected(null)}
+            nodesDraggable={!readOnly}
+            nodesConnectable={!readOnly}
+            elementsSelectable={!readOnly}
+            deleteKeyCode={readOnly ? null : ['Backspace', 'Delete']}
+            proOptions={{ hideAttribution: true }}
+            fitView
+            minZoom={0.2}
+          >
+            <FlowBackground />
+            <FlowControls showInteractive={!readOnly} />
+          </ReactFlow>
+        </TryContext.Provider>
       </BoxContext.Provider>
     </div>
   );

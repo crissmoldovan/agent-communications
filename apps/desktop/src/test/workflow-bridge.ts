@@ -78,7 +78,16 @@ export function workflowService(
   });
 }
 
-/** Opens Events → Rules, the workflow's page, then Edit…, and gives the designer's region. */
+/**
+ * How long a test waits for the designer: it is the app's lazy chunk — React Flow, the flow check and its Unicode
+ * tables — which a test file's first open transforms cold, and a loaded machine took longer than a find's 5 s for it.
+ */
+const DESIGNER_WAIT = { timeout: 15_000 };
+
+/** A test that opens the designer: room for the cold chunk above, inside its own limit. */
+export const DESIGNER_SLOW = { timeout: 40_000 };
+
+/** Opens Events → Workflows, the workflow's page, then Edit…, and gives the designer's region. */
 export async function openDesigner(ruleId: string): Promise<HTMLElement> {
   const tab = await screen.findByRole('tab', { name: /^(?:Rules|Workflows)\b/ });
   fireEvent.click(tab);
@@ -92,7 +101,7 @@ export async function openDesigner(ruleId: string): Promise<HTMLElement> {
     name: new RegExp(`^(?:Rule|Workflow) ${ruleId.replace('.', '\\.')}$`),
   });
   fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
-  return screen.findByRole('region', { name: `Edit ${ruleId}` });
+  return screen.findByRole('region', { name: `Edit ${ruleId}` }, DESIGNER_WAIT);
 }
 
 /** A box on the canvas, once it is drawn. */
@@ -101,7 +110,7 @@ export async function box(editor: HTMLElement, stepId: string): Promise<HTMLElem
     const found = editor.querySelector<HTMLElement>(`[data-step="${stepId}"]`);
     if (found === null) throw new Error(`${stepId} is not drawn yet`);
     return found;
-  });
+  }, DESIGNER_WAIT);
 }
 
 /** Selects a box, as a click on it does, and gives its settings. */

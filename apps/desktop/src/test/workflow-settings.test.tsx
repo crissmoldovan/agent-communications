@@ -12,7 +12,15 @@ import type { JsonObject } from '../rule-editor/model.ts';
 import { WorkflowSettings } from '../screens/workflows/WorkflowSettings.tsx';
 import { eventNames, namespaceFor, tickEvent, ticks } from '../workflows/settings.ts';
 import { renderApp } from './render.tsx';
-import { OWNER, openDesigner, polyfillCanvas, REMINDERS, select, workflowService } from './workflow-bridge.ts';
+import {
+  DESIGNER_SLOW,
+  OWNER,
+  openDesigner,
+  polyfillCanvas,
+  REMINDERS,
+  select,
+  workflowService,
+} from './workflow-bridge.ts';
 
 beforeAll(polyfillCanvas);
 
@@ -32,7 +40,7 @@ async function saveDraft(editor: HTMLElement): Promise<void> {
 }
 
 describe("each step's settings and the workflow's", () => {
-  it("Events lists the kind's words from Appendix W, all off by default", async () => {
+  it("Events lists the kind's words from Appendix W, all off by default", DESIGNER_SLOW, async () => {
     expect(ticks('find-session')).toEqual([
       'started',
       'succeeded',
@@ -65,34 +73,38 @@ describe("each step's settings and the workflow's", () => {
     for (const word of words) expect(word.getAttribute('aria-pressed'), word.dataset.event).toBe('false');
   });
 
-  it('the first tick fills flow.events with the namespace from the trigger account (acme for acme/slack) and the workflow id', async () => {
-    expect(namespaceFor('acme/slack')).toBe('acme');
-    expect(namespaceFor('Cue Plus/slack')).toBe('me');
-    expect(namespaceFor('com/gmail')).toBe('me');
-    const names = eventNames(REMINDERS as JsonObject, new Map());
-    expect(names).toEqual({ namespace: 'acme', workflow: 'reminders', written: false });
-    const ticked = tickEvent(REMINDERS as JsonObject, 'wait', 'elapsed', true, names) as JsonObject;
-    expect(flowOf(ticked).events).toEqual({ namespace: 'acme', workflow: 'reminders' });
-    expect(flowOf(ticked).steps.wait?.emit).toEqual(['elapsed']);
-    // In the designer, ticked and saved.
-    const service = workflowService();
-    renderApp(service.bridge, { screen: 'events' });
-    const editor = await openDesigner('reminders');
-    const settings = await select(editor, 'wait');
-    const events = within(settings).getByRole('region', { name: 'Events' });
-    fireEvent.click(events.querySelector('[data-event="elapsed"]') as HTMLElement);
-    await waitFor(() =>
-      expect(within(settings).getByRole('region', { name: 'Events' }).textContent).toContain(
-        'acme.reminders.wait.<event>',
-      ),
-    );
-    await saveDraft(editor);
-    const saved = flowOf(lastSaved(service));
-    expect(saved.events).toEqual({ namespace: 'acme', workflow: 'reminders' });
-    expect(saved.steps.wait?.emit).toEqual(['elapsed']);
-  });
+  it(
+    'the first tick fills flow.events with the namespace from the trigger account (acme for acme/slack) and the workflow id',
+    DESIGNER_SLOW,
+    async () => {
+      expect(namespaceFor('acme/slack')).toBe('acme');
+      expect(namespaceFor('Cue Plus/slack')).toBe('me');
+      expect(namespaceFor('com/gmail')).toBe('me');
+      const names = eventNames(REMINDERS as JsonObject, new Map());
+      expect(names).toEqual({ namespace: 'acme', workflow: 'reminders', written: false });
+      const ticked = tickEvent(REMINDERS as JsonObject, 'wait', 'elapsed', true, names) as JsonObject;
+      expect(flowOf(ticked).events).toEqual({ namespace: 'acme', workflow: 'reminders' });
+      expect(flowOf(ticked).steps.wait?.emit).toEqual(['elapsed']);
+      // In the designer, ticked and saved.
+      const service = workflowService();
+      renderApp(service.bridge, { screen: 'events' });
+      const editor = await openDesigner('reminders');
+      const settings = await select(editor, 'wait');
+      const events = within(settings).getByRole('region', { name: 'Events' });
+      fireEvent.click(events.querySelector('[data-event="elapsed"]') as HTMLElement);
+      await waitFor(() =>
+        expect(within(settings).getByRole('region', { name: 'Events' }).textContent).toContain(
+          'acme.reminders.wait.<event>',
+        ),
+      );
+      await saveDraft(editor);
+      const saved = flowOf(lastSaved(service));
+      expect(saved.events).toEqual({ namespace: 'acme', workflow: 'reminders' });
+      expect(saved.steps.wait?.emit).toEqual(['elapsed']);
+    },
+  );
 
-  it('a workflow id that is not a segment asks for a name before the first tick', async () => {
+  it('a workflow id that is not a segment asks for a name before the first tick', DESIGNER_SLOW, async () => {
     const odd = { ...REMINDERS, ruleId: 'Reminders.Daily' };
     expect(tickEvent(odd as JsonObject, 'wait', 'elapsed', true, eventNames(odd as JsonObject, new Map()))).toBeNull();
     const service = workflowService([odd]);
@@ -112,7 +124,7 @@ describe("each step's settings and the workflow's", () => {
     expect(flowOf(lastSaved(service)).events).toEqual({ namespace: 'acme', workflow: 'daily-reminders' });
   });
 
-  it("a Deliver's settings edit its target; Save makes a new target version", async () => {
+  it("a Deliver's settings edit its target; Save makes a new target version", DESIGNER_SLOW, async () => {
     const service = workflowService();
     renderApp(service.bridge, { screen: 'events' });
     const editor = await openDesigner('client-asks');
@@ -164,7 +176,7 @@ describe("each step's settings and the workflow's", () => {
     expect(changed).toBeNull();
   });
 
-  it("Find this conversation's session sets in { thread: true } and offers Claude only", async () => {
+  it("Find this conversation's session sets in { thread: true } and offers Claude only", DESIGNER_SLOW, async () => {
     const service = workflowService();
     renderApp(service.bridge, { screen: 'events' });
     const editor = await openDesigner('client-asks');

@@ -11,7 +11,7 @@ import { canonical, copyOf, type JsonObject } from '../rule-editor/model.ts';
 import { printRuleText } from '../rule-text.ts';
 import { moveNode, toGraph } from '../workflows/canvas.ts';
 import { renderApp } from './render.tsx';
-import { box, OWNER, openDesigner, polyfillCanvas, select, workflowService } from './workflow-bridge.ts';
+import { box, DESIGNER_SLOW, OWNER, openDesigner, polyfillCanvas, select, workflowService } from './workflow-bridge.ts';
 
 beforeAll(polyfillCanvas);
 
@@ -31,7 +31,7 @@ const writes = [
 ] as const;
 
 describe('the three views of one workflow', () => {
-  it('text that parses replaces the document and redraws the canvas', async () => {
+  it('text that parses replaces the document and redraws the canvas', DESIGNER_SLOW, async () => {
     renderApp(workflowService().bridge, { screen: 'events' });
     const editor = await openDesigner('reminders');
     view(editor, 'Text');
@@ -54,25 +54,29 @@ describe('the three views of one workflow', () => {
     await box(editor, 'tell');
   });
 
-  it('text that does not parse leaves the canvas on the last good document, dimmed, with the line', async () => {
-    renderApp(workflowService().bridge, { screen: 'events' });
-    const editor = await openDesigner('reminders');
-    view(editor, 'Text');
-    const text = await waitFor(() => textArea(editor));
-    const lines = text.value.split('\n');
-    const at = lines.findIndex((line) => line.includes('step tell:'));
-    lines[at] = lines[at]?.replace('step tell: tell me', 'step tell: tel me') ?? '';
-    fireEvent.change(text, { target: { value: lines.join('\n') } });
-    const mistake = await within(editor).findByText(`The text has a mistake on line ${at + 1}`);
-    expect(mistake).toBeTruthy();
-    const canvas = editor.querySelector<HTMLElement>('[data-slot="workflow-canvas"]') as HTMLElement;
-    expect(canvas.className).toContain('opacity-50');
-    // The last good document: tell is still there, and the other views wait for the text.
-    expect(canvas.querySelector('[data-step="tell"]')).not.toBeNull();
-    const views = within(editor).getByRole('group', { name: 'View as' });
-    expect((within(views).getByRole('button', { name: 'Canvas' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((within(editor).getByRole('button', { name: 'Save draft' }) as HTMLButtonElement).disabled).toBe(true);
-  });
+  it(
+    'text that does not parse leaves the canvas on the last good document, dimmed, with the line',
+    DESIGNER_SLOW,
+    async () => {
+      renderApp(workflowService().bridge, { screen: 'events' });
+      const editor = await openDesigner('reminders');
+      view(editor, 'Text');
+      const text = await waitFor(() => textArea(editor));
+      const lines = text.value.split('\n');
+      const at = lines.findIndex((line) => line.includes('step tell:'));
+      lines[at] = lines[at]?.replace('step tell: tell me', 'step tell: tel me') ?? '';
+      fireEvent.change(text, { target: { value: lines.join('\n') } });
+      const mistake = await within(editor).findByText(`The text has a mistake on line ${at + 1}`);
+      expect(mistake).toBeTruthy();
+      const canvas = editor.querySelector<HTMLElement>('[data-slot="workflow-canvas"]') as HTMLElement;
+      expect(canvas.className).toContain('opacity-50');
+      // The last good document: tell is still there, and the other views wait for the text.
+      expect(canvas.querySelector('[data-step="tell"]')).not.toBeNull();
+      const views = within(editor).getByRole('group', { name: 'View as' });
+      expect((within(views).getByRole('button', { name: 'Canvas' }) as HTMLButtonElement).disabled).toBe(true);
+      expect((within(editor).getByRole('button', { name: 'Save draft' }) as HTMLButtonElement).disabled).toBe(true);
+    },
+  );
 
   it('printRuleText of a document is the same whatever its positions', () => {
     const document = copyOf(OWNER as JsonObject);
@@ -86,7 +90,7 @@ describe('the three views of one workflow', () => {
     expect(canonical(document)).toBe(canonical(OWNER));
   });
 
-  it('saving keeps every step id of the last version', async () => {
+  it('saving keeps every step id of the last version', DESIGNER_SLOW, async () => {
     const service = workflowService();
     renderApp(service.bridge, { screen: 'events' });
     const editor = await openDesigner('client-asks');
@@ -102,7 +106,7 @@ describe('the three views of one workflow', () => {
     expect((saved as { flow: { steps: { find: JsonObject } } }).flow.steps.find.emit).toEqual(['busy']);
   });
 
-  it('New workflow… offers from your words, an empty canvas, or a copy', async () => {
+  it('New workflow… offers from your words, an empty canvas, or a copy', DESIGNER_SLOW, async () => {
     renderApp(workflowService().bridge, { screen: 'events' });
     fireEvent.click(await screen.findByRole('tab', { name: /^Workflows\b/ }));
     fireEvent.click(await screen.findByRole('button', { name: 'New workflow…' }));
@@ -124,7 +128,7 @@ describe('the three views of one workflow', () => {
     expect(editor.querySelector('[data-step]')).toBeNull();
   });
 
-  it('a straight-line workflow opened and closed untouched makes no call', async () => {
+  it('a straight-line workflow opened and closed untouched makes no call', DESIGNER_SLOW, async () => {
     const service = workflowService();
     renderApp(service.bridge, { screen: 'events' });
     const editor = await openDesigner('invoices');
@@ -139,7 +143,7 @@ describe('the three views of one workflow', () => {
     expect(service.bridge.calls.filter((call) => call.command === 'setWorkflowPositions')).toEqual([]);
   });
 
-  it("the sidebar's Workflows opens Events on its Workflows tab", async () => {
+  it("the sidebar's Workflows opens Events on its Workflows tab", DESIGNER_SLOW, async () => {
     renderApp(workflowService().bridge);
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
     fireEvent.click(within(navigation).getByRole('button', { name: /^Workflows ?New$/ }));

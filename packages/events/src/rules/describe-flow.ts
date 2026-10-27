@@ -334,7 +334,9 @@ function outcomePhrase(step: FlowStep, outcome: string, scope: Scope): RulePart[
       if (outcome === 'idle') return [plain('a session is idle '), ...where];
       if (outcome === 'busy') return [plain('the session '), ...where, plain(' is busy')];
       if (outcome === 'watched') return [plain('the session '), ...where, plain(' is only watched')];
-      return step.only === 'idle' ? [plain('no session is idle there')] : [plain('no session is found '), ...where];
+      return step.only === 'idle'
+        ? [plain('no session is idle '), ...where]
+        : [plain('no session is found '), ...where];
     }
     case 'wait': {
       const within = plain(` within ${formatDuration(step.timeoutMs)}`);

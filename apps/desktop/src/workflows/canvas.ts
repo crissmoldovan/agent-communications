@@ -71,6 +71,8 @@ export interface StepBox extends Record<string, unknown> {
   readonly problems: number;
   /** Whether the flow starts here. */
   readonly entry: boolean;
+  /** Whether a try (`workflow test`) took this step: its box is drawn live. */
+  readonly lit: boolean;
 }
 
 export interface GateBox extends Record<string, unknown> {
@@ -219,15 +221,34 @@ export function gateParts(document: JsonObject): GatePart[] {
   return ['trigger', 'condition', ...(isObject(document.agentic) ? (['judge'] as const) : []), 'keep'];
 }
 
+/** A try's path (`workflow test`): the steps it took, in order, and the outcome each answered. */
+export interface Lit {
+  readonly path: readonly string[];
+  readonly taken: Readonly<Record<string, string>>;
+}
+
+/** Whether a try took the wire from `from`'s `outcome` (`otherwise` for one with no arrow of its own) to `to`. */
+function wireTaken(step: JsonObject, from: string, outcome: string, to: string, lit: Lit): boolean {
+  if (!lit.path.includes(from) || !lit.path.includes(to)) return false;
+  if (step.kind === 'split') return true;
+  const answered = lit.taken[from];
+  if (answered === undefined) return false;
+  const arrows = arrowsOf(step);
+  return outcome === answered || (outcome === 'otherwise' && !Object.hasOwn(arrows, answered));
+}
+
 /**
  * The canvas: a box per gate part and per step, each where `positions` kept it or where `layout` puts it, a wire per
- * arrow, and the gate's last box wired to the flow's start. `problems` counts what is wrong with each step.
+ * arrow, and the gate's last box wired to the flow's start. `problems` counts what is wrong with each step; `lit` is a
+ * try's path, whose boxes and wires are drawn live.
  */
 export function toGraph(
   document: JsonObject,
   positions: Positions,
-  options: { problems?: ReadonlyMap<string, number>; selected?: string | null } = {},
+  options: { problems?: ReadonlyMap<string, number>; selected?: string | null; lit?: Lit | null } = {},
 ): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
+  const lit = options.lit ?? null;
+  const live = (on: boolean): WireData => (on ? { live: true } : {});
   const { flow } = flowOfDocument(document);
   const steps = stepsOf(flow);
   const ids = Object.keys(steps);
@@ -276,6 +297,7 @@ export function toGraph(
       targetHandle: IN,
       type: 'signal',
       deletable: false,
+      data: live(lit !== null && lit.path.length > 0),
       ...(part === 'condition' ? { label: 'matches' } : part === 'judge' ? { label: outcomeWords('yes') } : {}),
     });
   });
@@ -302,6 +324,7 @@ export function toGraph(
         emits: emit,
         problems: options.problems?.get(id) ?? 0,
         entry: id === start,
+        lit: lit?.path.includes(id) ?? false,
       },
     });
     if (kind === 'split') {
@@ -315,6 +338,7 @@ export function toGraph(
             target: branch,
             targetHandle: IN,
             type: 'signal',
+            data: live(lit !== null && wireTaken(step, id, BRANCHES, branch, lit)),
           });
       continue;
     }
@@ -328,7 +352,12 @@ export function toGraph(
           targetHandle: IN,
           type: 'signal',
           label: outcomeWords(outcome),
-          data: outcome === 'otherwise' ? { muted: true } : {},
+          data:
+            lit !== null && wireTaken(step, id, outcome, to, lit)
+              ? { live: true }
+              : outcome === 'otherwise'
+                ? { muted: true }
+                : {},
         });
   }
   return { nodes, edges };

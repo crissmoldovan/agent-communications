@@ -24,6 +24,7 @@ export {
   type StepKind,
   stepOrder,
 } from '../../../../packages/events/src/flow/index.ts';
+export { describeFlow, type FlowLine } from '../../../../packages/events/src/rules/describe-flow.ts';
 export {
   eventsFor,
   RUN_EVENTS,
