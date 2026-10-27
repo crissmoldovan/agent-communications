@@ -235,29 +235,18 @@ async function calls(page: Page, kind: string): Promise<Recorded[]> {
 }
 
 /**
- * Drags a palette step onto the canvas, dropped `at` a point of the canvas's own box, kept inside it. The drop is made
- * by hand — press on the step, move onto the canvas, release — at a point read from the canvas's box as it is then, so
- * no hit check stands in the way; and what was under that point is returned, for the message of an expectation that
- * the step arrived (CI, 2026-10-27: Playwright's own drag found the page's scroller at the second drop's point).
+ * Drags a palette step onto the canvas, dropped `at` a point of the canvas's own box, kept inside it: the canvas is as
+ * wide as the window leaves it (550 pixels in CI's), and a drop beyond its edge lands on the page around it
+ * (CI, 2026-10-27). Returns where the drop was aimed, for the message of an expectation that the step arrived.
  */
-async function dragOn(page: Page, editor: Locator, item: string, at: { x: number; y: number }): Promise<string> {
+async function dragOn(editor: Locator, item: string, at: { x: number; y: number }): Promise<string> {
   const canvas = editor.locator('.react-flow');
   await canvas.evaluate((element) => element.scrollIntoView({ block: 'center' }));
-  const source = editor.locator(`[data-palette="${item}"]`);
-  await source.scrollIntoViewIfNeeded();
-  const from = await middle(source);
   const box = await canvas.boundingBox();
   if (box === null) throw new Error('the canvas has no place on the page');
-  const to = { x: box.x + Math.min(at.x, box.width - 40), y: box.y + Math.min(at.y, box.height - 40) };
-  const under = await page.evaluate(({ x, y }) => {
-    const element = document.elementFromPoint(x, y);
-    return element === null ? 'nothing' : `${element.tagName.toLowerCase()} ${element.className}`.slice(0, 160);
-  }, to);
-  await page.mouse.move(from.x, from.y);
-  await page.mouse.down();
-  await page.mouse.move(to.x, to.y, { steps: 10 });
-  await page.mouse.up();
-  return `the drop at (${Math.round(to.x)}, ${Math.round(to.y)}) in a canvas of ${Math.round(box.width)}×${Math.round(box.height)} landed on ${under}`;
+  const target = { x: Math.min(at.x, box.width - 40), y: Math.min(at.y, box.height - 40) };
+  await editor.locator(`[data-palette="${item}"]`).dragTo(canvas, { targetPosition: target });
+  return `a ${item} dropped at (${target.x}, ${target.y}) of a canvas ${Math.round(box.width)}×${Math.round(box.height)}`;
 }
 
 /** The middle of an element on the page. */
@@ -288,9 +277,9 @@ test('a workflow made on an empty canvas by dragging, two events ticked, approve
 
   // Two steps, each dragged from the palette to where it should go.
   // One above the other near the canvas's left edge, so both fit whatever width the canvas has.
-  const waited = await dragOn(page, editor, 'wait-time', { x: 60, y: 60 });
+  const waited = await dragOn(editor, 'wait-time', { x: 60, y: 60 });
   await expect(editor.locator('[data-step="wait-1"]'), waited).toBeVisible();
-  const told = await dragOn(page, editor, 'notify', { x: 60, y: 330 });
+  const told = await dragOn(editor, 'notify', { x: 60, y: 330 });
   const tell = editor.locator('[data-settings="notify-1"]');
   await expect(tell, told).toBeVisible();
   await tell.getByRole('textbox', { name: 'It says' }).fill('Time to look at it again');
