@@ -9,7 +9,7 @@ import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { PALETTE_MIME } from '../workflows/palette.ts';
 import { renderApp } from './render.tsx';
-import { openDesigner, polyfillCanvas, workflowService as service } from './workflow-bridge.ts';
+import { DESIGNER_SLOW, openDesigner, polyfillCanvas, workflowService as service } from './workflow-bridge.ts';
 
 // React Flow's helper, where jsdom draws nothing: a point on the screen is the canvas point 100 left and 40 up.
 vi.mock('@xyflow/react', async (importOriginal) => {
@@ -37,38 +37,42 @@ function dataTransfer(item: string) {
 const button = (editor: HTMLElement, name: string) => within(editor).getByRole('button', { name }) as HTMLButtonElement;
 
 describe('the workflow designer', () => {
-  it('the palette groups Decide, Sessions, Linear, Hand over and tell, and Wait, with Raise an event', async () => {
-    renderApp(service().bridge, { screen: 'events' });
-    const editor = await openDesigner('invoices');
-    const palette = within(editor).getByRole('complementary', { name: 'Steps' });
-    const groups = [...palette.querySelectorAll<HTMLElement>('[data-palette-group]')].map(
-      (group) => group.dataset.paletteGroup,
-    );
-    expect(groups).toEqual(['Decide', 'Sessions', 'Linear', 'Hand over, and tell', 'Wait']);
-    const items = (group: string) =>
-      [...(palette.querySelector(`[data-palette-group="${group}"]`)?.querySelectorAll('button') ?? [])].map(
-        (each) => each.textContent,
+  it(
+    'the palette groups Decide, Sessions, Linear, Hand over and tell, and Wait, with Raise an event',
+    DESIGNER_SLOW,
+    async () => {
+      renderApp(service().bridge, { screen: 'events' });
+      const editor = await openDesigner('invoices');
+      const palette = within(editor).getByRole('complementary', { name: 'Steps' });
+      const groups = [...palette.querySelectorAll<HTMLElement>('[data-palette-group]')].map(
+        (group) => group.dataset.paletteGroup,
       );
-    expect(items('Decide')).toEqual(['Condition', 'Ask a judge', 'Which project?', 'Side by side']);
-    expect(items('Sessions')).toContain('Find this conversation’s session');
-    expect(items('Linear')).toEqual(['Create', 'Update', 'Comment', 'Close']);
-    expect(items('Hand over, and tell')).toEqual([
-      'Put it in the Queue',
-      'Send to a webhook',
-      'Notify me',
-      'Raise an event',
-    ]);
-    expect(items('Wait')).toEqual(['For a session’s turn to end', 'For a session to be free', 'For a time']);
-    // Each is dragged with its own id under the app's own type.
-    const wait = palette.querySelector<HTMLElement>('[data-palette="wait-time"]') as HTMLElement;
-    const transfer = dataTransfer('');
-    fireEvent.dragStart(wait, { dataTransfer: transfer });
-    expect(transfer.getData(PALETTE_MIME)).toBe('wait-time');
-    // The palette is beside the canvas, not inside React Flow.
-    expect(palette.closest('.react-flow')).toBeNull();
-  });
+      expect(groups).toEqual(['Decide', 'Sessions', 'Linear', 'Hand over, and tell', 'Wait']);
+      const items = (group: string) =>
+        [...(palette.querySelector(`[data-palette-group="${group}"]`)?.querySelectorAll('button') ?? [])].map(
+          (each) => each.textContent,
+        );
+      expect(items('Decide')).toEqual(['Condition', 'Ask a judge', 'Which project?', 'Side by side']);
+      expect(items('Sessions')).toContain('Find this conversation’s session');
+      expect(items('Linear')).toEqual(['Create', 'Update', 'Comment', 'Close']);
+      expect(items('Hand over, and tell')).toEqual([
+        'Put it in the Queue',
+        'Send to a webhook',
+        'Notify me',
+        'Raise an event',
+      ]);
+      expect(items('Wait')).toEqual(['For a session’s turn to end', 'For a session to be free', 'For a time']);
+      // Each is dragged with its own id under the app's own type.
+      const wait = palette.querySelector<HTMLElement>('[data-palette="wait-time"]') as HTMLElement;
+      const transfer = dataTransfer('');
+      fireEvent.dragStart(wait, { dataTransfer: transfer });
+      expect(transfer.getData(PALETTE_MIME)).toBe('wait-time');
+      // The palette is beside the canvas, not inside React Flow.
+      expect(palette.closest('.react-flow')).toBeNull();
+    },
+  );
 
-  it('dropping Wait at a client point adds wait-1 at screenToFlowPosition of that point', async () => {
+  it('dropping Wait at a client point adds wait-1 at screenToFlowPosition of that point', DESIGNER_SLOW, async () => {
     const fake = service();
     renderApp(fake.bridge, { screen: 'events' });
     const editor = await openDesigner('invoices');
@@ -94,7 +98,7 @@ describe('the workflow designer', () => {
     for (const kind of ['eventsRuleUpdate', 'eventsTargetUpdate'] as const) expect(fake.calls(kind), kind).toEqual([]);
   });
 
-  it('a dropped step stays invalid and Save stays off until its fields pass', async () => {
+  it('a dropped step stays invalid and Save stays off until its fields pass', DESIGNER_SLOW, async () => {
     renderApp(service().bridge, { screen: 'events' });
     const editor = await openDesigner('invoices');
     // Untouched, there is nothing to save.
@@ -116,7 +120,7 @@ describe('the workflow designer', () => {
     expect(button(editor, 'Save draft').disabled).toBe(true);
   });
 
-  it('a step that emits shows a mark with the count', async () => {
+  it('a step that emits shows a mark with the count', DESIGNER_SLOW, async () => {
     renderApp(service().bridge, { screen: 'events' });
     const editor = await openDesigner('client-asks');
     const issue = await waitFor(() => {
