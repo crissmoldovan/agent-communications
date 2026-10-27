@@ -710,6 +710,27 @@
       "reason": "Removing a connection is a tightening: its entry goes from its app and its key stops working at once, applied at once and audited (design §6.2)."
     },
     {
+      "id": "core.connection.migrate",
+      "package": "core",
+      "cli": "connection migrate",
+      "mcp": "comms_connection_migrate",
+      "status": "both",
+      "operation": "connectionMigrateChange",
+      "reason": "Each app's separate entries into one connection that reaches exactly what they reached, adding nothing, each removed entry saved first: approved first, as it rewrites the apps' configs and moves their tools under agentcomms (single-server design D16, §9.1, §9.4). Never run by update or the background job."
+    },
+    {
+      "id": "core.connection.migrate.undo",
+      "package": "core",
+      "cli": "connection migrate",
+      "mcp": "comms_connection_migrate",
+      "status": "both",
+      "operation": "connectionMigrateUndoChange",
+      "argv": ["--undo", "cn_0123456789ABCDEFGHJKMNPQRS"],
+      "args": { "undo": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "expect": { "request.id": "cn_0123456789ABCDEFGHJKMNPQRS" },
+      "reason": "A connection's parts registered again as entries of their own, under the names they had, and the connection taken out: approved first, as every registration is (design §9.1, step 6)."
+    },
+    {
       "id": "core.mcp.install",
       "package": "core",
       "cli": "mcp install",

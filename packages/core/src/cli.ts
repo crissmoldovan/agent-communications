@@ -233,6 +233,12 @@ Usage — run these with this CLI, each as the words after its program:
   connection rename <id> <name> rename it: applies at once
   connection key replace <id>   a new key, written into its entry, the old one stopping at once: applies at once
   connection remove <id>        remove it and its entry: its key stops working at once
+  connection migrate [--client <client>] [--approval <id>]
+                                move each app's separate Agent Comms entries into one connection that
+                                reaches exactly what they reached, each removed entry saved first: approved
+                                first. The tools then appear under agentcomms, so allow them again
+  connection migrate --undo <id> [--approval <id>]
+                                its parts as entries of their own again, and the connection taken out
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -429,6 +435,7 @@ function parse(argv: string[]) {
       // `connection add|change`; refused on every other command (`refuseConnectionOptionsElsewhere`).
       app: { type: 'string' },
       parts: { type: 'string' },
+      undo: { type: 'string' },
       folder: { type: 'string' },
       profile: { type: 'string' },
       name: { type: 'string' },
@@ -536,7 +543,7 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
 }
 
 /** `connection add|change`'s own options, as typed. */
-const CONNECTION_OPTIONS = ['app', 'parts', 'folder', 'profile'] as const;
+const CONNECTION_OPTIONS = ['app', 'parts', 'folder', 'profile', 'undo'] as const;
 
 /**
  * Refuses `connection`'s own options on any other command, as USAGE, before anything runs — as `label`'s are: an option

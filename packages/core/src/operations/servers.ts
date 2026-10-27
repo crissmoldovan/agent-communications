@@ -265,6 +265,8 @@ export interface ConnectionEntryRequest {
   readonly key: string;
   readonly scope?: 'user' | 'local' | undefined;
   readonly folder?: string | undefined;
+  /** A migration: the entry takes the place of core's own under the name, put back if it does not land (§9.1). */
+  readonly replaceCore?: boolean | undefined;
 }
 
 export type ServerInstallResult = InstallResult & {
@@ -432,6 +434,7 @@ function installOptions(request: ServerInstallRequest): InstallOptions {
           entryEnv: { [CONNECTION_KEY_ENV]: request.connection.key },
           connection: request.connection.id,
           scope: request.connection.scope ?? 'user',
+          ...(request.connection.replaceCore === true ? { replaceCore: true } : {}),
           ...(request.connection.folder === undefined ? {} : { folder: request.connection.folder }),
         }),
   };

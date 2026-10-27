@@ -35,6 +35,7 @@ import {
   changePolicyReport,
   refuseApprovalWithoutChange,
 } from '../operations/change-policy.ts';
+import { connectionMigrateChange, connectionMigrateUndoChange } from '../operations/connection-migrate.ts';
 import {
   connectionAddChange,
   connectionChangeChange,
@@ -1346,6 +1347,34 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
     async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), undefined),
+  );
+
+  server.registerTool(
+    'comms_connection_migrate',
+    {
+      title: 'Move entries into one MCP connection',
+      description:
+        'Move each app’s separate Agent Comms entries into one connection that reaches exactly what they reached — their servers, each pin and read-only — adding nothing; each entry it removes is saved first, and an app whose connection does not start is put back as it was. `client` keeps it to one app. With `undo` and a connection’s id, its parts become entries of their own again, under the names they had, and the connection goes. Either way a change: the first call returns `approvalRequired` with a preview naming every entry it writes, removes and leaves alone, and an approvalId. Tell the person the tools then appear under agentcomms — mcp__agentcomms__… — so permission rules that named the old servers need allowing again, and that the app needs one restart.',
+      inputSchema: {
+        client: z
+          .enum(CLIENTS.filter((client) => client !== 'json') as [string, ...string[]])
+          .optional()
+          .describe('only this app'),
+        undo: connectionId.optional().describe('undo this connection: its parts as entries of their own again'),
+        ...approvalArg,
+      },
+      annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
+    },
+    async (args) => {
+      const deps = installVerification(updateDeps, npmRegistry(env));
+      const undo = args.undo;
+      if (undo === undefined) {
+        return change(() => connectionMigrateChange(core, env, { client: args.client }, 'mcp', deps), args.approvalId);
+      }
+      if (args.client !== undefined)
+        return fail(new CommsError('USAGE', '`undo` takes no `client`: it undoes one connection'));
+      return change(() => connectionMigrateUndoChange(core, env, { id: undo }, 'mcp', deps), args.approvalId);
+    },
   );
 
   server.registerTool(

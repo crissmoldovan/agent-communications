@@ -220,6 +220,7 @@ test('D19: every reader of what is registered counts what a connection starts, o
     'mcp-clients.ts',
     'mcp-install.ts',
     'operations/connections.ts',
+    'operations/connection-migrate.ts',
   ]);
   const root = fileURLToPath(new URL('../src/', import.meta.url));
   const callers: string[] = [];

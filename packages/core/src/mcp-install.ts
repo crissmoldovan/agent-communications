@@ -158,6 +158,12 @@ export interface InstallOptions {
   scope?: 'user' | 'local' | undefined;
   /** The project folder a `local` entry is for: Claude Code's own CLI is run there. */
   folder?: string | undefined;
+  /**
+   * With `connection`: core's own entry under the name, which this connection's entry takes the place of — a migration
+   * (single-server design §9.1, "It takes core's name, `agentcomms`, replacing core's own entry"). Saved first, and put
+   * back if the connection's entry does not land.
+   */
+  replaceCore?: boolean | undefined;
 }
 
 /** The MCP connection an entry starts the gateway for — the value of its `--connection` — or null for one that is none. */
@@ -861,7 +867,12 @@ function claimName(
     );
   }
   if (options.connection !== undefined) {
-    if (taken.some((server) => connectionOfEntry(server.args) !== options.connection)) {
+    const others = taken.filter(
+      (server) =>
+        connectionOfEntry(server.args) !== options.connection &&
+        !(options.replaceCore === true && connectionOfEntry(server.args) === null && isProductServer(server, product)),
+    );
+    if (others.length > 0) {
       throw new CommsError('CONFIG', `${options.client} already has an MCP server called "${name}"`, {
         hint: 'Choose another name for the connection’s entry.',
       });
@@ -1946,6 +1957,66 @@ export async function mcpUninstall(
     }
   }
   return { client, removed, kept, unreadable, backupPath };
+}
+
+/** The client configs every install recorded writing to or printing for (`HandedOut.config`), as `prune` reads them. */
+export async function recordedClientConfigs(dataDir: string): Promise<{ client: string; path: string }[] | null> {
+  const handedOut = await readHandedOut(handedOutRuntimesPath(dataDir));
+  if (handedOut === null) return null;
+  return handedOut.flatMap((record) => (record.config ? [{ client: record.client, path: record.config }] : []));
+}
+
+/**
+ * Takes exactly these entries out of one client — a migration's (single-server design §9.1, step 5.4) — each saved
+ * first, owner-only, and only while it is still there as it was read: nothing else of that client is touched.
+ */
+export async function removeEntries(
+  context: InstallContext,
+  client: SupportedClient,
+  entries: readonly RegisteredServer[],
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
+  now: Date = new Date(),
+): Promise<UninstallResult> {
+  const platform = platformOf(context);
+  const kept: KeptEntry[] = [];
+  const removed: UninstalledEntry[] = [];
+  if (entries.length === 0) return { client, removed, kept, unreadable: [], backupPath: undefined };
+  const backupPath = await backUpRemoved(context, client, entries, now);
+  const target = await installTarget(context, { client });
+  if (target.cliName !== null) {
+    for (const server of entries) {
+      const words =
+        target.cliName === 'claude'
+          ? ['mcp', 'remove', server.name, '--scope', 'user']
+          : ['mcp', 'remove', server.name];
+      if (target.cliPath === null) {
+        kept.push({
+          name: server.name,
+          path: server.path,
+          reason: `${target.cliName} was not found ${clientCliSearch(context.env)}`,
+        });
+        continue;
+      }
+      try {
+        await run(context.env, target.cliPath, words);
+        removed.push({ name: server.name, path: server.path });
+      } catch (error) {
+        const message = error instanceof CommsError ? error.message : String(error);
+        if (/no (mcp )?server|not found|does not exist/i.test(message))
+          removed.push({ name: server.name, path: server.path });
+        else kept.push({ name: server.name, path: server.path, reason: message });
+      }
+    }
+  } else {
+    const byFile = new Map<string, RegisteredServer[]>();
+    for (const server of entries) byFile.set(server.path, [...(byFile.get(server.path) ?? []), server]);
+    for (const [path, servers] of byFile) {
+      const outcome = await removeFromJsonConfig(path, servers, product, platform);
+      removed.push(...outcome.removed);
+      kept.push(...outcome.kept);
+    }
+  }
+  return { client, removed, kept, unreadable: [], backupPath };
 }
 
 /**

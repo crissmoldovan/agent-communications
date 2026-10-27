@@ -266,6 +266,7 @@ const CHANGING = [
   'comms_update',
   'comms_connection_add',
   'comms_connection_change',
+  'comms_connection_migrate',
 ];
 /**
  * Tools that change something only by taking it away, so ask nobody and take no approval: a revoke, narrowing or

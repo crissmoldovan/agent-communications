@@ -4,6 +4,12 @@ import type { ConnectionApp, ConnectionLauncher } from './connections.ts';
 import type { Core } from './core.ts';
 import type { CommsError } from './errors.ts';
 import {
+  connectionMigrateChange,
+  connectionMigrateUndoChange,
+  type MigrationResult,
+  type MigrationUndoResult,
+} from './operations/connection-migrate.ts';
+import {
   type ConnectionAddResult,
   type ConnectionChangeResult,
   type ConnectionKeyResult,
@@ -36,6 +42,8 @@ interface ConnectionValues {
   readonly profile?: string | undefined;
   readonly launcher?: string | undefined;
   readonly 'no-verify'?: boolean | undefined;
+  readonly client?: string | undefined;
+  readonly undo?: string | undefined;
 }
 
 interface CommandContext {
@@ -61,6 +69,7 @@ const USAGE = {
   rename: 'usage: connection rename <id> <name>',
   key: 'usage: connection key replace <id>',
   remove: 'usage: connection remove <id>',
+  migrate: 'usage: connection migrate [--client <client>] | connection migrate --undo <id>',
 };
 
 export async function connectionCommand(
@@ -178,6 +187,33 @@ export async function connectionCommand(
       writeResult(result, output, renderKey);
       return;
     }
+    case 'migrate': {
+      if (rest.length > 0) throw usage(USAGE.migrate);
+      onlyFor('migrate', []);
+      if (values.undo !== undefined) {
+        if (values.client !== undefined) throw usage(USAGE.migrate);
+        const result = await gatedChangeAtTerminal(
+          core,
+          connectionMigrateUndoChange(core, env, { id: values.undo }, 'cli', installDeps),
+          {
+            ...approval,
+            rerun: ['connection', 'migrate', '--undo', values.undo],
+            appApproval,
+            appReach: { clients: true },
+          },
+        );
+        writeResult(result, output, renderUndone);
+        return;
+      }
+      const words = ['connection', 'migrate', ...(values.client === undefined ? [] : ['--client', values.client])];
+      const result = await gatedChangeAtTerminal(
+        core,
+        connectionMigrateChange(core, env, { client: values.client }, 'cli', installDeps),
+        { ...approval, rerun: words, appApproval, appReach: { clients: true } },
+      );
+      writeResult(result, output, renderMigrated);
+      return;
+    }
     case 'remove': {
       if (rest.length !== 1) throw usage(USAGE.remove);
       onlyFor('remove', []);
@@ -274,6 +310,25 @@ function renderKey(result: ConnectionKeyResult): string {
   return [
     'Replaced at once. The old key stopped working.',
     ...(result.snippets === undefined ? [] : ['', 'The new snippet, shown this once:', '', result.snippets.json]),
+    result.next,
+  ].join('\n');
+}
+
+function renderMigrated(result: MigrationResult): string {
+  return [
+    ...result.migrated.map(
+      (each) =>
+        `Moved ${each.replaced} entr${each.replaced === 1 ? 'y' : 'ies'} into the connection “${each.name}” (${each.app}).`,
+    ),
+    ...result.left.map((each) => `Left “${each.name}” in ${each.path}: ${each.why}.`),
+    '',
+    ...result.next,
+  ].join('\n');
+}
+
+function renderUndone(result: MigrationUndoResult): string {
+  return [
+    `Undid “${result.name}”: ${result.registered.map((each) => `${each.server} as ${each.name}${each.applied ? '' : ' (not registered)'}`).join('; ')}.`,
     result.next,
   ].join('\n');
 }
