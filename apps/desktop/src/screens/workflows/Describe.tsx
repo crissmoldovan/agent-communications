@@ -48,7 +48,7 @@ export const DESCRIBE_COPY = {
   } satisfies Record<DescribeProvider, string>,
   sent: 'What is sent',
   sentLine:
-    'Your words and your answers; a fixed brief and the workflow text’s words; the names a draft may use — your accounts, lanes, judges, targets, projects and namespaces, the step event words, and the Linear teams, labels and states your workflows name; and, when you ask again, the current draft.',
+    'Your words and your answers; a fixed brief and the workflow text’s words; the names a draft may use — your accounts, lanes, judges, targets, projects and namespaces, the step event words, and the Linear teams, labels and states your workflows name; and, when you ask again, the current draft, its folders, addresses and templates replaced by placeholders that are put back in what comes back. A draft that does not read as a workflow goes as you wrote it, for the model to fix.',
   neverLine:
     'Never a message, unless you paste one above, and then marked as an example. Never a project’s profile or folders, a count, an address, a template, a subscriber or a key.',
   draft: 'Draft it',
@@ -81,6 +81,24 @@ const PROVIDERS: readonly DescribeProvider[] = ['claude-cli', 'openrouter', 'ant
 const WORDS_MAX = 4000;
 const ANSWERS_MAX = 5;
 
+const WORD_END = /[\p{L}\p{N}\p{M}]$/u;
+const WORD_START = /^[\p{L}\p{N}\p{M}]/u;
+
+/**
+ * Whether a note's words are the person's own (security review of 0.36.0, L7), as the event service reads them: at
+ * least 12 characters and three words, found at word boundaries in `sources` — the person's description and the answers
+ * they typed. A choice the model offered is never among them, so a step quoting one is "Added by the model".
+ */
+export function quotesPerson(words: string, sources: readonly string[]): boolean {
+  const quote = words.trim();
+  if ([...quote].length < 12 || quote.split(/\s+/u).length < 3) return false;
+  return sources.some((source) => {
+    for (let at = source.indexOf(quote); at !== -1; at = source.indexOf(quote, at + 1))
+      if (!WORD_END.test(source.slice(0, at)) && !WORD_START.test(source.slice(at + quote.length))) return true;
+    return false;
+  });
+}
+
 /** A document's steps: its flow's, in the order written. */
 function stepIdsOf(document: JsonObject): string[] {
   return isObject(document.flow) && isObject(document.flow.steps) ? Object.keys(document.flow.steps) : [];
@@ -112,6 +130,8 @@ export function Describe({
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [drafted, setDrafted] = useState<string[]>([]);
+  /** What the person wrote for the round shown: their words, and the answers they typed rather than picked. */
+  const [ownWords, setOwnWords] = useState<string[]>([]);
 
   // A new round starts from the answers the person gave this one.
   useEffect(() => {
@@ -124,10 +144,18 @@ export function Describe({
   const draft = async () => {
     setBusy(true);
     setProblem(null);
+    const sent = answers.slice(0, ANSWERS_MAX);
+    // An answer that is one of the choices the model offered is the model's words, not the person's (L7).
+    const typed = sent.filter(
+      (entry) =>
+        !(result?.questions ?? []).some(
+          (question) => question.question === entry.question && question.choices.includes(entry.answer),
+        ),
+    );
     const request: DescribeRequest = {
       words,
       ...(example.trim() === '' ? {} : { example }),
-      ...(answers.length === 0 ? {} : { answers: answers.slice(0, ANSWERS_MAX) }),
+      ...(sent.length === 0 ? {} : { answers: sent }),
       // Asking again sends the current draft, so the next round changes only what it must.
       ...(result === null ? {} : { draft: printRuleText(document) }),
     };
@@ -146,6 +174,7 @@ export function Describe({
         setProblem(DESCRIBE_COPY.unreadable);
         return;
       }
+      setOwnWords([words, ...typed.map((entry) => entry.answer)]);
       setResult(read);
       const parsed = read.parse.ok ? parseRuleText(read.text) : null;
       if (parsed?.ok === true) {
@@ -254,7 +283,8 @@ export function Describe({
                 </h4>
                 <ul className="flex flex-col gap-(--cue-space-1)">
                   {steps.map((step) => {
-                    const said = notes.get(step);
+                    const noted = notes.get(step);
+                    const said = noted !== undefined && quotesPerson(noted, ownWords) ? noted : undefined;
                     return (
                       <li
                         key={step}
