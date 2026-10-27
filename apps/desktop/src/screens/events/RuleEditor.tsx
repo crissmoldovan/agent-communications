@@ -52,8 +52,13 @@ import { type PreparedReview, RuleReview } from './RuleReview.tsx';
 import { RuleChecks, RuleJsonPane, RuleTextPane } from './RuleText.tsx';
 import { type JudgeChoice, RuleVisual } from './RuleVisual.tsx';
 
-/** What the editor opens on: a rule's next version, or a new rule by the name the person gave it. */
-export type EditTarget = { kind: 'edit'; ruleId: string } | { kind: 'new'; ruleId: string };
+/**
+ * What the editor opens on: a rule's next version, or a new rule by the name the person gave it. A new workflow (0.36.0)
+ * may start from the person's words, an empty canvas, or a copy of another; the rule editor reads none of them.
+ */
+export type EditTarget =
+  | { kind: 'edit'; ruleId: string }
+  | { kind: 'new'; ruleId: string; from?: 'words' | 'empty' | { copy: string } };
 
 type Mode = 'visual' | 'text' | 'json';
 

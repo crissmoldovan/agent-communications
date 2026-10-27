@@ -12,7 +12,7 @@
  * `checkFlow` says what is wrong; nothing here throws on a document a person is still editing.
  */
 import type { Edge, Node } from '@xyflow/react';
-import { copyOf, isObject, type Json, type JsonObject, targetsIn } from '../rule-editor/model.ts';
+import { canonical, copyOf, isObject, type Json, type JsonObject, targetsIn } from '../rule-editor/model.ts';
 import { DELIVER_TITLES, FIND_TITLES, GATE_TITLES, outcomeWords, STEP_TITLES, WAIT_TITLES } from './copy.ts';
 import {
   connectionAllowed,
@@ -145,6 +145,16 @@ function editable(document: JsonObject): { next: JsonObject; flow: JsonObject; s
   if (!isObject(flow.steps)) flow.steps = {};
   next.flow = flow;
   return { next, flow, steps: flow.steps as Steps };
+}
+
+/**
+ * `document` as a straight line again when its flow is exactly the one `flowOf` derives for it — a step dropped and
+ * deleted, an event ticked and unticked — so undoing a change on a straight line leaves its bytes as they were (W2).
+ */
+function settled(document: JsonObject): JsonObject {
+  if (!isObject(document.flow)) return document;
+  const { flow: _flow, ...line } = document;
+  return canonical(flowOfDocument(line).flow) === canonical(document.flow) ? line : document;
 }
 
 const stepsOf = (flow: FlowDocumentV1): Readonly<Record<string, unknown>> =>
@@ -390,7 +400,7 @@ export function applyNodeDrop(
   });
   if (empty || typeof flow.start !== 'string' || flow.start === '') flow.start = stepId;
   if (options.target !== undefined) next.targets = [...targetsIn(next), copyOf(options.target)];
-  return next;
+  return settled(next);
 }
 
 /**
@@ -408,7 +418,7 @@ export function applyConnect(document: JsonObject, from: string, outcome: string
     if (from !== last || (typeof flow.start === 'string' && Object.hasOwn(steps, flow.start))) return null;
     const { next, flow: written } = editable(document);
     written.start = to;
-    return next;
+    return settled(next);
   }
   const step = steps[from];
   if (!isObject(step)) return null;
@@ -426,7 +436,7 @@ export function applyConnect(document: JsonObject, from: string, outcome: string
   const changed = written[from] as JsonObject;
   if (changed.kind === 'split') changed.branches = [...(Array.isArray(changed.branches) ? changed.branches : []), to];
   else changed.next = { ...arrowsOf(changed), [outcome]: to };
-  return next;
+  return settled(next);
 }
 
 /**
@@ -444,7 +454,7 @@ export function applyDisconnect(document: JsonObject, from: string, outcome: str
     if (arrows[outcome] === to) delete arrows[outcome];
     step.next = arrows;
   }
-  return next;
+  return settled(next);
 }
 
 /** Whether `from`'s `outcome` may be wired to `to`: what `isValidConnection` asks. */
@@ -487,7 +497,7 @@ export function applyDelete(document: JsonObject, stepId: StepId): JsonObject {
         (each) => !(each.targetId === target.targetId && each.version === target.version),
       );
   }
-  return next;
+  return settled(next);
 }
 
 /** The document with event `word` ticked (`on`) or not on step `stepId`: `emit` sorted, and gone when empty (W23). */
@@ -500,7 +510,7 @@ export function applyEmit(document: JsonObject, stepId: StepId, word: string, on
   else ticked.delete(word);
   if (ticked.size === 0) delete step.emit;
   else step.emit = [...ticked].sort();
-  return next;
+  return settled(next);
 }
 
 /** The document with step `stepId` as `change` makes it: the settings' one way in. */
@@ -513,14 +523,14 @@ export function applyStep(document: JsonObject, stepId: StepId, change: (step: J
     writable: true,
     configurable: true,
   });
-  return next;
+  return settled(next);
 }
 
 /** The document with its flow as `change` makes it (limits, events, chain, shadow): written out for a straight line. */
 export function applyFlow(document: JsonObject, change: (flow: JsonObject) => JsonObject): JsonObject {
   const { next, flow } = editable(document);
   next.flow = change(flow);
-  return next;
+  return settled(next);
 }
 
 /** Whether `id` is one a step may take: what a box's id is checked against before it is kept. */

@@ -19,7 +19,7 @@ import {
   Spinner,
 } from '@cueplusplus/ui';
 import { ChevronRight, Plus } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useState } from 'react';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY, type Screen } from '../../copy.ts';
 import { madeAt } from '../../events-deliveries.ts';
@@ -45,10 +45,20 @@ import { RuleEditor } from './RuleEditor.tsx';
 
 const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 
-/** Whether this machine's event service has the rule editor's commands (0.33.0): only then is a rule edited here. */
-function useRuleEditor(): boolean {
+/**
+ * The designer (0.36.0), loaded only when a workflow is opened in it: React Flow and its stylesheets come with this
+ * chunk, never with the app's first.
+ */
+const WorkflowEditor = lazy(() =>
+  import('../workflows/WorkflowEditor.tsx').then((module) => ({ default: module.WorkflowEditor })),
+);
+
+/** Which editor this machine's event service has: none, the rule editor (0.33.0), or the designer (0.36.0). */
+function useEditor(): 'none' | 'rules' | 'workflows' {
   const { result } = useCall<string>(EVENTS_VERSION);
-  return result.state === 'ready' && supports(result.value, 'ruleEditor');
+  if (result.state !== 'ready') return 'none';
+  if (supports(result.value, 'workflows')) return 'workflows';
+  return supports(result.value, 'ruleEditor') ? 'rules' : 'none';
 }
 
 /** New rule…: its name first, which the rule keeps for good; then the editor. */
@@ -245,8 +255,28 @@ export function RulesTab({
   onScreen?: ((screen: Screen) => void) | undefined;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
-  const canEdit = useRuleEditor();
+  const editor = useEditor();
+  const canEdit = editor !== 'none';
   const editing = nav.editing;
+  if (editing !== null && editor === 'workflows')
+    return (
+      <Suspense fallback={<Spinner label={COPY.loading} />}>
+        <WorkflowEditor
+          key={`${editing.kind}:${editing.ruleId}`}
+          target={editing}
+          lists={lists}
+          onClose={() => {
+            nav.edit(null);
+            if (editing.kind === 'edit') nav.openRule(editing.ruleId);
+          }}
+          onApproved={(ruleId) => {
+            nav.edit(null);
+            nav.openRule(ruleId);
+            void lists.reloadRules();
+          }}
+        />
+      </Suspense>
+    );
   if (editing !== null)
     return (
       <RuleEditor
