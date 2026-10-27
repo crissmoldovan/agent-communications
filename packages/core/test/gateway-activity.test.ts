@@ -21,6 +21,7 @@ import {
 } from '../src/connections.ts';
 import { openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
+import { asPartOf } from './helpers/gateway/as-part.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -137,18 +138,15 @@ test('D11: a line a part records names its connection by id and by its name now;
       async () => ({ total: 0 }),
       () => ({ count: 0 }),
     );
-  const before = process.env.AGENTCOMMS_CONNECTION;
-  process.env.AGENTCOMMS_CONNECTION = id;
-  try {
+  await asPartOf(id, async () => {
     await call();
     await put({ ...held, name: 'Acme — Claude Code' }, false);
     await call();
-  } finally {
-    if (before === undefined) delete process.env.AGENTCOMMS_CONNECTION;
-    else process.env.AGENTCOMMS_CONNECTION = before;
-  }
+  });
   await call();
+  // The variable a process sets for itself, outside any part a gateway started, names nothing (0.35.0 review, LOW).
+  await asPartOf(id, call, { gateway: false });
   const shown = await core.activity.show(session.key, {});
   const named = shown.lines.map((line) => line.session.connection ?? null).reverse();
-  assert.deepEqual(named, [{ id, name: 'Work — Claude Code' }, { id, name: 'Acme — Claude Code' }, null]);
+  assert.deepEqual(named, [{ id, name: 'Work — Claude Code' }, { id, name: 'Acme — Claude Code' }, null, null]);
 });

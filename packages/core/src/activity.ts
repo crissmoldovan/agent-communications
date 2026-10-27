@@ -11,7 +11,7 @@ import {
   MAX_ACTIVITY_RETENTION_DAYS,
   MIN_ACTIVITY_RETENTION_DAYS,
 } from './activity-settings.ts';
-import { CONNECTION_ID_ENV, CONNECTION_ID_PATTERN, connectionById, GATEWAY_PID_ENV } from './connections.ts';
+import { CONNECTION_ID_PATTERN, connectionById, connectionOfThisProcess, GATEWAY_PID_ENV } from './connections.ts';
 import type { Core } from './core.ts';
 import { CommsError } from './errors.ts';
 import { appendPrivateLine, ensurePrivateDir, FILE_MODE, isGroupOrWorldAccessible, writeFileAtomic } from './fs.ts';
@@ -1485,8 +1485,9 @@ function gatewayPidOf(env: NodeJS.ProcessEnv): number | undefined {
  * connection the configuration no longer has.
  */
 async function connectionOfProcess(core: Pick<Core, 'activity'>): Promise<ActivityConnection | undefined> {
-  const id = process.env[CONNECTION_ID_ENV];
-  if (id === undefined || !CONNECTION_ID_PATTERN.test(id)) return undefined;
+  // Only inside a part a gateway started: the variable a process sets for itself names nothing (`connectionOfThisProcess`).
+  const id = connectionOfThisProcess(process.env);
+  if (id === undefined) return undefined;
   const config = (core as Partial<Pick<Core, 'config'>>).config;
   if (config === undefined) return undefined;
   try {

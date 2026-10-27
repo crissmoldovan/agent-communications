@@ -7,7 +7,6 @@ import { agentMarker } from '../cli-runtime.ts';
 import { type Config, classifyChange, connectedAccounts } from '../config.ts';
 import {
   CONNECTION_APPS,
-  CONNECTION_ID_ENV,
   CONNECTION_ID_PATTERN,
   CONNECTION_KEY_ENV,
   CONNECTION_LAUNCHERS,
@@ -20,6 +19,7 @@ import {
   connectionKeyHash,
   connectionKeyMatches,
   connectionNameProblem,
+  connectionOfThisProcess,
   connectionReach,
   newConnectionId,
   newConnectionKey,
@@ -381,7 +381,7 @@ export async function connectionShow(
   env: NodeJS.ProcessEnv,
   request: { id?: string | undefined },
 ): Promise<ConnectionShown> {
-  const id = request.id ?? env[CONNECTION_ID_ENV];
+  const id = request.id ?? connectionOfThisProcess(env);
   if (id === undefined || id === '') {
     throw new CommsError('USAGE', 'name the connection by its id: this is not one of a connection’s parts', {
       hint: 'connection list gives every connection’s id.',

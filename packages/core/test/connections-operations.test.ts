@@ -25,6 +25,7 @@ import {
   parsePartsSpec,
 } from '../src/operations/connections.ts';
 import { VERSION } from '../src/version.ts';
+import { asPartOf } from './helpers/gateway/as-part.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -427,14 +428,9 @@ test('§8.1: --app-approval covers connection add and change, and is refused ins
 
 test('D11 (§7): an audit line written inside a part of a connection names the connection, by id', async () => {
   const m = machine();
-  const before = process.env.AGENTCOMMS_CONNECTION;
-  process.env.AGENTCOMMS_CONNECTION = 'cn_0123456789ABCDEFGHJKMNPQRS';
-  try {
-    await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
-  } finally {
-    if (before === undefined) delete process.env.AGENTCOMMS_CONNECTION;
-    else process.env.AGENTCOMMS_CONNECTION = before;
-  }
+  await asPartOf('cn_0123456789ABCDEFGHJKMNPQRS', () =>
+    m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' }),
+  );
   await m.core.audit.append({ inboxId: 'ibx_AAAAAAAAAAAAAAAA', operation: 'send.execute', outcome: 'ok' });
   const lines = auditText(m)
     .trim()

@@ -445,8 +445,14 @@ does not protect.
   same key as with direct servers.
 - **`comms_activity` still answers only for the calling session** (S3).
 - **What the app shows:**
-  - "Used by <connection name>" where a line names a connection. That attribution is exact, not the approximate
-    `CLIENT_NAMES` table (`connections.ts:39-56`).
+  - "Used by <connection name>" where a line names a connection: the connection as the gateway reports it, not the
+    approximate `CLIENT_NAMES` table (`connections.ts:39-56`).
+  - **Note, 2026-10-27 (0.35.0 security review, LOW):** this said the attribution was "exact". It is not: any process
+    can set `AGENTCOMMS_CONNECTION`. It is now honoured only inside a part a gateway started — the gateway's pid
+    (`AGENTCOMMS_GATEWAY_PID`) and an MCP server's mark (`AGENTCOMMS_MCP_SERVER`) set beside it, as the gateway gives
+    every part — and ignored anywhere else, so a shell, a hook or a server started with no gateway names no connection
+    in `preparedBy`, the audit or Activity. Code running as the person can still set all three (§6.3): the attribution
+    is what the gateway reports, not a proof.
   - The client's name, as the client said it, for lines with none.
   - Each connection's "last used": its newest line.
 - **The audit records the connection's id** on every line a part writes, and on every connection operation:

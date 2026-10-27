@@ -6,10 +6,11 @@ import { bindingDigestOf } from '../src/approval-binding.ts';
 import { approvalOutcome, publicApproval } from '../src/approval-outcome.ts';
 import { decodeStored } from '../src/approval-stored.ts';
 import { type GatedChange, gatedChange } from '../src/change-flow.ts';
-import { CONNECTION_ID_ENV, CONNECTION_KEY_ENV, newConnectionKey } from '../src/connections.ts';
+import { CONNECTION_KEY_ENV, newConnectionKey } from '../src/connections.ts';
 import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { listApprovals } from '../src/operations/maintenance.ts';
+import { asPartOf as asPart } from './helpers/gateway/as-part.ts';
 import { tempDir } from './helpers/temp.ts';
 import { downloadBinding, edited, OWNER, T0, v2Record } from './helpers/v2-records.ts';
 
@@ -38,22 +39,15 @@ function machine(): { core: Core; stateDir: string } {
 }
 
 /** Runs `body` as a part of the connection `id` runs, its gateway's variables set, and puts them back after. */
-async function asPartOf<T>(id: string | undefined, body: () => Promise<T>): Promise<T> {
-  const before = { id: process.env[CONNECTION_ID_ENV], key: process.env[CONNECTION_KEY_ENV] };
-  if (id === undefined) delete process.env[CONNECTION_ID_ENV];
-  else process.env[CONNECTION_ID_ENV] = id;
+async function asPartOf<T>(id: string | undefined, body: () => Promise<T>, options: { gateway?: boolean } = {}) {
+  const before = process.env[CONNECTION_KEY_ENV];
   // A key in the environment too, as a careless process could leave one: it must reach no record.
   process.env[CONNECTION_KEY_ENV] = newConnectionKey();
   try {
-    return await body();
+    return await asPart(id, body, options);
   } finally {
-    for (const [name, value] of [
-      [CONNECTION_ID_ENV, before.id],
-      [CONNECTION_KEY_ENV, before.key],
-    ] as const) {
-      if (value === undefined) delete process.env[name];
-      else process.env[name] = value;
-    }
+    if (before === undefined) delete process.env[CONNECTION_KEY_ENV];
+    else process.env[CONNECTION_KEY_ENV] = before;
   }
 }
 
@@ -128,6 +122,29 @@ test('P3: prepared outside any connection, a record has no preparedBy; claimed e
   const used = (await listApprovals(core)).find((approval) => approval.approvalId === inside.prepared.approvalId);
   assert.equal(used?.state, 'used');
   assert.equal(used?.preparedBy, CONNECTION);
+});
+
+test('P3 (0.35.0 review, LOW): a process outside any gateway part that sets AGENTCOMMS_CONNECTION itself names no connection', async () => {
+  const { core, stateDir } = machine();
+  // The reviewer's scenario: a shell sets the variable itself — no gateway, no key — and prepares a change, writes an
+  // audit line. Before, preparedBy and the audit line named the connection it chose.
+  const forged = await asPartOf(
+    CONNECTION,
+    async () => {
+      const change = await gatedChange(core, effectOnly(), { surface: 'cli', channel: 'core' });
+      await core.audit.append({ inboxId: '', operation: 'connection.rename', outcome: 'ok', surface: 'cli' });
+      return change;
+    },
+    { gateway: false },
+  );
+  assert.equal(forged.status, 'approval-required');
+  if (forged.status !== 'approval-required') return;
+  const shown = (await listApprovals(core)).find((approval) => approval.approvalId === forged.prepared.approvalId);
+  assert.equal(Object.hasOwn(shown ?? {}, 'preparedBy'), false, 'no preparedBy from a variable a process set itself');
+  const audit = readdirSync(join(stateDir, 'audit'))
+    .map((name) => readFileSync(join(stateDir, 'audit', name), 'utf8'))
+    .join('');
+  assert.equal(audit.includes(CONNECTION), false, 'nor an audit line naming it');
 });
 
 test('P3: preparedBy is not bound, so a release before it reads the record; one that is not a connection id reads as corrupt', () => {

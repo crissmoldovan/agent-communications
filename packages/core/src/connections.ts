@@ -3,6 +3,7 @@ import type { ChannelManifest } from './channel-manifest.ts';
 import { CHANNEL_SNAPSHOT, SERVICE_SNAPSHOT } from './channels.generated.ts';
 import { isDangerous } from './chars.ts';
 import type { SettingValue } from './config.ts';
+import { mcpServerOf } from './mcp-marker.ts';
 
 /**
  * MCP connections (single-server design §6, D9–D12): each place an app uses Agent Comms — Claude Code in every folder,
@@ -56,9 +57,18 @@ export const GATEWAY_PID_ENV = 'AGENTCOMMS_GATEWAY_PID';
 /**
  * The MCP connection this process is a part of, as its gateway set it (`AGENTCOMMS_CONNECTION`, D11): its id, never
  * its key — or undefined outside any connection, and for anything there that is not a connection's id. What an audit
- * line and an approval this process writes name the connection by (single-server design §7).
+ * line, an approval's `preparedBy` and Activity's "used by" name the connection by (single-server design §7), and what
+ * an agent's own connection is (`connection rename`, `key replace`, `remove`).
+ *
+ * Honoured only inside a part a gateway started: one whose environment carries the gateway's pid
+ * (`AGENTCOMMS_GATEWAY_PID`) and an MCP server's mark (`AGENTCOMMS_MCP_SERVER`), as the gateway gives every part it
+ * starts — each part then marks itself with its own name. Anywhere else the variable is ignored: a shell, a hook or a
+ * server started without a gateway that sets it names no connection (0.35.0 security review, LOW). Code running as the
+ * person can still set all three, as it can read the app's config: the attribution is the connection as the gateway
+ * reports it, not a proof (§6.3).
  */
 export function connectionOfThisProcess(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!isGatewayPart(env) || mcpServerOf(env) === undefined) return undefined;
   const id = env[CONNECTION_ID_ENV];
   return id !== undefined && CONNECTION_ID_PATTERN.test(id) ? id : undefined;
 }
