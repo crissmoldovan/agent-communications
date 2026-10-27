@@ -437,25 +437,55 @@ export class WorkflowEngine {
   }
 
   /**
-   * Held runs start in turn, oldest first (§5): each as its workflow's and every workflow's concurrent runs, and its
-   * hour's runs, allow. A run held for the first time is announced once; one that starts is announced started.
+   * Held runs start in turn, oldest first (§5), each workflow's on its own: its oldest held runs, one after another,
+   * while its own concurrent runs and its hour's runs allow. The first its limits still hold ends that workflow's turn
+   * in this pass, so a backlog one workflow's limits hold — which a sender can build, since a held run is never dropped
+   * — never hides another workflow's run (security review 0.36.0, M6). Every workflow's ceiling stops them all. Then
+   * each held run not yet looked at is announced held, once. At most `batch` runs a pass, across every workflow.
    */
   async #startHeld(): Promise<void> {
     const database = this.#store.database;
-    const held = database
-      .prepare("SELECT id FROM workflow_runs WHERE state = 'held' ORDER BY started_at, id LIMIT ?")
-      .all(this.#batch) as Array<{ id: string }>;
-    for (const { id } of held) {
+    let budget = this.#batch;
+    const workflows = database
+      .prepare(
+        `SELECT rule_id FROM workflow_runs WHERE state = 'held'
+          GROUP BY rule_id ORDER BY MIN(started_at), rule_id LIMIT ?`,
+      )
+      .all(this.#batch) as Array<{ rule_id: string }>;
+    for (const { rule_id: ruleId } of workflows) {
+      if (budget <= 0) return;
+      const held = database
+        .prepare("SELECT id FROM workflow_runs WHERE rule_id = ? AND state = 'held' ORDER BY started_at, id LIMIT ?")
+        .all(ruleId, budget) as Array<{ id: string }>;
+      for (const { id } of held) {
+        if (!anyRunMayStartInTransaction(database)) return;
+        budget -= 1;
+        // A run that cannot be read holds back no other's start; one its limits hold, its workflow's later runs.
+        if ((await this.#startOne(id).catch(() => 'gone' as const)) === 'held') break;
+      }
+    }
+    if (budget <= 0) return;
+    const unseen = database
+      .prepare(
+        `SELECT id FROM workflow_runs AS run
+          WHERE run.state = 'held' AND NOT EXISTS (SELECT 1 FROM workflow_steps AS step WHERE step.run_id = run.id)
+          ORDER BY run.started_at, run.id LIMIT ?`,
+      )
+      .all(budget) as Array<{ id: string }>;
+    for (const { id } of unseen) {
       if (!anyRunMayStartInTransaction(database)) return;
       await this.#startOne(id).catch(() => undefined);
     }
   }
 
-  /** One held run, on its own: a run that cannot be read holds back no other's start. */
-  async #startOne(id: string): Promise<void> {
+  /**
+   * One held run, on its own: started, still held by its limits — announced held when this is its first look — or gone
+   * meanwhile. A run held for the first time is announced once; one that starts is announced started.
+   */
+  async #startOne(id: string): Promise<'started' | 'held' | 'gone'> {
     const database = this.#store.database;
     const row = readRun(database, id);
-    if (row === undefined || row.state !== 'held') return;
+    if (row === undefined || row.state !== 'held') return 'gone';
     const rule = this.#ruleOf(row);
     const flow = rule.flow as FlowDocumentV1;
     const first = readSteps(database, id).length === 0;
@@ -466,15 +496,17 @@ export class WorkflowEngine {
       .get(row.rule_id) as { count: number };
     const startable =
       own.count < flow.limits.concurrentRuns && limitInTransaction(database, row.rule_id, 'run', flow.limits, now).ok;
-    if (!startable && !first) return;
+    if (!startable && !first) return 'held';
     const started = startable ? await this.#sink.prepare([this.#runTransition(row, rule, 'run-started', null)]) : null;
     const announced =
       first && !startable ? await this.#sink.prepare([this.#runTransition(row, rule, 'run-held', null)]) : null;
-    this.#store.immediate(() => {
+    const outcome = this.#store.immediate(() => {
       const outcome = startRunInTransaction(database, { runId: id, flow, now: this.#now() });
       if (outcome === 'started' && started !== null) this.#sink.commitInTransaction(database, started);
       if (outcome === 'held-first' && announced !== null) this.#sink.commitInTransaction(database, announced);
+      return outcome;
     });
+    return outcome === 'started' || outcome === 'gone' ? outcome : 'held';
   }
 
   /** One step: claimed, fenced, run through its executor, and settled once. True when it ran. */
