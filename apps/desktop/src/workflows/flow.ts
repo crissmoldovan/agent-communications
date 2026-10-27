@@ -4,6 +4,8 @@
  * with the same `checkFlow`, `connectionAllowed`, `flowOf` and step event catalogue. They have no I/O, and they load
  * only with the designer's chunk.
  */
+
+export { outcomesOf, successors } from '../../../../packages/events/src/flow/graph.ts';
 export {
   checkFlow,
   connectionAllowed,
@@ -22,7 +24,6 @@ export {
   type StepKind,
   stepOrder,
 } from '../../../../packages/events/src/flow/index.ts';
-export { outcomesOf, successors } from '../../../../packages/events/src/flow/graph.ts';
 export {
   eventsFor,
   RUN_EVENTS,

@@ -5,15 +5,11 @@
  * out), with a fresh id, its kind's defaults and no arrows, and stays invalid — Save off — until it is wired and set.
  * A step that raises events carries a mark with the count. Every answer is a fixture; nothing is stored by looking.
  */
-import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, waitFor, within } from '@testing-library/react';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import owner from '../../../../packages/events/test/fixtures/flows/owner-example.json';
-import type { Call } from '../ipc.ts';
 import { PALETTE_MIME } from '../workflows/palette.ts';
 import { renderApp } from './render.tsx';
-import { editorBridge } from './rule-editor-bridge.ts';
-import rules from './fixtures/events-rules.v032.json';
-import shows from './fixtures/events-rule-show.v032.json';
+import { openDesigner, polyfillCanvas, workflowService as service } from './workflow-bridge.ts';
 
 // React Flow's helper, where jsdom draws nothing: a point on the screen is the canvas point 100 left and 40 up.
 vi.mock('@xyflow/react', async (importOriginal) => {
@@ -24,57 +20,7 @@ vi.mock('@xyflow/react', async (importOriginal) => {
   };
 });
 
-beforeAll(() => {
-  // What React Flow reads of the page, which jsdom does not have.
-  globalThis.DOMMatrixReadOnly ??= class {
-    m22 = 1;
-  } as unknown as typeof DOMMatrixReadOnly;
-  // jsdom has no DragEvent, so a drop would carry no pointer: one that is a mouse event, as a browser's is.
-  globalThis.DragEvent ??= class extends MouseEvent {} as unknown as typeof DragEvent;
-});
-
-/** The owner's example (spec §4.4) as a workflow the event service holds, beside 0.32.0's rules. */
-const CLIENT_ASKS = {
-  ...(rules[0] as Record<string, unknown>),
-  rule_id: 'client-asks',
-  version: 5,
-  state: 'active',
-};
-const CLIENT_ASKS_SHOW = [
-  {
-    ...((shows as Record<string, Record<string, unknown>[]>).invoices?.[1] ?? {}),
-    document: owner,
-    summary: null,
-  },
-];
-
-/** The rule editor's fake service, with the event service at 0.36.0 and the owner's workflow beside the rules. */
-function service() {
-  return editorBridge({
-    fixtures: {
-      version: (call: Call) => (call.kind === 'version' && call.product === 'events-daemon' ? '0.36.0' : '0.33.0'),
-      eventsRules: [...rules, CLIENT_ASKS],
-      eventsRuleShow: (call: Call) => {
-        const { ruleId } = call as Extract<Call, { kind: 'eventsRuleShow' }>;
-        return ruleId === 'client-asks' ? CLIENT_ASKS_SHOW : ((shows as Record<string, unknown[]>)[ruleId] ?? []);
-      },
-    },
-  });
-}
-
-async function openDesigner(ruleId: string): Promise<HTMLElement> {
-  const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
-  fireEvent.click(tab);
-  const card = await waitFor(() => {
-    const found = document.querySelector<HTMLElement>(`[data-rule="${ruleId}"]`);
-    if (found === null) throw new Error(`no card for ${ruleId}`);
-    return found;
-  });
-  fireEvent.click(card);
-  const page = await screen.findByRole('region', { name: `Rule ${ruleId}` });
-  fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
-  return screen.findByRole('region', { name: `Edit ${ruleId}` });
-}
+beforeAll(polyfillCanvas);
 
 /** A drag's data, as the palette writes it and the canvas reads it. */
 function dataTransfer(item: string) {

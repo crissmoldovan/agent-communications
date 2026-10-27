@@ -10,16 +10,27 @@
  * Nothing switches on until the person approves it there; the version that runs keeps running until then.
  */
 import { Button, Chip, Spinner } from '@cueplusplus/ui';
-import { useMemo, useState } from 'react';
-import { useAppData } from '../../data.tsx';
+import { useCallback, useMemo, useState } from 'react';
 import { useBridge } from '../../bridge-context.tsx';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
+import { useAppData } from '../../data.tsx';
 import { currentVersion, type RuleVersionView } from '../../events-rules.ts';
 import { useCall } from '../../hooks/use-call.ts';
+import { readLinear } from '../../integrations.ts';
 import { type Call, errorMessage } from '../../ipc.ts';
+import { useNavigate } from '../../navigation.tsx';
+import { readJudgeShow, readListedJudges } from '../../providers.ts';
 import { blocking, draftChecks } from '../../rule-editor/checks.ts';
 import { REVIEW_COPY } from '../../rule-editor/copy.ts';
-import { canonical, copyOf, isObject, type JsonObject, newRule, nextVersion } from '../../rule-editor/model.ts';
+import {
+  canonical,
+  copyOf,
+  isObject,
+  type JsonObject,
+  newRule,
+  nextVersion,
+  setJudge,
+} from '../../rule-editor/model.ts';
 import { knownTargets, readTargetVersions } from '../../rule-editor/submit.ts';
 import { designerChecks } from '../../workflows/checks.ts';
 import { FLOW_LIMIT_DEFAULTS, isEventSegment } from '../../workflows/flow.ts';
@@ -28,6 +39,7 @@ import type { EventsLists } from '../events/lists.ts';
 import { BackTo, Problem } from '../events/parts.tsx';
 import type { EditTarget } from '../events/RuleEditor.tsx';
 import { type PreparedReview, RuleReview } from '../events/RuleReview.tsx';
+import type { JudgeChoice, VisualContext } from '../events/RuleVisual.tsx';
 import { Designer, type DesignerContext } from './Designer.tsx';
 
 export const WORKFLOW_EDITOR_COPY = {
@@ -50,6 +62,11 @@ export const WORKFLOW_EDITOR_COPY = {
 } as const;
 
 const TARGETS: Call = { kind: 'eventsTargetsList' };
+const JUDGES: Call = { kind: 'judgesList' };
+const LINEAR: Call = { kind: 'integrationShow', integration: 'linear' };
+
+/** A judge version's key, `<id>@<version>`, as the pickers name it. */
+const judgeKey = (judge: { judgeId: string; version: number }) => `${judge.judgeId}@${judge.version}`;
 
 /** Every workflow document the app read, newest last: where a stored target's exact copy is found. */
 function documentsOf(lists: EventsLists): JsonObject[] {
@@ -127,17 +144,86 @@ export function WorkflowEditor({
   const [notice, setNotice] = useState<string | null>(null);
   const [review, setReview] = useState<PreparedReview | null>(null);
 
+  const navigate = useNavigate();
   const targetsRead = useCall<unknown>(TARGETS).result;
+  const judges = useCall<unknown>(JUDGES).result;
+  const linearRead = useCall<unknown>(LINEAR).result;
+  const linear = linearRead.state === 'ready' ? readLinear(linearRead.value) : null;
   const documents = useMemo(() => documentsOf(lists), [lists]);
+  // Every live judge `judges list` names is offered; the one chosen is embedded exactly as `judge show` gives its
+  // document, read once per version, as the rule editor does.
+  const [judgeDocuments, setJudgeDocuments] = useState<ReadonlyMap<string, JsonObject>>(() => new Map());
+  const [judgeReading, setJudgeReading] = useState(false);
+  const [judgeProblem, setJudgeProblem] = useState<string | null>(null);
+  const judgeChoices: JudgeChoice[] = useMemo(() => {
+    const listed = judges.state === 'ready' ? (readListedJudges(judges.value) ?? []) : [];
+    return listed
+      .filter((judge) => judge.revokedAt === null)
+      .map((judge) => ({
+        judgeId: judge.judgeId,
+        version: judge.version,
+        kind: judge.kind,
+        provider: judge.provider,
+        document: judgeDocuments.get(judgeKey(judge)) ?? null,
+      }));
+  }, [judgeDocuments, judges]);
+  const readJudge = useCallback(
+    async (choice: JudgeChoice): Promise<JsonObject | null> => {
+      if (choice.document !== null) return choice.document;
+      try {
+        const result = await bridge.cli({ kind: 'judgeShow', judgeId: choice.judgeId, version: choice.version });
+        const judge = result.status === 'ok' ? (readJudgeShow(result.data, choice) as JsonObject | null) : null;
+        if (judge !== null) setJudgeDocuments((before) => new Map(before).set(judgeKey(choice), judge));
+        return judge;
+      } catch {
+        return null;
+      }
+    },
+    [bridge],
+  );
   const context: DesignerContext = useMemo(() => {
     const listed = targetsRead.state === 'ready' ? readTargetVersions(targetsRead.value) : null;
+    const takenTargetIds = new Set(listed?.keys() ?? []);
     const webhooks = documents.flatMap((each) =>
       Array.isArray(each.targets)
         ? each.targets.filter((one): one is JsonObject => isObject(one) && one.kind === 'webhook')
         : [],
     );
-    return { names: lists.names, takenTargetIds: new Set(listed?.keys() ?? []), webhooks };
-  }, [documents, lists.names, targetsRead]);
+    const onEditAsText = () => undefined;
+    const visual: VisualContext = {
+      names: lists.names,
+      judges: judgeChoices,
+      onChooseJudge: (choice) => {
+        setJudgeProblem(null);
+        if (choice === null) {
+          setDocument((current) => setJudge(current, null));
+          return;
+        }
+        setJudgeReading(true);
+        void readJudge(choice).then((judge) => {
+          setJudgeReading(false);
+          if (judge === null) setJudgeProblem('That judge’s details could not be read.');
+          else setDocument((current) => setJudge(current, judge));
+        });
+      },
+      judgeReading,
+      judgeProblem,
+      linear,
+      takenTargetIds,
+      onEditAsText,
+      onIntegrations: navigate === null ? null : () => navigate({ screen: 'settings', section: 'integrations' }),
+    };
+    return {
+      names: lists.names,
+      takenTargetIds,
+      webhooks,
+      judges: judgeChoices,
+      readJudge,
+      linear,
+      visual,
+      onEditAsText,
+    };
+  }, [documents, judgeChoices, judgeProblem, judgeReading, linear, lists.names, navigate, readJudge, targetsRead]);
 
   const version = typeof document.version === 'number' ? document.version : 1;
   const base = saved ?? stored;

@@ -14,7 +14,6 @@
  */
 import '@xyflow/react/dist/style.css';
 import '@cueplusplus/ui/flow.css';
-import { Button, Chip, Panel } from '@cueplusplus/ui';
 import { FlowBackground, FlowControls, useFlowTheme } from '@cueplusplus/ui/flow';
 import {
   applyEdgeChanges,
@@ -27,9 +26,7 @@ import {
   useReactFlow,
 } from '@xyflow/react';
 import { type DragEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type { AccountNames } from '../../account-aliases.ts';
 import { useBridge } from '../../bridge-context.tsx';
-import { UntrustedText } from '../../components/UntrustedText.tsx';
 import type { JsonObject } from '../../rule-editor/model.ts';
 import {
   applyConnect,
@@ -38,17 +35,16 @@ import {
   type CanvasEdge,
   type CanvasNode,
   connectable,
-  GATE,
   moveNode,
   type Positions,
   toGraph,
 } from '../../workflows/canvas.ts';
 import { type DesignerProblem, designerChecks, problemsByStep } from '../../workflows/checks.ts';
-import { CANVAS_COPY } from '../../workflows/copy.ts';
 import { type DropContext, dropItem, PALETTE_MIME } from '../../workflows/palette.ts';
 import { readPositions, writePositions } from '../../workflows/positions.ts';
 import { Palette } from './Palette.tsx';
 import { BoxContext, GateNode, StepNode } from './StepNode.tsx';
+import { type SettingsContext, SettingsPanel } from './StepSettings.tsx';
 
 /** The box types the canvas draws: stable, as React Flow asks. */
 const NODE_TYPES = { step: StepNode, gate: GateNode } as const;
@@ -62,9 +58,7 @@ export const DESIGNER_COPY = {
 } as const;
 
 /** What the designer knows beside the document, for its palette and each step's settings. */
-export interface DesignerContext extends DropContext {
-  readonly names: AccountNames;
-}
+export interface DesignerContext extends DropContext, SettingsContext {}
 
 export interface DesignerProps {
   document: JsonObject;
@@ -279,52 +273,18 @@ function DesignerCanvas({ document, onChange, context, settings, readOnly = fals
       </section>
       <div className="flex min-w-0 flex-[1_1_18rem] flex-col gap-(--cue-space-3)">
         {settings === undefined ? (
-          <BasicSettings document={document} selected={selected} problems={problems} onChange={onChange} />
+          <SettingsPanel
+            document={document}
+            selected={selected}
+            problems={problems}
+            onChange={onChange}
+            onSelect={setSelected}
+            context={context}
+          />
         ) : (
           settings(selected, problems, setSelected)
         )}
       </div>
     </div>
-  );
-}
-
-/** The panel before each step has its own settings: what is selected, what is wrong with it, and Remove. */
-function BasicSettings({
-  document,
-  selected,
-  problems,
-  onChange,
-}: {
-  document: JsonObject;
-  selected: string | null;
-  problems: readonly DesignerProblem[];
-  onChange: (next: JsonObject) => void;
-}) {
-  const mine = problems.filter((problem) => problem.stepId === selected);
-  const isStep = selected !== null && !selected.startsWith('gate:') && selected !== GATE.keep;
-  return (
-    <Panel className="flex flex-col gap-(--cue-space-2) p-(--cue-space-4)">
-      {selected === null ? null : (
-        <h3 className="font-mono text-fg">
-          <UntrustedText text={selected} />
-        </h3>
-      )}
-      {mine.length === 0 ? null : (
-        <ul className="flex flex-col gap-(--cue-space-1)">
-          {mine.map((problem, index) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: the checks come in a fixed order for one document.
-            <li key={index} className="flex items-start gap-(--cue-space-2) text-fg">
-              <Chip tone="warn">!</Chip>
-              <UntrustedText text={problem.message} />
-            </li>
-          ))}
-        </ul>
-      )}
-      {isStep ? (
-        <Button size="sm" variant="ghost" onClick={() => onChange(applyDelete(document, selected))}>
-          {CANVAS_COPY.remove}
-        </Button>
-      ) : null}
-    </Panel>
   );
 }
