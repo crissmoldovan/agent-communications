@@ -5,8 +5,9 @@
  * reminded, or only shown under the Queue's Not taken.
  *
  * Each change is core's `taking <account> …` through the one change flow (`change-flow.tsx`): requiring a take, saying
- * nothing and the reminder apply at once; letting sessions act without taking, and a 👀 on taking, loosen, and are
- * approved in the app — in Terminal where nothing attests the app. The 👀 is never posted by this setting itself: it is
+ * nothing, a shorter wait and a reminder apply at once; letting sessions act without taking, a 👀 on taking, a longer
+ * wait and no reminder loosen, and are approved in the app — in Terminal where nothing attests the app. Core judges a
+ * wait by the one in force, so a change of it always carries the words for asking. The 👀 is never posted by this setting itself: it is
  * made only under a standing approval the person made at their terminal (§7), and the line beside it names the one it
  * would use. The reminder is the event service's, and says so when it is not running.
  */
@@ -131,15 +132,29 @@ function wordsFor(view: TakingSettingView, change: TakingSetting, standing: stri
             },
           };
     case 'unclaimed':
+      // A longer wait lets a message nobody took go unnoticed for longer, so core asks first (security review of
+      // 0.35.0); a shorter one applies at once.
       return {
         applied: `Saved: in ${account}, a message nobody takes within ${waitWords(change.minutes)} counts as not taken${view.unclaimed.notify ? ', and you’re reminded' : ''}.`,
+        asking: {
+          title: `Wait ${waitWords(change.minutes)} before a message nobody takes counts, in ${account}? Approve it`,
+          body: `A message no session takes would wait ${waitWords(change.minutes)}, not ${waitWords(view.unclaimed.afterMinutes)}, before it shows under Queue → Not taken${view.unclaimed.notify ? ' and you’re reminded' : ''}.`,
+          approved: `Approved. In ${account}, a message nobody takes within ${waitWords(change.minutes)} counts as not taken.`,
+        },
       };
     case 'notify':
-      return {
-        applied: change.on
-          ? `Saved: in ${account}, you’re reminded of a message nobody takes within ${waitWords(view.unclaimed.afterMinutes)}.`
-          : `Saved: in ${account}, a message nobody takes waits under Queue → Not taken, with no notice.`,
-      };
+      return change.on
+        ? {
+            applied: `Saved: in ${account}, you’re reminded of a message nobody takes within ${waitWords(view.unclaimed.afterMinutes)}.`,
+          }
+        : {
+            applied: `Saved: in ${account}, a message nobody takes waits under Queue → Not taken, with no notice.`,
+            asking: {
+              title: `Stop reminding you of a message nobody takes, in ${account}? Approve it`,
+              body: 'No notice would come on this Mac: a message no session takes would only wait under Queue → Not taken, and Messages’ Nobody took it.',
+              approved: `Approved. In ${account}, a message nobody takes waits under Queue → Not taken, with no notice.`,
+            },
+          };
   }
 }
 

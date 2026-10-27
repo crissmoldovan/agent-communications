@@ -1238,9 +1238,10 @@ pub enum Call {
     /// Core `taking` (0.35.0): each account's taking settings. Read-only; it takes no argument.
     Taking {},
     /// Core `taking <account> <option> <word> [--app-approval <id>]` (0.35.0): one change to one account's settings.
-    /// Letting sessions act without taking, and a 👀 on taking, loosen: without `appApproval` core answers with their
-    /// preview; with it, the person approved in the app the change the app prepared (`connections::run_app_approval`),
-    /// once. Every other change applies at once, and is refused with an approval (`taking::change_words`).
+    /// Letting sessions act without taking, a 👀 on taking, a longer wait and no reminder loosen: without `appApproval`
+    /// core answers with their preview; with it, the person approved in the app the change the app prepared
+    /// (`connections::run_app_approval`), once. Every other change applies at once, and is refused with an approval
+    /// (`taking::change_words`).
     TakingChange {
         account: AccountName,
         change: TakingSetting,
@@ -2137,7 +2138,7 @@ impl Call {
                 change,
                 app_approval: None,
                 ..
-            } if change.loosens()
+            } if change.can_loosen()
         ) || self.prepares_search_change()
             || self.prepares_connection_change()
     }
@@ -3306,6 +3307,9 @@ mod tests {
                 json!({ "kind": "labelRuleRemove", "account": "example/slack", "as": "me" }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "require", "on": false } }),
                 json!({ "kind": "takingChange", "account": "example/slack", "change": { "setting": "acknowledge", "acknowledge": "eyes" } }),
+                // A wait, and no reminder, can loosen too (security review of 0.35.0): core judges the wait in force.
+                json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "unclaimed", "minutes": 15 } }),
+                json!({ "kind": "takingChange", "account": "example/gmail", "change": { "setting": "notify", "on": false } }),
                 json!({ "kind": "searchOn" }),
                 json!({ "kind": "searchAccountsAdd", "account": "acme/slack" }),
                 json!({ "kind": "searchModelSet", "address": "http://127.0.0.1:11434", "model": "qwen3-embedding:0.6b" }),

@@ -475,7 +475,9 @@ has each message across every window, and ending, giving or keeping one. [More](
 
 With the take required, the event service offers each message a rule delivers to a lane or a session to that window:
 no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is posted,
-and the window still takes it itself — its pointer or prompt says until when. The event service never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
+and the window still takes it itself — its pointer or prompt says until when. A window that is never woken for it holds
+it only for the account's reminder time; then the offer lapses, and the message counts as not taken. The event service
+never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
 reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one handed back as
 needing you at once; the notice never says what they are, and the app lists them under Not taken.
 

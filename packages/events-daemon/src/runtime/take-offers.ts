@@ -4,8 +4,11 @@ import {
   isClaudeCodeSessionId,
   NOTICE_TITLE,
   type Notifier,
+  offerWaitMs,
+  offerWaitsUntil,
   readTakingSettings,
   TAKE_OFFER_MS,
+  TAKE_OFFER_WAIT_MS,
   type TakeHolder,
   type TakeLine,
   type TakeMessage,
@@ -29,15 +32,17 @@ import { parseEventSource } from './event-source.ts';
  *   be written never fails, delays past its write, or undoes a delivery. An offer is exclusive while the item waits for
  *   its window, then for `TAKE_OFFER_MS` after the window was handed it — woken for it, or its prompt posted — and then it
  *   lapses, open again. An offer whose item no longer waits (closed, gone, its lane bound to another window) lapses at
- *   the next sweep. Only accounts that ask a session to take a message first (`taking.required`) are offered anything:
+ *   the next sweep, and one whose window is never woken for it lapses by itself at the account's reminder window
+ *   (core's `offerWait`; security review of 0.35.0, M5) — a wake after that names no offer. Only accounts that ask a session to take a message first (`taking.required`) are offered anything:
  *   with it off, an offer would refuse other sessions' acts, and nothing changes until the person turns taking on (§14).
  * - **The words the session reads.** The prompt's fixed frame and the lane's pointer carry one fixed line of ours with
  *   the offer's clock time — only once the offer is known to be written, or about to be with a time already chosen.
  * - **The "nobody took it" sweep (§8), once a minute.** For each account with taking required, every
  *   `gmail.message.received`, `slack.message.posted` and `resend.email.received` event a rule matched and delivered to a
  *   lane, a session or the Queue, that has waited `unclaimed.afterMinutes` with no take, no done and no live offer: the
- *   clock starts when the event service saw it, and again when it was last handed back, released or lapsed; a
- *   `needs-the-person` hand-back counts at once. With `unclaimed.notify` on and collection on, one content-free notice per
+ *   clock starts when the event service saw it, and again when it was last handed back, released, or a take of it
+ *   lapsed — an offer that ran out counts from when it was made (`reopenedLine`), so a lane offer its window was never
+ *   woken for counts as soon as it lapses; a `needs-the-person` hand-back counts at once. With `unclaimed.notify` on and collection on, one content-free notice per
  *   sweep per account, through core's notifier, for the messages not yet reminded of. It writes the `ended` and
  *   `expired` lines first (T3). It makes no queue item: the app's Not taken tab shows them (§8, "Put it in the Queue").
  * - **Nothing a sender wrote** is read here: ids from an event's dedupe key, the rule's and the delivery's ids, the
@@ -59,6 +64,33 @@ export const TAKE_SWEEP_LOOKBACK_MS: number = 24 * 60 * 60_000;
 const TAKEABLE_SQL = TAKEABLE_EVENT_TYPES.map((type) => `'${type}'`).join(', ');
 /** The lines that put a message back to open: "nobody took it" counts again from each (§6). */
 const REOPENED: ReadonlySet<TakeLine['kind']> = new Set(['handed-back', 'released', 'expired', 'ended']);
+/** The lines that set what state a record is in; an acknowledgement does not. */
+const STATE_LINES: ReadonlySet<TakeLine['kind']> = new Set([...REOPENED, 'offered', 'given', 'taken', 'kept', 'done']);
+
+/**
+ * The line after which a message was last open to every session again, for "nobody took it" (§8): a hand-back, the
+ * person's release, or a take or an offer that lapsed. An offer that ran out counts from when it was made, not from when
+ * it ran out (security review of 0.35.0, M5): being offered to one window is no session taking it, so the clock runs on
+ * through the offer — and a lane offer its window was never woken for counts as not taken as soon as it lapses.
+ */
+export function reopenedLine(history: readonly TakeLine[]): TakeLine | undefined {
+  const index = history.findLastIndex((line) => REOPENED.has(line.kind));
+  if (index < 0) return undefined;
+  const line = history[index] as TakeLine;
+  if (line.kind !== 'expired') return line;
+  for (let before = index - 1; before >= 0; before -= 1) {
+    const earlier = history[before] as TakeLine;
+    if (earlier.kind === 'offered' || earlier.kind === 'given') return { ...line, at: earlier.at };
+    if (STATE_LINES.has(earlier.kind)) break;
+  }
+  return line;
+}
+
+/** When a lane offer still waiting for its window lapses by itself (M5), in milliseconds; never, for any other record. */
+function waitingLapse(record: TakeRecord, waitMs: number): number {
+  const until = offerWaitsUntil(record, waitMs);
+  return until === null ? Number.POSITIVE_INFINITY : Date.parse(until);
+}
 
 /** An offer a delivery makes: the message, the window, the rule and delivery it came with, and until when. */
 export interface PlannedOffer {
@@ -134,6 +166,8 @@ interface LaneEntry {
   readonly message: TakeMessage;
   readonly delivery: string;
   readonly window: { readonly sessionId: string | null; readonly key: string | null };
+  /** When the offer lapses by itself if its window is not woken for it first (M5). */
+  readonly lapsesAt: number;
 }
 
 interface DeliveryMessageRow {
@@ -282,7 +316,8 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
       const found = this.#laneItem(deliveryId);
       if (found === null) return;
       const { row, binding, message } = found;
-      if (!(await this.#required(message.accountId))) return;
+      const config = await this.#config.load();
+      if (!takingFor(config, message.accountId).required) return;
       const window: TakeWindow = {
         sessionId: binding.session_id,
         key: binding.activity_key,
@@ -307,6 +342,7 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
           message,
           delivery: deliveryId,
           window: { sessionId: binding.session_id, key: binding.activity_key },
+          lapsesAt: waitingLapse(record, offerWaitMs(config, message.accountId)),
         },
         row.appended_at,
       );
@@ -323,6 +359,8 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
     const entry = this.#lane.get(itemId);
     if (entry === undefined || !sameWindow(entry.window, window)) return null;
     this.#lane.delete(itemId);
+    // M5: woken only after the offer lapsed by itself — nothing is offered any more, and the pointer names nothing.
+    if (at >= entry.lapsesAt) return null;
     const until = iso(at + TAKE_OFFER_MS);
     void this.#takes.handOffer(entry.message, entry.delivery, until).catch(() => undefined);
     return until;
@@ -361,7 +399,8 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
 
   /**
    * A lane offer just written: its window may have been woken for the item while it was written — the wake then named
-   * no offer — so its fifteen minutes start from that wake; otherwise the next wake starts them.
+   * no offer — so its fifteen minutes start from that wake; otherwise the next wake starts them. A wake only after the
+   * offer lapsed by itself (M5) starts nothing.
    */
   #afterLaneOffer(itemId: string, entry: LaneEntry, offeredAfter: number): void {
     const woken = this.#firstWake(itemId, offeredAfter);
@@ -370,6 +409,7 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
       return;
     }
     this.#lane.delete(itemId);
+    if (woken >= entry.lapsesAt) return;
     void this.#takes.handOffer(entry.message, entry.delivery, iso(woken + TAKE_OFFER_MS)).catch(() => undefined);
   }
 
@@ -440,6 +480,7 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
   async reconcile(records?: readonly TakeRecord[]): Promise<number> {
     let lapsed = 0;
     const listed = records ?? (await this.#records());
+    const config = await this.#config.load().catch(() => null);
     for (const record of listed) {
       const delivery = deliveryOf(record);
       // An entry whose offer was since taken, handed back, released or handed over is not waiting any more.
@@ -466,7 +507,15 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
       const offeredAt = Date.parse(record.history.findLast((line) => line.kind === 'offered')?.at ?? '');
       this.#afterLaneOffer(
         found.row.item_id,
-        { message: record.message, delivery, window: { sessionId: offer.to.sessionId, key: offer.to.key } },
+        {
+          message: record.message,
+          delivery,
+          window: { sessionId: offer.to.sessionId, key: offer.to.key },
+          lapsesAt: waitingLapse(
+            record,
+            config === null ? TAKE_OFFER_WAIT_MS : offerWaitMs(config, record.message.accountId),
+          ),
+        },
         Number.isFinite(offeredAt) ? Math.min(offeredAt, found.row.appended_at) : found.row.appended_at,
       );
     }
@@ -578,7 +627,7 @@ export class TakeOffers implements SessionOfferPort, LaneOfferPort {
         // as held, as the store reads it.
         if (record !== undefined && record.state !== 'open') continue;
         if (record === undefined && listed.unreadable.has(`${message.accountId}/${recordFileOf(key)}`)) continue;
-        const reopened = record?.history.findLast((line) => REOPENED.has(line.kind));
+        const reopened = record === undefined ? undefined : reopenedLine(record.history);
         const reopenedAt = reopened === undefined ? Number.NaN : Date.parse(reopened.at);
         const clock = Number.isFinite(reopenedAt) ? Math.max(event.observed_at, reopenedAt) : event.observed_at;
         if (clock < now - TAKE_SWEEP_LOOKBACK_MS) continue;

@@ -340,6 +340,73 @@ describe('Settings → Taking messages', () => {
     expect(bridge.calls.map((call) => call.command)).not.toContain('openInTerminal');
   });
 
+  it('a longer wait, and no reminder, are approved in the app; a shorter wait applies at once', SLOW, async () => {
+    // Security review of 0.35.0 (LOW): each quieted the person's oversight of messages nobody took, at once.
+    const bridge = bridgeAt('0.35.0', {
+      takingChange: (call) => {
+        const { change, appApproval } = call as Extract<Call, { kind: 'takingChange' }>;
+        const loosens =
+          (change.setting === 'unclaimed' && change.minutes > 15) || (change.setting === 'notify' && !change.on);
+        return loosens && appApproval === undefined
+          ? pending('In example/gmail, a message nobody takes within 60 minutes counts as not taken')
+          : ok({
+              ...taking,
+              change: change.setting === 'notify' ? 'notify' : 'afterMinutes',
+              changed: true,
+              note: null,
+            });
+      },
+    });
+    const section = await settings(bridge);
+    const gmail = within(section).getByRole('region', { name: 'example/gmail' });
+    const choose = async (name: string, option: string) => {
+      fireEvent.click(within(gmail).getByRole('combobox', { name }));
+      const item = await screen.findByRole('option', { name: option });
+      fireEvent.pointerMove(item);
+      fireEvent.mouseMove(item);
+      fireEvent.click(item);
+    };
+    await choose('How long, in example/gmail', '1 hour');
+    const longer = await within(gmail).findByRole('region', {
+      name: 'Wait 1 hour before a message nobody takes counts, in example/gmail? Approve it',
+    });
+    fireEvent.click(within(longer).getByRole('button', { name: 'Approve' }));
+    expect(
+      await within(gmail).findByText(
+        'Approved. In example/gmail, a message nobody takes within 1 hour counts as not taken.',
+      ),
+    ).toBeTruthy();
+    await choose('Then, in example/gmail', TAKING_COPY.queue);
+    const silent = await within(gmail).findByRole('region', {
+      name: 'Stop reminding you of a message nobody takes, in example/gmail? Approve it',
+    });
+    fireEvent.click(within(silent).getByRole('button', { name: 'Approve' }));
+    expect(
+      await within(gmail).findByText(
+        'Approved. In example/gmail, a message nobody takes waits under Queue → Not taken, with no notice.',
+      ),
+    ).toBeTruthy();
+    await choose('How long, in example/gmail', '5 minutes');
+    expect(
+      await within(gmail).findByText(
+        'Saved: in example/gmail, a message nobody takes within 5 minutes counts as not taken, and you’re reminded.',
+      ),
+    ).toBeTruthy();
+    expect(asked(bridge, 'takingChange')).toEqual([
+      { kind: 'takingChange', account: 'example/gmail', change: { setting: 'unclaimed', minutes: 60 } },
+      {
+        kind: 'takingChange',
+        account: 'example/gmail',
+        change: { setting: 'unclaimed', minutes: 60 },
+        appApproval: ID,
+      },
+      { kind: 'takingChange', account: 'example/gmail', change: { setting: 'notify', on: false } },
+      { kind: 'takingChange', account: 'example/gmail', change: { setting: 'notify', on: false }, appApproval: ID },
+      { kind: 'takingChange', account: 'example/gmail', change: { setting: 'unclaimed', minutes: 5 } },
+    ]);
+    expect(bridge.calls.map((call) => call.command)).not.toContain('openInTerminal');
+  });
+
   it('an older core gets the update line, and nothing of taking is read', SLOW, async () => {
     const bridge = bridgeAt('0.34.0');
     renderApp(bridge, { screen: 'settings' });

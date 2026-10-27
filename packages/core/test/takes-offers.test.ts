@@ -5,6 +5,7 @@ import { CommsError } from '../src/errors.ts';
 import {
   TAKE_LEASE_MS,
   TAKE_OFFER_MS,
+  TAKE_OFFER_WAIT_MS,
   type TakeAct,
   type TakeHolder,
   type TakeMessage,
@@ -250,6 +251,60 @@ test('an offer whose item no longer waits lapses at once — only that delivery�
   });
 });
 
+test('an offer its window is never handed lapses by itself: at the account’s reminder window, or after an hour', async () => {
+  // Security review of 0.35.0, M5: a lane offer had no end time until its window was woken, so a window that had gone
+  // kept every other session off the message for as long as the queue kept its item — still refused days later.
+  const DAY = 24 * 60 * 60_000;
+  {
+    const { store, advance, at } = storeAt();
+    const start = at();
+    await store.offer(MESSAGE, DAVID_WINDOW, BY, null);
+    advance(TAKE_OFFER_WAIT_MS - 1);
+    assert.equal((await refusal(store.take(MESSAGE, BOB))).details?.reason, 'OFFERED', 'within the hour, it holds');
+    advance(6 * DAY);
+    // The sweep writes it down, at the time it lapsed; then anyone may take it.
+    assert.deepEqual(await store.lapse(), { ended: 0, expired: 1 });
+    const lapsed = await store.read(MESSAGE);
+    assert.ok(lapsed !== null && lapsed !== 'unreadable');
+    assert.equal(lapsed.state, 'open');
+    assert.deepEqual(lapsed.history.at(-1), {
+      at: new Date(Date.parse(start) + TAKE_OFFER_WAIT_MS).toISOString(),
+      kind: 'expired',
+      by: 'service',
+      windowKey: DAVID_WINDOW.key,
+    });
+    assert.equal((await store.take(MESSAGE, BOB)).view?.by, 'you');
+  }
+  {
+    // Where the account's reminder window is known — core reads it from the configuration — the offer lasts that long.
+    const asked: string[] = [];
+    const { store, advance, at } = storeAt('2026-10-26T10:00:00.000Z', {
+      offerWait: async (accountId) => {
+        asked.push(accountId);
+        return 15 * 60_000;
+      },
+    });
+    const start = at();
+    await store.offer(MESSAGE, DAVID_WINDOW, BY, null);
+    advance(15 * 60_000 - 1);
+    assert.equal((await refusal(store.gate(MESSAGE, BOB, ACT, { required: false }))).details?.reason, 'OFFERED');
+    advance(1);
+    assert.deepEqual(await store.gate(MESSAGE, BOB, ACT, { required: false }), { held: false, line: null });
+    const lapsed = await store.read(MESSAGE);
+    assert.ok(lapsed !== null && lapsed !== 'unreadable');
+    assert.equal(lapsed.state, 'open');
+    assert.equal(lapsed.history.at(-1)?.at, new Date(Date.parse(start) + 15 * 60_000).toISOString());
+    assert.ok(asked.includes(ACCOUNT));
+    // Handed over before then, it lasts its fifteen minutes from the hand-over instead.
+    const second = { ...BY, delivery: 'second-delivery' };
+    await store.offer(OTHER_MESSAGE, DAVID_WINDOW, second, null);
+    advance(10 * 60_000);
+    await store.handOffer(OTHER_MESSAGE, second.delivery, new Date(Date.parse(at()) + TAKE_OFFER_MS).toISOString());
+    advance(10 * 60_000);
+    assert.equal((await refusal(store.take(OTHER_MESSAGE, BOB))).details?.reason, 'OFFERED', 'handed over');
+  }
+});
+
 test('an offer names its window, rule and delivery as ids; anything else is refused before a file is named', async () => {
   const { store } = storeAt();
   const nobody: TakeWindow = { sessionId: null, key: null, parent: null, folder: null, client: null };
@@ -280,10 +335,11 @@ test('the sweep writes every lapse down, at the time it happened: ended, expired
   await store.take(OTHER_MESSAGE, BOB);
   await store.offer(third, DAVID_WINDOW, BY, null);
   await store.handOffer(third, BY.delivery, new Date(Date.parse(start) + TAKE_OFFER_MS).toISOString());
-  await store.offer(fourth, DAVID_WINDOW, { ...BY, delivery: 'waiting-delivery' }, null);
   await store.keep(kept, TERMINAL);
   advance(10 * 60_000);
   await store.take(MESSAGE, DAVID);
+  // Offered ten minutes on: still within the hour a waiting offer lasts, at the sweep below.
+  await store.offer(fourth, DAVID_WINDOW, { ...BY, delivery: 'waiting-delivery' }, null);
   // Nothing has lapsed yet.
   assert.deepEqual(await store.lapse(), { ended: 0, expired: 0 });
   gone = true;

@@ -8,22 +8,26 @@
  *   wins however many processes race for it, and written whole with `writeFileAtomic`.
  * - **Who (T2):** a take is held by a session — an agent window — worked out by the server or the command itself from
  *   core's activity session and `CLAUDE_CODE_SESSION_ID` (`takerIdentity`), and never from an argument. A command at the
- *   person's own terminal, which joined no agent window and has no session id, is the person: never held to taking.
+ *   person's own terminal, which joined no agent window and has no session id, is the person: never held to taking. The
+ *   same command in a shell a known coding agent marks is not the person, and nothing it does can be matched to a take
+ *   (`TakeUnmatched`): it is held to every gate, and takes nothing (security review of 0.35.0, M4).
  * - **What ends a take (T3):** a hand-back, the person's release, or a lapse — `ended` when the holder's parent is gone,
  *   `expired` sixty minutes after the holder's last act on the message, unless an approval prepared under the take
  *   still waits. Worked out by whoever meets the record, and written down under the lock by the next writer, at the
  *   time it happened.
  * - **Offers (T4):** a message offered to one window is reserved for it; it must still take it. The person's **Give
  *   to…** offers one for fifteen minutes; a rule's delivery offers one through the event service (`offer`), while its
- *   item waits for the window and for fifteen minutes after the window was handed it (`handOffer`). A delivery's offer
- *   never takes a message from anyone, and the event service never writes `taken`.
+ *   item waits for the window and for fifteen minutes after the window was handed it (`handOffer`) — and one its window
+ *   is never handed lapses by itself, at the account's reminder window (`offerWait`), or after an hour (security review
+ *   of 0.35.0, M5). A delivery's offer never takes a message from anyone, and the event service never writes `taken`.
  * - **What an agent learns (T7, T8):** closed words — `you`, `another session`, `the person`, `done`, and the closed
  *   hand-back reasons. Never another session's folder, client, key or session id, and never a hand-back's note, which an
  *   agent wrote and may have copied a sender's words into: notes are the person's, shown enveloped.
  * - **Nothing a sender wrote is stored (§4):** ids and closed words only, every record rebuilt field by field on read and
  *   on write, so a field this release does not know never survives a write.
  * - **Retention:** a record is deleted thirty days after it last changed, once a day, by the first process that writes
- *   one; an account no longer connected loses its folder then too.
+ *   one; an account no longer connected loses its folder then too. Past it, a record is read as none wherever it is
+ *   met — a done and the person's keep included — whether or not a prune has run since (security review of 0.35.0).
  *
  * Taking guards against two sessions acting on one message, not against what is sent: every act still needs the
  * behaviour rules, the send policy and the person's approval. And it is a speed bump, not a boundary — every process
@@ -42,9 +46,11 @@ import {
   type SessionIdentityOptions,
   sessionIdentity,
 } from './activity.ts';
+import { agentMarker } from './cli-runtime.ts';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
+import { MCP_SERVER_MARKER, mcpServerOf } from './mcp-marker.ts';
 import { wrapUntrusted } from './untrusted.ts';
 
 // ── The vocabulary ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -105,6 +111,11 @@ export const TAKE_LEASE_MS: number = 60 * 60 * 1000;
  * from when its window was handed the message.
  */
 export const TAKE_OFFER_MS: number = 15 * 60 * 1000;
+/**
+ * M5: how long a delivery's offer waits for its window to be handed it, where the account's reminder window is not
+ * known (`TakeStoreOptions.offerWait`): an hour, as a take's lease. A window that never wakes holds the message no longer.
+ */
+export const TAKE_OFFER_WAIT_MS: number = 60 * 60 * 1000;
 /** §4: a record is deleted this many days after it last changed. */
 export const TAKE_RETENTION_DAYS = 30;
 /** §4: the newest lines of a record's history kept. */
@@ -198,10 +209,34 @@ export interface TakePerson {
 }
 
 /**
- * Who is acting: an agent session, or — `null` — the person at their own terminal, never held to taking (T2, T6). A
- * command an agent runs in its shell joins its window, and is that session.
+ * An agent's own shell that is no session (security review of 0.35.0, M4): a command that joined no agent window and
+ * has no Claude Code session id, run where a known coding agent's marker is set (`agentMarker`) or inside an MCP
+ * server's process. It is not the person, so every gate holds for it; and nothing it does can be matched to a take —
+ * each command is a process of its own — so it holds nothing, is offered nothing and takes nothing. Where a take is
+ * required it acts on no message, and is told why.
  */
-export type TakeCaller = TakeHolder | null;
+export interface TakeUnmatched {
+  readonly unmatched: true;
+  /** What says an agent runs it: the marker's name — `CODEX_SANDBOX`, `CLAUDECODE` — or `AGENTCOMMS_MCP_SERVER`. */
+  readonly marker: string;
+}
+
+/**
+ * Who is acting: an agent session; an agent's shell that is no session (`TakeUnmatched`); or — `null` — the person at
+ * their own terminal, never held to taking (T2, T6). A command an agent runs in its shell joins its window, and is that
+ * session.
+ */
+export type TakeCaller = TakeHolder | TakeUnmatched | null;
+
+/** Whether a caller is an agent's shell that is no session (M4). */
+export function isUnmatched(caller: TakeCaller | undefined): caller is TakeUnmatched {
+  return typeof caller === 'object' && caller !== null && 'unmatched' in caller && caller.unmatched === true;
+}
+
+/** The session a caller is, when a take can be matched to it: neither the person nor an agent's shell that is none. */
+function sessionOf(caller: TakeCaller): TakeHolder | null {
+  return caller === null || isUnmatched(caller) ? null : caller;
+}
 
 /** The window an offer reserves a message for: by its Claude Code session id, its activity key, or both (T4). */
 export interface TakeWindow {
@@ -214,7 +249,10 @@ export interface TakeWindow {
 
 export interface TakeOffer {
   readonly to: TakeWindow;
-  /** When it lapses; null while the item a delivery's offer came with still waits for the window. */
+  /**
+   * When it lapses; null while the item a delivery's offer came with still waits for the window — and then it lapses
+   * by itself once it has waited the account's reminder window, or an hour (`offerWaitsUntil`, M5).
+   */
   readonly until: string | null;
   readonly by: { readonly rule: string; readonly delivery: string } | TakePerson;
 }
@@ -498,7 +536,8 @@ export function offeredTo(window: TakeWindow, caller: TakeHolder): boolean {
 }
 
 function holdsIt(record: TakeRecord, caller: TakeCaller): boolean {
-  return caller !== null && record.holder !== null && !isPerson(record.holder) && sameSession(record.holder, caller);
+  const session = sessionOf(caller);
+  return session !== null && record.holder !== null && !isPerson(record.holder) && sameSession(record.holder, session);
 }
 
 /** A session as a take holds it, from the activity session it was worked out as and its Claude Code session id. */
@@ -523,8 +562,11 @@ export function claudeCodeSessionId(env: NodeJS.ProcessEnv): string | null {
 export interface TakerIdentityOptions {
   /** The environment `CLAUDE_CODE_SESSION_ID` is read from; the process's own by default. */
   readonly env?: NodeJS.ProcessEnv | undefined;
-  /** The MCP connection's own session id, where its transport has one (`SessionIdentityOptions.connection`). */
-  readonly connection?: string | undefined;
+  /**
+   * The MCP transport's own session id, where it has one (`SessionIdentityOptions.transportSession`): mixed into the
+   * key, so two transport sessions through one parent are two takers.
+   */
+  readonly transportSession?: string | undefined;
   /** For a test: the activity session, worked out by the test. */
   readonly identity?: (() => Promise<ActivitySession>) | undefined;
   /** For a test: the seams `sessionIdentity` takes. */
@@ -537,7 +579,8 @@ export interface TakerIdentityOptions {
  * read alone until now. Never from an argument.
  *
  * `null` for the person: a command that joined no agent window and has no session id, at their own terminal. They are
- * never held to taking (T6). A server is never the person.
+ * never held to taking (T6). A server is never the person, and neither is that same command where a known coding
+ * agent's marker is set, or inside an MCP server's process: it is `TakeUnmatched` (M4), held to every gate.
  */
 export async function takerIdentity(
   core: { readonly activity: SessionIdentityOptions['log'] },
@@ -545,16 +588,21 @@ export async function takerIdentity(
   clientInfo?: ClientInfo | undefined,
   options: TakerIdentityOptions = {},
 ): Promise<TakeCaller> {
-  const sessionId = claudeCodeSessionId(options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const sessionId = claudeCodeSessionId(env);
   const session =
     options.identity === undefined
       ? await sessionIdentity(surface, clientInfo, {
           ...options.session,
           log: core.activity,
-          ...(options.connection === undefined ? {} : { connection: options.connection }),
+          ...(options.transportSession === undefined ? {} : { transportSession: options.transportSession }),
         })
       : await options.identity();
-  if (surface === 'cli' && !session.grouped && sessionId === null) return null;
+  if (surface === 'cli' && !session.grouped && sessionId === null) {
+    // M4: no window, no session id — the person, unless an agent's marker, or an MCP server's, says otherwise.
+    const marker = agentMarker(env) ?? (mcpServerOf(env) === undefined ? null : MCP_SERVER_MARKER);
+    return marker === null ? null : { unmatched: true, marker };
+  }
   const caller = holderOfSession(session, sessionId);
   // A command that joined no window names the process above it — the shell it ran in, which ends as soon as it has —
   // not the window's: it holds no parent, and its take lapses by its lease alone.
@@ -644,7 +692,8 @@ export function takenViewOf(record: TakeRecord | null, caller: TakeCaller): Take
       return handedBack.length > 0 ? { state: 'open', ...back } : null;
     case 'offered': {
       const offer = record.offer as TakeOffer;
-      const mine = caller !== null && offeredTo(offer.to, caller);
+      const session = sessionOf(caller);
+      const mine = session !== null && offeredTo(offer.to, session);
       return { state: 'offered', offered: { to: mine ? 'you' : 'another session', until: offer.until }, ...back };
     }
     default: {
@@ -699,6 +748,38 @@ export function takeRequired(act: TakeAct, offeredUntil?: string | null | undefi
   );
 }
 
+/**
+ * M4: `TAKE_REQUIRED` for an agent's shell that is no session — it cannot take the message, so it is told why, and where
+ * it can act on it instead.
+ */
+export function unmatchedTakeRequired(act: TakeAct, caller: TakeUnmatched): CommsError {
+  return new CommsError(
+    'TAKE_REQUIRED',
+    `${act.account} asks a session to take a message before acting on it, and this command runs in an agent’s shell that joined no agent window and has no Claude Code session id, so no take can be matched to it`,
+    {
+      hint: `Act on ${act.shown} through ${act.account}’s tools over MCP, in the agent’s window, taking it there first; or leave it for the person.`,
+      details: { reason: 'NO_SESSION', act: act.act, message: act.shown, marker: caller.marker },
+    },
+  );
+}
+
+/** M4: a take step from an agent's shell that is no session: a take made there could be matched to nothing it does next. */
+export function unmatchedTakesNothing(caller: TakeUnmatched): CommsError {
+  return new CommsError(
+    'USAGE',
+    'this command runs in an agent’s shell that joined no agent window and has no Claude Code session id, so a take made here could be matched to nothing it does next',
+    {
+      hint: 'Take it with this channel’s take tool over MCP, in the agent’s window; or leave it for the person.',
+      details: { reason: 'NO_SESSION', marker: caller.marker },
+    },
+  );
+}
+
+/** `TAKE_REQUIRED` for this caller: a session that has not taken the message, or an agent's shell that can take none. */
+function requiredOf(act: TakeAct, caller: TakeHolder | TakeUnmatched): CommsError {
+  return isUnmatched(caller) ? unmatchedTakeRequired(act, caller) : takeRequired(act);
+}
+
 const ELSEWHERE_HINT = 'Leave it. The person can give it to this session in Agent Comms → Messages.';
 
 /** §6: `TAKEN_ELSEWHERE` — someone else has this message. It never names the other session (T7). */
@@ -726,7 +807,8 @@ function elsewhere(record: TakeRecord, caller: TakeCaller): CommsError | null {
       return null;
     case 'offered': {
       const offer = record.offer as TakeOffer;
-      return caller !== null && offeredTo(offer.to, caller) ? null : takenElsewhere('OFFERED', offer.until);
+      const session = sessionOf(caller);
+      return session !== null && offeredTo(offer.to, session) ? null : takenElsewhere('OFFERED', offer.until);
     }
     default:
       if (isPerson(record.holder)) return takenElsewhere('PERSON');
@@ -753,6 +835,24 @@ export interface TakeStoreOptions {
   readonly platform?: NodeJS.Platform | undefined;
   /** The ids of every connected account, for the daily prune to drop the folders of the rest. */
   readonly accountIds?: (() => Promise<ReadonlySet<string> | null>) | undefined;
+  /**
+   * M5: how long a delivery's offer waits for its window to be handed it in an account, in milliseconds: the account's
+   * reminder window (`unclaimed.afterMinutes`), as core reads it from the configuration. Left out, or failing, an hour
+   * (`TAKE_OFFER_WAIT_MS`).
+   */
+  readonly offerWait?: ((accountId: string) => Promise<number>) | undefined;
+}
+
+/**
+ * M5: when a delivery's offer still waiting for its window lapses by itself — `waitMs` after it was made — or null for
+ * any other record: an offer with a time lapses at that time, and the person's always has one.
+ */
+export function offerWaitsUntil(record: TakeRecord, waitMs: number): string | null {
+  if (record.state !== 'offered' || record.offer === null || record.offer.until !== null) return null;
+  if ('person' in record.offer.by) return null;
+  const made = Date.parse(record.history.findLast((line) => line.kind === 'offered')?.at ?? record.updatedAt);
+  const wait = Number.isFinite(waitMs) && waitMs > 0 ? waitMs : TAKE_OFFER_WAIT_MS;
+  return Number.isFinite(made) ? new Date(made + wait).toISOString() : null;
 }
 
 /** Whether `pid` is a running process, as `kill(pid, 0)` says: false only for one that is not there. */
@@ -900,6 +1000,7 @@ export class TakeStore {
   readonly #running: (pid: number) => boolean;
   readonly #platform: NodeJS.Platform;
   readonly #accountIds: (() => Promise<ReadonlySet<string> | null>) | undefined;
+  readonly #offerWait: ((accountId: string) => Promise<number>) | undefined;
   #prunedDay: string | null = null;
 
   constructor(stateDir: string, options: TakeStoreOptions = {}) {
@@ -910,6 +1011,18 @@ export class TakeStore {
     this.#running = options.running ?? runningPid;
     this.#platform = options.platform ?? process.platform;
     this.#accountIds = options.accountIds;
+    this.#offerWait = options.offerWait;
+  }
+
+  /** M5: how long a delivery's offer waits for its window in an account: its reminder window, or an hour. */
+  async #offerWaitIn(accountId: string): Promise<number> {
+    if (this.#offerWait === undefined) return TAKE_OFFER_WAIT_MS;
+    try {
+      const wait = await this.#offerWait(accountId);
+      return Number.isFinite(wait) && wait > 0 ? wait : TAKE_OFFER_WAIT_MS;
+    } catch {
+      return TAKE_OFFER_WAIT_MS;
+    }
   }
 
   #path(ref: TakeMessageRef): string {
@@ -937,17 +1050,28 @@ export class TakeStore {
     }
   }
 
+  /**
+   * §4: whether a record is within its retention, thirty days after it last changed. Past it, it is read as none, as if
+   * the daily prune had deleted it — which runs only after a write, so a done, or the person's keep, would otherwise
+   * hold every session off a message until some process happened to write a take (security review of 0.35.0).
+   */
+  #retained(record: TakeRecord): boolean {
+    return Date.parse(record.updatedAt) + TAKE_RETENTION_DAYS * DAY_MS > this.#now().getTime();
+  }
+
   /** The record as it stands, lapses worked out on the lease alone (no process is looked at), or null. */
   async read(ref: TakeMessageRef): Promise<TakeRecord | null | 'unreadable'> {
     const found = await this.#readFile(this.#path(ref));
     if (found === null || found === 'unreadable') return found;
+    if (!this.#retained(found)) return null;
     return (await this.#settle(found, null)).record;
   }
 
   /**
-   * Works out what has lapsed (T3, T4), at the time it happened: an offer past its time; a take with no approval
-   * waiting under it, sixty minutes after its last act; and — only when `probing`, for a caller that is not the holder —
-   * a take whose holder's parent has gone.
+   * Works out what has lapsed (T3, T4), at the time it happened: an offer past its time; a delivery's offer its window
+   * was never handed, past the account's reminder window (M5); a take with no approval waiting under it, sixty minutes
+   * after its last act; and — only when `probing`, for a caller that is not the holder — a take whose holder's parent
+   * has gone.
    */
   async #settle(
     record: TakeRecord,
@@ -957,6 +1081,12 @@ export class TakeStore {
     const until = record.state === 'offered' ? (record.offer?.until ?? null) : null;
     if (until !== null && Date.parse(until) <= now.getTime()) {
       const line: TakeLine = { at: until, kind: 'expired', by: 'service', windowKey: record.offer?.to.key ?? null };
+      return { record: opened(record, line, now.toISOString()), changed: true };
+    }
+    if (record.state === 'offered' && record.offer !== null && record.offer.until === null) {
+      const waits = offerWaitsUntil(record, await this.#offerWaitIn(record.message.accountId));
+      if (waits === null || Date.parse(waits) > now.getTime()) return { record, changed: false };
+      const line: TakeLine = { at: waits, kind: 'expired', by: 'service', windowKey: record.offer.to.key };
       return { record: opened(record, line, now.toISOString()), changed: true };
     }
     if (record.state !== 'taken' || record.holder === null || isPerson(record.holder))
@@ -1039,7 +1169,7 @@ export class TakeStore {
           lastActAt: at,
         };
         settledChanged = true;
-      } else if (found === null) current = null;
+      } else if (found === null || !this.#retained(found)) current = null;
       else {
         const settled = await this.#settle(found, probe ? new Map() : null);
         current = settled.record;
@@ -1181,7 +1311,8 @@ export class TakeStore {
    * lease and, given `approvalId`, pins the take while that approval waits. Otherwise it is refused with
    * `TAKEN_ELSEWHERE` when anyone else has the message — whether or not taking is required, a take is respected
    * wherever one exists — and with `TAKE_REQUIRED` when `required` and this session has not taken it: an offer to it
-   * included, since the offered session must still take it (T4).
+   * included, since the offered session must still take it (T4). An agent's shell that is no session (M4) holds
+   * nothing: it is refused wherever anyone has the message, and wherever a take is required.
    */
   async gate(
     ref: TakeMessageRef,
@@ -1190,33 +1321,36 @@ export class TakeStore {
     options: { readonly required: boolean; readonly approvalId?: string | undefined },
   ): Promise<TakeGatePass> {
     if (caller === null) return { held: false, line: null };
+    const session = sessionOf(caller);
     const path = this.#path(ref);
     // Nothing recorded: nobody has it, and nothing is written to say so.
     if ((await this.#readFile(path)) === null) {
-      if (options.required) throw takeRequired(act);
+      if (options.required) throw requiredOf(act, caller);
       return { held: false, line: null };
     }
     const pin =
       options.approvalId !== undefined && APPROVAL_ID.test(options.approvalId) ? options.approvalId : undefined;
     return this.#update<TakeGatePass>(ref, true, (current, at) => {
       if (current === null || current.state === 'open') {
-        if (options.required) throw takeRequired(act);
+        if (options.required) throw requiredOf(act, caller);
         return { next: current, result: { held: false, line: null } };
       }
       if (current.state === 'offered') {
         const offer = current.offer as TakeOffer;
-        if (!offeredTo(offer.to, caller)) throw takenElsewhere('OFFERED', offer.until);
+        if (session === null || !offeredTo(offer.to, session)) throw takenElsewhere('OFFERED', offer.until);
         if (options.required) throw takeRequired(act, offer.until);
         return { next: current, result: { held: false, line: null } };
       }
       const refusal = elsewhere(current, caller);
       if (refusal !== null) throw refusal;
+      // Only the holder comes this far, and an agent's shell that is no session holds nothing.
+      if (session === null) throw takenElsewhere('HELD');
       const line = `Taken by this session at ${clockTime(current.takenAt ?? at)}.`;
       if (current.state === 'done') return { next: current, result: { held: true, line } };
       const pins = pin === undefined || current.pins.includes(pin) ? [...current.pins] : [...current.pins, pin];
       const next: TakeRecord = {
         ...current,
-        holder: refreshedHolder(current.holder, caller),
+        holder: refreshedHolder(current.holder, session),
         lastActAt: at,
         pins,
         updatedAt: at,
@@ -1227,7 +1361,8 @@ export class TakeStore {
 
   /**
    * T6: housekeeping — organising, binning — needs no take, but is refused on a message someone else has. The person is
-   * never refused. Nothing is written but what a lapse found.
+   * never refused; an agent's shell that is no session (M4) is refused on any message anyone has. Nothing is written but
+   * what a lapse found.
    */
   async refuseHeldElsewhere(refs: readonly TakeMessageRef[], caller: TakeCaller): Promise<void> {
     if (caller === null) return;
@@ -1236,6 +1371,7 @@ export class TakeStore {
       const found = await this.#readFile(path);
       if (found === null) continue;
       if (found === 'unreadable') throw takenElsewhere('HELD');
+      if (!this.#retained(found)) continue;
       // A quick look first; only a record someone else seems to hold is looked at under its lock, with its holder's parent.
       if (elsewhere((await this.#settle(found, null)).record, caller) === null) continue;
       await this.#update(ref, true, (current) => {
@@ -1268,14 +1404,19 @@ export class TakeStore {
     return views;
   }
 
-  /** The messages in one account this session holds or is offered (`taken` with no ids), newest first. */
-  async mine(channel: TakeChannel, accountId: string, caller: TakeHolder): Promise<{ id: string; view: TakenView }[]> {
+  /**
+   * The messages in one account this session holds or is offered (`taken` with no ids), newest first. The person, and
+   * an agent's shell that is no session, hold none here.
+   */
+  async mine(channel: TakeChannel, accountId: string, caller: TakeCaller): Promise<{ id: string; view: TakenView }[]> {
+    const session = sessionOf(caller);
+    if (session === null) return [];
     const listed = await this.list({ accountId });
     return listed
       .flatMap((entry) => ('record' in entry && entry.record.message.channel === channel ? [entry.record] : []))
       .filter((record) => {
-        if (record.state === 'offered') return record.offer !== null && offeredTo(record.offer.to, caller);
-        return holdsIt(record, caller);
+        if (record.state === 'offered') return record.offer !== null && offeredTo(record.offer.to, session);
+        return holdsIt(record, session);
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map((record) => ({ id: record.message.id, view: takenViewOf(record, caller) }));
@@ -1294,16 +1435,22 @@ export class TakeStore {
     }
   }
 
-  /** The record a mail's Message-ID was taken under in one account, if any: how a reply by In-Reply-To finds its take. */
-  async findByRfc822(channel: TakeChannel, accountId: string, rfc822Id: string): Promise<TakeMessageRef | null> {
+  /**
+   * Every message in one account a record holds under a mail's Message-ID, each by its own id, in id order: how a reply
+   * by In-Reply-To finds the takes it answers. A Message-ID is the sender's word, so two received emails can carry one —
+   * a forged copy among them — and a reply answers each: its gate asks every one (security review of 0.35.0), never
+   * whichever was found first.
+   */
+  async findAllByRfc822(channel: TakeChannel, accountId: string, rfc822Id: string): Promise<TakeMessage[]> {
     const wanted = rfc822IdOf(rfc822Id);
-    if (wanted === undefined) return null;
-    for (const entry of await this.list({ accountId })) {
-      if ('record' in entry && entry.record.message.channel === channel && entry.record.message.rfc822Id === wanted) {
-        return entry.record.message;
-      }
-    }
-    return null;
+    if (wanted === undefined) return [];
+    return (await this.list({ accountId }))
+      .flatMap((entry) =>
+        'record' in entry && entry.record.message.channel === channel && entry.record.message.rfc822Id === wanted
+          ? [entry.record.message]
+          : [],
+      )
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   // ── The person's acts ───────────────────────────────────────────────────────────────────────────────────────
@@ -1404,8 +1551,8 @@ export class TakeStore {
    * T4: a rule's delivery offers a message to the window it was delivered to — a lane's bound window, or the session its
    * prompt was posted to. While the offer lasts it is exclusive: any other session's take or act is refused, and the
    * window must still take the message itself. `until` is null while the item waits for the window; `handOffer` starts
-   * its fifteen minutes when the window is handed it. The event service writes it best-effort, after its delivery
-   * commits.
+   * its fifteen minutes when the window is handed it, and one never handed it lapses at the account's reminder window,
+   * or after an hour (M5). The event service writes it best-effort, after its delivery commits.
    *
    * It never takes a message from anyone: one a session holds or has done, one the person keeps, one already offered —
    * by the person or by another delivery — or one whose record cannot be read is left as it is (`changed: false`), and
@@ -1511,8 +1658,9 @@ export class TakeStore {
   /**
    * §8, T3: the event service's sweep writes every lapse down, under each record's lock, at the time it happened —
    * `ended` for a take whose holder's parent has gone, `expired` for one past its lease and for an offer past its time —
-   * so the story, and "nobody took it", count from then rather than from whenever someone next meets the record. A take
-   * still held, an offer still waiting for its window, and the person's keep stand. Returns how many of each it wrote.
+   * so the story, and "nobody took it", count from then rather than from whenever someone next meets the record — and a
+   * delivery's offer its window was never handed, past the account's reminder window (M5). A take still held, an offer
+   * still waiting within that window, and the person's keep stand. Returns how many of each it wrote.
    * Each holder's parent is looked at once per sweep, and a record that cannot be written now is left for the next.
    */
   async lapse(): Promise<{ ended: number; expired: number }> {
@@ -1534,15 +1682,14 @@ export class TakeStore {
       for (const file of files.sort()) {
         const path = join(this.directory, accountId, file);
         const found = await this.#readFile(path);
-        if (found === null || found === 'unreadable') continue;
-        // Only a session's take, or an offer with a time, can lapse by itself.
+        if (found === null || found === 'unreadable' || !this.#retained(found)) continue;
+        // Only a session's take, or an offer — with a time, or waiting past its account's reminder window — lapses by itself.
         const may =
-          (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) ||
-          (found.state === 'offered' && found.offer?.until !== null);
+          (found.state === 'taken' && found.holder !== null && !isPerson(found.holder)) || found.state === 'offered';
         if (!may) continue;
         await withFileLock(`${path}.lock`, async () => {
           const again = await this.#readFile(path);
-          if (again === null || again === 'unreadable') return;
+          if (again === null || again === 'unreadable' || !this.#retained(again)) return;
           const settled = await this.#settle(again, probing);
           if (!settled.changed) return;
           await this.#write(path, settled.record);
@@ -1558,7 +1705,7 @@ export class TakeStore {
 
   /**
    * Every record held, or one account's, lapses worked out on the lease alone; a file that cannot be read is listed as
-   * such. Nothing is written.
+   * such, and one past its retention is not listed. Nothing is written.
    */
   async list(options: { readonly accountId?: string | undefined } = {}): Promise<ListedTake[]> {
     let accounts: string[];
@@ -1583,7 +1730,7 @@ export class TakeStore {
         const found = await this.#readFile(join(this.directory, accountId, file));
         if (found === null) continue;
         if (found === 'unreadable') listed.push({ unreadable: { accountId, file } });
-        else listed.push({ record: (await this.#settle(found, null)).record });
+        else if (this.#retained(found)) listed.push({ record: (await this.#settle(found, null)).record });
       }
     }
     return listed;

@@ -242,7 +242,9 @@ new release asks of them after an update — they should never be handed several
   email, as `taken`. Look before you start work on one.
 - **`TAKE_REQUIRED` (exit `10`)** means the account asks a session to take an email before it answers it, and you have
   not — or the `inReplyTo` names no email any session took: nothing was prepared or sent. Take it if it is yours, then
-  make the same call again. A new message, with no `inReplyTo`, needs no take.
+  make the same call again. A new message, with no `inReplyTo`, needs no take. Its `reason` `NO_SESSION` means you ran
+  a command in a shell that joined no agent window and has no Claude Code session id, where nothing can be taken: act
+  through the MCP tools instead.
 - **`TAKEN_ELSEWHERE` (exit `10`)** means another session, or the person, has it: leave it. Never answer it another way,
   and never ask the person to release it for you unless they asked you to handle it.
 - **Not yours? Hand it back:** `step: "hand-back"` with a closed `reason` — `not-mine`, `wrong-account`,

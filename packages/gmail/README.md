@@ -244,9 +244,11 @@ before it prepares or sends a reply — one whose In-Reply-To names mail this ma
 is refused with `TAKE_REQUIRED` (exit `10`), before any draft, preview or approval, and again just before the send: a
 take released in between sends nothing, and the approval is as it was. A message another session has is refused with
 `TAKEN_ELSEWHERE` (exit `10`) whether or not a take is required — and so are organising and binning it, which never
-need a take. A new message, a forward and a follow-up to your own mail answer nobody's message, and need no take. At
-your own terminal you are never held to taking: `agentcomms takes keep` holds a message for you, and `takes list`,
-`release` and `give` are yours too, in core's README.
+need a take. A new message and a forward answer nobody's message, and need no take. A follow-up to your own mail goes
+into its thread, so it needs the take of the thread's newest message this mailbox received, and is refused while
+another session has any of them; one in a thread of your own mail alone needs no take. At your own terminal you are
+never held to taking: `agentcomms takes keep` holds a message for you, and `takes list`, `release` and `give` are yours
+too, in core's README.
 
 A take allows nothing by itself: every send still needs the behaviour rules, the send policy and your yes. It keeps two
 sessions from answering the same message; it is not a boundary against a process running as you. Gmail has no 👀, so

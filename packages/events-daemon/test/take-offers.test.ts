@@ -568,3 +568,68 @@ test('TAKE-O3: the sweep reminds once per message, in content-free words; a hand
     { now: clock, takes: { notify, sweepMs: 3_600_000 } },
   );
 });
+
+test('TAKE-O4: a lane offer whose window is never woken lapses at the account’s reminder window, and counts as not taken then', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // Security review of 0.35.0, M5: the offer had no end time until its window was woken, so a window that had gone kept
+  // every other session off the message for as long as the queue kept its item, and the sweep never reminded of it.
+  let skew = 0;
+  const notices: Array<{ title: string; body: string }> = [];
+  const notify: Notifier = async (notice) => {
+    notices.push(notice);
+    return { raised: true };
+  };
+  const clock = () => Date.now() + skew;
+  await withLaneOwner(
+    async (harness) => {
+      await setUp(harness, [lane(1)]);
+      const david = await harness.window(DAVID);
+      await bindDavid(harness, david);
+      await setTaking(harness, { required: true, unclaimed: { afterMinutes: 15, notify: true } });
+      const offered = await deliver(harness, 'Please call me back');
+      const waiting = await recordOf(harness, offered, clock);
+      assert.equal(waiting?.state, 'offered');
+      assert.equal(waiting?.offer?.until, null, 'waiting for its window');
+      const offeredAt = Date.parse(waiting?.history.at(-1)?.at as string);
+      const other = holderOf(OTHER, 'c3c3c3c3c3c3');
+
+      // The window is never woken. Within the account's fifteen minutes the offer holds, and nobody is reminded.
+      skew += 14 * 60_000;
+      assert.deepEqual((await harness.sweepTakes()).notices, []);
+      await assert.rejects(
+        takesOf(harness, clock).take(gmailMessage(offered), other),
+        (error: { details?: unknown }) => {
+          assert.deepEqual(error.details, { reason: 'OFFERED', until: null });
+          return true;
+        },
+      );
+
+      // Past them it lapses by itself, the history saying when, and counts as not taken at once.
+      skew += 2 * 60_000;
+      await harness.sweepTakes();
+      assert.deepEqual(notices, [
+        {
+          title: 'agent-communications',
+          body: '1 message in events/gmail has waited 15 minutes and no session took it.',
+        },
+      ]);
+      const lapsed = await recordOf(harness, offered, clock);
+      assert.equal(lapsed?.state, 'open');
+      assert.deepEqual(lapsed?.history.at(-1), {
+        at: new Date(offeredAt + 15 * 60_000).toISOString(),
+        kind: 'expired',
+        by: 'service',
+        windowKey: DAVID.activityKey,
+      });
+      // A wake after it lapsed names no offer, and moves nothing.
+      const pointer = await wake(david);
+      assert.equal(pointer.item, itemOf(harness, offered));
+      assert.doesNotMatch(pointer.text, OFFER_LINE);
+      assert.equal((await recordOf(harness, offered, clock))?.state, 'open');
+      // Any session may take it now.
+      assert.equal((await takesOf(harness, clock).take(gmailMessage(offered), other)).view?.by, 'you');
+    },
+    { now: clock, takes: { notify, sweepMs: 3_600_000 } },
+  );
+});

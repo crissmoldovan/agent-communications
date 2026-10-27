@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { type Config, parseConfig } from '../src/config.ts';
+import type { CommsError } from '../src/errors.ts';
 import { checkedTakenIds, checkedTakeStep, gateTake, takeStep } from '../src/take-flow.ts';
-import { type TakeAct, type TakeHolder, TakeStore } from '../src/takes.ts';
+import { type TakeAct, type TakeHolder, TakeStore, takerIdentity } from '../src/takes.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -130,4 +131,93 @@ test('the gate reads whether a take is required from the configuration as it is 
   // Fail closed: a block that cannot be read requires a take.
   const broken = { ...config(), taking: 'yes' } as Config;
   await assert.rejects(gateTake(store, broken, { ref: REF, caller: HOLDER, act: ACT }), { code: 'TAKE_REQUIRED' });
+});
+
+// ── An agent's own shell that is no session (security review of 0.35.0, M4) ───────────────────────────────────
+
+test('an agent’s shell that joined no window and has no session id is never the person: every take gate holds for it', async () => {
+  // The reviewer's scenario: a Codex shell — its marker set — that joined no agent window (activity recording off, say)
+  // and has no CLAUDE_CODE_SESSION_ID. It was the person, and passed every gate.
+  const unjoined = async () =>
+    ({
+      key: 'cccccccccccccccc',
+      process: 'c3c3c3c3c3c3',
+      pid: 1,
+      folder: '/example/home/work',
+      grouped: false,
+      surface: 'cli',
+    }) as const;
+  const caller = await takerIdentity({ activity: undefined }, 'cli', undefined, {
+    env: { CODEX_SANDBOX: 'seatbelt' },
+    identity: unjoined,
+  });
+  assert.notEqual(caller, null, 'it is not the person');
+  const store = new TakeStore(tempDir('comms-take-flow-'), { running: () => true, probe: async () => null });
+  // Another session holds the message: the shell is refused, whether or not a take is required.
+  await store.take({ ...REF, thread: null }, HOLDER);
+  for (const required of [true, false]) {
+    await assert.rejects(
+      gateTake(store, config(required), { ref: REF, caller, act: ACT }),
+      (error: unknown) =>
+        (error as CommsError).code === 'TAKEN_ELSEWHERE' && (error as CommsError).details?.reason === 'HELD',
+      `required ${required}`,
+    );
+  }
+  await assert.rejects(store.refuseHeldElsewhere([REF], caller), { code: 'TAKEN_ELSEWHERE' });
+  assert.equal((await store.views([REF], caller)).get(REF.id)?.by, 'another session');
+  // Nobody has the message: with a take required it is refused, and told why it cannot take one; without, it acts.
+  const open = { ...REF, id: 'C0123/1729936900.000100' };
+  const act = { ...ACT, shown: open.id };
+  const refused = await gateTake(store, config(true), { ref: open, caller, act }).then(
+    () => assert.fail('expected a refusal'),
+    (error: unknown) => error as CommsError,
+  );
+  assert.equal(refused.code, 'TAKE_REQUIRED');
+  assert.equal(refused.exitCode, 10);
+  assert.deepEqual(refused.details, {
+    reason: 'NO_SESSION',
+    act: 'slack.react',
+    message: open.id,
+    marker: 'CODEX_SANDBOX',
+  });
+  assert.match(refused.message, /joined no agent window and has no Claude Code session id/);
+  assert.match(refused.hint ?? '', /over MCP/);
+  assert.deepEqual(await gateTake(store, config(false), { ref: open, caller, act }), { held: false, line: null });
+  // It takes nothing — a take made here could be matched to nothing it does next — and hands back or finishes nothing.
+  for (const request of [{ step: 'take' }, { step: 'hand-back', reason: 'not-mine' }, { step: 'done' }] as const) {
+    await assert.rejects(
+      takeStep(store, {
+        caller,
+        request,
+        ref: open,
+        act,
+        verify: async () => assert.fail('nothing is read for a shell that is no session'),
+      }),
+      (error: unknown) =>
+        (error as CommsError).code === 'USAGE' && (error as CommsError).details?.reason === 'NO_SESSION',
+      request.step,
+    );
+  }
+  assert.equal(await store.read(open), null, 'nothing was recorded for it');
+  // The person at their own terminal — no marker — is still nobody; inside an MCP server's process, nobody is the person.
+  assert.equal(await takerIdentity({ activity: undefined }, 'cli', undefined, { env: {}, identity: unjoined }), null);
+  assert.notEqual(
+    await takerIdentity({ activity: undefined }, 'cli', undefined, {
+      env: { AGENTCOMMS_MCP_SERVER: 'gmail' },
+      identity: unjoined,
+    }),
+    null,
+  );
+  // A marked shell that joined a window, or that has a session id, is that session, as before.
+  const joined = await takerIdentity({ activity: undefined }, 'cli', undefined, {
+    env: { CODEX_SANDBOX: 'seatbelt' },
+    identity: async () => ({ ...(await unjoined()), grouped: true }),
+  });
+  assert.equal((joined as TakeHolder).key, 'cccccccccccccccc');
+  const sid = '11111111-2222-4333-8444-555555555555';
+  const claude = await takerIdentity({ activity: undefined }, 'cli', undefined, {
+    env: { CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: sid },
+    identity: unjoined,
+  });
+  assert.equal((claude as TakeHolder).sessionId, sid);
 });

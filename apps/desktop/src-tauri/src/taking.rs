@@ -8,11 +8,13 @@
 //!   coordination, so the app applies it at once (DA10); core refuses each inside an MCP server's process and in an
 //!   agent's shell, and the app's child has neither (`runner::command_for` clears its environment).
 //! - **The settings:** `taking`, read; and one change, `taking <account> --require on|off | --acknowledge eyes|nothing |
-//!   --unclaimed <minutes> | --notify on|off`. Letting sessions act without taking, and a 👀 on taking, loosen: they are
-//!   prepared without an approval, core answers with its preview, and the person approves in the app, where the same
-//!   words go again with `--app-approval <id>` (the call's `appApproval`), only for the approval the app prepared for
-//!   that very change (`connections::run_app_approval`), once — or in Terminal where nothing attests the app. Every
-//!   other change applies at once, and is never sent the flag.
+//!   --unclaimed <minutes> | --notify on|off`. Letting sessions act without taking, a 👀 on taking, a longer wait and no
+//!   reminder loosen (the last two since the security review of 0.35.0): they are prepared without an approval, core
+//!   answers with its preview, and the person approves in the app, where the same words go again with
+//!   `--app-approval <id>` (the call's `appApproval`), only for the approval the app prepared for that very change
+//!   (`connections::run_app_approval`), once — or in Terminal where nothing attests the app. Core judges a wait by the
+//!   one in force, so a shorter one applies at once all the same. Every other change applies at once, and is never sent
+//!   the flag.
 //!
 //! The account is a checked name, the message an id of the grammar `activity items` already takes (a Gmail message's id,
 //! a Slack `<channel>/<ts>`, or a Resend email's id, a UUID, which that grammar holds), the window a Claude Code session id
@@ -87,22 +89,26 @@ pub enum TakingSetting {
     Require { on: bool },
     /// `--acknowledge eyes|nothing`: what a take says to the sender. Eyes loosens.
     Acknowledge { acknowledge: TakingAcknowledge },
-    /// `--unclaimed <minutes>`: when a message nobody took counts. Applies at once.
+    /// `--unclaimed <minutes>`: when a message nobody took counts. Longer loosens; shorter applies at once.
     Unclaimed { minutes: UnclaimedMinutes },
-    /// `--notify on|off`: whether the person is reminded of one. Applies at once.
+    /// `--notify on|off`: whether the person is reminded of one. Off loosens.
     Notify { on: bool },
 }
 
 impl TakingSetting {
-    /// Whether the change lets sessions do more, so the person approves it first (core's `classifyChange`): letting
-    /// them act without taking, and a 👀 on taking. Everything else applies at once.
-    pub fn loosens(self) -> bool {
+    /// Whether the change can let sessions do more, or the person hear less, so core may answer it with a preview the
+    /// person approves first (core's `classifyChange`): letting sessions act without taking, a 👀 on taking, no
+    /// reminder, and a change of the wait — a longer one loosens, a shorter one core applies at once, judged by the wait
+    /// in force (security review of 0.35.0). Requiring a take, saying nothing and a reminder apply at once.
+    pub fn can_loosen(self) -> bool {
         matches!(
             self,
             TakingSetting::Require { on: false }
                 | TakingSetting::Acknowledge {
                     acknowledge: TakingAcknowledge::Eyes
                 }
+                | TakingSetting::Unclaimed { .. }
+                | TakingSetting::Notify { on: false }
         )
     }
 
@@ -129,7 +135,7 @@ pub fn change_words(
     setting: TakingSetting,
     app_approval: &Option<ApprovalId>,
 ) -> Result<Vec<String>, AppError> {
-    if app_approval.is_some() && !setting.loosens() {
+    if app_approval.is_some() && !setting.can_loosen() {
         return Err(AppError::refused(
             "this change applies at once: it takes no approval",
         ));
@@ -321,12 +327,37 @@ mod tests {
                 ID
             ]
         );
+        // No reminder, and a change of the wait — a longer one loosens (security review of 0.35.0) — approved in the app.
+        assert_eq!(
+            words(json!({
+                "kind": "takingChange",
+                "account": account,
+                "change": { "setting": "notify", "on": false },
+                "appApproval": ID
+            })),
+            ["taking", account, "--notify", "off", "--app-approval", ID]
+        );
+        assert_eq!(
+            words(json!({
+                "kind": "takingChange",
+                "account": account,
+                "change": { "setting": "unclaimed", "minutes": 240 },
+                "appApproval": ID
+            })),
+            [
+                "taking",
+                account,
+                "--unclaimed",
+                "240",
+                "--app-approval",
+                ID
+            ]
+        );
         // A tightening applies at once, and is never sent the app's approval.
         for change in [
             json!({ "setting": "require", "on": true }),
             json!({ "setting": "acknowledge", "acknowledge": "nothing" }),
-            json!({ "setting": "unclaimed", "minutes": 15 }),
-            json!({ "setting": "notify", "on": false }),
+            json!({ "setting": "notify", "on": true }),
         ] {
             let refusal = call(json!({ "kind": "takingChange", "account": account, "change": change, "appApproval": ID }))
                 .words()
@@ -451,7 +482,8 @@ mod tests {
                 json!({ "setting": "acknowledge", "acknowledge": "nothing" }),
                 false,
             ),
-            (json!({ "setting": "unclaimed", "minutes": 30 }), false),
+            (json!({ "setting": "unclaimed", "minutes": 30 }), true),
+            (json!({ "setting": "notify", "on": false }), true),
             (json!({ "setting": "notify", "on": true }), false),
         ] {
             let prepared = call(

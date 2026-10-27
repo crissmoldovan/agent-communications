@@ -589,7 +589,7 @@
         "request.afterMinutes": 30,
         "request.notify": null
       },
-      "reason": "When a message nobody took counts as not taken only decides when the person hears of it, so it applies at once either way."
+      "reason": "A shorter wait before a message nobody took counts as not taken applies at once; a longer one lets it go unnoticed for longer, so it is a loosening the person approves (security review of 0.35.0)."
     },
     {
       "id": "core.taking.notify",
@@ -609,7 +609,7 @@
         "request.afterMinutes": null,
         "request.notify": false
       },
-      "reason": "Whether the person is reminded of a message nobody took applies at once either way: it waits under Not taken regardless."
+      "reason": "A reminder of a message nobody took applies at once; none is a loosening the person approves, since only Not taken would show it then (security review of 0.35.0)."
     },
     {
       "id": "core.takes.list",

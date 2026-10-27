@@ -2207,7 +2207,8 @@ export function classifyChange(before: Config, after: Config): { loosened: strin
   const modelAfter = searchModelText(searchAfter.model);
   if (modelAfter !== null && modelAfter !== modelBefore) loosen('search.model', modelBefore, modelAfter);
   // Taking messages (design 2026-10-26-taking-messages §5), judged per account by its id, by the settings in force on
-  // each side: letting a session act without taking a message first, and a 👀 on taking, wait for the person.
+  // each side: letting a session act without taking a message first, a 👀 on taking, a longer wait before a message
+  // nobody took counts, and no reminder of one wait for the person (security review of 0.35.0).
   for (const loosening of classifyTakingChange(before, after)) {
     loosen(loosening.path, loosening.was, loosening.now, loosening.id);
   }

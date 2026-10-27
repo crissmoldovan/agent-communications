@@ -23,9 +23,10 @@ import {
  * operation each way — `takingReport` shows, `takingChange` changes.
  *
  * Showing asks nobody. A change goes through the one change flow (`gatedChange`), judged by `classifyChange`: letting
- * sessions act without taking a message first, and a 👀 on taking, wait for the person's yes — under the change policy,
- * and in the app through `--app-approval`; requiring a take, saying nothing, and when a message nobody took is reminded
- * of apply at once. One change at a time, as the activity settings and the behaviour rules take them.
+ * sessions act without taking a message first, a 👀 on taking, waiting longer before a message nobody took counts, and
+ * no reminder of one wait for the person's yes — under the change policy, and in the app through `--app-approval`;
+ * requiring a take, saying nothing, a shorter wait and a reminder apply at once. One change at a time, as the activity
+ * settings and the behaviour rules take them.
  *
  * Written so that nothing a change is not about moves: the account's entry is replaced by one with the settings in
  * force for it now and the one field changed, and every other entry stays exactly as it was.
