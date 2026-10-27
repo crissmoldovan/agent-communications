@@ -1461,11 +1461,11 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Remove an MCP connection',
       description:
-        'Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.',
-      inputSchema: { id: connectionId },
+        'Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.',
+      inputSchema: { id: connectionId, ...approvalArg },
       annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: false },
     },
-    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), undefined),
+    async (args) => change(() => connectionRemoveChange(core, env, { id: args.id }, 'mcp'), args.approvalId),
   );
 
   server.registerTool(

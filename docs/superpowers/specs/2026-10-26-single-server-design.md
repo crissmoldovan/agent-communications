@@ -400,12 +400,15 @@ does not protect.
   - adding a part;
   - removing or changing a pin;
   - turning read-only off;
-  - a migration (its effects are every entry it rewrites).
+  - a migration (its effects are every entry it rewrites);
+  - removing a connection whose entry shadows a wider one of the same name (2026-10-27, H1: its effect says what the
+    agents there will use instead; §8.1's note).
 - **Tightenings:**
   - removing a part;
   - adding a pin;
   - turning read-only on;
-  - revoking.
+  - revoking;
+  - removing a connection that leaves nothing wider behind.
 - **Neutral, applied at once and audited:**
   - renaming;
   - rotating the key, for every type but Manual.
@@ -473,7 +476,7 @@ does not protect.
 | Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it. Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
 | Add or rotate a **Manual** connection (shows the key) | refused: the key would stay in the transcript | yes | yes | yes, through the terminal |
 | Revoke, drop a part, pin, read-only on | at once | at once | at once | at once |
-| Remove | its own connection only: at once (note below) | at once | at once | at once |
+| Remove | its own connection only: at once — but prepared, like a loosening, where its entry shadows a wider one (note below) | at once, or approves at the terminal | at once, or approves in the app (`--app-approval`) | at once, or "Do it in Terminal" |
 | Rename; rotate (not Manual) | its own connection only: at once, audited (note below) | at once | at once | at once |
 
 - **Note, 2026-10-27 (0.35.0 security review, M1):** over MCP, from an agent's shell and inside an MCP server's
@@ -483,7 +486,17 @@ does not protect.
   that names a connection — its summary, each loosening's path, each effect — names it by name, app, place (its folder,
   its profile, or "every folder") and short id: `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)`, with
   "new" in place of the id for one being added, which has none until it is.
-- **`--app-approval` is extended to** `connection add|update|migrate`, in `takesAppApproval` (`cli.ts:535-547`) and in
+- **Note, 2026-10-27 (0.35.0 security review, H1):** a one-project connection's entry is Claude Code's local scope,
+  under core's name, so it shadows the app's `agentcomms` for every folder (§6.1); removing it handed the agents in
+  that folder the wider one, at once. A remove whose entry shadows a wider entry of the same name — a connection
+  reaching a part, an account or a switch this one does not, or an entry of its own, or a config that cannot be read —
+  is now a loosening: prepared, its preview saying what the agents there will use instead ("Agents in ~/work/acme will
+  then use the connection "Everywhere" (Claude Code, every folder, cn_ABCD…), for every folder: Agent Comms itself;
+  Gmail, every mailbox; Events — more than this one reaches"), and approved under the change policy, in the app or at
+  the terminal. A remove that leaves nothing wider behind stays at once. A key replaced never takes the entry out: a
+  connection cut off by it still shadows the wider one, serving nothing, and the one case where its entry was gone —
+  removed by hand — is refused (below).
+- **`--app-approval` is extended to** `connection add|update|migrate|remove`, in `takesAppApproval` (`cli.ts:535-547`) and in
   `appliedFromApp`'s list (`change-flow.ts:401-411`).
 - **`AppReach`** (`change-flow.ts:523-556`) also names a connection's `configDir`, so that a test build approves only
   inside its profile.

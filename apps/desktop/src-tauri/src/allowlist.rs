@@ -1380,9 +1380,15 @@ pub enum Call {
     /// Core `connection key replace <id>` (0.35.0): a new key, the old one stopping at once; applied at once. A Manual
     /// connection's comes back once, in its snippet, for the person to paste.
     ConnectionKeyReplace { connection_id: ConnectionId },
-    /// Core `connection remove <id>` (0.35.0): a tightening, applied at once; its entry is taken out of its app, and
-    /// no record of it is kept.
-    ConnectionRemove { connection_id: ConnectionId },
+    /// Core `connection remove <id> [--app-approval <id>]` (0.35.0): a tightening, applied at once; its entry is taken
+    /// out of its app, and no record of it is kept. Where its entry shadows a wider one the agents in its folder would
+    /// then use (the security review's H1), core answers with a preview instead: prepared and approved as
+    /// `connectionAdd` is.
+    ConnectionRemove {
+        connection_id: ConnectionId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        app_approval: Option<ApprovalId>,
+    },
     /// Core `connection migrate [--client <client>] [--app-approval <id>]` (0.35.0): each app's separate entries moved
     /// into one connection that reaches exactly what they reached. Prepared and approved as `connectionAdd` is.
     ConnectionMigrate {
@@ -2483,6 +2489,7 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "connectionRename", "connectionId": CONNECTION, "name": "Personal — Claude Desktop" }),
         json!({ "kind": "connectionKeyReplace", "connectionId": CONNECTION }),
         json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
+        json!({ "kind": "connectionRemove", "connectionId": CONNECTION, "appApproval": ID }),
         json!({ "kind": "connectionMigrate" }),
         json!({ "kind": "connectionMigrate", "client": "claude-code", "appApproval": ID }),
         json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION }),
@@ -3318,6 +3325,8 @@ mod tests {
                 json!({ "kind": "connectionAdd", "app": "codex", "name": "Reviews — Codex", "parts": [{ "server": "core" }], "profile": "/example/home/.codex-reviews" }),
                 json!({ "kind": "connectionAdd", "app": "manual", "name": "Raycast", "parts": [{ "server": "core" }, { "server": "slack" }] }),
                 json!({ "kind": "connectionChange", "connectionId": CONNECTION, "parts": [{ "server": "core" }, { "server": "slack" }] }),
+                // Core prepares a remove where its entry shadows a wider one (the security review's H1).
+                json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
                 json!({ "kind": "connectionMigrate" }),
                 json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION }),
             ]

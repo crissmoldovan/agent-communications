@@ -12,7 +12,9 @@
 //!   gives more (core narrows before it asks).
 //! - **At once:** `connection rename`, `connection key replace` and `connection remove`, which give an agent nothing
 //!   more. A Manual connection's new key comes back once, in its snippet; core refuses that to an agent, and the app runs
-//!   as the person (`runner::command_for` clears the environment), so only the person's press asks for it.
+//!   as the person (`runner::command_for` clears the environment), so only the person's press asks for it. A remove
+//!   whose entry shadows a wider one the agents in its folder would then use is a loosening (the security review's H1):
+//!   core answers it with a preview, approved in the app as the loosenings are.
 //!
 //! Every value is closed or checked here before a word is built: a connection's id, its name by core's rule, an app of
 //! core's list, each part a server's word (the platform pattern of an account name: core checks it against its
@@ -415,8 +417,13 @@ impl Call {
                 literal(&["connection", "key", "replace", connection_id.as_str()]),
                 ENTRY_TIMEOUT,
             ),
-            Call::ConnectionRemove { connection_id } => core(
+            Call::ConnectionRemove {
+                connection_id,
+                app_approval,
+            } => approved(
                 literal(&["connection", "remove", connection_id.as_str()]),
+                app_approval,
+                ENTRY_TIMEOUT,
                 ENTRY_TIMEOUT,
             ),
             Call::ConnectionMigrate {
@@ -447,7 +454,8 @@ impl Call {
     }
 
     /// Whether this connection call is one the app prepares, and core may answer with its preview: an addition, a
-    /// change of parts, a migration and its undo — each without the app's approval.
+    /// change of parts, a migration and its undo, and a removal (core asks for one only where it widens what agents in
+    /// the connection's folder reach) — each without the app's approval.
     pub fn prepares_connection_change(&self) -> bool {
         matches!(
             self,
@@ -455,6 +463,9 @@ impl Call {
                 app_approval: None,
                 ..
             } | Call::ConnectionChange {
+                app_approval: None,
+                ..
+            } | Call::ConnectionRemove {
                 app_approval: None,
                 ..
             } | Call::ConnectionMigrate {
@@ -498,6 +509,16 @@ impl Call {
                 Call::ConnectionChange {
                     connection_id: connection_id.clone(),
                     parts: parts.clone(),
+                    app_approval: None,
+                },
+            )),
+            Call::ConnectionRemove {
+                connection_id,
+                app_approval: Some(id),
+            } => Some((
+                id,
+                Call::ConnectionRemove {
+                    connection_id: connection_id.clone(),
                     app_approval: None,
                 },
             )),
@@ -679,6 +700,12 @@ mod tests {
             ["connection", "remove", CONNECTION]
         );
         assert_eq!(
+            words(
+                json!({ "kind": "connectionRemove", "connectionId": CONNECTION, "appApproval": ID })
+            ),
+            ["connection", "remove", CONNECTION, "--app-approval", ID]
+        );
+        assert_eq!(
             words(json!({ "kind": "connectionMigrate" })),
             ["connection", "migrate"]
         );
@@ -789,6 +816,12 @@ mod tests {
         );
         assert_eq!(
             timeout(json!({ "kind": "connectionRemove", "connectionId": CONNECTION })),
+            Duration::from_secs(90)
+        );
+        assert_eq!(
+            timeout(
+                json!({ "kind": "connectionRemove", "connectionId": CONNECTION, "appApproval": ID })
+            ),
             Duration::from_secs(90)
         );
         assert_eq!(
@@ -995,9 +1028,6 @@ mod tests {
             json!({ "kind": "connectionKeyReplace", "connectionId": CONNECTION, "appApproval": ID }),
         );
         refused(
-            json!({ "kind": "connectionRemove", "connectionId": CONNECTION, "appApproval": ID }),
-        );
-        refused(
             json!({ "kind": "connectionRename", "connectionId": CONNECTION, "name": "Work", "appApproval": ID }),
         );
         refused(
@@ -1016,6 +1046,8 @@ mod tests {
             json!({ "kind": "connectionMigrate" }),
             json!({ "kind": "connectionMigrate", "client": "cursor" }),
             json!({ "kind": "connectionMigrateUndo", "connectionId": CONNECTION }),
+            // At once where it narrows; prepared where its entry shadows a wider one (the security review's H1).
+            json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
         ];
         for value in preparing {
             let prepared = call(value.clone());
@@ -1049,7 +1081,6 @@ mod tests {
             json!({ "kind": "connectionShow", "connectionId": CONNECTION }),
             json!({ "kind": "connectionRename", "connectionId": CONNECTION, "name": "Work" }),
             json!({ "kind": "connectionKeyReplace", "connectionId": CONNECTION }),
-            json!({ "kind": "connectionRemove", "connectionId": CONNECTION }),
         ] {
             let at_once = call(value.clone());
             assert!(!at_once.prepares_change(), "{value}");
@@ -1196,6 +1227,6 @@ mod tests {
             assert_eq!(refuse_in_test_build(&sample, TEST).is_ok(), read, "{value}");
             assert!(refuse_in_test_build(&sample, RELEASE).is_ok(), "{value}");
         }
-        assert_eq!(seen, 15);
+        assert_eq!(seen, 16);
     }
 }

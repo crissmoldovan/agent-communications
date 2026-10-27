@@ -43,6 +43,8 @@ export const MCP_COPY = {
     manual
       ? `Removed at once: ${name}. Its key stopped working. Take the snippet out of ${app}’s settings when you can.`
       : `Removed at once: ${name}. Its key stopped working. Restart ${app} to see the change.`,
+  removedApprovedSaid: (name: string, app: string) =>
+    `Approved and removed: ${name}. Its key stopped working. Restart ${app} to see the change.`,
   // Move to one entry (D16, §9.1): the person's step, never automatic.
   moveTitle: 'Move to one entry',
   moveLead:
@@ -254,6 +256,10 @@ export const ONE_COPY = {
   removeAtOnce: 'Applies at once.',
   removeAtOnceKnown: (app: string) => `Applies at once. Restart ${app} to see the change.`,
   removeCancelled: (name: string) => `Cancelled: ${name} stays.`,
+  // Core asks first where its entry shadows a wider one the agents in its folder would then use (0.35.0 review, H1).
+  removeWider:
+    'Its entry stands in front of a wider Agent Comms entry for every folder. Once it is gone, the agents in its folder use that one, and reach more. Core’s preview says what they would use.',
+  removeAsk: (name: string) => `Remove ${name}, and let the agents in its folder reach more? Approve it`,
   notRemoved: (message: string) => `It was not removed: ${message}`,
   keptEntry: (name: string, path: string, reason: string) => `Its entry “${name}” in ${path} was left: ${reason}`,
   goneTitle: 'This connection is removed',

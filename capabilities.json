@@ -964,7 +964,7 @@
       "operation": "connectionRemoveChange",
       "argv": ["cn_0123456789ABCDEFGHJKMNPQRS"],
       "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS" },
-      "reason": "Removing a connection is a tightening: its entry goes from its app and its key stops working at once, applied at once and audited (design §6.2)."
+      "reason": "Removing a connection is a tightening: its entry goes from its app and its key stops working at once, applied at once and audited (design §6.2). Where its entry shadows a wider one the agents in its folder would then use, it is approved first, like a loosening; over MCP and from an agent's shell, only the connection the caller is a part of (0.35.0 security review, H1, M1)."
     },
     {
       "id": "core.connection.migrate",

@@ -417,13 +417,14 @@ Give the connection this server is a part of a new key, written into its app’s
 
 ### `comms_connection_remove`
 
-Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening: it applies at once and takes no approvalId. The app keeps the tools it started until it is restarted — tell the person.
+Remove the connection this server is a part of: its entry is taken out of its app, saved first, and its key stops working at once. Another connection is the person’s, at their terminal or in the app, and is refused here. A tightening, applied at once — unless its entry is one project’s over the app’s Agent Comms for every folder, which the agents there would then use: that reaches more, so the first call returns `approvalRequired` with a preview saying what they would use instead, and an approvalId; call again with it once the person agrees. The app keeps the tools it started until it is restarted — tell the person.
 
 *writes · destructive*
 
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
+| `approvalId` | string | no | leave out the first time. The approval this tool returned, once the person has agreed to its preview — in the chat under `chat`, with the approve command the result gives under `confirm` |
 
 ### `comms_connection_migrate`
 

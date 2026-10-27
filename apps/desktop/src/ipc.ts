@@ -412,14 +412,15 @@ export type Call =
   // MCP connections (0.35.0, single-server design §11, `mcp_connections.rs`): core's `connection …`. The list and one
   // connection, read; adding one, changing its parts, moving separate entries into one and undoing it, each prepared
   // without `appApproval` and approved by the person's press in the app with it, only for the approval the app prepared
-  // for that same change (a change that only takes away applies at once); renaming, a new key and removing, at once.
+  // for that same change (a change that only takes away applies at once); renaming, a new key and removing, at once —
+  // but a remove whose entry shadows a wider one the agents in its folder would then use is prepared and approved too.
   | { kind: 'connectionList' }
   | { kind: 'connectionShow'; connectionId: string }
   | ConnectionAddCall
   | { kind: 'connectionChange'; connectionId: string; parts: ConnectionPartRequest[]; appApproval?: string }
   | { kind: 'connectionRename'; connectionId: string; name: string }
   | { kind: 'connectionKeyReplace'; connectionId: string }
-  | { kind: 'connectionRemove'; connectionId: string }
+  | { kind: 'connectionRemove'; connectionId: string; appApproval?: string }
   | { kind: 'connectionMigrate'; client?: McpClient; appApproval?: string }
   | { kind: 'connectionMigrateUndo'; connectionId: string; appApproval?: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.

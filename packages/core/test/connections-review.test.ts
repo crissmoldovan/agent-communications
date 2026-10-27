@@ -17,8 +17,10 @@ import {
   connectionRenameChange,
   parsePartsSpec,
 } from '../src/operations/connections.ts';
+import { homeDirectory, shortenHome } from '../src/paths.ts';
 import { partEnv } from './helpers/gateway/as-part.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
+import { runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
 
 /*
@@ -200,5 +202,97 @@ test(
       adding.prepared.effects.some((effect) => effect.startsWith(`registers the connection ${added} with claude-code`)),
       adding.prepared.effects.join('\n'),
     );
+  },
+);
+
+const claudeJson = (m: Machine) =>
+  JSON.parse(readFileSync(m.claudeJson, 'utf8')) as {
+    mcpServers?: Record<string, unknown>;
+    projects?: Record<string, { mcpServers?: Record<string, unknown> }>;
+  };
+
+test(
+  'H1: removing a one-project connection over the app’s every-folder one widens reach, so it waits for the person',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { project, everywhere, acme } = await twoConnections(m);
+    const real = realpathSync(project);
+    // Both entries carry core's name: the project's shadows the one for every folder there (Claude Code's precedence).
+    assert.ok(claudeJson(m).mcpServers?.agentcomms);
+    assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms);
+    // The reviewer's scenario: the agent in the project removes its own connection over MCP.
+    const inAcme = partEnv(m.env, acme.id);
+    const remove = () => connectionRemoveChange(m.core, inAcme, { id: acme.id }, 'mcp');
+    const asked = await run(m, remove(), 'mcp');
+    assert.equal(asked.status, 'approval-required', 'not applied at once');
+    if (asked.status !== 'approval-required') return;
+    const place = shortenHome(real, homeDirectory(m.env));
+    const line = `Agents in ${place} will then use the connection "Everywhere" (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…), for every folder: Agent Comms itself; Events — more than this one reaches`;
+    assert.deepEqual(asked.prepared.effects, [line]);
+    assert.ok(asked.prepared.preview.includes(line), asked.prepared.preview);
+    assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, 'nothing removed while it waits');
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+    // The person's yes in the chat, claimed with the approval: removed.
+    const done = await gatedChange(m.core, remove(), {
+      surface: 'mcp',
+      channel: 'core',
+      approvalId: asked.prepared.approvalId,
+    });
+    assert.equal(done.status, 'applied');
+    assert.equal(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, undefined);
+    assert.deepEqual(await names(m), ['Everywhere']);
+  },
+);
+
+test(
+  'H1: a remove that leaves nothing wider behind applies at once — every folder, or a project over a narrower one',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const project = join(m.home, 'work', 'acme');
+    mkdirSync(project, { recursive: true });
+    // The project's connection reaches more than the one for every folder: removing it narrows, at once.
+    const narrow = await added(m, { app: 'claude-code', name: 'Everywhere', parts: parsePartsSpec('core') });
+    const wide = await added(m, {
+      app: 'claude-code',
+      name: 'Acme',
+      parts: parsePartsSpec('core,events'),
+      folder: project,
+    });
+    const atOnce = await run(m, connectionRemoveChange(m.core, m.env, { id: wide.id }, 'cli'), 'cli');
+    assert.equal(atOnce.status, 'applied');
+    // The connection for every folder shadows nothing: at once too.
+    const last = await run(m, connectionRemoveChange(m.core, m.env, { id: narrow.id }, 'cli'), 'cli');
+    assert.equal(last.status, 'applied');
+    assert.deepEqual(await names(m), []);
+  },
+);
+
+test(
+  'H1 at a terminal: connection remove prints the preview and takes --approval; --app-approval is the app’s to give',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { acme } = await twoConnections(m);
+    const words = ['connection', 'remove', acme.id, '--json'];
+    // No terminal to ask at (an agent, or a pipe): the preview and the approval to claim.
+    const asked = await runMain(words, m.env, 'darwin');
+    assert.equal(asked.code, 10, asked.stdout + asked.stderr);
+    const error = asked.json().error as { code: string; details: { approvalId: string; preview: string } };
+    assert.equal(error.code, 'APPROVAL_PENDING');
+    assert.match(error.details.preview, /will then use the connection "Everywhere"/);
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+    const removed = await runMain([...words, '--approval', error.details.approvalId], m.env, 'darwin');
+    assert.equal(removed.code, 0, removed.stdout + removed.stderr);
+    assert.deepEqual(await names(m), ['Everywhere']);
+    // The app approves a remove as it approves an addition: refused to an agent, as there.
+    const agent = await runMain(
+      ['connection', 'remove', acme.id, '--app-approval', 'ap_00000000000000000000000000', '--json'],
+      { ...m.env, CLAUDECODE: '1' },
+      'darwin',
+    );
+    assert.equal(agent.code, 10, agent.stdout);
+    assert.match(agent.stdout, /only a person can approve a change in the app, not an agent/);
   },
 );

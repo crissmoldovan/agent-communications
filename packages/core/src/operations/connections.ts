@@ -68,7 +68,9 @@ import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange }
  * - **Renaming it, and replacing its key**, give an agent nothing more, so they apply at once and are audited. A
  *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is. An agent
  *   renames, re-keys and removes only its own connection (`refuseAnotherConnection`).
- * - **Removing it** applies at once: its entry is taken out of its app, and its key stops working with the record.
+ * - **Removing it** applies at once: its entry is taken out of its app, and its key stops working with the record —
+ *   unless its entry shadows a wider one for every folder, which the agents there would use instead: then it is
+ *   prepared and approved (`widerBehind`).
  */
 
 /**
@@ -1532,6 +1534,58 @@ export function connectionKeyReplaceChange(
   };
 }
 
+/** Whether `wider` reaches anything `than` does not: a part it lacks, an account it is not kept to, or more than reading. */
+function reachesMore(wider: ConnectionRecord, than: ConnectionRecord): boolean {
+  const held = connectionReach({ readable: true, record: than, problems: [] });
+  for (const [server, reach] of connectionReach({ readable: true, record: wider, problems: [] })) {
+    const mine = held.get(server);
+    if (mine === undefined) return true;
+    if (mine.pin !== null && (reach.pin === null || reach.pin.id !== mine.pin.id)) return true;
+    if (mine.readOnly && !reach.readOnly) return true;
+  }
+  return false;
+}
+
+/**
+ * What agents in a connection's place would use once its entry is gone, when that reaches more (0.35.0 security review,
+ * H1): the sentence a preview says it in, or null when nothing wider is left behind.
+ *
+ * A one-project connection's entry is Claude Code's local scope, under core's name (`entryName`), so it shadows an
+ * entry of the same name for every folder — the app's own Agent Comms. Taking it out hands the agents there that one.
+ * It reaches more when it is a connection with a part, an account or a switch this one does not have, or an entry of
+ * its own (whatever it starts, nothing here can show it reaches less). An app's config that cannot be read says so
+ * too: what is left behind cannot be shown to reach less. A connection for every folder shadows nothing.
+ */
+async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: ConnectionRecord): Promise<string | null> {
+  if (record.app === 'manual' || record.entry === null || record.where.scope !== 'local') return null;
+  const home = homeDirectory(env);
+  const place = `${shortenHome(record.where.folder ?? '', home)}${record.where.configDir === null ? '' : ` (profile ${shortenHome(record.where.configDir, home)})`}`;
+  const client = APP_CLIENT[record.app];
+  const scan = await scanRegisteredServers(envFor(env, record)).catch(() => null);
+  if (scan === null) {
+    return `Agents in ${place} will then use whatever ${APP_LABELS[record.app]} has called "${record.entry.name}" for every folder, and its settings could not be read to say what that reaches`;
+  }
+  const behind = scan.servers.find(
+    (server) =>
+      server.client === client &&
+      server.name === record.entry?.name &&
+      server.scope !== 'project' &&
+      connectionOfEntry(server.args) !== record.id,
+  );
+  if (behind === undefined) return null;
+  const id = connectionOfEntry(behind.args);
+  if (id !== null) {
+    const read = connectionById(config, id);
+    // One that cannot be read, is cut off or is gone serves nothing: what is left behind reaches less.
+    if (read === undefined || !read.readable || read.record.revokedAt !== null) return null;
+    if (!reachesMore(read.record, record)) return null;
+    const parts = [...connectionReach(read)].map(([server, reach]) => partText(server, reach));
+    return `Agents in ${place} will then use the connection ${connectionLabel(read.record, read.record.id)}, for every folder: ${parts.join('; ')} — more than this one reaches`;
+  }
+  const own = PART_FACTS.find((facts) => isProductServer(behind, serverFacts(facts.server)));
+  return `Agents in ${place} will then use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`} — nothing here shows it reaches less than this one`;
+}
+
 export interface ConnectionRemoveResult {
   readonly id: string;
   readonly name: string | null;
@@ -1546,6 +1600,11 @@ export interface ConnectionRemoveResult {
  * Removing a connection (§6.2): a tightening, applied at once and audited. Its record goes — so its key stops working
  * at once, everywhere a copy of it is — and its entry is taken out of its app, saved first. A Manual snippet is the
  * person's to take out of their app; until then it serves nothing.
+ *
+ * Except where taking its entry out widens what agents there reach (0.35.0 security review, H1; the lead's decision):
+ * a one-project connection over the app's Agent Comms for every folder, which its entry shadows. That remove is a
+ * loosening — prepared, its preview saying what the agents there will use instead (`widerBehind`), and approved under
+ * the change policy, in the app or at the terminal. A remove that leaves nothing wider behind stays at once.
  */
 export function connectionRemoveChange(
   core: Core,
@@ -1555,12 +1614,15 @@ export function connectionRemoveChange(
 ): GatedChange<ConnectionRemoveResult> {
   let held: ConnectionRead | undefined;
   return {
-    plan: (config) => {
+    plan: async (config) => {
       refuseAnotherConnection(env, surface, request.id, 'remove');
       held = requireConnection(config, request.id);
+      const behind = held.readable ? await widerBehind(env, config, held.record) : null;
       return {
         before: config,
         after: { ...config, connections: withConnection(config, { remove: request.id }) } as Config,
+        // What the agents there would use instead, as the one thing it does that waits for the person.
+        ...(behind === null ? {} : { effects: [behind] }),
         summary: `Remove the connection ${held.readable ? connectionLabel(held.record, held.record.id) : request.id}`,
       };
     },

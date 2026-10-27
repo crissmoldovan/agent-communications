@@ -484,6 +484,37 @@ describe('MCP connections: one connection (Connection board)', () => {
     ]);
   });
 
+  it(
+    'removing one project’s connection over the one for every folder asks first, and is approved in the app',
+    SLOW,
+    async () => {
+      // Core asks where its entry shadows a wider one the agents in its folder would then use (0.35.0 review, H1).
+      const acme = list.connections[1]?.id ?? '';
+      const bridge = bridgeAt('0.35.0', {
+        connectionRemove: (call) =>
+          (call as Extract<Call, { kind: 'connectionRemove' }>).appApproval === undefined
+            ? pending(
+                ID,
+                'Remove the connection "Acme site — Claude Code"\nAgents in ~/work/acme-site will then use the connection "Work — Claude Code"',
+              )
+            : ok({ id: acme, name: 'Acme site — Claude Code', entry: { removed: 1, kept: [] }, next: '' }),
+      });
+      const view = await openOne(bridge, 'Acme site — Claude Code');
+      fireEvent.click(view.getByRole('button', { name: ONE_COPY.removeButton }));
+      fireEvent.click(view.getByRole('button', { name: ONE_COPY.removeConfirm }));
+      expect(await view.findByText(ONE_COPY.removeAsk('Acme site — Claude Code'))).toBeTruthy();
+      expect(view.getByText(/will then use the connection "Work — Claude Code"/)).toBeTruthy();
+      fireEvent.click(view.getByRole('button', { name: MCP_COPY.approve }));
+      expect(
+        await view.findByText(MCP_COPY.removedApprovedSaid('Acme site — Claude Code', 'Claude Code')),
+      ).toBeTruthy();
+      expect(changes(bridge)).toEqual([
+        { kind: 'connectionRemove', connectionId: acme },
+        { kind: 'connectionRemove', connectionId: acme, appApproval: ID },
+      ]);
+    },
+  );
+
   it('a Manual connection’s new key comes as its snippet, shown this once', SLOW, async () => {
     const bridge = bridgeAt('0.35.0', {
       connectionKeyReplace: () =>
