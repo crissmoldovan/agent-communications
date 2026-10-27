@@ -11,6 +11,7 @@ import { evaluateRuleProjection } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher, type ProjectionReference } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
 import type { FencedWhatsAppEventVisibility, WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import { prepareFlowRun } from './workflow/runs.ts';
 
 export type HoldBoundBy = 'hold-window' | 'ingest-retention';
 
@@ -508,6 +509,11 @@ export class HoldResolver {
             // A person let this held decision through: its queue item says so, not what the judge answered (Q3).
             released: true,
           });
+    // A released match of a workflow with a flow is a run, as an evaluated one is (workflows design §5).
+    const run =
+      evaluated === null || 'rejected' in evaluated
+        ? undefined
+        : await prepareFlowRun({ cipher: this.#cipher, rule: after.rule, data: evaluated.mapped.data, createdAt });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({
         eventId: after.reference.eventId,
@@ -530,6 +536,7 @@ export class HoldResolver {
         outcome,
         switchGeneration: after.switchGeneration,
         deliveries,
+        ...(run === undefined ? {} : { run }),
         disclosure: {
           approvalId: authorisation.approvalId,
           authorizationActivationId: authorisation.authorizationActivationId,

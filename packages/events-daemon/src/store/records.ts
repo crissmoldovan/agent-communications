@@ -384,6 +384,8 @@ export const RECORD_LAYOUTS: readonly RecordLayout[] = [
     sqlColumn: 'encrypted_domain',
     keyColumns: ['decision_id'],
   },
+  // A workflow run's sealed record (workflows design §4.3, W7): its mapped values, until the run ends.
+  { table: 'workflow_runs', column: 'encryptedRecord', sqlColumn: 'encrypted_record', keyColumns: ['id'] },
 ];
 
 type SqlValue = string | number | bigint | Uint8Array | null;

@@ -142,6 +142,11 @@ export interface LaneHarness {
   readonly window: (identity: LaneWindowIdentity) => Promise<RawClient>;
   readonly approve: (ruleVersion: number) => Promise<void>;
   readonly openCount: () => Promise<number>;
+  /**
+   * Stops this owner, as a crash's end would, and starts another on the same state, configuration and mailbox, with
+   * these options in place of the first's: a restart.
+   */
+  readonly restart: (options?: Partial<EventOwnerOptions>) => Promise<void>;
 }
 
 export async function withLaneOwner(
@@ -206,39 +211,41 @@ export async function withLaneOwner(
       },
     };
   };
-  const owner = await startEventOwner({
-    stateDir,
-    configDir,
-    // A home of its own, never the real one: a binding's `~` and the relay's default homes are looked for under it.
-    homeDirectory: join(root, 'home'),
-    tickMs: 60_000,
-    pollIntervalMs: 1,
-    ...options,
-    gmailSourceFor: async () =>
-      ({
-        inboxId: ACCOUNT,
-        getProfile: async () => ({ historyId: String(history) }),
-        listHistory: async () => {
-          if (pending.length === 0) return { historyId: String(history), nextPageToken: undefined, history: [] };
-          const added = pending.splice(0);
-          history += 1;
-          return {
-            historyId: String(history),
-            nextPageToken: undefined,
-            history: [
-              {
-                id: String(history),
-                messagesAdded: added.map((id) => ({ message: { id, threadId: `${id}-thread` } })),
-                labelsAdded: [],
-                labelsRemoved: [],
-              },
-            ],
-          };
-        },
-        getMessageMetadata: async (id: string) => metadata(id),
-        getMessage: async (id: string) => metadata(id),
-      }) as never,
-  });
+  const start = (more: Partial<EventOwnerOptions>) =>
+    startEventOwner({
+      stateDir,
+      configDir,
+      // A home of its own, never the real one: a binding's `~` and the relay's default homes are looked for under it.
+      homeDirectory: join(root, 'home'),
+      tickMs: 60_000,
+      pollIntervalMs: 1,
+      ...more,
+      gmailSourceFor: async () =>
+        ({
+          inboxId: ACCOUNT,
+          getProfile: async () => ({ historyId: String(history) }),
+          listHistory: async () => {
+            if (pending.length === 0) return { historyId: String(history), nextPageToken: undefined, history: [] };
+            const added = pending.splice(0);
+            history += 1;
+            return {
+              historyId: String(history),
+              nextPageToken: undefined,
+              history: [
+                {
+                  id: String(history),
+                  messagesAdded: added.map((id) => ({ message: { id, threadId: `${id}-thread` } })),
+                  labelsAdded: [],
+                  labelsRemoved: [],
+                },
+              ],
+            };
+          },
+          getMessageMetadata: async (id: string) => metadata(id),
+          getMessage: async (id: string) => metadata(id),
+        }) as never,
+    });
+  let owner = await start(options);
   const control = new EventControlClient({ stateDir, clientName: 'events-lane-story-e2e' });
   const opened: Array<() => Promise<void>> = [];
   const harness: LaneHarness = {
@@ -273,6 +280,10 @@ export async function withLaneOwner(
     },
     async openCount() {
       return ((await control.request('queue-counts')) as { open: number }).open;
+    },
+    async restart(more = {}) {
+      await owner.stop();
+      owner = await start(more);
     },
   };
   try {

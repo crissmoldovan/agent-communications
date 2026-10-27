@@ -21,6 +21,7 @@ import {
   removeRuleVersionTargetReferences,
 } from './target-version-references.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export type TighteningKind =
   | 'remove-target'
@@ -433,6 +434,8 @@ export function purgeRevokedRuleWork(
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   // The action queue (Q6): a revoked version's items go with its dry-run rows, in this same transaction.
   purgeQueueItemsForRuleVersions(database, { ruleId, ruleVersions: versions });
+  // A revoked version's workflow runs end with its authority (workflows design W10), before its deliveries go below.
+  cancelRunsInTransaction(database, { ruleId, versions }, 'AUTHORIZATION_REVOKED', now);
   for (const version of versions) {
     const versionId = ruleVersionId(ruleId, version);
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);

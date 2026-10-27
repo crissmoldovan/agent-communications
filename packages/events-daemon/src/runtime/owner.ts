@@ -10,6 +10,8 @@ import {
   homeDirectory,
   homeForDiscovery,
   isCommsError,
+  makeNotifier,
+  type Notifier,
   openCore,
   resolvePaths,
   sha256Hex,
@@ -149,6 +151,9 @@ import type { SseServer } from './sse-server.ts';
 import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
+import { composeWorkflows } from './workflow/compose.ts';
+import type { WorkflowComposition } from './workflow/contracts.ts';
+import type { WorkflowFailpoint } from './workflow/engine.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -264,6 +269,18 @@ export interface EventOwnerOptions {
         readonly homeDirectory?: string | undefined;
         readonly generate?: ContextGenerator | undefined;
         readonly reconcileMs?: number | undefined;
+      }
+    | undefined;
+  /**
+   * Workflows (0.36), test seams only: more compositions than the owner's own — a stand-in executor for a kind another
+   * track adds — the notifier a notify step raises its notice through, and a crash at a point of a step's life.
+   * Production composes every track's part and raises notices on the person's own screen.
+   */
+  readonly workflows?:
+    | {
+        readonly parts?: readonly WorkflowComposition[] | undefined;
+        readonly notifier?: Notifier | undefined;
+        readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
       }
     | undefined;
   readonly laya?:
@@ -1431,6 +1448,20 @@ async function startOwnerWithLock(
       database.close();
     },
   });
+  // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  const workflows = composeWorkflows(
+    {
+      store: database,
+      cipher,
+      approvals: core.approvals,
+      config: core.config,
+      notifier: options.workflows?.notifier ?? makeNotifier({ platform: process.platform, env: process.env }),
+      writerQuiescer,
+      now,
+      failpoint: options.workflows?.failpoint,
+    },
+    [...(options.workflows?.parts ?? [])],
+  );
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -1438,6 +1469,7 @@ async function startOwnerWithLock(
     gmailSourceFor,
     assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
     assertLinearTargets: (rule) => readers.linear?.assertActivation(rule) ?? Promise.resolve('none'),
+    flowActivationChecks: workflows.activationChecks,
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
@@ -1610,6 +1642,7 @@ async function startOwnerWithLock(
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     writerQuiescer,
+    workflows,
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),

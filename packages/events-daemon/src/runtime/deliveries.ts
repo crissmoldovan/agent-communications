@@ -92,6 +92,8 @@ export async function prepareDeliveries(input: {
   /** A held decision a person let through: its queue item says so instead of showing a judge's answer (Q3). */
   readonly released?: boolean | undefined;
 }): Promise<readonly PreparedDelivery[]> {
+  // A workflow with a flow fans out to no target: its match is a run, whose steps deliver (workflows design W1, §5).
+  if (input.rule.flow !== undefined && input.targets === undefined) return [];
   const deliveries: PreparedDelivery[] = [];
   const targets = input.targets ?? input.rule.targets.map((target) => documentDeliveryTarget(input.rule, target));
   for (const target of targets) {

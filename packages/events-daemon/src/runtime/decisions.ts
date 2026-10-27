@@ -6,6 +6,7 @@ import { assertStoredRuleAuthority } from './disclosure-fence.ts';
 import { expireHeldDecisionsInTransaction, type HoldDeadline, holdDeadline, sqliteTransactionNow } from './holds.ts';
 import { assertJudgeReservationInFlightInTransaction, settleReservationInTransaction } from './judge-budget.ts';
 import { addRetainedDeliveryTargetReference } from './target-version-references.ts';
+import { createRunInTransaction, type PreparedFlowRun } from './workflow/runs.ts';
 
 export interface DecisionCommitInput {
   readonly id: string;
@@ -28,6 +29,11 @@ export interface DecisionCommitInput {
   readonly retainProjection?: boolean | undefined;
   /** A held decision captures its creation instant in SQLite and never recalculates it from evaluator time. */
   readonly hold?: Readonly<{ holdMs: number; ingestMs: number }> | undefined;
+  /**
+   * A match of a workflow with a flow (workflows design §5): the run it makes, its record sealed before this
+   * transaction, written in it in place of any delivery. Ignored for every outcome but a match.
+   */
+  readonly run?: PreparedFlowRun | undefined;
 }
 
 export type DecisionFailpoint =
@@ -51,6 +57,8 @@ export interface HeldDecisionResolutionCommitInput {
   readonly disclosure?: Readonly<{ approvalId: string; authorizationActivationId: string }> | undefined;
   /** The one shared live-list fence applies its journal while it holds the lock; this confirms that exact live head. */
   readonly whatsappVisibilityVersion?: number | undefined;
+  /** A released match of a workflow with a flow: the run it makes, as `commitDecisionOutbox`'s. */
+  readonly run?: PreparedFlowRun | undefined;
 }
 
 /** Why a decision did not commit: the work it would complete was purged, or the switch moved, after the fence. */
@@ -177,6 +185,18 @@ export function commitDecisionOutbox(
         input.whatsapp?.messageId ?? null,
       );
     failpoint?.('after-decision');
+    if (outcome === 'matched' && input.run !== undefined)
+      createRunInTransaction(store.database, {
+        runId: input.run.runId,
+        decisionId: input.id,
+        rule: input.run.rule,
+        accountId: input.accountId,
+        eventId: input.eventId,
+        sealedRecord: input.run.sealedRecord,
+        parentRunId: input.run.parentRunId,
+        depth: input.run.depth,
+        now: input.run.createdAt,
+      });
     for (const delivery of outcome === 'retention-expired' ? [] : input.deliveries) {
       // B2-D: rule and target version replacements do not create another ordering stream. The counter's stable
       // identity intentionally excludes both immutable version numbers.
@@ -328,6 +348,18 @@ export function commitHeldDecisionOutbox(
       .run(input.outcome, input.id);
     if (updated.changes !== 1) throw new StaleDecisionError('PROJECTION_GONE');
     failpoint?.('after-decision');
+    if (input.outcome === 'matched' && input.run !== undefined)
+      createRunInTransaction(database, {
+        runId: input.run.runId,
+        decisionId: input.id,
+        rule: input.run.rule,
+        accountId: input.accountId,
+        eventId: input.eventId,
+        sealedRecord: input.run.sealedRecord,
+        parentRunId: input.run.parentRunId,
+        depth: input.run.depth,
+        now: input.run.createdAt,
+      });
     for (const delivery of input.deliveries) {
       const orderingSequence = allocateDeliveryOrderSequence(database, {
         ruleId: input.ruleId,
