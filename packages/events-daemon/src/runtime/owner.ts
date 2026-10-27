@@ -1979,8 +1979,9 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
-        // An event delivery a tick started finishes here, while the database and the listeners are still open.
-        await eventDispatcher.idle();
+        // An event delivery a tick started finishes here, while the database and the listeners are still open; its
+        // queue's next event starts no more.
+        await eventDispatcher.stop();
         // A workflow pass a wake started finishes here, before the database closes; none starts after.
         await workflows.stop();
         await control?.close();

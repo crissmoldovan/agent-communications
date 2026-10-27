@@ -25,6 +25,8 @@ import { seedRun } from './support/workflow-event-rows.ts';
 interface Received {
   readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
+  /** When the whole request had arrived. */
+  readonly at: number;
 }
 
 /** A loopback webhook receiver answering each request with the next status it is given (the last one repeats). */
@@ -45,7 +47,7 @@ async function receiver(statuses: readonly number[]) {
       );
       const length = Number(headers['content-length'] ?? 0);
       if (buffer.byteLength < end + 4 + length) return;
-      requests.push({ headers, body: buffer.subarray(end + 4, end + 4 + length).toString('utf8') });
+      requests.push({ headers, body: buffer.subarray(end + 4, end + 4 + length).toString('utf8'), at: Date.now() });
       const status = statuses[Math.min(requests.length - 1, statuses.length - 1)] ?? 200;
       socket.end(`HTTP/1.1 ${status} X\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`);
     });
@@ -470,5 +472,65 @@ test('D5: a webhook subscriber that hangs holds back neither the owner’s own t
     );
   } finally {
     await server.close();
+  }
+});
+
+test('D5: a burst of six reaches each subscriber in order at once, not one event per tick, on the owner’s normal tick', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const hook = await receiver([200]);
+  const port = await freePort();
+  try {
+    await withLiveEvents(
+      [
+        { document: webhookSubscriber({ url: hook.url }) },
+        { document: sseSubscriber({ port, patterns: ['acme.*.*.*'] }) },
+      ],
+      async (harness) => {
+        await signingSecret(harness.stateDir);
+        // From here the owner runs on its own timer, at its normal interval (5 s): the test ticks nothing.
+        await harness.lane.restart({ tickMs: undefined });
+        const live = await openSse({
+          port,
+          subscriberId: 'events-dashboard',
+          token: harness.tokens.get('events-dashboard') ?? '',
+        });
+        try {
+          const ids = await harness.raise((run, workflow) =>
+            [1, 2, 3, 4, 5, 6].map((index) => issueCreated(run, workflow, Date.now(), index)),
+          );
+          // The owner's next tick starts each subscriber's first; the rest follow it at once, one at a time each.
+          // Bounded well short of the six ticks one event per tick took (30 s).
+          const deadline = Date.now() + 15_000;
+          while ((hook.requests.length < 6 || live.frames().length < 6) && Date.now() < deadline)
+            await new Promise((resolve) => setTimeout(resolve, 20));
+          assert.deepEqual(
+            hook.requests.map((request) => request.headers['webhook-id']),
+            ids,
+            'all six by webhook, in order',
+          );
+          assert.deepEqual(
+            live.frames().map((frame) => frame.id),
+            ids,
+            'and all six live, in order',
+          );
+          const spread = (times: readonly number[]) => Math.max(...times) - Math.min(...times);
+          const hooked = spread(hook.requests.map((request) => request.at));
+          const delivered = spread(
+            (
+              harness.database
+                .prepare("SELECT delivered_at FROM event_deliveries WHERE subscriber_id = 'events-dashboard'")
+                .all() as Array<{ delivered_at: number }>
+            ).map((row) => row.delivered_at),
+          );
+          assert.ok(hooked < 2_000, `the webhook had them within ${hooked} ms of each other`);
+          assert.ok(delivered < 2_000, `the live subscriber within ${delivered} ms`);
+        } finally {
+          live.close();
+        }
+      },
+    );
+  } finally {
+    await hook.server.close();
   }
 });
