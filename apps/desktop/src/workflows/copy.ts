@@ -227,3 +227,23 @@ export const SETTINGS_COPY = {
   split: { branches: 'Side by side, it starts' },
   remove: 'Remove this step',
 } as const;
+
+/** Try it (spec §7.7, §11.3): a draft walked over an example message, with the outcomes the person picks. */
+export const TRY_COPY = {
+  tryIt: 'Try it',
+  back: 'Back to editing',
+  title: 'Try it',
+  body: 'Pick what each step answers on its box, then try it on an example message. Nothing is sent, started or written: each step says what it would do. A step you leave answers with its first outcome.',
+  run: 'Try it',
+  again: 'Try it again',
+  clear: 'Clear the answers',
+  trying: 'Trying…',
+  answer: (stepId: string, outcome: string) => `${stepId} answers ${outcome}`,
+  path: 'The path it took',
+  noPath: 'It took no step: the example did not reach the workflow’s steps.',
+  wouldRaise: 'Would raise',
+  prompt: 'The session would be told',
+  issue: 'The issue would read',
+  fixFirst: 'Fix what the checks found first: a workflow is tried as it would be saved.',
+  unreadable: 'The answer could not be read.',
+} as const;

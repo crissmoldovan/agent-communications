@@ -451,6 +451,48 @@ export function readCheck(data: unknown): RuleCheckResultV1 {
   };
 }
 
+const PART_KINDS = ['plain', 'value', 'untrusted'] as const;
+
+function readPart(value: unknown, what: string): RulePart {
+  const fields = object(value, what);
+  return { text: text(fields.text, `${what}.text`), kind: word(fields.kind, PART_KINDS, `${what}.kind`) };
+}
+
+function readTestStep(value: unknown, what: string): FlowTestStepV1 {
+  const fields = object(value, what);
+  const issue = fields.issue === undefined ? undefined : object(fields.issue, `${what}.issue`);
+  return {
+    stepId: text(fields.stepId, `${what}.stepId`),
+    kind: word(fields.kind, STEP_KINDS, `${what}.kind`),
+    outcome: text(fields.outcome, `${what}.outcome`),
+    would: list(fields.would, `${what}.would`, readPart),
+    ...(fields.prompt === undefined ? {} : { prompt: text(fields.prompt, `${what}.prompt`) }),
+    ...(issue === undefined
+      ? {}
+      : {
+          issue: {
+            title: text(issue.title, `${what}.issue.title`),
+            description: text(issue.description, `${what}.issue.description`),
+          },
+        }),
+    events: list(fields.events, `${what}.events`, (event, at) => {
+      const each = object(event, at);
+      return { type: text(each.type, `${at}.type`), data: json(each.data, `${at}.data`) };
+    }),
+  };
+}
+
+/** `workflow test - <example> --json` for a workflow with a flow: the path it took, and what each step would do. */
+export function readFlowTest(data: unknown): FlowTestResultV1 {
+  const fields = object(data, 'workflow test');
+  return {
+    ruleId: text(fields.ruleId, 'workflow test.ruleId'),
+    version: whole(fields.version, 'workflow test.version'),
+    path: texts(fields.path, 'workflow test.path'),
+    steps: list(fields.steps, 'workflow test.steps', readTestStep),
+  };
+}
+
 const FOLDER_KINDS = ['checkout', 'worktree'] as const;
 const SESSION_STATES = ['idle', 'busy', 'watched'] as const;
 

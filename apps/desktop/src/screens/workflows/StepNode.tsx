@@ -19,7 +19,7 @@ import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { judgeLine, watches, whatsKept, whichMessages } from '../../events-rules.ts';
 import type { JsonObject } from '../../rule-editor/model.ts';
 import { type GateBox, IN, OUT, type StepBox } from '../../workflows/canvas.ts';
-import { CANVAS_COPY } from '../../workflows/copy.ts';
+import { CANVAS_COPY, TRY_COPY } from '../../workflows/copy.ts';
 import { Sentence } from '../events/parts.tsx';
 
 /** What every box reads beside its own data: the workflow, for the gate's sentences, and the accounts' names. */
@@ -27,6 +27,15 @@ export const BoxContext = createContext<{ document: JsonObject; names: AccountNa
   document: {},
   names: new Map(),
 });
+
+/**
+ * Try it (§11.3, §7.7): each box's outcomes become a picker, the one chosen is what `workflow test` makes the step
+ * answer. Null while the designer is not trying the workflow.
+ */
+export const TryContext = createContext<{
+  chosen: Readonly<Record<string, string>>;
+  choose: (stepId: string, outcome: string | null) => void;
+} | null>(null);
 
 /** The marks a step's header carries: the events it raises, and what the checks found. */
 function Marks({ emits, problems }: { emits: number; problems: number }) {
@@ -61,11 +70,14 @@ const ROW = 'relative flex min-h-0 flex-1 items-center gap-(--cue-space-2) px-(-
 
 /** A step's box: its header, its id and label, then each outcome with its handle. */
 export function StepNode({ data, selected }: NodeProps<Node<StepBox, 'step'>>) {
+  const trying = useContext(TryContext);
+  const chosen = trying?.chosen[data.stepId];
   return (
     <NodeCard
       tone={data.tone}
-      state={selected ? 'selected' : 'idle'}
+      state={selected ? 'selected' : data.lit ? 'live' : 'idle'}
       data-step={data.stepId}
+      data-lit={data.lit ? 'true' : undefined}
       className="flex h-full w-full flex-col"
       header={
         <span className="flex min-w-0 flex-1 items-center gap-(--cue-space-2)">
@@ -97,7 +109,20 @@ export function StepNode({ data, selected }: NodeProps<Node<StepBox, 'step'>>) {
                 {CANVAS_COPY.stops}
               </Chip>
             ) : null}
-            <span className="truncate">{handle.words}</span>
+            {trying === null || handle.id === 'otherwise' ? (
+              <span className="truncate">{handle.words}</span>
+            ) : (
+              <button
+                type="button"
+                data-choose={handle.id}
+                aria-pressed={chosen === handle.id}
+                aria-label={TRY_COPY.answer(data.stepId, handle.words)}
+                className="nodrag truncate rounded-control px-(--cue-space-1) hover:bg-surface-2 aria-pressed:bg-accent-soft aria-pressed:text-accent"
+                onClick={() => trying.choose(data.stepId, chosen === handle.id ? null : handle.id)}
+              >
+                {handle.words}
+              </button>
+            )}
             <NodeHandle
               type="source"
               position={Position.Right}
