@@ -465,6 +465,13 @@ export function connectionMigrateUndoChange(
       if (!read.readable)
         throw new CommsError('CONFIG', `connection ${request.id} could not be read, so it cannot be undone`);
       if (read.record.app === 'manual') throw new CommsError('USAGE', 'a Manual connection came from no migration');
+      // Only a migration's connection is undone: one `connection add` or a channel's own `mcp install` made replaced
+      // no entries, and "undoing" it registered each part on its own under its default name — the six-entry shape.
+      if (read.record.migratedFrom === undefined) {
+        throw new CommsError('USAGE', `"${read.record.name}" came from no migration, so there is nothing to undo`, {
+          hint: 'connection list says which connections a migration made. To stop using this one, take it out with connection remove; to register a server as an entry of its own, use its mcp install --standalone.',
+        });
+      }
       record = read.record;
       const names = new Map((read.record.migratedFrom?.entries ?? []).map((entry) => [entry.server, entry.name]));
       return {

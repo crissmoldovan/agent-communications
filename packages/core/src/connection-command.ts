@@ -273,6 +273,11 @@ function viewLines(view: ConnectionView, env: NodeJS.ProcessEnv): string[] {
     `${view.name}  (${view.appLabel}, ${whereLine(view, env)})  ${state}`,
     `  id ${view.id}`,
     ...view.parts.map((part) => `  · ${part.text}${part.available ? '' : `: not started — ${part.why}`}`),
+    ...(view.migratedFrom === null
+      ? []
+      : [
+          `  moved here by connection migrate from ${view.migratedFrom.entries.map((entry) => `"${entry.name}"`).join(', ')}: connection migrate --undo ${view.id} puts them back`,
+        ]),
     `  ${view.lastUsed === null ? 'not used yet' : `last used ${view.lastUsed}`}`,
   ];
 }

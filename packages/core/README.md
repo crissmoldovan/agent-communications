@@ -352,6 +352,8 @@ agentcomms connection migrate            # your app's separate entries into one 
   often committed and would carry the key into the repository.
 - **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one
   connection per app reaching exactly what those entries reached, saves each entry it removes, and can be undone.
+  `connection list --json` says which connections a migration made (`migratedFrom`, with the entries it replaced), and
+  `connection migrate --undo` refuses any other: one you added replaced nothing, so there is nothing to put back.
 - `connection` commands are `comms_connections_list`, `comms_connection_show`, `comms_connection_add`,
   `comms_connection_change`, `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` and
   `comms_connection_migrate` over MCP; a Manual connection is the one thing they do not do. Inside a connection,

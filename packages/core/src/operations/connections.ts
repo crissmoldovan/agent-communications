@@ -241,6 +241,15 @@ export interface ConnectionView {
   readonly key: { readonly issuedAt: string | null; readonly revoked: boolean };
   readonly createdAt: string | null;
   readonly lastUsed: string | null;
+  /**
+   * Whether `connection migrate` made it (D16), and the entries of their own it replaced, by server and entry name —
+   * what `connection migrate --undo` registers again; null for a connection made any other way, which has nothing to
+   * undo. Never where those entries were saved.
+   */
+  readonly migratedFrom: {
+    readonly at: string;
+    readonly entries: readonly { readonly server: string; readonly name: string }[];
+  } | null;
   readonly problems: readonly string[];
 }
 
@@ -317,6 +326,7 @@ async function viewOf(
       key: { issuedAt: null, revoked: false },
       createdAt: null,
       lastUsed: null,
+      migratedFrom: null,
       problems: read.problems,
     };
   }
@@ -338,6 +348,13 @@ async function viewOf(
     key: { issuedAt: record.keyIssuedAt, revoked: record.revokedAt !== null },
     createdAt: record.createdAt,
     lastUsed: await connectionLastUsed(core.paths.stateDir, record.id),
+    migratedFrom:
+      record.migratedFrom === undefined
+        ? null
+        : {
+            at: record.migratedFrom.at,
+            entries: record.migratedFrom.entries.map((entry) => ({ server: entry.server, name: entry.name })),
+          },
     problems: read.problems,
   };
 }
