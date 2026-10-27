@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { isCommand, openCore } from '@agentcomms/core';
+import { agentMarkerHint, isCommand, openCore } from '@agentcomms/core';
 import { RESEND_CALLER } from '../src/caller.ts';
 import { run } from '../src/cli/program.ts';
 import { ResendContext } from '../src/context.ts';
@@ -70,7 +70,7 @@ test('the hand-off command quotes a spaced word on POSIX and prints words instea
   const posix = await addAccount('two words.test', 'darwin');
   assert.equal(
     posix.hint,
-    `Ask the user to run ${resendInline(posix.core, words('two words.test'))} in their own terminal. Never paste a key into a chat: the transcript keeps it.`,
+    `Ask the user to run ${resendInline(posix.core, words('two words.test'))} in their own terminal. Never paste a key into a chat: the transcript keeps it. ${agentMarkerHint('CLAUDECODE', process.platform)}`,
   );
   assert.match(posix.hint, / account add acme\/resend --domain 'two words\.test'`/);
 
