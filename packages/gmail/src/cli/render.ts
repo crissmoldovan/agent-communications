@@ -146,6 +146,11 @@ export type FinishRegistration =
    * or, from 0.35.0, its MCP connection's Gmail part reaches it (`connectionServesInbox`), and `connection` names it.
    */
   | { client: string; status: 'already-registered'; connection?: string | undefined }
+  /**
+   * The app's connection's Gmail part is kept to another mailbox, or read-only: setup's every mailbox would loosen it,
+   * so it was left as it is and nothing prepared (`gmailPartLeftAlone`) — `next` says so, with the command that would.
+   */
+  | { client: string; status: 'left-alone'; connection: string; part: string; next: string }
   | { client: string; status: 'registered'; install: ServerInstallResult }
   /** Gmail put into the app's MCP connection, or a connection made for it (single-server design D17). */
   | { client: string; status: 'registered'; connection: ConnectionPartResult }
@@ -181,6 +186,8 @@ function renderFinishRegistration(registration: FinishRegistration, color: boole
       return registration.connection === undefined
         ? `Setup asked for the Gmail server to be registered with ${client}; its entry there already serves this mailbox, so nothing was changed.`
         : `Setup asked for Gmail to be put into ${client}'s MCP connection; its connection "${registration.connection}" already reaches this mailbox, so nothing was changed.`;
+    case 'left-alone':
+      return registration.next;
     case 'registered':
       return 'connection' in registration
         ? [

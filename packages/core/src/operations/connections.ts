@@ -1127,6 +1127,69 @@ export function appConnectionPart(
   return part === undefined ? null : { connection, part };
 }
 
+/** The app's connection's part of a server as it is, when it is narrower than every account and every tool. */
+export interface AppPartAsIs {
+  readonly connection: { readonly id: string; readonly name: string; readonly label: string };
+  /** The part in a sentence: "Gmail, the mailbox cue/gmail, read-only". */
+  readonly text: string;
+  /** The account it is kept to, by the name it has now; null for every account. */
+  readonly account: string | null;
+  readonly readOnly: boolean;
+  /** Core's `connection change` words that let it reach every account, its read-only kept; null when it does. */
+  readonly everyAccount: readonly string[] | null;
+  /** Core's `connection change` words that let it do more than read, its account kept; null when it is not read-only. */
+  readonly everyTool: readonly string[] | null;
+}
+
+/**
+ * The app's connection's part of `server` (`appConnectionPart`) when it is kept to one account, or read-only — what a
+ * setup that asks for every account, with every tool, would loosen (decision 5 of the 0.35.0 security review's fixes:
+ * Gmail's `setup --mcp-client` and the finish of its sign-in leave such a part as it is, prepare nothing, and say so).
+ * With the words of core's own `connection change` that would let it reach every account, or do more than read, each
+ * keeping the rest of what the person chose. Null when the app has no such connection or part, or the part reaches
+ * every account with every tool already.
+ */
+export function narrowedAppPart(
+  config: Config,
+  env: NodeJS.ProcessEnv,
+  app: string,
+  server: string,
+): AppPartAsIs | null {
+  const found = appConnectionPart(config, env, app, server);
+  if (found === null) return null;
+  const { connection, part } = found;
+  if (part.pin === undefined && part.readOnly !== true) return null;
+  const facts = partFacts(server);
+  const account =
+    part.pin === undefined
+      ? null
+      : facts?.accounts === 'inboxes'
+        ? (findById(config, 'inbox', part.pin.id)?.alias ?? part.pin.alias)
+        : (findById(config, 'account', part.pin.id)?.alias ?? part.pin.alias);
+  const words = (next: ConnectionPart) => [
+    'connection',
+    'change',
+    connection.id,
+    '--parts',
+    partsWords(config, putPart(connection.parts, next)),
+  ];
+  return {
+    connection: { id: connection.id, name: connection.name, label: connectionLabel(connection, connection.id) },
+    text: partText(server, {
+      pin: part.pin === undefined ? null : { id: part.pin.id, alias: account ?? part.pin.alias },
+      readOnly: part.readOnly === true,
+    }),
+    account,
+    readOnly: part.readOnly === true,
+    everyAccount:
+      part.pin === undefined ? null : words({ server: part.server, ...(part.readOnly ? { readOnly: true } : {}) }),
+    everyTool:
+      part.readOnly === true
+        ? words({ server: part.server, ...(part.pin === undefined ? {} : { pin: part.pin }) })
+        : null,
+  };
+}
+
 /** A name no connection here has, ignoring case: `Claude Code`, then `Claude Code 2`, and so on. */
 function freeConnectionName(config: Config, base: string): string {
   const taken = new Set(

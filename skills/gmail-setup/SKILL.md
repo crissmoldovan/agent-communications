@@ -198,7 +198,11 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    `gmail_inbox_finish` with the `flowId`. `APPROVAL_PENDING` means they have not finished yet and the
    link is still good: wait and call again, never start a second one. A sign-in `agent-gmail setup
    --mcp-client` started can come back with `pendingRegistration`: the mailbox is connected, Gmail is not in
-   the app's connection yet. Call the core tool it names with its `arguments`, show the preview, claim it.
+   the app's connection yet. Call the core tool it names with its `arguments`, show the preview, claim it. Or
+   with `connectionLeftAlone` instead: the app's connection has Gmail kept to another mailbox, or read-only,
+   which setup's every mailbox would loosen, so it was left as it is and nothing is pending — tell the person
+   its `next`, which names the command that would let it reach this mailbox too. Do not make that change
+   yourself unless they ask for it.
 
    The OAuth client is registered with `gmail_client_add`, from the **path** of the JSON they downloaded —
    `candidates` in `gmail_setup` lists the ones in their Downloads folder. Never ask them to paste the
@@ -241,7 +245,11 @@ send policy?" either: `gmail_inboxes_list` answers that in one call.
    user's yes run `claim` — `agent-gmail mcp install --client <client> --approval <id>`; after `--standalone`
    with `--standalone`, `--force` when replacing, and `--inbox <mailbox>` when the entry there served another
    mailbox: the replacement serves the one just connected. `"already-registered"` means the app's connection
-   (or, after `--standalone`, its `gmail` entry) already reaches this mailbox; nothing was asked.
+   (or, after `--standalone`, its `gmail` entry) already reaches this mailbox; nothing was asked. `"left-alone"`
+   means the app's connection has Gmail kept to another mailbox, or read-only: setup asks for every mailbox,
+   which would loosen what the person chose, so it left the part as it is and asked nothing — tell them `next`,
+   with the command that would let it reach this mailbox too. `setup --mcp-client` does the same, saying it
+   among `warnings`.
    `"not-registered"` means it did not happen, and `reason` says why — several connections, somebody else's
    server under that name, ours without `--replace-server` (its `hint` names a second entry), or a client this
    cannot write to. The mailbox is connected all the same, and nothing was replaced.
