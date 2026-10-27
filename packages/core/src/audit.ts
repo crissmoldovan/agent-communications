@@ -3,7 +3,7 @@ import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { RetainedApproval } from './approval-maintenance.ts';
 import type { SendPolicy } from './config.ts';
-import { CONNECTION_ID_ENV, CONNECTION_ID_PATTERN } from './connections.ts';
+import { connectionOfThisProcess } from './connections.ts';
 import { appendPrivateLine } from './fs.ts';
 
 /**
@@ -57,12 +57,6 @@ export interface AuditRecord {
    * record is unlinked, so the audit log keeps the terminal history the approval directory no longer does.
    */
   retained?: RetainedApproval;
-}
-
-/** The MCP connection this process is a part of, as its gateway set it: an id, never its key. */
-function connectionOfThisProcess(): string | undefined {
-  const id = process.env[CONNECTION_ID_ENV];
-  return id !== undefined && CONNECTION_ID_PATTERN.test(id) ? id : undefined;
 }
 
 /** Large id lists are condensed so every audit line stays small enough to be appended atomically. */

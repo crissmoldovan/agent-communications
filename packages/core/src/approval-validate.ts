@@ -8,6 +8,7 @@ import {
   standingUseProblem,
 } from './approval-binding.ts';
 import { type ApprovalRecord, type ApprovalState, changeDigest, DIGEST_VERSION, downloadDigest } from './approvals.ts';
+import { CONNECTION_ID_PATTERN } from './connections.ts';
 import { canonicalJson, sha256Hex } from './digest.ts';
 import { APPROVAL_ID_PATTERN } from './ids.ts';
 import {
@@ -160,6 +161,13 @@ function fail(reason: IntegrityReason, attribution: Attribution = 'verified'): F
 
 function checkVerified(record: ApprovalRecord, raw: Record<string, unknown>): Fail | null {
   if (raw.digestVersion !== DIGEST_VERSION) return fail('digest-version');
+  // Unbound, and shown by the app: only ever a connection's id, so nothing else a file holds is shown as one (P3).
+  if (
+    raw.preparedBy !== undefined &&
+    (typeof raw.preparedBy !== 'string' || !CONNECTION_ID_PATTERN.test(raw.preparedBy))
+  ) {
+    return fail('wrong-shape');
+  }
   const kind = raw.kind;
   if (kind === 'disclosure') return checkDisclosure(record, raw);
   if (kind !== 'send' && kind !== 'change' && kind !== 'download' && kind !== 'standing') return fail('wrong-shape');

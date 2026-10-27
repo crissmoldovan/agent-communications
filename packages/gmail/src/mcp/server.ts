@@ -207,12 +207,13 @@ async function pendingRegistrationOf(
 ) {
   const served = await mailboxServedElsewhere(env, { client: intent.client, inbox: alias });
   const second = `gmail-${alias.split('/')[0]}`;
-  // This installation's own `mcp install`, located: the same change comms_server_install makes, at a terminal.
+  // This installation's own `mcp install --standalone`, located: the change comms_server_install makes, at a terminal.
   const command = handoffs.own([
     'mcp',
     'install',
     '--client',
     intent.client,
+    '--standalone',
     ...(intent.launcher ? ['--launcher', intent.launcher] : []),
     ...(!replace && served !== null ? ['--name', second] : []),
     ...(served === null ? [] : ['--inbox', alias]),

@@ -142,7 +142,8 @@ terminal), `approve` (under `confirm`, a person at a terminal) and `mcp` (it sta
 | `agent-resend scheduled cancel <id>` | `resend_scheduled_cancel` |
 | `agent-resend approve <approvalId>` | — a person at a terminal, with the command the result gives |
 | `agent-resend mcp` | — it starts the server |
-| `agent-resend mcp install --client <client>` | `comms_server_install` (core) |
+| `agent-resend mcp install --client <client>` | `comms_connection_change` with `add` and `app` (core): Resend into the app's connection |
+| `agent-resend mcp install --client <client> --standalone` | `comms_server_install` (core): an entry of its own |
 | `agent-resend mcp prune` | `comms_server_prune` (core) |
 
 Every command that reads or changes an account — all but `account`, `doctor`, `send wait`, `approve` and `mcp` — is

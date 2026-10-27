@@ -54,6 +54,16 @@ export const CONNECTION_ID_ENV = 'AGENTCOMMS_CONNECTION';
 export const GATEWAY_PID_ENV = 'AGENTCOMMS_GATEWAY_PID';
 
 /**
+ * The MCP connection this process is a part of, as its gateway set it (`AGENTCOMMS_CONNECTION`, D11): its id, never
+ * its key — or undefined outside any connection, and for anything there that is not a connection's id. What an audit
+ * line and an approval this process writes name the connection by (single-server design §7).
+ */
+export function connectionOfThisProcess(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  const id = env[CONNECTION_ID_ENV];
+  return id !== undefined && CONNECTION_ID_PATTERN.test(id) ? id : undefined;
+}
+
+/**
  * Whether this process is a part of an MCP connection, started by its gateway: its instructions are then a brief of a
  * few lines that the gateway composes with the others' (D14), not its own full greeting.
  */

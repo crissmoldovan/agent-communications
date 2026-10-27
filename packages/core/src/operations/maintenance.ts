@@ -58,8 +58,8 @@ import {
 import { VERSION } from '../version.ts';
 import { activityDoctorCheck } from './activity.ts';
 import { orphanedBehaviourRules } from './behaviour.ts';
-import { searchDoctorCheck } from './search.ts';
 import { connectionList } from './connections.ts';
+import { searchDoctorCheck } from './search.ts';
 import { type ChannelRegistration, CLIENTS, channelsAvailable } from './servers.ts';
 import { type StandingReport, standingReport } from './standing.ts';
 

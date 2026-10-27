@@ -143,7 +143,8 @@ registers it only once npm has installed exactly that tarball; a runtime already
 once that runtime is shown to be that tarball. A channel's own `mcp install`
 (`npx -y @agentcomms/gmail mcp install --client claude-code`) carries no verifier: it installs the release it is
 running itself — the one npx just fetched to run it — and says, in its preview and its result, that it was not
-verified and that core's command checks it; any other release it refuses. With `--launcher npx`, core verifies the
+verified and that core's command checks it; any other release it refuses — so where the app has no connection yet,
+it makes none whose Agent Comms runtime it would have to fetch, and names core's `connection add` instead. With `--launcher npx`, core verifies the
 release the entry names before it registers it, and a channel's own command, which cannot, registers it unchecked;
 either way the client fetches the package from npm again each time it starts it, unverified, where the managed
 launcher's runtime is the verified one. [Upgrading](docs/upgrading.md#the-short-way-agentcomms-update) has the details.
@@ -535,13 +536,16 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
 
 `mcp install` pins the exact version into the entry it registers, so upgrading the package elsewhere
 on your machine cannot change what your agents run underneath you. The cost is that a new release
-reaches an already-registered client only when you re-register it:
+reaches an already-registered client only when you re-register it.
+
+From 0.35.0 a channel's own `mcp install` puts the channel into the app's MCP connection, whose parts
+`agentcomms update` moves. An entry of its own, made with `--standalone`, is brought up to date so:
 
 ```bash
-npx -y @agentcomms/gmail@latest mcp install --client claude-code --force
-npx -y @agentcomms/slack@latest mcp install --client claude-code --force
-npx -y @agentcomms/resend@latest mcp install --client claude-code --force
-npx -y @agentcomms/whatsapp@latest mcp install --client claude-code --force   # keeps the account it is pinned to
+npx -y @agentcomms/gmail@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/slack@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/resend@latest mcp install --client claude-code --standalone --force
+npx -y @agentcomms/whatsapp@latest mcp install --client claude-code --standalone --force   # keeps the account it is pinned to
 npx -y @agentcomms/core@latest mcp install --client claude-code --force   # the core server, if you use it
 ```
 

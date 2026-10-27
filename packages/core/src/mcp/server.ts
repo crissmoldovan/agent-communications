@@ -41,6 +41,7 @@ import {
   connectionChangeChange,
   connectionKeyReplaceChange,
   connectionList,
+  connectionPartChange,
   connectionRemoveChange,
   connectionRenameChange,
   connectionShow,
@@ -1354,22 +1355,73 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Change an MCP connection’s parts',
       description:
-        'Every part a connection has from now on. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits. Giving more — a part added, an account let go or moved, read-only off — returns `approvalRequired` with a preview and an approvalId: call again with it once the person agrees. A running app sees the change through tools/list_changed where it supports it.',
-      inputSchema: { id: connectionId, parts: partArg, ...approvalArg },
+        'Every part a connection has from now on, with `id` and `parts`. Or, with `add`, one part put into an app’s connection — what a channel’s own `mcp install` does: `app` names the app, and its connection for every folder takes the part, kept to the account and read-only `add` names; an app with none gets a connection made for it, with Agent Comms itself and that part; one with several needs `id` to say which. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits, and the preview marks it done. Giving more — a part added, an account let go or moved, read-only off, a connection made — returns `approvalRequired` with a preview naming the connection and an approvalId: call again with it once the person agrees. A running app sees a change of parts through tools/list_changed where it supports it; a connection made needs the app restarted — tell the person.',
+      inputSchema: {
+        id: connectionId.optional().describe('the connection, by its id: cn_ and 26 letters and digits'),
+        parts: partArg.optional(),
+        add: z
+          .strictObject({
+            server: z.string().describe(`the part: ${PART_FACTS.map((facts) => facts.server).join(', ')}`),
+            account: z
+              .string()
+              .optional()
+              .describe('the one account it is kept to, `organisation/platform`; left out, every account'),
+            readOnly: z.boolean().optional().describe('Gmail only: keep it to reading'),
+          })
+          .optional()
+          .describe('one part to put into the app’s connection, in place of the one of that server it has'),
+        app: z
+          .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
+          .optional()
+          .describe('with `add`: the app whose connection takes the part'),
+        ...approvalArg,
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
-    async (args) =>
-      change(
-        () =>
-          connectionChangeChange(
-            core,
-            env,
-            { id: args.id, parts: args.parts },
-            'mcp',
-            installVerification(updateDeps, npmRegistry(env)),
-          ),
+    async (args) => {
+      const deps = installVerification(updateDeps, npmRegistry(env));
+      if (args.add !== undefined) {
+        if (args.parts !== undefined) {
+          return fail(new CommsError('USAGE', '`add` puts one part in, and `parts` says every part: give one of them'));
+        }
+        if (args.app === undefined) {
+          return fail(new CommsError('USAGE', '`add` names the app whose connection takes the part: give `app`'));
+        }
+        const add = args.add;
+        return change(
+          () =>
+            connectionPartChange(
+              core,
+              env,
+              {
+                server: add.server,
+                app: args.app as string,
+                ...(args.id === undefined ? {} : { id: args.id }),
+                ...(add.account === undefined ? {} : { account: add.account }),
+                ...(add.readOnly === undefined ? {} : { readOnly: add.readOnly }),
+                approvalId: args.approvalId,
+              },
+              'mcp',
+              deps,
+            ),
+          args.approvalId,
+        );
+      }
+      if (args.id === undefined || args.parts === undefined) {
+        return fail(
+          new CommsError('USAGE', 'name the connection with `id` and every part it has from now on with `parts`', {
+            hint: 'Or put one part into an app’s connection with `add` and `app`.',
+          }),
+        );
+      }
+      if (args.app !== undefined) return fail(new CommsError('USAGE', '`app` goes with `add`: `parts` names no app'));
+      const id = args.id;
+      const parts = args.parts;
+      return change(
+        () => connectionChangeChange(core, env, { id, parts, approvalId: args.approvalId }, 'mcp', deps),
         args.approvalId,
-      ),
+      );
+    },
   );
   server.registerTool(
     'comms_connection_rename',

@@ -206,6 +206,7 @@ function disclosureShape(raw: Record<string, unknown>): UnreadableReason | null 
     'revokedAt',
     'expiredAt',
     'reason',
+    'preparedBy',
   ] as const) {
     if (!optional(raw[field], isString)) return 'wrong-shape';
   }
@@ -276,6 +277,7 @@ function v2Shape(raw: Record<string, unknown>): UnreadableReason | null {
     'failedAt',
     'revokedAt',
     'expiredAt',
+    'preparedBy',
   ] as const) {
     if (!optional(raw[field], isString)) return 'wrong-shape';
   }

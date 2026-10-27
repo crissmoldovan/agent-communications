@@ -5,9 +5,18 @@ import { isAbsolute, join } from 'node:path';
 import { before, test } from 'node:test';
 import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
+import { REGISTRY } from '../scripts/channels.mjs';
 import { DRIVERS, driveOperations, parameterNames, recordArguments, resolveOperation } from '../scripts/operations.mjs';
 import { PUBLISHABLE } from '../scripts/packages.mjs';
-import { checkOperations, checkParity, readTable, uncheckedRows, verifyParity } from '../scripts/parity.mjs';
+import {
+  checkGateway,
+  checkOperations,
+  checkParity,
+  gatewayParts,
+  readTable,
+  uncheckedRows,
+  verifyParity,
+} from '../scripts/parity.mjs';
 import { deriveRegistries, LIBRARIES, ROOT, SERVICES, SURFACES, scratchEnv, WRAPPERS } from '../scripts/registries.mjs';
 import { tempDir } from './helpers/temp-dir.mjs';
 
@@ -498,12 +507,21 @@ test('the second review’s swaps — between rows that share an operation — e
     ),
     // One tool behind three commands: what the tool is given decides which, so it is the arguments that move.
     probe(
-      'core.mcp.install ↔ slack.mcp.install, by their arguments',
-      (source) => argsSwapped(source, 'core.mcp.install', 'slack.mcp.install'),
+      'core.mcp.install ↔ slack.mcp.install.standalone, by their arguments',
+      (source) => argsSwapped(source, 'core.mcp.install', 'slack.mcp.install.standalone'),
       'row "core.mcp.install": comms_server_install',
       'reaches serverInstallChange with request.channel "slack", where the row expects "core"',
-      'row "slack.mcp.install": comms_server_install',
+      'row "slack.mcp.install.standalone": comms_server_install',
       'reaches serverInstallChange with request.channel "core", where the row expects "slack"',
+    ),
+    // A channel's own `mcp install` puts its channel into the app's connection (D17): which channel, the arguments say.
+    probe(
+      'gmail.mcp.install ↔ slack.mcp.install, by their arguments',
+      (source) => argsSwapped(source, 'gmail.mcp.install', 'slack.mcp.install'),
+      'row "gmail.mcp.install": comms_connection_change',
+      'reaches connectionPartChange with request.server "slack", where the row expects "gmail"',
+      'row "slack.mcp.install": comms_connection_change',
+      'reaches connectionPartChange with request.server "gmail", where the row expects "slack"',
     ),
   ]);
 });
@@ -1837,4 +1855,67 @@ test('what an operation receives is recorded by parameter name, leaves only, and
     3: 'extra',
   });
   assert.equal(ran, false, 'a getter is code, and recording runs none');
+});
+
+// ── The whole gateway (single-server design §8.3, §10, §12) ─────────────────────────────────────────────────────
+
+test('the gateway’s parts are every declared server, under the prefix the registry gives each (D5)', () => {
+  const parts = gatewayParts();
+  assert.deepEqual(
+    parts
+      .filter((part) => REGISTRY.channels.some((channel) => channel.directory === part.package))
+      .map((part) => [part.package, part.prefix]),
+    REGISTRY.products.map((product) => [product.channel, product.tool]),
+  );
+  assert.ok(
+    parts.some((part) => part.server === 'events' && part.prefix === 'events'),
+    'the event service is one',
+  );
+  // Every surface serves, and every one is a part: each is asked on its own for what the gateway must list.
+  assert.deepEqual(parts.map((part) => part.package).sort(), SURFACES.map((surface) => surface.package).sort());
+});
+
+test('the whole gateway lists exactly the union of its parts’ own tools — every rule of it fails when broken', () => {
+  const tool = (name, description = name) => ({ name, description, inputSchema: { type: 'object', properties: {} } });
+  const parts = () => [
+    { server: 'core', prefix: 'comms', tools: [tool('comms_paths'), tool('comms_doctor')] },
+    { server: 'gmail', prefix: 'gmail', tools: [tool('gmail_search')] },
+  ];
+  const listed = () => [tool('comms_paths'), tool('comms_doctor'), tool('gmail_search')];
+  assert.deepEqual(checkGateway(parts(), listed()), [], 'the fixture passes as it stands');
+  assertNamed(
+    checkGateway(parts(), listed().slice(0, 2)),
+    'the gateway does not list gmail_search, which gmail serves',
+  );
+  assertNamed(
+    checkGateway(parts(), [...listed(), tool('slack_read')]),
+    'the gateway lists slack_read, which no part serves',
+  );
+  const reshaped = listed();
+  reshaped[2] = { ...tool('gmail_search'), inputSchema: { type: 'object', properties: { query: { type: 'string' } } } };
+  assertNamed(
+    checkGateway(parts(), reshaped),
+    'the gateway lists gmail_search otherwise than gmail serves it: its inputSchema differs',
+  );
+  const reordered = listed();
+  reordered[2] = { description: 'gmail_search', name: 'gmail_search', inputSchema: tool('x').inputSchema };
+  assertNamed(
+    checkGateway(parts(), reordered),
+    'gmail_search otherwise than gmail serves it: its fields are in another order',
+  );
+  const strays = parts();
+  strays[1].tools.push(tool('comms_send'));
+  assertNamed(
+    checkGateway(strays, listed()),
+    'gmail serves comms_send, outside its prefix gmail_: the gateway drops it',
+  );
+  const twice = parts();
+  twice[1].tools.push(tool('gmail_search'));
+  assertNamed(checkGateway(twice, listed()), 'gmail_search is served by gmail and gmail');
+  assertNamed(checkGateway(parts(), [...listed(), tool('gmail_search')]), 'the gateway lists gmail_search twice');
+  const [first, second, third] = listed();
+  assertNamed(
+    checkGateway(parts(), [third, first, second]),
+    'the gateway lists the parts’ tools out of the connection’s order',
+  );
 });

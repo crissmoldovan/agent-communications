@@ -390,7 +390,7 @@ The console renames these pages every few months; the sequence has been stable.
 | `orphaned-secrets` | A token could not be deleted when an inbox was removed | Remove it from the keychain by hand, then delete the listed file |
 | `other-gmail-servers` | Another Gmail MCP server with send tools is registered: **nothing gates sending while it is there** | the removal command the check prints |
 | `registered-server-version` | No MCP client's config starts this server (`warn`: a plugin or extension can start it unseen), or an entry runs an older release | `agent-gmail mcp install --client <client>`, or the `fix` printed for the stale entry — a change approval |
-| `mcp-command` | A registered server's command path no longer exists | the `fix` the check prints: `mcp install` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force` — a change approval, like any registration |
+| `mcp-command` | A registered server's command path no longer exists | the `fix` the check prints: `mcp install --standalone` with the entry's own `--name`, `--inbox` and `--read-only`, and `--force` — a change approval, like any registration |
 
 A failing check is a finding, not a crash: the command still exits `0` and the detail is in the checks.
 Read `healthy` and the `fail` count, not the exit code.

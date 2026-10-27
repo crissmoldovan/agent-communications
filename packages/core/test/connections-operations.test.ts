@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { Client } from '@modelcontextprotocol/client';
@@ -11,15 +11,20 @@ import { CORE_CALLER } from '../src/handoffs.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
 import {
   type ConnectionAddResult,
+  type ConnectionChangeResult,
+  type ConnectionPartRequest,
+  type ConnectionPartResult,
   connectionAddChange,
   connectionChangeChange,
   connectionKeyReplaceChange,
   connectionList,
+  connectionPartChange,
   connectionRemoveChange,
   connectionRenameChange,
   connectionShow,
   parsePartsSpec,
 } from '../src/operations/connections.ts';
+import { VERSION } from '../src/version.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -440,3 +445,396 @@ test('D11 (§7): an audit line written inside a part of a connection names the c
     ['cn_0123456789ABCDEFGHJKMNPQRS', null],
   );
 });
+
+test(
+  'connection change: what narrows at once is bound into the waiting preview, marked done, and said again by the result and the audit',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const added = await twice<ConnectionAddResult>(m, () =>
+      connectionAddChange(
+        m.core,
+        m.env,
+        { app: 'claude-code', name: 'Work', parts: parsePartsSpec('core,events'), launcher: 'local', noVerify: true },
+        'cli',
+      ),
+    );
+    const id = added.connection.id;
+    // Events out — at once — and Gmail in, which waits: one call, from a chat, where each call builds the change afresh.
+    const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null, platform: 'darwin' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([client.connect(clientSide), server.connect(serverSide)]);
+    const call = async (args: Record<string, unknown>) =>
+      (
+        (await client.callTool({ name: 'comms_connection_change', arguments: args })) as {
+          structuredContent: Record<string, unknown>;
+        }
+      ).structuredContent;
+    const asked = await call({ id, parts: [{ server: 'core' }, { server: 'gmail' }] });
+    assert.equal(asked.approvalRequired, true, JSON.stringify(asked));
+    const first = { prepared: asked as unknown as { approvalId: string; preview: string } };
+    assert.deepEqual(
+      (await connectionShow(m.core, m.env, { id })).parts.map((part) => part.server),
+      ['core'],
+      'Events was taken out before anything waited',
+    );
+    const { preview } = first.prepared;
+    assert.match(
+      preview,
+      /what is marked done at once is done already; the rest has not been changed, and approving changes only the rest/,
+    );
+    assert.match(preview, /Let agents in "Work" reach more; what narrows was applied at once/);
+    assert.match(preview, /Done already, at once, as this was prepared:\n {2}- Events taken out/);
+    const stored = await m.core.approvals.get(first.prepared.approvalId);
+    assert.deepEqual(stored?.form === 'v2' ? stored.record.change?.doneAtOnce : null, ['Events taken out'], 'bound');
+    // The person's yes: the same call again, built afresh, with the approval id — the record narrowed already.
+    const claimed = await call({
+      id,
+      parts: [{ server: 'core' }, { server: 'gmail' }],
+      approvalId: first.prepared.approvalId,
+    });
+    await Promise.all([client.close(), server.close()]);
+    assert.equal(claimed.applied, true, JSON.stringify(claimed));
+    const result = claimed.result as ConnectionChangeResult;
+    assert.deepEqual(result.appliedAtOnce, ['Events taken out'], 'the result says what the preparation did at once');
+    assert.deepEqual(
+      result.connection.parts.map((part) => part.server),
+      ['core', 'gmail'],
+    );
+    const lines = auditText(m)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation: string; reason?: string })
+      .filter((line) => line.operation === 'connection.update');
+    assert.deepEqual(
+      lines.map((line) => line.reason),
+      [
+        'narrowed at once: Events taken out',
+        'parts: core, gmail; narrowed at once as this was prepared: Events taken out',
+      ],
+    );
+  },
+);
+
+test(
+  'connection change at a terminal: the narrowing done as the person was asked is in the preview they read, and the claim binds the same',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const added = await twice<ConnectionAddResult>(m, () =>
+      connectionAddChange(
+        m.core,
+        m.env,
+        { app: 'claude-code', name: 'Work', parts: parsePartsSpec('core,events'), launcher: 'local', noVerify: true },
+        'cli',
+      ),
+    );
+    const id = added.connection.id;
+    // Not a terminal: the preview and the approval id, exit 10; the narrowing done already.
+    const words = ['connection', 'change', id, '--parts', 'core,gmail', '--json'];
+    const asked = await runMain(words, m.env, 'darwin');
+    assert.equal(asked.code, 10, asked.stdout);
+    const details = (asked.json().error as { details: { approvalId: string; preview: string } }).details;
+    assert.match(details.preview, /Done already, at once, as this was prepared:\n {2}- Events taken out/);
+    // The approval carried back: the claim, in a process of its own, plans from a record narrowed already.
+    const applied = await runMain([...words, '--approval', details.approvalId], m.env, 'darwin');
+    assert.equal(applied.code, 0, applied.stdout + applied.stderr);
+    const data = (applied.json() as { data: ConnectionChangeResult }).data;
+    assert.deepEqual(data.appliedAtOnce, ['Events taken out']);
+    assert.deepEqual(
+      data.connection.parts.map((part) => part.server),
+      ['core', 'gmail'],
+    );
+  },
+);
+
+// ── D17: a channel's own `mcp install` puts that channel into the app's connection ──────────────────────────────
+
+/** A mailbox here, `cue/gmail`, written into `config.json` before anything else is. */
+function withMailbox(m: Machine): void {
+  writeFileSync(
+    join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json'),
+    `${JSON.stringify({
+      version: 2,
+      inboxes: {
+        'cue/gmail': {
+          id: 'ibx_AAAAAAAAAAAAAAAA',
+          provider: 'gmail',
+          email: 'jo@example.test',
+          identity: 'oidc',
+          client: 'desktop',
+          tier: 'read',
+          contacts: false,
+          grantedScopes: [],
+          secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+          internalDomains: ['example.test'],
+          createdAt: '2026-10-27T09:00:00.000Z',
+        },
+      },
+    })}\n`,
+  );
+}
+
+const part = (m: Machine, request: Omit<ConnectionPartRequest, 'app'> & { app?: string }, deps = {}) =>
+  connectionPartChange(
+    m.core,
+    m.env,
+    { app: 'claude-code', launcher: 'local', noVerify: true, ...request },
+    'cli',
+    deps,
+  );
+
+async function addConnection(m: Machine, name: string, parts: string, extra: Record<string, unknown> = {}) {
+  return twice<ConnectionAddResult>(m, () =>
+    connectionAddChange(
+      m.core,
+      m.env,
+      { app: 'claude-code', name, parts: parsePartsSpec(parts), launcher: 'local', noVerify: true, ...extra },
+      'cli',
+    ),
+  );
+}
+
+test(
+  "D17: a channel's mcp install where the app has no connection makes one, with Agent Comms itself and that channel",
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const first = await gatedChange(m.core, part(m, { server: 'gmail' }), { surface: 'cli', channel: 'gmail' });
+    assert.equal(first.status, 'approval-required', 'making a connection is a loosening the person approves');
+    if (first.status !== 'approval-required') return;
+    // The preview names the connection it makes, and every part it reaches.
+    assert.match(first.prepared.preview, /Add the connection "Claude Code" for Claude Code/);
+    assert.deepEqual(
+      first.prepared.loosened.map((change) => [change.path, change.after]),
+      [['connections["Claude Code"]', 'Claude Code (claude-code): Agent Comms itself; Gmail, every mailbox']],
+    );
+    assert.deepEqual(readConnections(await m.core.config.load()).connections, [], 'nothing written while it waits');
+    const done = (await gatedChange(m.core, part(m, { server: 'gmail' }), {
+      surface: 'cli',
+      channel: 'gmail',
+      approvalId: first.prepared.approvalId,
+    })) as GatedOutcome<ConnectionPartResult>;
+    assert.equal(done.status, 'applied');
+    const result = (done as { result: ConnectionPartResult }).result;
+    assert.equal(result.created, true);
+    assert.deepEqual(
+      result.connection.parts.map((each) => each.server),
+      ['core', 'gmail'],
+    );
+    const entry = claudeServers(m).agentcomms;
+    assert.deepEqual(entry?.args.slice(-3), ['mcp', '--connection', result.connection.id], 'one entry, the gateway');
+    assert.match(result.next, /Restart Claude Code/);
+  },
+);
+
+test(
+  'D17: where the app has one connection, the channel goes into it — a part added, approved, the preview naming the connection',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const work = await addConnection(m, 'Work', 'core');
+    const entries = JSON.stringify(claudeServers(m));
+    const first = await gatedChange(m.core, part(m, { server: 'slack' }), { surface: 'cli', channel: 'slack' });
+    assert.equal(first.status, 'approval-required');
+    if (first.status !== 'approval-required') return;
+    assert.match(first.prepared.preview, /Let agents in "Work" reach more/);
+    assert.deepEqual(
+      first.prepared.loosened.map((change) => [change.path, change.after]),
+      [['connections["Work"].parts.slack', 'Slack, every workspace']],
+    );
+    const done = (await gatedChange(m.core, part(m, { server: 'slack' }), {
+      surface: 'cli',
+      channel: 'slack',
+      approvalId: first.prepared.approvalId,
+    })) as GatedOutcome<ConnectionPartResult>;
+    const result = (done as { result: ConnectionPartResult }).result;
+    assert.equal(result.created, false);
+    assert.equal(result.connection.id, work.connection.id);
+    assert.deepEqual(
+      result.connection.parts.map((each) => each.server),
+      ['core', 'slack'],
+    );
+    assert.equal(JSON.stringify(claudeServers(m)), entries, 'no entry of its own, and the connection’s untouched');
+    // Asked again as it is: nothing to approve, nothing changed, and said so.
+    const again = (await gatedChange(m.core, part(m, { server: 'slack' }), {
+      surface: 'cli',
+      channel: 'slack',
+    })) as GatedOutcome<ConnectionPartResult>;
+    assert.equal(again.status, 'applied');
+    const same = (again as { result: ConnectionPartResult }).result;
+    assert.equal(same.changed, false);
+    assert.equal(same.next, 'Slack is a part of "Work" already, as asked: nothing was changed.');
+    // A connection that is there keeps how it starts its parts.
+    await assert.rejects(
+      gatedChange(m.core, part(m, { server: 'events', launcher: 'npx' }), { surface: 'cli', channel: 'core' }),
+      /"Work" starts its parts with local, and a part is started as the others are: nothing was changed/,
+    );
+  },
+);
+
+test(
+  'D17: an account asked for narrows the part at once; letting it go, or read-only off, waits',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    withMailbox(m);
+    await addConnection(m, 'Work', 'core,gmail');
+    const pinned = (await gatedChange(m.core, part(m, { server: 'gmail', account: 'cue/gmail', readOnly: true }), {
+      surface: 'cli',
+      channel: 'gmail',
+    })) as GatedOutcome<ConnectionPartResult>;
+    assert.equal(pinned.status, 'applied', 'kept to one mailbox, read-only: it only narrows');
+    assert.deepEqual((pinned as { result: ConnectionPartResult }).result.appliedAtOnce, [
+      'Gmail kept to cue/gmail',
+      'Gmail read-only',
+    ]);
+    const freed = await gatedChange(m.core, part(m, { server: 'gmail' }), { surface: 'cli', channel: 'gmail' });
+    assert.equal(freed.status, 'approval-required');
+    if (freed.status === 'approval-required') {
+      assert.deepEqual(
+        freed.prepared.loosened.map((change) => [change.path, change.before, change.after]),
+        [
+          ['connections["Work"].parts.gmail.pin', 'cue/gmail', 'every mailbox'],
+          ['connections["Work"].parts.gmail.readOnly', true, false],
+        ],
+      );
+    }
+  },
+);
+
+test(
+  'D17: an app with several connections for every folder gets the part in none, each named by its id, until one is named',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const work = await addConnection(m, 'Work', 'core');
+    const personal = await addConnection(m, 'Personal', 'core');
+    const before = readFileSync(join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json'), 'utf8');
+    await assert.rejects(
+      gatedChange(m.core, part(m, { server: 'slack' }), { surface: 'cli', channel: 'slack' }),
+      (error: Error & { hint?: string }) => {
+        assert.match(
+          error.message,
+          /Claude Code has 2 connections for every folder, so Slack was put into none: say which/,
+        );
+        assert.ok(error.hint?.includes(`${work.connection.id} ("Work")`), error.hint);
+        assert.ok(error.hint?.includes(`${personal.connection.id} ("Personal")`), error.hint);
+        return true;
+      },
+    );
+    assert.equal(readFileSync(join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json'), 'utf8'), before);
+    const named = await gatedChange(m.core, part(m, { server: 'slack', id: personal.connection.id }), {
+      surface: 'cli',
+      channel: 'slack',
+    });
+    assert.equal(named.status, 'approval-required');
+    if (named.status === 'approval-required')
+      assert.match(named.prepared.preview, /Let agents in "Personal" reach more/);
+  },
+);
+
+test(
+  'D17: a connection for one project is not the app’s for every folder: one is made, under a name of its own',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const project = join(m.home, 'work', 'acme');
+    mkdirSync(project, { recursive: true });
+    await addConnection(m, 'Claude Code', 'core', { folder: project });
+    const made = await gatedChange(m.core, part(m, { server: 'gmail' }), { surface: 'cli', channel: 'gmail' });
+    assert.equal(made.status, 'approval-required');
+    if (made.status === 'approval-required') {
+      assert.match(made.prepared.preview, /Add the connection "Claude Code 2" for Claude Code/);
+    }
+  },
+);
+
+test(
+  'D17: an entry of the channel’s own in the app is named in the preview — the agent would see its tools twice',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    writeFileSync(
+      m.claudeJson,
+      JSON.stringify({
+        mcpServers: { gmail: { command: 'npx', args: ['-y', '@agentcomms/gmail@0.34.0', 'mcp'] } },
+      }),
+    );
+    const first = await gatedChange(m.core, part(m, { server: 'gmail' }), { surface: 'cli', channel: 'gmail' });
+    assert.equal(first.status, 'approval-required');
+    if (first.status !== 'approval-required') return;
+    assert.ok(
+      first.prepared.effects.includes(
+        'Claude Code reaches Gmail through its own entry "gmail" already: as a part of the connection too, the agent sees the same tools twice — connection migrate moves that entry into the connection',
+      ),
+      first.prepared.effects.join('\n'),
+    );
+  },
+);
+
+test(
+  "D17: a channel's own process, which cannot verify a release, makes no managed connection whose Agent Comms runtime is not here",
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const own = { running: { packageName: '@agentcomms/gmail', version: VERSION } };
+    await assert.rejects(
+      gatedChange(m.core, connectionPartChange(m.core, m.env, { app: 'claude-code', server: 'gmail' }, 'cli', own), {
+        surface: 'cli',
+        channel: 'gmail',
+      }),
+      (error: Error & { hint?: string }) => {
+        assert.match(error.message, /nothing was installed or changed: @agentcomms\/core@.* could not be verified/);
+        assert.match(error.hint ?? '', /connection add --app claude-code --name .*Claude Code.* --parts core,gmail/);
+        return true;
+      },
+    );
+    assert.deepEqual(readConnections(await m.core.config.load()).connections, []);
+    assert.equal(existsSync(join(m.env.AGENT_COMMS_STATE_DIR as string, 'approvals')), false, 'nothing prepared');
+  },
+);
+
+test(
+  'D17 over MCP: comms_connection_change with `add` and `app` puts the part in, approved; `add` beside `parts`, or without `app`, is refused',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const work = await addConnection(m, 'Work', 'core');
+    const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null, platform: 'darwin' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([client.connect(clientSide), server.connect(serverSide)]);
+    try {
+      const call = async (args: Record<string, unknown>) =>
+        (await client.callTool({ name: 'comms_connection_change', arguments: args })) as {
+          isError?: boolean;
+          structuredContent: Record<string, unknown>;
+        };
+      const asked = await call({ app: 'claude-code', add: { server: 'slack' } });
+      assert.equal(asked.structuredContent.approvalRequired, true, JSON.stringify(asked.structuredContent));
+      assert.match(String(asked.structuredContent.preview), /Let agents in "Work" reach more/);
+      const done = await call({
+        app: 'claude-code',
+        add: { server: 'slack' },
+        approvalId: asked.structuredContent.approvalId,
+      });
+      assert.equal(done.structuredContent.applied, true, JSON.stringify(done.structuredContent));
+      assert.deepEqual(
+        (done.structuredContent.result as ConnectionPartResult).connection.parts.map((each) => each.server),
+        ['core', 'slack'],
+      );
+      const both = await call({ id: work.connection.id, parts: [{ server: 'core' }], add: { server: 'slack' } });
+      assert.equal(both.isError, true);
+      assert.match(JSON.stringify(both.structuredContent), /`add` puts one part in, and `parts` says every part/);
+      const noApp = await call({ add: { server: 'slack' } });
+      assert.equal(noApp.isError, true);
+      assert.match(JSON.stringify(noApp.structuredContent), /give `app`/);
+      const neither = await call({ id: work.connection.id });
+      assert.equal(neither.isError, true);
+    } finally {
+      await Promise.all([client.close(), server.close()]);
+    }
+  },
+);

@@ -764,8 +764,10 @@ agent-gmail mcp install [options]
 | `--read-only` | leave out every tool that changes the mailbox | `false` |
 | `--launcher <launcher>` | how the server is started (choices: "managed", "npx", "local") | — |
 | `--no-verify` | do not start the server to check the entry works | — |
-| `--force` | replace this server's own earlier entry — this is how you upgrade | `false` |
-| `--print` | only print what would be written | `false` |
+| `--force` | with --standalone: replace this server's own earlier entry — this is how you upgrade | `false` |
+| `--print` | with --standalone: only print what would be written | `false` |
+| `--connection <id>` | the app's connection to put it into, when the app has several | — |
+| `--standalone` | register it as an entry of its own, as before 0.35.0, rather than as a part of the app's connection | `false` |
 | `--approval <id>` | register the server this approval was given for | — |
 
 ### `agent-gmail mcp prune`
