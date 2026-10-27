@@ -338,6 +338,85 @@ agent-events workflow analyse invoices --provider anthropic --json   # the model
   agent's marker) and, on macOS, from any process the Agent Comms app did not start — a speed bump against agents, not
   a boundary against code running as you — and no MCP tool runs it.
 
+## A workflow that branches
+
+From 0.36.0 a workflow can do more than send each match to one place. A workflow with a `flow` is a graph of steps: it
+can choose a project, find or start a session, make a worktree, hand the message over, wait for the turn to end, write
+to Linear, tell you, and raise events for others. Rules and workflows are one list now; `agent-events rule …` still
+works, and the MCP tools keep their `rule` names.
+
+```
+workflow client-asks, version 5
+
+when a Slack message is posted in acme/slack, in conversation C0123
+match text exists
+
+flow, at most 6 runs an hour
+  events in acme as client-asks, run emits failed and finished
+  step route: choose a project among acme-site and billing, by hints
+    looking at text
+    project acme-site, in /Users/you/work/acme-site
+    project billing, in /Users/you/work/billing
+    none → tell
+  step issue: linear issue client-issues, version 1, in team ACME, assigned to me
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    title "{{author.name}} asks about {{steps.route.project}}"
+    emits created
+  step find: find a session in route's project, with claude-code
+    idle → give
+    busy → free
+    none → tree
+  step free: wait for find's session to be free, up to 2 hours
+    free → give
+    otherwise → tell
+  step tree: make a worktree of route's project, branch "ac/{{steps.issue.identifier}}"
+    refused → tell
+  step start: start a session in tree, with claude-code, mode manual
+  step give: session client-prompt, version 2, with claude-code, to find or start
+    give
+      fields text, author.name
+      text "Do what they ask, on a branch of its own. Don't push."
+    report done and needs-the-person
+  step wait: wait for give's turn to end, up to 1 day
+    done → note
+    otherwise → tell
+  step note: linear change client-done, version 1, in team ACME, on issue
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    comment "{{steps.wait.summary}}"
+    state Done, a completed state
+    state id 5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f
+    then → end
+  step tell: tell me "A message for {{steps.route.project}} needs you"
+
+keep author.name, text
+at most 60 an hour
+```
+
+- **The steps.** A condition or a judge (yes, no, unsure); **Which project?** (`route`, by your hints, then a judge if
+  you name one); **find a session** in a project, a worktree or the session that took this conversation (idle, busy,
+  watched, none); **start a session** (started, refused); **make a worktree** (made, refused); **hand it over** to a
+  session, a queue, a webhook or Linear (done, left in the queue, failed); **wait** for a turn to end, a session to be
+  free or a time (and `timed-out`); **tell me**; **split** into branches that run side by side; and **raise an event**.
+- **Arrows.** A step's outcome goes where its arrow says (`busy → free`); an outcome with no arrow goes on to the next
+  step written, so a straight line needs none. `->` may be typed for `→`. `otherwise → <step>` sends every outcome not
+  named; `then → end` or `then stop` ends the run there.
+- **Limits are written out.** `flow, at most …` sets runs an hour (default 10, at most 60), runs at a time (2, at most
+  8), sessions started an hour (2, at most 10), worktrees a day (5, at most 20), Linear writes an hour (30, at most
+  120), events an hour (120, at most 600) and a run's deadline (3 days, at most 30). A flow has at most 32 steps and a
+  run at most 64 executed steps.
+- **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
+  the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). The
+  message's own take doesn't count, and a Codex session can't be found this way.
+- **What a session is told.** A flow hands a message over through a `session` target, as a straight-line workflow
+  does: its fixed frame, the fields you mapped, the sender's words inside their envelope. The session is offered the
+  message for 15 minutes after it is handed over, and still takes it itself.
+- **Approved as a whole.** The approval lists, after the workflow's plain words, one numbered line per step that does
+  something: the folders a session may work in, the projects it may choose, each Linear team and state, the fields that
+  leave and each event it raises. The JSON you approve under them holds the limits too. Moving a box in the designer
+  doesn't change the version; changing a step, an arrow, a limit or an event makes a new one, approved again.
+- **In the app** a workflow opens in its designer: the canvas, the text and the JSON are three views of one document,
+  with the checks under them.
+
 ## A workflow's runs
 
 From 0.36.0 a workflow with a `flow` makes a run for each message it matches, and the run goes through its steps. The
@@ -421,6 +500,111 @@ agent-events workflow show client-asks --version 5 --json                     # 
 - **A flow's approval** lists, after the workflow's plain words, one numbered line per step that does something, as
   `describeFlow` says it.
 
+## Projects
+
+From 0.36.0 a project is a GitHub repository, its folders on this Mac (checkouts and their worktrees), a profile you
+write and hints. A workflow's **Which project?** step chooses among the projects its approval names; then a session
+can be found or started there, or a worktree made of it. In the app, **Projects** in the sidebar shows each project
+with its folders and the sessions working in them; at a terminal:
+
+```bash
+agent-events project scan --json                    # the GitHub checkouts under the relay's roots, else ~/work and ~/code
+agent-events project add - --json < acme-site.json  # { projectId, name, repo, profile, hints, folders }
+agent-events projects list --json                   # each project, with the relay sessions working in it
+agent-events project show acme-site --json
+agent-events project update - --json < acme-site.json
+agent-events project remove acme-site --json
+```
+
+- **Scan finds, you choose.** `project scan` walks the relay's allowed roots, or `~/work` and `~/code`, four folders
+  down (or the `--root` folders you name, at most 8). It follows no symlink, reads no file, and groups what it finds
+  by the GitHub repository each checkout's origin names, with each checkout's worktrees. You pick the folders.
+- **Hints choose without a judge:** sender domains (`acme.example`), Slack conversations (`C0123ABCD`) and people (a
+  Slack user id or an email address), matched exactly. A message they don't settle goes to the judge, when the step
+  names one, with the profile (at most 2,000 characters) and only the fields the step looks at.
+- **Folders are authority; the rest changes at once.** A workflow's approval binds the folders of the projects it may
+  choose, by value. A profile or hints change applies at once. When a project's folders change, a run whose approved
+  candidate no longer matches takes `none` with `PROJECT_CHANGED`, and the app offers Review again.
+- **Yours alone.** A project's folders name your clients, so listing, showing and changing projects refuse inside the
+  event service's MCP server, in an agent's shell and, on macOS, from a process the app did not start. No tool reads
+  them.
+
+## A workflow's events, and who receives them
+
+From 0.36.0 each step can raise events, each one ticked in the workflow (off by default), and a **Raise an event** step
+raises one wherever you put it. Each is named `<namespace>.<workflow>.<step>.<event>`, such as
+`acme.client-asks.issue.created` or `acme.client-asks.run.failed`, and is a CloudEvents 1.0 JSON object whose `data`
+holds closed values: the run, the step, its outcome, the issue's identifier, the project's name. Never a folder.
+
+```bash
+agent-events workflow-events list --json        # every event each step kind can raise, and what it carries
+agent-events workflow-events show <schema> --json
+```
+
+- **Subscribers receive them.** A subscriber is given namespaces and patterns (`acme.client-asks.*.*`,
+  `*.*.*.failed`; `*` is one segment), and either takes them **live on this Mac** — over SSE or WebSocket, on its own
+  loopback listener, with its own token — or by **signed webhook** off it, as a webhook target is signed.
+
+  ```json
+  {
+    "subscriberId": "events-dashboard",
+    "version": 1,
+    "kind": "sse",
+    "authority": { "host": "127.0.0.1", "port": 4801 },
+    "origins": ["http://localhost:3000"],
+    "retentionMs": 86400000,
+    "events": { "namespaces": ["acme"], "patterns": ["*.*.*.failed", "acme.client-asks.*.*"], "content": "none" }
+  }
+  ```
+
+  ```bash
+  agent-events subscriber add - --json < events-dashboard.json
+  agent-events subscriber enable events-dashboard 1 --json   # prepares your approval; nothing is approved here
+  agent-events approve <approval-id>                         # at your terminal, or Approve… in the app
+  agent-events subscriber token create events-dashboard      # a live subscriber's token, shown once
+  agent-events subscriber secret create <id> --version <n>   # a webhook subscriber's signing secret, shown once
+  ```
+- **Two approvals let an event out.** The workflow's says what is raised and with what; the subscriber's says who
+  receives which names, in which namespaces, and whether it gets what senders wrote. Both are checked again just before
+  each event leaves. `subscriber remove` ends it at once: its streams close and its undelivered events are cancelled.
+- **Sender content only by a Raise step's `fields`,** only to a subscriber approved with `content: "enveloped"`, and
+  only inside the untrusted-content envelope. Every other subscriber gets the event without them.
+- **Delivery never holds a run back.** Each event goes to each matching subscriber at least once, in order. Limits: a
+  workflow's `eventsPerHour` (120 by default), 1,000 an hour across all workflows, and 10,000 undelivered per subscriber,
+  past which the oldest expire (`SUBSCRIBER_BACKLOG`). A subscriber's deliveries are on the Deliveries screen under it,
+  with `delivery retry|drop <event-id>:<subscriber-id>`.
+- **A live connection** sends `Authorization: Bearer <token>`, or from a browser the WebSocket subprotocols
+  `agentcomms.events.v1, agentcomms.bearer.<token>`; it replays from `Last-Event-ID` (or `agentcomms.after.<event id>`).
+  The server only pushes: a client may send ping, pong and close. A rotated or removed token closes the stream (4401).
+- **A workflow can start on another's event.** A chained workflow's flow begins with `on raised <pattern>, within 1
+  day`: it waits, for that long, for a run about the same message to raise a matching event, then reads the message
+  through its own approved mapping. No sender content passes between workflows, a chain stops at depth 3, and a
+  workflow can't start on its own events.
+- **Shadow versions and tests raise nothing:** they record what they would have raised.
+
+## Describe it
+
+From 0.36.0 the app's designer has **Describe it…**: say in your words what should happen, and a model drafts the
+workflow. The draft opens in the designer, with each step marked by the words it came from ("Added by the model, not
+from your words" where none), up to 5 questions with choices, and the checks. Nothing is saved until you save it, and
+nothing runs until you approve it.
+
+```bash
+echo "When acme writes in C0123, find a session in their project and hand it over" \
+  | agent-events workflow describe --provider claude-cli --json
+```
+
+- **Who drafts it:** your Claude subscription (`claude` on this Mac, signed in; the default when it is found), run in
+  the process of the terminal you started, with no tools and no MCP servers; or OpenRouter or Anthropic, with the key
+  you keep for Analyse.
+- **What is sent:** your words (at most 4,000 characters) and your answers, a fixed brief with the text's grammar, and
+  the names a draft may use — your accounts, lanes, judges, targets, projects' ids and names, the step event words and
+  your namespaces. Never a message's content (unless you paste one, which goes inside the untrusted envelope), never a
+  profile, a folder, a target's URL, a secret or a key.
+- **Yours alone.** `workflow describe` refuses inside the event service's MCP server, in an agent's shell and, on
+  macOS, from a process the app did not start; no tool runs it. An agent writes a workflow itself with
+  `workflow create`, which you approve as any other.
+
 ## What you can do with it
 
 - **Sources:**
@@ -446,6 +630,9 @@ agent-events workflow show client-asks --version 5 --json                     # 
     ([A lane](#a-lane)).
   - **A Linear issue** in your workspace, with your Linear key (0.33.0, [A Linear issue](#a-linear-issue)).
   - **The dry-run log.**
+- **Workflows that branch (0.36.0):** steps that choose a project, find or start a session, make a worktree, write to
+  Linear, wait and tell you, and raise events that subscribers receive live on this Mac or by signed webhook
+  ([A workflow that branches](#a-workflow-that-branches), [A workflow's events](#a-workflows-events-and-who-receives-them)).
 - **Workflows and deliveries you can read (0.32.0):**
   - `workflow show <workflow-id>` gives each version with when it was switched on, replaced or revoked, the workflow in
     plain words (its `summary`, as parts; a part of kind `untrusted` is the workflow author's own text), and what it
@@ -484,7 +671,9 @@ channel servers applies, and the result tells you to restart the client. The
 - **An agent can:** read the catalogue and your workflows, propose workflows, targets, judges and a judge budget, test a
   workflow against a sample event, test an active judge on the daemon's synthetic event, prepare a judge kind's
   enablement, and turn a judge kind off. In a window you bound to a lane, it can watch that lane, read its items and
-  unbind it.
+  unbind it. From 0.36.0 it can also check a workflow (`events_rule_check`), read the step event catalogue
+  (`events_workflow_events_list`, `_show`), and propose a subscriber version and prepare its approval
+  (`events_subscriber_enable`).
 - **An agent can never:**
   - approve anything. `events_approval_view`, and `approval view` run in a shell that carries an agent's marker or
     inside the event service's MCP server, give an approval's preview without a challenge and issue none (0.34.0), so
@@ -496,7 +685,10 @@ channel servers applies, and the result tells you to restart the client. The
   - see, set or rotate a webhook secret or stream token;
   - see, set or rotate a hosted judge's API key;
   - set up a judge (`judge setup`), or set or remove an AI provider's key (`provider key set|remove`);
-  - analyse a workflow (`workflow analyse`);
+  - analyse a workflow (`workflow analyse`), or draft one with Describe it (`workflow describe`);
+  - approve a subscriber's events, or see its token or signing secret;
+  - read or change your projects, or read or cancel a workflow's runs;
+  - try a workflow on a message the event service holds (`workflow test-retained`);
   - resume a target;
   - decide a held event.
 

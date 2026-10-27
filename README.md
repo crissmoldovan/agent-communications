@@ -44,8 +44,10 @@ Eight packages and twenty-one skills.
   network client, no WhatsApp session, nothing that sends.
 - **`@agentcomms/events-daemon`** — local events (`agent-events`): watches the Gmail, Slack, Resend and
   WhatsApp accounts you connected and, when an event matches a workflow you approved at your terminal, delivers it
-  to a signed webhook, a local live stream or a dry-run log. Its MCP server (`agent-events mcp`) lets an agent
-  propose and test workflows, never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
+  to a signed webhook, a local live stream, your queue, Linear, a coding-agent session or a dry-run log. From 0.36.0
+  a workflow can branch: choose a project, find or start a session, make a worktree, wait for the turn to end, and
+  raise events that subscribers receive. Its MCP server (`agent-events mcp`) lets an agent propose and test workflows,
+  never approve them. macOS and Linux. [How it works](packages/events-daemon/README.md).
 - **`@agentcomms/events`** — the event catalogue, conditions and mapping that `agent-events` uses, as a
   library with no I/O that runs in Node and in a browser.
 - **`@agentcomms/core`** — the shared core: config, secrets, the approval engine, the
@@ -534,6 +536,17 @@ relay you already run — the Pilot app's, or `agentctl serve`'s — on this Mac
 - **A match starts at most one session.** If the session it started is fenced or moved to another executor, watched or
   gone by the time it is prompted, the match fails, saying which (`SESSION_FENCED`, `SESSION_MOVED`, `SESSION_WATCHED`,
   `SESSION_GONE`), rather than start another.
+
+### Workflows that branch
+
+From 0.36.0 a workflow can be a graph of steps rather than one delivery, in the app's designer (with **Describe it…**
+to draft one from your words) or as text. One you approve can choose which of your projects a message is about, find
+the session working there or the one that took the conversation, wait for it to be free, make a worktree and start a
+session in it, hand the message over, wait for the turn to end, open and close a Linear issue, and tell you when it
+needs you. Each run is shown step by step in the app's run view, and you can cancel it. Each step can raise events,
+off until you tick them, that a subscriber you approve receives live on this Mac (SSE or WebSocket) or by signed
+webhook, or that start another workflow about the same message. Projects, runs and Describe it are yours alone: no
+tool reads or runs them. [Workflows that branch](packages/events-daemon/README.md#a-workflow-that-branches).
 
 ### Upgrading
 
