@@ -156,7 +156,7 @@ describe('Messages', () => {
       ]);
       expect(within(invoice).getByText(COPY.fromOutside)).toBeTruthy();
       const steps = Array.from(invoice.querySelectorAll('[data-slot="message-step"]')).map((step) => step.textContent);
-      expect(steps.slice(0, 3)).toEqual(['Rule invoices', 'Jev: yes', 'Queue, lane billing']);
+      expect(steps.slice(0, 3)).toEqual(['Workflow invoices', 'Jev: yes', 'Queue, lane billing']);
       expect(steps).toContain('Marked done by the agent');
       expect(steps.some((step) => /^Reply sent .+, after your approval$/.test(step ?? ''))).toBe(true);
       // A Slack direct message says so; an account with no name the app read shows its id.
@@ -165,7 +165,9 @@ describe('Messages', () => {
       // Nothing kept its sender: what it is, and where to see it, with no From outside mark.
       const unseen = card('event:e4');
       expect(
-        within(unseen).getByText('A Gmail message. No rule kept its sender or subject, so open it in Gmail to see it.'),
+        within(unseen).getByText(
+          'A Gmail message. No workflow kept its sender or subject, so open it in Gmail to see it.',
+        ),
       ).toBeTruthy();
       expect(unseen.querySelector('[data-slot="from-outside"]')).toBeNull();
       expect(within(unseen).queryByText(COPY.fromOutside)).toBeNull();

@@ -71,7 +71,7 @@ const region = (name: string): HTMLElement => screen.getByRole('region', { name 
 const WATCH = 'Watching your accounts';
 
 /** The Events screen's tabs, by the name each starts with: its badge, when it has one, follows. */
-const TAB_NAMES = ['Service', 'Judges', 'Rules', 'Deliveries'] as const;
+const TAB_NAMES = ['Service', 'Judges', 'Workflows', 'Deliveries'] as const;
 type TabName = (typeof TAB_NAMES)[number];
 
 /** A tab, once the screen shows its tabs. */
@@ -164,10 +164,10 @@ describe('Events', () => {
     expect(await within(status).findByText('On')).toBeTruthy();
 
     // The rules as cards, one per rule (0.32.0): its two versions are one card, on (`events-rules.test.tsx`).
-    await openTab('Rules');
-    expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
-    expect(region('Rules').querySelectorAll('[data-rule]')).toHaveLength(1);
-    expect(within(region('Rules')).getByText('On')).toBeTruthy();
+    await openTab('Workflows');
+    expect(await within(region('Workflows')).findByText('rule_example')).toBeTruthy();
+    expect(region('Workflows').querySelectorAll('[data-rule]')).toHaveLength(1);
+    expect(within(region('Workflows')).getByText('On')).toBeTruthy();
 
     await openTab('Deliveries');
     // The deliveries as rows (0.32.0), each in plain words, its next try a time while it waits
@@ -200,8 +200,8 @@ describe('Events', () => {
     const status = await screen.findByRole('region', { name: WATCH });
     expect(await within(status).findByText('Not running')).toBeTruthy();
     expect(within(status).queryAllByRole('button')).toEqual([]);
-    await openTab('Rules');
-    expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
+    await openTab('Workflows');
+    expect(await within(region('Workflows')).findByText('No workflows yet.')).toBeTruthy();
     await openTab('Deliveries');
     expect(await within(region('Deliveries')).findByText('No deliveries yet.')).toBeTruthy();
   });
@@ -217,8 +217,8 @@ describe('Events', () => {
       },
     );
     renderApp(bridge, { screen: 'events' });
-    await openTab('Rules');
-    expect(await within(region('Rules')).findByText('The list could not be read.')).toBeTruthy();
+    await openTab('Workflows');
+    expect(await within(region('Workflows')).findByText('The list could not be read.')).toBeTruthy();
     await openTab('Deliveries');
     const deliveryView = region('Deliveries');
     await waitFor(() => expect(deliveryView.textContent).toContain('<img src=x onerror=alert(1)>'));
@@ -242,7 +242,7 @@ describe('Events', () => {
     expect(await screen.findByRole('region', { name: 'Event service' })).toBeTruthy();
     expect(screen.getByRole('region', { name: WATCH })).toBeTruthy();
     // The others wait behind their tabs, and are read all the same, as the screen always read them.
-    for (const name of ['Judges', 'Rules', 'Deliveries']) {
+    for (const name of ['Judges', 'Workflows', 'Deliveries']) {
       expect(screen.queryByRole('region', { name }), name).toBeNull();
     }
     await waitFor(() =>
@@ -257,10 +257,10 @@ describe('Events', () => {
     const views: Record<TabName, string[]> = {
       Service: [WATCH, 'Event service', 'What the words here mean'],
       Judges: ['Judges'],
-      Rules: ['Rules'],
+      Workflows: ['Workflows'],
       Deliveries: ['Deliveries'],
     };
-    for (const tab of ['Judges', 'Rules', 'Deliveries', 'Service'] as const) {
+    for (const tab of ['Judges', 'Workflows', 'Deliveries', 'Service'] as const) {
       await openTab(tab);
       for (const [owner, names] of Object.entries(views)) {
         for (const name of names) {
@@ -277,19 +277,19 @@ describe('Events', () => {
     // entry that is not a row at all is shown nowhere; neither is counted.
     const odd = [...rules, { ...rules[0], rule_id: 7, version: 3 }, 'not a row'];
     const first = renderApp(bridgeWith({}, { eventsRules: odd, eventsDeliveries: deliveries }), { screen: 'events' });
-    expect(await screen.findByRole('tab', { name: 'Rules 1' })).toBeTruthy();
+    expect(await screen.findByRole('tab', { name: 'Workflows 1' })).toBeTruthy();
     expect(await screen.findByRole('tab', { name: `Deliveries ${deliveries.length}` })).toBeTruthy();
-    await openTab('Rules');
-    expect(region('Rules').querySelectorAll('[data-rule]')).toHaveLength(1);
-    expect(markOf(await findTab('Rules'))).toBeNull();
+    await openTab('Workflows');
+    expect(region('Workflows').querySelectorAll('[data-rule]')).toHaveLength(1);
+    expect(markOf(await findTab('Workflows'))).toBeNull();
     first.unmount();
 
     renderApp(bridgeWith({}, { eventsRules: [], eventsDeliveries: [] }), { screen: 'events' });
-    await openTab('Rules');
-    expect(await within(region('Rules')).findByText('No rules yet.')).toBeTruthy();
+    await openTab('Workflows');
+    expect(await within(region('Workflows')).findByText('No workflows yet.')).toBeTruthy();
     await openTab('Deliveries');
     expect(await within(region('Deliveries')).findByText('No deliveries yet.')).toBeTruthy();
-    for (const name of ['Rules', 'Deliveries'] as const) {
+    for (const name of ['Workflows', 'Deliveries'] as const) {
       expect(screen.getByRole('tab', { name }), name).toBeTruthy();
       expect(markOf(await findTab(name)), name).toBeNull();
     }
@@ -315,14 +315,14 @@ describe('Events', () => {
     ] as const) {
       const view = renderApp(bridge, { screen: 'events' });
       // Marked while another tab is open: what went wrong waits behind it.
-      await waitFor(async () => expect(markOf(await findTab('Rules')), what).toEqual(FAILED_MARK));
+      await waitFor(async () => expect(markOf(await findTab('Workflows')), what).toEqual(FAILED_MARK));
       await waitFor(async () => expect(markOf(await findTab('Deliveries')), what).toEqual(FAILED_MARK));
       // No count beside it, and the view says what went wrong.
-      expect((await findTab('Rules')).textContent, what).toBe('Rules could not be read');
+      expect((await findTab('Workflows')).textContent, what).toBe('Workflows could not be read');
       expect(markOf(await findTab('Service')), what).toBeNull();
       expect(markOf(await findTab('Judges')), what).toBeNull();
-      await openTab('Rules');
-      expect(await within(region('Rules')).findByText(rulesSay), what).toBeTruthy();
+      await openTab('Workflows');
+      expect(await within(region('Workflows')).findByText(rulesSay), what).toBeTruthy();
       await openTab('Deliveries');
       expect(await within(region('Deliveries')).findByText(deliveriesSay), what).toBeTruthy();
       view.unmount();
@@ -591,9 +591,9 @@ describe('The event service', () => {
     });
     renderApp(bridge, { screen: 'events' });
     expect(await within(await screen.findByRole('region', { name: WATCH })).findByText('Not running')).toBeTruthy();
-    await openTab('Rules');
+    await openTab('Workflows');
     await waitFor(() =>
-      expect(within(region('Rules')).getByText('the local event service is not running')).toBeTruthy(),
+      expect(within(region('Workflows')).getByText('the local event service is not running')).toBeTruthy(),
     );
     await openTab('Deliveries');
     await waitFor(() =>
@@ -603,8 +603,8 @@ describe('The event service', () => {
     up = true;
     await act(async () => bridge.emit('event-service:changed', EVENT_SERVICE.running));
     await waitFor(() => expect(region('Deliveries').querySelectorAll('[data-delivery]').length).toBeGreaterThan(0));
-    await openTab('Rules');
-    expect(await within(region('Rules')).findByText('rule_example')).toBeTruthy();
+    await openTab('Workflows');
+    expect(await within(region('Workflows')).findByText('rule_example')).toBeTruthy();
     await openTab('Service');
     expect(await within(region(WATCH)).findByText('On')).toBeTruthy();
 
@@ -718,7 +718,7 @@ describe('The event service', () => {
     for (const [what, state, count] of cases) {
       const view = renderApp(serviceBridge(state), { screen: 'events' });
       await shownService();
-      await openTab('Rules');
+      await openTab('Workflows');
       const name = count === 0 ? 'Service' : `Service ${count} to look at`;
       const tab = await screen.findByRole('tab', { name });
       expect(tab, what).toBeTruthy();
@@ -756,7 +756,7 @@ describe('The event service', () => {
     const section = await shownService();
     fireEvent.click(within(section).getByRole('switch', { name: SWITCH }));
     expect(await within(region(SERVICE)).findByText('the event service could not be stopped')).toBeTruthy();
-    await openTab('Rules');
+    await openTab('Workflows');
     expect(await screen.findByRole('tab', { name: 'Service 1 to look at' })).toBeTruthy();
     // The next command clears it, and the tab with it.
     refuse = false;
@@ -780,7 +780,7 @@ describe('The event service', () => {
         'event_service_state is not built yet',
       ),
     ).toBeTruthy();
-    await openTab('Rules');
+    await openTab('Workflows');
     await waitFor(async () => expect(markOf(await findTab('Service'))).toEqual(FAILED_MARK));
   });
 });
@@ -1291,7 +1291,7 @@ describe('Judges', () => {
     const jev = row(section, JEV);
     expect(
       within(jev).getByText(
-        'A hosted judge. The fields a rule names are sent to TypeSafe, with your TypeSafe API key.',
+        'A hosted judge. The fields a workflow names are sent to TypeSafe, with your TypeSafe API key.',
       ),
     ).toBeTruthy();
     expect(within(jev).getByText('Off')).toBeTruthy();
@@ -1385,7 +1385,7 @@ describe('Judges', () => {
     const dialog = await screen.findByRole('alertdialog', { name: 'Turn off Jev, by TypeSafe?' });
     expect(
       within(dialog).getByText(
-        "Decisions waiting on its judges are cancelled, and its rules can't call it until it is turned on again.",
+        "Decisions waiting on its judges are cancelled, and its workflows can't call it until it is turned on again.",
       ),
     ).toBeTruthy();
     expect(
@@ -1610,8 +1610,8 @@ describe('Judges', () => {
     await openTab('Judges');
     const section = await screen.findByRole('region', { name: 'Judges' });
     expect(await within(section).findByText('the kinds could not be listed')).toBeTruthy();
-    await openTab('Rules');
-    expect(await screen.findByRole('region', { name: 'Rules' })).toBeTruthy();
+    await openTab('Workflows');
+    expect(await screen.findByRole('region', { name: 'Workflows' })).toBeTruthy();
   });
 
   it('Judges: the tab counts the kinds on with no judge, the rows that say what is next, and claims nothing unread', {

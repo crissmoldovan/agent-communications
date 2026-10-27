@@ -18,7 +18,8 @@ import type { Screen } from './copy.ts';
  */
 export type Destination =
   | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' | 'search' }
-  | { readonly screen: 'events'; readonly tab: 'judges' }
+  // Events at its Judges, from Settings; at its Workflows (0.36.0), from the sidebar's Workflows.
+  | { readonly screen: 'events'; readonly tab: 'judges' | 'rules' }
   | { readonly screen: 'messages'; readonly eventId: string }
   // Accounts at one account's page (0.34.0), from Your agents' line for it; with no account, the list.
   | { readonly screen: 'accounts'; readonly account?: string }
@@ -51,6 +52,14 @@ export function NavigationProvider({
     [onScreen],
   );
   return <NavigateContext.Provider value={navigate}>{children}</NavigateContext.Provider>;
+}
+
+/**
+ * Asks for `to` without changing the screen: for a screen that shows another at one of its places, as the sidebar's
+ * Workflows shows Events at its Workflows tab (0.36.0).
+ */
+export function askFor(to: Destination): void {
+  pending = to;
 }
 
 /** Opens a destination; `null` where the screen was shown without the shell (Settings before an install). */

@@ -359,7 +359,7 @@ export function RuleEditor({
   ];
   return (
     <section aria-label={title} className="flex flex-col gap-(--cue-space-4)">
-      <BackTo label={target.kind === 'new' ? 'All rules' : target.ruleId} onBack={onClose} />
+      <BackTo label={target.kind === 'new' ? 'All workflows' : target.ruleId} onBack={onClose} />
       <div className="flex flex-wrap items-center gap-(--cue-space-3)">
         <h2 className="font-semibold text-(length:--cue-text-title) text-fg">
           <UntrustedText text={title} />

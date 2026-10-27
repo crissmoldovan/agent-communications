@@ -98,10 +98,10 @@ describe('Review and approve… says all a target is given', () => {
     };
     const lines = whatLeaves(JSON.parse(JSON.stringify(constant)) as never);
     const all = words(lines).join('\n');
-    expect(all).toContain(`Context part 1: the rule’s own text ${SECRET}.`);
+    expect(all).toContain(`Context part 1: the workflow’s own text ${SECRET}.`);
     expect(all).toContain("Context part 2: the message's first 300 characters.");
     expect(all).toContain(
-      `Its description: {{note}}, where {{note}} is the rule’s own text ${SECRET}, quoted in the issue as text, never as Markdown`,
+      `Its description: {{note}}, where {{note}} is the workflow’s own text ${SECRET}, quoted in the issue as text, never as Markdown`,
     );
     // The description quotes every slot's value as text, the message's too; the title takes each as plain text.
     const quoted = whatLeaves({
@@ -195,7 +195,7 @@ describe('Review and approve… says all a target is given', () => {
       },
     });
     renderApp(service.bridge, { screen: 'events' });
-    const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
+    const tab = await screen.findByRole('tab', { name: /^Workflows\b/ });
     fireEvent.click(tab);
     await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
     const card = await waitFor(() => {
@@ -204,7 +204,7 @@ describe('Review and approve… says all a target is given', () => {
       return found;
     });
     fireEvent.click(card);
-    const page = await screen.findByRole('region', { name: 'Rule invoices' });
+    const page = await screen.findByRole('region', { name: 'Workflow invoices' });
     fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
     const editor = await screen.findByRole('region', { name: 'Edit invoices' });
 

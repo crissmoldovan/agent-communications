@@ -360,7 +360,7 @@ export function doctorView(product: DoctorProduct, data: unknown): DoctorView {
             const validation = isRecord(lineage.validation) ? lineage.validation : {};
             const valid = validation.status === 'valid';
             return check(
-              `Rule ${textOf(lineage.ruleId)} v${String(lineage.ruleVersion ?? '')}`,
+              `Workflow ${textOf(lineage.ruleId)} v${String(lineage.ruleVersion ?? '')}`,
               valid ? 'ok' : 'fail',
               valid ? 'valid' : textOf(validation.code) || 'invalid',
               undefined,

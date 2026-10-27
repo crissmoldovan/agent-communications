@@ -18,7 +18,7 @@ import type { EditTarget } from './RuleEditor.tsx';
 /** What a list says when its answer is not one the app can read. */
 export const UNREADABLE_LIST = 'The list could not be read.';
 /** What a rule's versions say when theirs is not. */
-export const UNREADABLE_RULE = "This rule's details could not be read.";
+export const UNREADABLE_RULE = "This workflow's details could not be read.";
 
 const RULES: Call = { kind: 'eventsRules' };
 const DELIVERIES: Call = { kind: 'eventsDeliveries' };

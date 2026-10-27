@@ -34,13 +34,15 @@ import {
 import { knownTargets, readTargetVersions } from '../../rule-editor/submit.ts';
 import { designerChecks } from '../../workflows/checks.ts';
 import { FLOW_LIMIT_DEFAULTS, isEventSegment } from '../../workflows/flow.ts';
+import { useDocumentHistory } from '../../workflows/history.ts';
 import { prepareReview, saveWorkflow } from '../../workflows/save.ts';
 import type { EventsLists } from '../events/lists.ts';
 import { BackTo, Problem } from '../events/parts.tsx';
 import type { EditTarget } from '../events/RuleEditor.tsx';
 import { type PreparedReview, RuleReview } from '../events/RuleReview.tsx';
 import type { JudgeChoice, VisualContext } from '../events/RuleVisual.tsx';
-import { Designer, type DesignerContext } from './Designer.tsx';
+import type { DesignerContext } from './Designer.tsx';
+import { Views } from './Views.tsx';
 
 export const WORKFLOW_EDITOR_COPY = {
   allWorkflows: 'All workflows',
@@ -137,7 +139,8 @@ export function WorkflowEditor({
   }, [lists.versions, target.ruleId]);
   const running = versions?.find((each) => each.state === 'active') ?? null;
   const [stored] = useState<JsonObject>(() => startDocument(target, versions, lists));
-  const [document, setDocument] = useState<JsonObject>(stored);
+  const history = useDocumentHistory(() => stored);
+  const { document, apply } = history;
   const [saved, setSaved] = useState<JsonObject | null>(null);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
@@ -196,14 +199,14 @@ export function WorkflowEditor({
       onChooseJudge: (choice) => {
         setJudgeProblem(null);
         if (choice === null) {
-          setDocument((current) => setJudge(current, null));
+          apply((current) => setJudge(current, null));
           return;
         }
         setJudgeReading(true);
         void readJudge(choice).then((judge) => {
           setJudgeReading(false);
           if (judge === null) setJudgeProblem('That judge’s details could not be read.');
-          else setDocument((current) => setJudge(current, judge));
+          else apply((current) => setJudge(current, judge));
         });
       },
       judgeReading,
@@ -223,7 +226,18 @@ export function WorkflowEditor({
       visual,
       onEditAsText,
     };
-  }, [documents, judgeChoices, judgeProblem, judgeReading, linear, lists.names, navigate, readJudge, targetsRead]);
+  }, [
+    apply,
+    documents,
+    judgeChoices,
+    judgeProblem,
+    judgeReading,
+    linear,
+    lists.names,
+    navigate,
+    readJudge,
+    targetsRead,
+  ]);
 
   const version = typeof document.version === 'number' ? document.version : 1;
   const base = saved ?? stored;
@@ -254,7 +268,7 @@ export function WorkflowEditor({
       fail(outcome.problem);
       return null;
     }
-    setDocument(outcome.document);
+    history.reset(outcome.document);
     setSaved(outcome.document);
     return { document: outcome.document, version: outcome.version };
   };
@@ -318,7 +332,7 @@ export function WorkflowEditor({
           {notice}
         </p>
       )}
-      <Designer document={document} onChange={setDocument} context={context} />
+      <Views history={history} context={context} />
       {problem === null ? null : <Problem message={problem} />}
       <div className="sticky bottom-0 flex flex-wrap items-center gap-(--cue-space-2) bg-bg py-(--cue-space-3)">
         <span className="min-w-60 flex-1 text-(length:--cue-text-label) text-fg-muted">

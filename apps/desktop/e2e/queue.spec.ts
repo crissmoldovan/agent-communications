@@ -217,7 +217,7 @@ test('with no rule sending to a queue, it says how to add one', async ({ page })
   await openQueue(page);
   await expect(page.getByText('Nothing sends to the queue yet.')).toBeVisible();
   await expect(
-    page.getByText('Add a queue target and a rule that sends to it, then approve both in the terminal.'),
+    page.getByText('Add a queue target and a workflow that sends to it, then approve both in the terminal.'),
   ).toBeVisible();
   await expect(page.getByRole('tablist', { name: 'Queue' })).toHaveCount(0);
 });

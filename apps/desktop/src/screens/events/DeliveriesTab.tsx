@@ -38,7 +38,7 @@ import { inWords } from './Watching.tsx';
 /** The tab's words (the approved prototype, row 3), in sentence case. */
 export const DELIVERIES_COPY = {
   intro:
-    'A delivery is one match a rule passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log. Open one to see the message, why it was passed on, and each try.',
+    'A delivery is one match a workflow passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log. Open one to see the message, why it was passed on, and each try.',
   show: 'Show',
   filters: {
     all: 'All',
@@ -55,19 +55,19 @@ export const DELIVERIES_COPY = {
   removed: 'Removed',
   reach: {
     title: 'Something reached your agent?',
-    intro: "A rule's match goes to one of these. Two are meant for an agent; the dry-run log is meant for you.",
+    intro: "A workflow's match goes to one of these. Two are meant for an agent; the dry-run log is meant for you.",
     forAgent: 'An agent sees it',
     forYou: 'For you',
     queue: 'The Queue',
     queueWhat: 'Items an agent works through, one at a time.',
     queueLink: 'Open the Queue ›',
     session: 'A session',
-    sessionWhat: 'A rule that hands the message to an agent session claude-stream runs on this Mac.',
+    sessionWhat: 'A workflow that hands the message to an agent session claude-stream runs on this Mac.',
     sessionLink: 'Settings → Integrations ›',
     log: 'The dry-run log',
     logWhat:
-      "For trying a rule out. Nothing is sent. An agent with a terminal can read it as you can; its tools can't.",
-    others: 'A rule can also add a Linear issue or call a webhook. Neither reaches an agent here.',
+      "For trying a workflow out. Nothing is sent. An agent with a terminal can read it as you can; its tools can't.",
+    others: 'A workflow can also add a Linear issue or call a webhook. Neither reaches an agent here.',
   },
   empty: 'No deliveries yet.',
   noneHere: 'No deliveries here.',

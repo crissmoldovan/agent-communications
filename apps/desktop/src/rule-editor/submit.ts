@@ -106,7 +106,7 @@ export function readActivation(data: unknown): { approvalId: string; digest: str
 export function readPreview(data: unknown): { rule: JsonObject; problem: null } | { rule: null; problem: string } {
   if (!isObject(data)) return { rule: null, problem: 'The preview could not be read.' };
   if (data.kind === 'STALE_APPROVAL') return { rule: null, problem: 'This approval is no longer waiting.' };
-  if (data.kind === 'DIGEST_MISMATCH') return { rule: null, problem: 'The rule changed after it was prepared.' };
+  if (data.kind === 'DIGEST_MISMATCH') return { rule: null, problem: 'The workflow changed after it was prepared.' };
   const preview = isObject(data.preview) ? data.preview : null;
   if (data.kind !== 'READY' || preview === null || preview.kind !== 'rule' || !isObject(preview.rule))
     return { rule: null, problem: 'The preview could not be read.' };
@@ -225,11 +225,11 @@ function mappedRef(mapping: unknown, pointer: string): RulePart[] {
       return words === undefined ? [plain("the message's "), authored(found.pointer)] : [plain(words)];
     }
     case 'constant':
-      return [plain('the rule’s own text '), authored(written(found.value))];
+      return [plain('the workflow’s own text '), authored(written(found.value))];
     case 'template':
-      return [plain('the rule’s mapping '), authored(written(found.value))];
+      return [plain('the workflow’s mapping '), authored(written(found.value))];
     case 'none':
-      return [authored(pointer), plain(', which the rule does not map')];
+      return [authored(pointer), plain(', which the workflow does not map')];
   }
 }
 
@@ -255,7 +255,7 @@ function wholeRecord(mapping: unknown, fields: RulePart[]): RulePart[] {
   if (constants.length === 0) return fields;
   return [
     ...fields,
-    plain(constants.length === 1 ? ', with the rule’s own text ' : ', with the rule’s own texts '),
+    plain(constants.length === 1 ? ', with the workflow’s own text ' : ', with the workflow’s own texts '),
     ...constants.flatMap((constant, index) => [...(index === 0 ? [] : [plain(', ')]), authored(written(constant))]),
     plain(','),
   ];

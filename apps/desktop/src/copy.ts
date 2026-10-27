@@ -17,13 +17,15 @@ export type Screen =
   | 'agent'
   | 'updates'
   | 'events'
+  | 'workflows'
   | 'doctor'
   | 'settings';
 
 /**
  * The sections in the sidebar's order (DA3; Queue, 0.30.0, first after Overview; Messages, 0.32.0, after Queue;
- * People, 0.35.0, after Messages; Activity, 0.29.0, between Approvals and Agent; Connections, 0.32.0, after Accounts),
- * then Settings. `isNew` marks a section "New" in this release.
+ * People, 0.35.0, after Messages; Activity, 0.29.0, between Approvals and Agent; Connections, 0.32.0, after Accounts;
+ * Workflows, 0.36.0, after Events, which it opens on its Workflows tab), then Settings. `isNew` marks a section "New"
+ * in this release.
  */
 export const SECTIONS: readonly { screen: Exclude<Screen, 'settings' | 'search'>; label: string; isNew?: true }[] = [
   { screen: 'overview', label: 'Overview' },
@@ -37,6 +39,7 @@ export const SECTIONS: readonly { screen: Exclude<Screen, 'settings' | 'search'>
   { screen: 'agent', label: 'Your agents' },
   { screen: 'updates', label: 'Updates' },
   { screen: 'events', label: 'Events' },
+  { screen: 'workflows', label: 'Workflows', isNew: true },
   { screen: 'doctor', label: 'Doctor' },
 ];
 

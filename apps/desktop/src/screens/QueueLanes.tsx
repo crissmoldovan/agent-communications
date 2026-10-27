@@ -30,7 +30,7 @@ export const LANES_COPY = {
   about:
     'A lane is a queue with a name. The agent window bound to it is woken for each new item, and may read it. Other agent windows never see its items; you see them all, here.',
   noLanes: 'No lanes yet.',
-  noLanesHint: 'Give a queue target a lane in its rule, then approve the rule in the terminal.',
+  noLanesHint: 'Give a queue target a lane in its workflow, then approve the workflow in the terminal.',
   unreadable: 'The lanes could not be read.',
   lane: 'Lane',
   allLanes: 'All lanes',

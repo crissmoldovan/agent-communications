@@ -1,7 +1,9 @@
 /**
- * Events → Rules (owner feedback 0.32.0, §3.4): one card per rule, not per version — its id as its name, where it
- * stands, its sentence in plain words, and a line of facts — filtered by All, On, Not switched on and Off. A card opens
- * the rule's page (`RuleDetail`). Everything shown is read: nothing here changes a rule.
+ * Events → Workflows (owner feedback 0.32.0, §3.4; workflows design §11.2, W22): one card per workflow, not per version
+ * — its id as its name, where it stands, its sentence in plain words, and a line of facts — filtered by All, On, Not
+ * switched on and Off. Every rule there is is a workflow here, a straight line, unchanged. A card opens the workflow's
+ * page (`RuleDetail`), and its Edit… the designer once the event service has workflows (0.36.0), or the rule editor on
+ * an older one. Everything shown is read: nothing here changes a workflow.
  */
 import {
   Button,
@@ -38,6 +40,7 @@ import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import type { Call } from '../../ipc.ts';
 import { EDITOR_COPY } from '../../rule-editor/copy.ts';
+import { NewWorkflow } from '../workflows/NewWorkflow.tsx';
 import { type EventsLists, type EventsNav, readVersions } from './lists.ts';
 import { Day, DRY_RUN, FactsLine, Problem, Sentence, Short, STATUS_WORDS, StatusChip, statusOf } from './parts.tsx';
 import { RuleDetail } from './RuleDetail.tsx';
@@ -117,15 +120,15 @@ function NewRule({ taken, onStart }: { taken: ReadonlySet<string>; onStart: (rul
 /** The tab's words (the approved prototype, row 2), in sentence case. */
 export const RULES_COPY = {
   intro:
-    'A rule watches one account, picks out the messages it cares about, and passes them on. An agent writes a rule when you ask it to; you approve each one before it starts. Open a rule to see everything about it.',
+    'A workflow watches one account, picks out the messages it cares about, and does something with them: a straight line, or steps that branch, wait and find the right session. An agent writes one when you ask it to; you approve each one before it starts. Open a workflow to see everything about it.',
   introEditing:
-    'A rule watches one account, picks out the messages it cares about, and passes them on. Write one here, or ask an agent to; you approve each one before it starts. Open a rule to see everything about it, or edit it.',
+    'A workflow watches one account, picks out the messages it cares about, and does something with them: a straight line, or steps that branch, wait and find the right session. Make one here, or ask an agent to; you approve each one before it starts. Open a workflow to see everything about it, or edit it.',
   show: 'Show',
   all: 'All',
   status: STATUS_WORDS,
   dryRun: DRY_RUN,
-  empty: 'No rules yet.',
-  noneHere: 'No rules here.',
+  empty: 'No workflows yet.',
+  noneHere: 'No workflows here.',
   approvalWaits: 'Its approval is in Approvals, if an agent asked for it',
   turnedOff: 'Turned off',
 } as const;
@@ -309,10 +312,18 @@ export function RulesTab({
   const { rules } = lists;
   const taken = new Set(rules.state === 'ready' ? rules.value.map((rule) => rule.id) : []);
   return (
-    <section aria-label="Rules" className="flex flex-col gap-(--cue-space-4)">
+    <section aria-label="Workflows" className="flex flex-col gap-(--cue-space-4)">
       <div className="flex flex-wrap items-start gap-(--cue-space-3)">
         <p className="min-w-60 flex-1 text-fg-muted">{canEdit ? RULES_COPY.introEditing : RULES_COPY.intro}</p>
-        {canEdit ? <NewRule taken={taken} onStart={(ruleId) => nav.edit({ kind: 'new', ruleId })} /> : null}
+        {editor === 'workflows' ? (
+          <NewWorkflow
+            taken={taken}
+            workflows={[...taken]}
+            onStart={(ruleId, from) => nav.edit({ kind: 'new', ruleId, from })}
+          />
+        ) : canEdit ? (
+          <NewRule taken={taken} onStart={(ruleId) => nav.edit({ kind: 'new', ruleId })} />
+        ) : null}
       </div>
       {rules.state === 'loading' ? (
         <Spinner label={COPY.loading} />

@@ -38,9 +38,9 @@ import { type EventsLists, readVersions } from './lists.ts';
 export const WATCH_COPY = {
   title: 'Watching your accounts',
   stopped: 'Not running',
-  stoppedBody: "The event service isn't running on this Mac, so nothing is watched and no rule does anything.",
+  stoppedBody: "The event service isn't running on this Mac, so nothing is watched and no workflow does anything.",
   off: 'Switched off',
-  offBody: "The event service is running, but it isn't watching your accounts, so no rule does anything.",
+  offBody: "The event service is running, but it isn't watching your accounts, so no workflow does anything.",
   on: 'On',
   paused: 'Paused',
   pausedBody: 'Not watching; nothing new is collected.',
@@ -49,12 +49,12 @@ export const WATCH_COPY = {
   pause: 'Pause',
   pauseNote: 'Stops watching until you resume; nothing is lost.',
   resume: 'Resume',
-  resumeNote: 'Your rules, the Queue and anything waiting were kept.',
+  resumeNote: 'Your workflows, the Queue and anything waiting were kept.',
   pausedSaid: 'Paused at once.',
   resumedSaid: 'Resumed at once.',
   askTitle: 'Switch on watching? Approve it',
-  rulesStart: 'The rules that would start:',
-  noRules: 'No rule is on yet, so switching on watches nothing until you switch one on.',
+  rulesStart: 'The workflows that would start:',
+  noRules: 'No workflow is on yet, so switching on watches nothing until you switch one on.',
   approve: 'Approve',
   cancel: 'Cancel',
   cancelled: 'Cancelled: nothing was changed. Watching stays off.',
@@ -65,7 +65,7 @@ export const WATCH_COPY = {
   notRevoked: 'The approval was not revoked',
   offTitle: 'Switch off watching?',
   offConfirm:
-    "Your rules are kept, but none of them does anything until you switch watching on again and approve it. Deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are cleared, and each lane's window is unbound.",
+    "Your workflows are kept, but none of them does anything until you switch watching on again and approve it. Deliveries not yet sent, the Queue's items, the dry-run log and approvals not yet given are cleared, and each lane's window is unbound.",
   offSaid: 'Switched off.',
   updateToSwitch: 'Update agent-communications to switch watching on here.',
   unreadableStatus: 'The status could not be read.',
@@ -76,9 +76,9 @@ export const WORDS_COPY = {
   title: 'What the words here mean',
   words: [
     ['Running', 'The program is open on this Mac. On its own, it does nothing with your mail or Slack.'],
-    ['Watching', 'It reads new messages in the accounts your rules name, so the rules can act on them.'],
-    ['Paused', 'Watching stops for a while. Your rules, the Queue and anything waiting are kept.'],
-    ['Switched off', 'No rule acts until you switch watching on again, and approve it.'],
+    ['Watching', 'It reads new messages in the accounts your workflows name, so the workflows can act on them.'],
+    ['Paused', 'Watching stops for a while. Your workflows, the Queue and anything waiting are kept.'],
+    ['Switched off', 'No workflow acts until you switch watching on again, and approve it.'],
   ],
 } as const;
 
@@ -92,17 +92,17 @@ export function inWords(names: readonly string[]): string {
 export function watchingLine(accounts: readonly string[], rules: number | null): string {
   const watching = accounts.length === 0 ? 'Watching your accounts.' : `Watching ${inWords(accounts)}.`;
   if (rules === null) return watching;
-  return `${watching} ${rules} ${rules === 1 ? 'rule' : 'rules'} active.`;
+  return `${watching} ${rules} ${rules === 1 ? 'workflow' : 'workflows'} active.`;
 }
 
-/** `Switching on lets your rules watch <accounts> for new messages.` */
+/** `Switching on lets your workflows watch <accounts> for new messages.` */
 export function switchOnLine(accounts: readonly string[]): string {
-  return `Switching on lets your rules watch ${accounts.length === 0 ? 'your accounts' : inWords(accounts)} for new messages.`;
+  return `Switching on lets your workflows watch ${accounts.length === 0 ? 'your accounts' : inWords(accounts)} for new messages.`;
 }
 
-/** `Approved. Your rules are watching <accounts>.` */
+/** `Approved. Your workflows are watching <accounts>.` */
 export function approvedLine(accounts: readonly string[]): string {
-  return `Approved. Your rules are watching ${accounts.length === 0 ? 'your accounts' : inWords(accounts)}.`;
+  return `Approved. Your workflows are watching ${accounts.length === 0 ? 'your accounts' : inWords(accounts)}.`;
 }
 
 /** Where a target sends each match, in words to follow a rule's name. */

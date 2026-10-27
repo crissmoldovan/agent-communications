@@ -20,7 +20,7 @@ import { TakeButtons } from './TakeActions.tsx';
 export const NOT_TAKEN_COPY = {
   tab: 'Not taken',
   about:
-    'Messages a rule sent to a lane, a session or the Queue that no session took in time, in the accounts where a session must take a message before it acts on it (Settings → Taking messages). Give one to a window, or handle it yourself.',
+    'Messages a workflow sent to a lane, a session or the Queue that no session took in time, in the accounts where a session must take a message before it acts on it (Settings → Taking messages). Give one to a window, or handle it yourself.',
   nothing: 'Every message a session had to take was taken.',
   nothingHint:
     'A message shows here when a session must take messages in its account and nobody takes it within the time Settings → Taking messages gives.',

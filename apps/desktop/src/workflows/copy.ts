@@ -109,7 +109,8 @@ export const SETTINGS_COPY = {
   segment: 'Lowercase letters, digits, _ and -, starting with a letter: at most 32.',
   raisedAs: 'Raised as',
   namespace: 'Namespace',
-  namespaceWrong: 'Lowercase letters, digits, _ and -, starting with a letter; never agentcomms or com.',
+  namespaceWrong:
+    'Lowercase letters, digits, _ and -, starting with a letter; not one kept for Agent Comms (agentcomms, com).',
   workflowName: 'The workflow, in its events’ names',
   rename: 'Use these names',
   label: 'Label',

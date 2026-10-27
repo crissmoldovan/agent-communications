@@ -86,7 +86,7 @@ export function whereWords(message: JoinedMessage): string {
 /** What a card says when nothing kept who it is from: what it is, and where to see it. */
 export function unknownSender(channel: string): string {
   const name = channelWords(channel);
-  return `A ${name} message. No rule kept its sender or subject, so open it in ${name} to see it.`;
+  return `A ${name} message. No workflow kept its sender or subject, so open it in ${name} to see it.`;
 }
 
 // ── Judges, rules and deliveries ───────────────────────────────────────────────────────────────────────────────
@@ -124,7 +124,7 @@ function actingDecisions(decisions: readonly DecisionView[]): DecisionView[] {
 }
 
 function ruleCardStep(decision: DecisionView): Part[] {
-  const rule: Part[] = [{ text: 'Rule ' }, { untrusted: decision.ruleId }];
+  const rule: Part[] = [{ text: 'Workflow ' }, { untrusted: decision.ruleId }];
   switch (decision.outcome) {
     case 'matched':
       return rule;
@@ -142,15 +142,15 @@ function ruleCardStep(decision: DecisionView): Part[] {
 function ruleStoryStep(decision: DecisionView): Part[] {
   switch (decision.outcome) {
     case 'matched':
-      return [{ text: 'Matched the rule ' }, { untrusted: decision.ruleId }];
+      return [{ text: 'Matched the workflow ' }, { untrusted: decision.ruleId }];
     case 'hold':
-      return [{ text: 'Held for the judge of the rule ' }, { untrusted: decision.ruleId }];
+      return [{ text: 'Held for the judge of the workflow ' }, { untrusted: decision.ruleId }];
     case 'mapping-rejected':
-      return [{ text: 'The rule ' }, { untrusted: decision.ruleId }, { text: ' could not use it' }];
+      return [{ text: 'The workflow ' }, { untrusted: decision.ruleId }, { text: ' could not use it' }];
     case 'retention-expired':
-      return [{ text: 'The hold of the rule ' }, { untrusted: decision.ruleId }, { text: ' ran out' }];
+      return [{ text: 'The hold of the workflow ' }, { untrusted: decision.ruleId }, { text: ' ran out' }];
     default:
-      return [{ text: 'The rule ' }, { untrusted: decision.ruleId }, { text: `: ${decision.outcome}` }];
+      return [{ text: 'The workflow ' }, { untrusted: decision.ruleId }, { text: `: ${decision.outcome}` }];
   }
 }
 
@@ -429,10 +429,10 @@ function takeEntry(touch: Touch, message: JoinedMessage, context: StoryContext):
 export function cardSteps(message: JoinedMessage, context: StoryContext): Part[][] {
   const steps: Part[][] = [];
   const { event, touches } = message;
-  if (event === null) steps.push(words('No rule'));
+  if (event === null) steps.push(words('No workflow'));
   else {
     const acting = actingDecisions(event.decisions);
-    if (acting.length === 0) steps.push(words('No rule matched'));
+    if (acting.length === 0) steps.push(words('No workflow matched'));
     for (const decision of acting) {
       steps.push(ruleCardStep(decision));
       const judge = decision.judge === null ? null : judgeShort(decision.judge);
@@ -580,7 +580,7 @@ export function timeline(message: JoinedMessage, context: StoryContext): Timelin
       sub: words('Seen by the event service'),
     });
     const acting = actingDecisions(event.decisions);
-    if (acting.length === 0) entries.push({ at: null, tone: 'idle', what: words('No rule matched'), sub: null });
+    if (acting.length === 0) entries.push({ at: null, tone: 'idle', what: words('No workflow matched'), sub: null });
     for (const decision of acting) {
       entries.push({ at: decision.at, tone: 'accent', what: ruleStoryStep(decision), sub: null });
       const judge = decision.judge === null ? null : judgeLong(decision.judge);

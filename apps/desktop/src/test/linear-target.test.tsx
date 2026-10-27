@@ -20,7 +20,7 @@ const LABELS = [
 ];
 
 async function openRulesTab(): Promise<void> {
-  const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
+  const tab = await screen.findByRole('tab', { name: /^Workflows\b/ });
   fireEvent.click(tab);
   await waitFor(() => expect(tab.getAttribute('aria-selected')).toBe('true'));
 }
@@ -44,7 +44,7 @@ describe('the Linear target', () => {
       return found;
     });
     fireEvent.click(card);
-    const page = await screen.findByRole('region', { name: 'Rule invoices' });
+    const page = await screen.findByRole('region', { name: 'Workflow invoices' });
     fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
     const editor = await screen.findByRole('region', { name: 'Edit invoices' });
     // The rule as text, its action a Linear issue in team CUE.
@@ -64,7 +64,7 @@ describe('the Linear target', () => {
     fireEvent.click(
       within(within(editor).getByRole('group', { name: 'Edit as' })).getByRole('button', { name: 'Text' }),
     );
-    const text = (await within(editor).findByRole('textbox', { name: 'The rule as text' })) as HTMLTextAreaElement;
+    const text = (await within(editor).findByRole('textbox', { name: 'The workflow as text' })) as HTMLTextAreaElement;
     fireEvent.change(text, {
       target: { value: printRuleText({ ...invoices, version: 3, targets: [linear], retention } as never) },
     });

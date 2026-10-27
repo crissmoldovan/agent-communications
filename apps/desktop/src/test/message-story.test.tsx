@@ -104,7 +104,7 @@ describe('a message’s story', () => {
       await waitFor(() => expect(entries(happened)).toContain('You approved the reply'));
       expect(entries(happened)).toEqual([
         'Arrived in example/gmail',
-        'Matched the rule invoices',
+        'Matched the workflow invoices',
         'Jev said yes, 0.86 sure',
         'Put in the Queue, lane billing',
         'Woke the agent window bound to billing',
@@ -199,7 +199,9 @@ describe('a message’s story', () => {
     await story(bridgeAt(), 'event:e4');
     expect(screen.getByRole('heading', { level: 1 }).textContent).toBe('A Gmail message');
     expect(
-      within(main()).getByText('A Gmail message. No rule kept its sender or subject, so open it in Gmail to see it.'),
+      within(main()).getByText(
+        'A Gmail message. No workflow kept its sender or subject, so open it in Gmail to see it.',
+      ),
     ).toBeTruthy();
   });
 

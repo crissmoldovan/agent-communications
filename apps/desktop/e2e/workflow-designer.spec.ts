@@ -110,9 +110,9 @@ test('a wire drawn from timed out on wait to tell writes next.timed-out', async 
   await installMockIpc(page, scenario());
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
-  await page.getByRole('tab', { name: /^Rules\b/ }).click();
+  await page.getByRole('tab', { name: /^Workflows\b/ }).click();
   await page.locator('[data-rule="reminders"]').click();
-  await page.getByRole('region', { name: 'Rule reminders' }).getByRole('button', { name: 'Edit…' }).click();
+  await page.getByRole('region', { name: 'Workflow reminders' }).getByRole('button', { name: 'Edit…' }).click();
   const editor = page.getByRole('region', { name: 'Edit reminders' });
   const from = editor.locator('[data-step="wait"] [data-outcome="timed-out"] .react-flow__handle');
   const to = editor.locator('[data-step="tell"] .react-flow__handle.target');

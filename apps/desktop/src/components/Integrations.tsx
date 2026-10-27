@@ -39,9 +39,9 @@ export const INTEGRATIONS_SECTION = 'integrations';
 
 export const INTEGRATIONS_COPY = {
   title: 'Integrations',
-  body: 'Other tools a rule can act in. Each one is connected here, once, and a rule names it when you approve it.',
+  body: 'Other tools a workflow can act in. Each one is connected here, once, and a workflow names it when you approve it.',
   linear: 'Linear',
-  linearBody: 'Lets a rule add an issue. Nothing reads your Linear on its own.',
+  linearBody: 'Lets a workflow add an issue. Nothing reads your Linear on its own.',
   connected: 'Connected',
   notConnected: 'Not connected',
   connect: 'Connect Linear…',
@@ -54,19 +54,19 @@ export const INTEGRATIONS_COPY = {
   workspace: 'Workspace',
   teams: 'Teams it may use',
   usedBy: 'Used by',
-  noRule: 'No rule yet',
+  noRule: 'No workflow yet',
   changeTeams: 'Change teams…',
   disconnect: 'Disconnect',
   disconnectTitle: 'Disconnect Linear?',
   disconnectBody: (rules: number | null) =>
     rules === 0
-      ? 'Your key is removed from this Mac. No rule uses it.'
+      ? 'Your key is removed from this Mac. No workflow uses it.'
       : rules === null
-        ? 'Your key is removed from this Mac, and a rule that adds Linear issues adds none until you connect it again.'
-        : `Your key is removed from this Mac, and ${rules === 1 ? 'the rule that uses it adds' : `the ${rules} rules that use it add`} no issue until you connect it again.`,
+        ? 'Your key is removed from this Mac, and a workflow that adds Linear issues adds none until you connect it again.'
+        : `Your key is removed from this Mac, and ${rules === 1 ? 'the workflow that uses it adds' : `the ${rules} workflows that use it add`} no issue until you connect it again.`,
   sessions: 'Agent sessions',
   sessionsBody:
-    'A rule can hand a message to a Claude Code or Codex session that claude-stream runs on this Mac. Agent Comms reads claude-stream’s token as you, and never shows it.',
+    'A workflow can hand a message to a Claude Code or Codex session that claude-stream runs on this Mac. Agent Comms reads claude-stream’s token as you, and never shows it.',
   relay: 'claude-stream',
   ready: 'Ready',
   notReady: 'Not ready',

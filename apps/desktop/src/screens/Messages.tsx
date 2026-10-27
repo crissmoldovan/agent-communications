@@ -54,7 +54,7 @@ import { MessagesTabs } from './search/parts.tsx';
 export const MESSAGES_COPY = {
   title: 'Messages',
   about:
-    'What happened to each message that came in: whether a rule caught it, whether an agent read it, and whether anyone replied.',
+    'What happened to each message that came in: whether a workflow caught it, whether an agent read it, and whether anyone replied.',
   show: 'Show',
   shows: {
     all: 'All',
