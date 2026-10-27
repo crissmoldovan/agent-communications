@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { type GatedChange, type GatedOutcome, gatedChange } from '../src/change-flow.ts';
@@ -294,5 +294,32 @@ test(
     );
     assert.equal(agent.code, 10, agent.stdout);
     assert.match(agent.stdout, /only a person can approve a change in the app, not an agent/);
+  },
+);
+
+test(
+  'LOW: a key replaced where the person took the entry out by hand is refused, and nothing is written back',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const work = await added(m, { app: 'claude-code', name: 'Work', parts: parsePartsSpec('core') });
+    // The person takes the entry out of Claude Code by hand.
+    const held = claudeJson(m);
+    delete held.mcpServers?.agentcomms;
+    writeFileSync(m.claudeJson, JSON.stringify(held, null, 2));
+    const before = await m.core.config.load();
+    await assert.rejects(
+      run(m, connectionKeyReplaceChange(m.core, m.env, { id: work.id }, 'cli'), 'cli'),
+      (error: Error & { hint?: string }) => {
+        assert.match(error.message, /entry isn’t in .*\.claude\.json any more, so its key was not replaced/);
+        assert.match(error.hint ?? '', /Add the connection again/);
+        return true;
+      },
+    );
+    assert.equal(claudeJson(m).mcpServers?.agentcomms, undefined, 'the entry is not written back');
+    const [read] = readConnections(await m.core.config.load()).connections;
+    const [was] = readConnections(before).connections;
+    assert.ok(read?.readable && was?.readable);
+    assert.equal(read.record.keyHash, was.record.keyHash, 'the key is the one it had');
   },
 );

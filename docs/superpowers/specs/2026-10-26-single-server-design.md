@@ -495,7 +495,7 @@ does not protect.
   Gmail, every mailbox; Events — more than this one reaches"), and approved under the change policy, in the app or at
   the terminal. A remove that leaves nothing wider behind stays at once. A key replaced never takes the entry out: a
   connection cut off by it still shadows the wider one, serving nothing, and the one case where its entry was gone —
-  removed by hand — is refused (below).
+  removed by hand — is refused (§16).
 - **`--app-approval` is extended to** `connection add|update|migrate|remove`, in `takesAppApproval` (`cli.ts:535-547`) and in
   `appliedFromApp`'s list (`change-flow.ts:401-411`).
 - **`AppReach`** (`change-flow.ts:523-556`) also names a connection's `configDir`, so that a test build approves only
@@ -800,3 +800,10 @@ with these changes to this design:
 Still open after the spike: behaviour in real apps (Claude Code, Codex, Cursor, VS Code) with `list_changed` and ~190
 tools; Windows process handling; restart backoff, the status file, the key check and the instructions budget (not built
 in the spike); a part that logs needs the router to declare logging.
+
+## 16. The 0.35.0 security review's connection LOWs (2026-10-27)
+
+The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes in §6.2, §7 and §8.1.
+- **A key is never written back into an entry the person took out.** `connection key replace` reads the app's
+  config first: an entry that is not there any more — removed by hand — or a config that cannot be read is refused
+  ("its entry isn't in ~/.claude.json any more … add the connection again"), and nothing is written, the key included.

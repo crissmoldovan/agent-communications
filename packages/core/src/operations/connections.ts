@@ -1451,6 +1451,33 @@ export function connectionRenameChange(
   };
 }
 
+/**
+ * Refuses a new key for a connection whose entry is not in its app any more — the person took it out by hand — or whose
+ * app's config cannot be read to find it, before anything is written (0.35.0 security review, LOW): writing the new
+ * key would put back an entry the person removed. They add the connection again, or remove it.
+ */
+async function refuseEntryGone(env: NodeJS.ProcessEnv, record: ConnectionRecord): Promise<void> {
+  if (record.entry === null) return;
+  const state = await entryState(env, record);
+  if (state.present === true) return;
+  const file = shortenHome(
+    state.path ??
+      (record.app === 'claude-code'
+        ? join(claudeDir(env, record), '.claude.json')
+        : `${APP_LABELS[record.app]}’s settings`),
+    homeDirectory(env),
+  );
+  throw new CommsError(
+    'CONFIG',
+    state.present === false
+      ? `${connectionLabel(record, record.id)}’s entry isn’t in ${file} any more, so its key was not replaced: nothing was changed`
+      : `${file} could not be read to find the entry of ${connectionLabel(record, record.id)}, so its key was not replaced: nothing was changed`,
+    {
+      hint: 'Add the connection again — connection add at your terminal, or in the app — or remove it. A new key is never written into an entry that is not there.',
+    },
+  );
+}
+
 export interface ConnectionKeyResult {
   readonly connection: ConnectionView;
   readonly next: string;
@@ -1461,8 +1488,9 @@ export interface ConnectionKeyResult {
 /**
  * Replacing a connection's key (§6.2): neutral — a new key gives an agent nothing more — so applied at once and audited.
  * The old key stops working at once: a gateway checks it again when the record changes. For every type but Manual the
- * new key is written into the app's entry and never shown; a Manual connection's is a snippet shown once, at the
- * person's terminal or in the app only, never over MCP.
+ * new key is written into the app's entry and never shown — only an entry that is there: one the person took out is
+ * not written back (`refuseEntryGone`). A Manual connection's is a snippet shown once, at the person's terminal or in
+ * the app only, never over MCP.
  */
 export function connectionKeyReplaceChange(
   core: Core,
@@ -1473,10 +1501,11 @@ export function connectionKeyReplaceChange(
 ): GatedChange<ConnectionKeyResult> {
   let key = '';
   return {
-    plan: (config) => {
+    plan: async (config) => {
       refuseAnotherConnection(env, surface, request.id, 'replace the key of');
       const record = requireReadable(config, request.id);
       if (record.app === 'manual') refuseKeyToAgent(env, surface);
+      else await refuseEntryGone(env, record);
       key = newConnectionKey();
       return {
         before: config,
