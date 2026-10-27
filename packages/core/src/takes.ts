@@ -1591,10 +1591,12 @@ export class TakeStore {
 
   /**
    * Who took this conversation (workflows 0.36 W36): the newest take in `accountId` on `channel` whose thread is
-   * `thread`, other than `except` (the message a workflow is about), that is `taken` or `done` and held by a session
-   * with a Claude Code session id. Null when there is none, the person holds it, or its holder had no session id. It
-   * reads the account's records once, as `list` does, and writes nothing; it never reads another account. Only the
-   * session id leaves it: never the holder's folder, client or key.
+   * `thread` — or that is the thread's first message, whose id is the thread's (a Slack conversation is
+   * `<channel>/<parent ts>`), and which a take records in no thread while nobody has replied to it — other than
+   * `except` (the message a workflow is about), that is `taken` or `done` and held by a session with a Claude Code
+   * session id. Null when there is none, the person holds it, or its holder had no session id. It reads the account's
+   * records once, as `list` does, and writes nothing; it never reads another account. Only the session id leaves it:
+   * never the holder's folder, client or key.
    */
   async threadHolder(input: {
     readonly channel: TakeChannel;
@@ -1610,7 +1612,8 @@ export class TakeStore {
       const { record } = listed;
       const message = record.message;
       if (message.channel !== input.channel || message.accountId !== input.accountId) continue;
-      if (message.thread !== input.thread || takeMessageKey(message) === except) continue;
+      if (message.thread !== input.thread && message.id !== input.thread) continue;
+      if (takeMessageKey(message) === except) continue;
       if (record.state !== 'taken' && record.state !== 'done') continue;
       const held = record.holder;
       if (held === null || isPerson(held) || !isClaudeCodeSessionId(held.sessionId)) continue;

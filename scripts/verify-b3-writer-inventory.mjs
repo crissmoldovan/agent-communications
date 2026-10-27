@@ -168,8 +168,16 @@ export async function verifyB3WriterInventory({ root = ROOT, inventory = undefin
     const schedulerText = await readFile(join(root, scheduler), 'utf8').catch(() => '');
     const starts = [
       [
+        // 0.36.0 (W33): the manual tick then waits, outside its lease, for the event deliveries it started apart.
         'manual owner tick',
-        owner.includes('tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),'),
+        owner.includes(
+          'tick: async () => {\n      await withEventWriterLease(writerQuiescer, () => scheduler.tick());',
+        ),
+      ],
+      [
+        // 0.36.0 (W33): a raised event's delivery runs apart from the tick that started it, under a lease of its own.
+        'event delivery attempt apart from the tick',
+        owner.includes('apart: (work) => withOwnEventWriterLease(writerQuiescer, work),'),
       ],
       [
         'startup expiry recovery',

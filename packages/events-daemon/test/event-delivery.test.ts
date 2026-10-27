@@ -412,3 +412,63 @@ test('D5: events written before a crash are delivered after the restart, once ea
     await hook.server.close();
   }
 });
+
+test('D5: a webhook subscriber that hangs holds back neither the owner’s own ticks nor another subscriber', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  // A receiver that reads each request and never answers: the attempt waits out its whole timeout.
+  const held = new Set<Socket>();
+  const server = await startLoopbackReceiver((socket) => {
+    socket.on('data', () => held.add(socket));
+    socket.once('close', () => held.delete(socket));
+  });
+  const port = await freePort();
+  try {
+    await withLiveEvents(
+      [
+        { document: webhookSubscriber({ url: `http://127.0.0.1:${server.port}/hooks/events` }) },
+        { document: sseSubscriber({ port, patterns: ['acme.*.*.*'] }) },
+      ],
+      async (harness) => {
+        await signingSecret(harness.stateDir);
+        // From here the owner runs on its own quick timer, as on the person's Mac: the test ticks nothing.
+        await harness.lane.restart({ tickMs: 50 });
+        const [eventId] = await harness.raise((run, workflow) => [issueCreated(run, workflow, Date.now())]);
+        const state = (subscriberId: string) =>
+          (
+            harness.database
+              .prepare('SELECT state FROM event_deliveries WHERE event_id = ? AND subscriber_id = ?')
+              .get(eventId as string, subscriberId) as { state: string }
+          ).state;
+        for (let waited = 0; state('events-dashboard') !== 'delivered' && waited < 10_000; waited += 20)
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(state('events-dashboard'), 'delivered', 'the live subscriber is not held behind the webhook');
+        // The webhook's attempt was claimed in the same pass; its request may land a moment after the live frame.
+        for (let waited = 0; held.size === 0 && waited < 10_000; waited += 20)
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(held.size, 1, 'the webhook holds its request open, unanswered');
+        assert.equal(state('crm-hook'), 'disclosing', 'and its attempt is still going');
+        // The owner's later ticks go on while it hangs: the scheduler is not waiting on it.
+        const before = harness.database.prepare('SELECT COUNT(*) AS count FROM event_stream_log').get() as {
+          count: number;
+        };
+        await harness.raise((run, workflow) => [issueCreated(run, workflow, Date.now(), 2)]);
+        for (
+          let waited = 0;
+          (harness.database.prepare('SELECT COUNT(*) AS count FROM event_stream_log').get() as { count: number })
+            .count === before.count && waited < 10_000;
+          waited += 20
+        )
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal(
+          (harness.database.prepare('SELECT COUNT(*) AS count FROM event_stream_log').get() as { count: number }).count,
+          before.count + 1,
+          'a later event reaches the live subscriber too',
+        );
+        for (const socket of held) socket.destroy();
+      },
+    );
+  } finally {
+    await server.close();
+  }
+});

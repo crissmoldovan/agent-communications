@@ -75,3 +75,12 @@ export class WriterQuiescer {
 export async function withEventWriterLease<T>(quiescer: WriterQuiescer, work: () => Promise<T>): Promise<T> {
   return quiescer.withShared(work);
 }
+
+/**
+ * The shared lease, taken afresh for work its caller starts and does not wait for: outside any lease the caller holds,
+ * so the work never leans on one the caller gives up when it returns (a raised event's delivery, apart from the
+ * owner's tick, W33).
+ */
+export function withOwnEventWriterLease<T>(quiescer: WriterQuiescer, work: () => Promise<T>): Promise<T> {
+  return leaseContext.exit(() => withEventWriterLease(quiescer, work));
+}
