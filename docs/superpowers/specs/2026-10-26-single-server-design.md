@@ -478,9 +478,9 @@ does not protect.
 | Act | Agent over MCP | Person at a terminal | Person in the app (macOS, attested) | App on Windows or Linux |
 |---|---|---|---|---|
 | List or show connections; doctor | yes | yes | yes | yes |
-| Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it. Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
+| Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it — a change of parts for its own connection only, except with `add` (note below). Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
 | Add or rotate a **Manual** connection (shows the key) | refused: the key would stay in the transcript | yes | yes | yes, through the terminal |
-| Revoke, drop a part, pin, read-only on | at once | at once | at once | at once |
+| Revoke, drop a part, pin, read-only on | its own connection only: at once (note below) | at once | at once | at once |
 | Remove | its own connection only: at once — but prepared, like a loosening, where its entry shadows a wider one (note below) | at once, or approves at the terminal | at once, or approves in the app (`--app-approval`) | at once, or "Do it in Terminal" |
 | Rename; rotate (not Manual) | its own connection only: at once, audited (note below) | at once | at once | at once |
 
@@ -491,6 +491,13 @@ does not protect.
   that names a connection — its summary, each loosening's path, each effect — names it by name, app, place (its folder,
   its profile, or "every folder") and short id: `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)`, with
   "new" in place of the id for one being added, which has none until it is.
+- **Note, 2026-10-27 (0.35.0 re-review, LOW 2):** the own-connection rule covers changing a connection's parts too —
+  `connection change` and `comms_connection_change` with `id` and `parts`, narrowing included — over MCP, from an
+  agent's shell and inside an MCP server's process. The agent in one project narrowed the person's connection for every
+  folder to Agent Comms itself, at once, and cut their other apps off Gmail and Events until they approved putting them
+  back. `comms_connection_change` with `add`, the change Gmail's setup hands an agent, still puts a part into the app's
+  connection for every folder, approved first as every part added is, but takes nothing away there at once: a pin or
+  read-only on in another connection is refused. The person at a terminal and the app change any connection, as before.
 - **Note, 2026-10-27 (0.35.0 security review, H1):** a one-project connection's entry is Claude Code's local scope,
   under core's name, so it shadows the app's `agentcomms` for every folder (§6.1); removing it handed the agents in
   that folder the wider one, at once. A remove whose entry shadows a wider entry of the same name — a connection
@@ -838,3 +845,4 @@ The lead's decisions on the re-review of the 0.35.0 security fixes.
   remove's check (`widerBehind`) now reads this app's own file listed as unreadable as "could not be read": the remove
   is prepared, its loosening line says the app's settings could not be read to say what that reaches, and the person
   approves it, as §8.1's H1 note says.
+- **An agent changes the parts of only its own connection** (LOW 2): §8.1's table and its note.

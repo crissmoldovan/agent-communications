@@ -65,7 +65,8 @@ import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange }
  *   environment, never shown — installing any part's runtime this machine lacks. A Manual connection is a snippet with
  *   its key in it, shown once, so it is added only at the person's own terminal or in the app, never over MCP: the key
  *   would stay in the chat's transcript.
- * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest.
+ * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest. An
+ *   agent changes the parts of only its own connection, and narrows only its own (`refuseAnotherConnection`).
  * - **Renaming it, and replacing its key**, give an agent nothing more, so they apply at once and are audited. A
  *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is. An agent
  *   renames, re-keys and removes only its own connection (`refuseAnotherConnection`).
@@ -90,11 +91,12 @@ function refuseKeyToAgent(env: NodeJS.ProcessEnv, surface: ChangeSurface): void 
 }
 
 /**
- * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key and
- * removing it act only on the caller's own connection: the one whose part this is, as its gateway reports it
- * (`connectionOfThisProcess`). Another connection is the person's, at their terminal or in the app (0.35.0 security
- * review, M1: an agent renamed two others so that a later preview named the wrong one, and could cut any app off). A
- * speed bump against agents, as every person-only act here is: a shell runs as the person.
+ * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key,
+ * removing it and changing its parts — narrowing included — act only on the caller's own connection: the one whose part
+ * this is, as its gateway reports it (`connectionOfThisProcess`). Another connection is the person's, at their terminal
+ * or in the app (0.35.0 security review, M1: an agent renamed two others so that a later preview named the wrong one,
+ * and could cut any app off; the re-review's LOW 2: narrowing another at once cut the person's other apps off Gmail
+ * and Events). A speed bump against agents, as every person-only act here is: a shell runs as the person.
  */
 function refuseAnotherConnection(env: NodeJS.ProcessEnv, surface: ChangeSurface, id: unknown, act: string): void {
   const marker =
@@ -910,13 +912,21 @@ export function connectionChangeChange(
   surface: ChangeSurface,
   deps: ServerInstallDeps = {},
 ): GatedChange<ConnectionChangeResult> {
-  return partsChange(
+  const change = partsChange(
     core,
     env,
     { id: request.id, approvalId: request.approvalId, target: (config) => partsOf(config, request.parts) },
     surface,
     deps,
   );
+  return {
+    ...change,
+    // Before anything narrows at once: an agent's change to another connection's parts is refused whole (LOW 2).
+    plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'change the parts of');
+      return change.plan(config);
+    },
+  };
 }
 
 /**
@@ -1416,6 +1426,11 @@ export function connectionPartChange(
         servers = [facts.server];
         const target = (now: Config, record: ConnectionRecord) =>
           putPart(record.parts, partsOf(now, [asked])[0] as ConnectionPart);
+        // What narrows here applies at once, so an agent narrows only its own connection (LOW 2). What only reaches
+        // more waits for the person, as Gmail's setup hands it to an agent, whichever connection it goes into.
+        const narrowed = narrowing(into.parts, target(config, into));
+        if (JSON.stringify(narrowed) !== JSON.stringify(into.parts))
+          refuseAnotherConnection(env, surface, into.id, 'narrow the parts of');
         if (into.launcher === 'managed' && !into.parts.some((part) => part.server === facts.server)) {
           const words = ['connection', 'change', into.id, '--parts', partsWords(config, target(config, into))];
           await refuseUnverifiable(core, servers, deps, words);

@@ -13,6 +13,7 @@ import {
   connectionAddChange,
   connectionChangeChange,
   connectionKeyReplaceChange,
+  connectionPartChange,
   connectionRemoveChange,
   connectionRenameChange,
   parsePartsSpec,
@@ -357,5 +358,141 @@ test(
     writeFileSync(m.claudeJson, good);
     assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, 'the folder’s entry is still there');
     assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+  },
+);
+
+/** A mailbox here, `cue/gmail`, in `config.json` before anything else is written. */
+function withMailbox(m: Machine): void {
+  writeFileSync(
+    join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json'),
+    `${JSON.stringify({
+      version: 2,
+      inboxes: {
+        'cue/gmail': {
+          id: 'ibx_AAAAAAAAAAAAAAAA',
+          provider: 'gmail',
+          email: 'jo@example.test',
+          identity: 'oidc',
+          client: 'desktop',
+          tier: 'read',
+          contacts: false,
+          grantedScopes: [],
+          secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+          internalDomains: ['example.test'],
+          createdAt: '2026-10-27T09:00:00.000Z',
+        },
+      },
+    })}\n`,
+  );
+}
+
+const partsOf = async (m: Machine, id: string) => {
+  const read = readConnections(await m.core.config.load()).connections.find(
+    (each) => each.readable && each.record.id === id,
+  );
+  assert.ok(read?.readable);
+  return read.record.parts.map(
+    (each) => `${each.server}${each.pin ? `:${each.pin.alias}` : ''}${each.readOnly ? ':ro' : ''}`,
+  );
+};
+
+test(
+  'LOW 2: an agent changes the parts of only its own connection — narrowing another is refused, unchanged; the person’s any',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    withMailbox(m);
+    const project = join(m.home, 'work', 'acme');
+    mkdirSync(project, { recursive: true });
+    const everywhere = await added(m, {
+      app: 'claude-code',
+      name: 'Everywhere',
+      parts: parsePartsSpec('core,gmail,events'),
+    });
+    const acme = await added(m, {
+      app: 'claude-code',
+      name: 'Acme only',
+      parts: parsePartsSpec('core,events'),
+      folder: project,
+    });
+    const inAcme = partEnv(m.env, acme.id);
+    const refusedAsAnother = (error: Error & { code?: string; hint?: string; details?: Record<string, unknown> }) => {
+      assert.equal(error.code, 'APPROVAL_REQUIRED', error.message);
+      assert.match(error.message, /only the connection it is a part of/);
+      assert.match(error.message, /nothing was changed/);
+      assert.match(error.hint ?? '', /at your terminal, or in the app/);
+      assert.equal(error.details?.reason, 'NOT_OWN_CONNECTION');
+      return true;
+    };
+    // The re-review's probe: the agent in "Acme only" narrows "Everywhere" over MCP, cutting the person's other apps off.
+    const narrow = (env: Record<string, string>, surface: ChangeSurface) =>
+      run(
+        m,
+        connectionChangeChange(m.core, env, { id: everywhere.id, parts: parsePartsSpec('core') }, surface),
+        surface,
+      );
+    await assert.rejects(narrow(inAcme, 'mcp'), refusedAsAnother);
+    // From an agent's shell, and inside an MCP server's process: the same.
+    await assert.rejects(narrow({ ...m.env, CLAUDECODE: '1' }, 'cli'), refusedAsAnother);
+    await assert.rejects(narrow({ ...m.env, AGENTCOMMS_MCP_SERVER: 'gmail' }, 'cli'), refusedAsAnother);
+    // Widening another is refused too: another connection is the person's.
+    await assert.rejects(
+      run(
+        m,
+        connectionChangeChange(
+          m.core,
+          inAcme,
+          { id: everywhere.id, parts: parsePartsSpec('core,gmail,events,slack') },
+          'mcp',
+        ),
+        'mcp',
+      ),
+      refusedAsAnother,
+    );
+    // `add` into the app's connection for every folder, narrowing its Gmail part at once: refused too.
+    await assert.rejects(
+      run(
+        m,
+        connectionPartChange(
+          m.core,
+          inAcme,
+          {
+            app: 'claude-code',
+            server: 'gmail',
+            account: 'cue/gmail',
+            readOnly: true,
+            launcher: 'local',
+            noVerify: true,
+          },
+          'mcp',
+        ),
+        'mcp',
+      ),
+      refusedAsAnother,
+    );
+    assert.deepEqual(await partsOf(m, everywhere.id), ['core', 'gmail', 'events'], 'nothing narrowed');
+    // `add` that only reaches more still waits for the person, as Gmail's setup hands it to an agent.
+    const asked = await run(
+      m,
+      connectionPartChange(
+        m.core,
+        inAcme,
+        { app: 'claude-code', server: 'slack', launcher: 'local', noVerify: true },
+        'mcp',
+      ),
+      'mcp',
+    );
+    assert.equal(asked.status, 'approval-required');
+    // Its own connection: narrowed at once, as before.
+    const own = await run(
+      m,
+      connectionChangeChange(m.core, inAcme, { id: acme.id, parts: parsePartsSpec('core') }, 'mcp'),
+      'mcp',
+    );
+    assert.equal(own.status, 'applied');
+    assert.deepEqual(await partsOf(m, acme.id), ['core']);
+    // The person at a terminal: any connection, at once.
+    assert.equal((await narrow(m.env, 'cli')).status, 'applied');
+    assert.deepEqual(await partsOf(m, everywhere.id), ['core']);
   },
 );
