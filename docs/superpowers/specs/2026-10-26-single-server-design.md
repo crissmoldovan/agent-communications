@@ -811,3 +811,7 @@ The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes 
   cannot read it — a broken hand edit — stops every part and refuses every later call with the reason ("Agent Comms
   could not read its configuration…"), where it kept serving the last record it read (D15). Both of the gateway's race
   fixes stay as they were: one look at a time, and a look that finds nothing new answers with the last look's verdict.
+- **`connection migrate --undo` pins by id.** Each part kept to an account is registered under the name that account
+  has now, found by its immutable id (D12), never the alias the record kept when it was pinned, which a rename can
+  have given another account since; a part kept to an account no longer here refuses the undo before anything is
+  prepared, since registered with no pin it would reach every account.
