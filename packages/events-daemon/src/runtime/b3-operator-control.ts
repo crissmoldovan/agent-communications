@@ -715,9 +715,19 @@ function ruleReferencesSubscriber(document: string, subscriberId: string, versio
 
 function ruleReferencesJudge(document: string, judgeId: string, versions: ReadonlySet<number>): boolean {
   try {
-    const rule = JSON.parse(document) as { agentic?: { judge?: { judgeId?: unknown; version?: unknown } } };
-    const judge = rule.agentic?.judge;
-    return judge?.judgeId === judgeId && typeof judge.version === 'number' && versions.has(judge.version);
+    type Judge = { judgeId?: unknown; version?: unknown } | undefined;
+    const rule = JSON.parse(document) as {
+      agentic?: { judge?: Judge };
+      flow?: { steps?: Record<string, { ask?: { judge?: Judge }; judge?: { judge?: Judge } }> };
+    };
+    // The gate's judge, and every judge a workflow's flow asks: a judge step's, a route's (workflows plan B3).
+    const judges: Judge[] = [
+      rule.agentic?.judge,
+      ...Object.values(rule.flow?.steps ?? {}).flatMap((step) => [step.ask?.judge, step.judge?.judge]),
+    ];
+    return judges.some(
+      (judge) => judge?.judgeId === judgeId && typeof judge.version === 'number' && versions.has(judge.version),
+    );
   } catch {
     // A damaged live rule cannot prove that it is safe to leave active after the bound authority is revoked.
     return true;

@@ -1,7 +1,10 @@
 import type { DatabaseSync } from 'node:sqlite';
 
-/** The closed set of target kinds a delivery row can carry (migration 24; Linear from migration 31, sessions from 32). */
-export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue' | 'linear' | 'session';
+/**
+ * The closed set of target kinds a delivery row can carry (migration 24; Linear from migration 31, sessions from 32, a
+ * workflow's Linear change from 34).
+ */
+export type DeliveryTargetKind = 'dry-run' | 'webhook' | 'sse' | 'queue' | 'linear' | 'session' | 'linear-change';
 
 /**
  * One `deliveries list` row: content-free metadata only. The fields after `deadLetterExpiresAt` are 0.32.0's (owner
@@ -34,8 +37,9 @@ export interface DeliveryListRowV1 {
   readonly deliveredAt: number | null;
   readonly deadLetteredAt: number | null;
   /**
-   * The Linear issue a Linear delivery added (0.33.0 design §3.4): its identifier (CUE-123) and its address, without
-   * the title's words. Present only once there is one; ids, never what the issue says.
+   * The Linear issue a Linear delivery added (0.33.0 design §3.4), or a workflow's Linear change changed (0.36): its
+   * identifier (CUE-123) and its address, without the title's words. Present only once there is one; ids, never what
+   * the issue says.
    */
   readonly linear?: { readonly identifier: string; readonly url: string };
 }

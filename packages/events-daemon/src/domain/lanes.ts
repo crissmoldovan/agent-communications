@@ -194,7 +194,7 @@ const CLOCK_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/u;
  * text; those come only through `events_lane_item`, enveloped.
  */
 export function lanePointerText(pointer: LanePointer): string {
-  const where = `(${LANE_POINTER_CHANNEL_NAMES[pointer.channel]}, rule ${pointerRuleId(pointer.ruleId)})`;
+  const where = `(${LANE_POINTER_CHANNEL_NAMES[pointer.channel]}, workflow ${pointerRuleId(pointer.ruleId)})`;
   const offered =
     pointer.offeredUntil !== undefined && CLOCK_TIME.test(pointer.offeredUntil)
       ? ` ${sessionOfferLine(pointer.offeredUntil)}`

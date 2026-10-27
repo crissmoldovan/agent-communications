@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { lstat, mkdir, realpath } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import type { JsonValue } from '@agentcomms/events';
+import { closedSlotValue } from '../../../domain/flow.ts';
 import type { ProjectV1 } from '../../../domain/projects.ts';
 import type { EventDatabase } from '../../../store/database.ts';
 import { isInside } from '../../agent-sessions.ts';
@@ -80,32 +80,21 @@ export function branchOf(template: string, slot: (name: string) => string | null
   return branch.length === 0 ? undefined : branch;
 }
 
-/** A slot's value in this run: the run's id, a settled step's closed output, or the chained run's trigger data. */
+/**
+ * A slot's value in this run: the run's id, a settled step's closed output, or the chained run's trigger data — through
+ * the one slot resolver every step and target uses (`closedSlotValue`), as text, or null when it has none.
+ */
 async function slotValues(ctx: StepContext, template: string): Promise<(name: string) => string | null> {
   const trigger = template.includes('{{trigger.') ? await ctx.trigger() : null;
-  const text = (value: unknown): string | null =>
-    typeof value === 'string' ? value : typeof value === 'number' && Number.isFinite(value) ? String(value) : null;
+  const flow = ctx.rule.flow;
   return (name) => {
-    if (name === 'run') return ctx.run.id;
-    const [root, ...path] = name.split('.');
-    if (root === 'steps') {
-      // A key of the step's closed output — or of a Linear step's issue, `{ id, identifier, url }` (plan I5).
-      const output = ctx.output(path[0] as string);
-      const key = path[1] as string;
-      const issue = output?.issue;
-      return (
-        text(output?.[key]) ??
-        (issue !== null && typeof issue === 'object' && !Array.isArray(issue)
-          ? text((issue as Readonly<Record<string, JsonValue>>)[key])
-          : null)
-      );
-    }
-    let value: JsonValue | undefined = (trigger as JsonValue | null) ?? undefined;
-    for (const key of path) {
-      if (value === null || value === undefined || typeof value !== 'object' || Array.isArray(value)) return null;
-      value = (value as Readonly<Record<string, JsonValue>>)[key];
-    }
-    return text(value);
+    if (flow === undefined) return null;
+    const value = closedSlotValue(name, { runId: ctx.run.id, flow, output: (id) => ctx.output(id), trigger });
+    return typeof value === 'string'
+      ? value
+      : typeof value === 'number' && Number.isFinite(value)
+        ? String(value)
+        : null;
   };
 }
 

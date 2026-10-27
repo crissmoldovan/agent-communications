@@ -20,6 +20,43 @@ export const JUDGE_NOT_COMPOSED: StepContext['judge'] = async (): Promise<JudgeA
   code: 'JUDGE_NOT_COMPOSED',
 });
 
+/**
+ * A live run's mapped values, opened from its sealed record through the owner's leased cipher: what a Raise step's
+ * declared fields read when its event is built. Empty once the run has ended and its record is purged.
+ */
+/** A live run's whole sealed record, opened through the owner's leased cipher; null once the run has ended. */
+export async function openRunRecord(
+  store: EventDatabase,
+  cipher: ProjectionCipher,
+  runId: string,
+): Promise<RunRecord | null> {
+  const row = store.database.prepare('SELECT encrypted_record FROM workflow_runs WHERE id = ?').get(runId) as
+    | { encrypted_record: Uint8Array | null }
+    | undefined;
+  if (row?.encrypted_record === null || row?.encrypted_record === undefined) return null;
+  return JSON.parse(
+    (await cipher.decrypt(runRecordLocation(runId), row.encrypted_record)).toString('utf8'),
+  ) as RunRecord;
+}
+
+export async function openRunFields(
+  store: EventDatabase,
+  cipher: ProjectionCipher,
+  runId: string,
+): Promise<Readonly<Record<string, JsonValue>>> {
+  const row = store.database.prepare('SELECT encrypted_record FROM workflow_runs WHERE id = ?').get(runId) as
+    | { encrypted_record: Uint8Array | null }
+    | undefined;
+  if (row?.encrypted_record === null || row?.encrypted_record === undefined) return {};
+  const record = JSON.parse(
+    (await cipher.decrypt(runRecordLocation(runId), row.encrypted_record)).toString('utf8'),
+  ) as RunRecord;
+  const fields = record.fields;
+  return typeof fields === 'object' && fields !== null && !Array.isArray(fields)
+    ? (fields as Readonly<Record<string, JsonValue>>)
+    : {};
+}
+
 export function stepContextFor(input: {
   readonly store: EventDatabase;
   readonly cipher: ProjectionCipher;

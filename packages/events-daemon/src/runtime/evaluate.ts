@@ -374,6 +374,11 @@ export class EventEvaluator {
                   rule,
                   data: evaluated.mapped.data,
                   createdAt: this.#now(),
+                  matched: {
+                    definition: evaluated.definition,
+                    event: projection.event,
+                    classification: evaluated.classification,
+                  },
                   message: runMessageOf(rule, projection.event),
                 });
           // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
@@ -487,6 +492,11 @@ export class EventEvaluator {
             rule,
             data: evaluated.mapped.data,
             createdAt: now,
+            matched: {
+              definition: evaluated.definition,
+              event: projection.event,
+              classification: evaluated.classification,
+            },
             message: runMessageOf(rule, projection.event),
           });
     // Taint is part of the disclosure boundary. A failed flush retains the projection and creates no outbox row.

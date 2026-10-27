@@ -121,6 +121,7 @@ import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeSetupService } from './judge-setup.ts';
 import { JudgeReader } from './judge-show.ts';
 import { JudgeTestControl } from './judge-test.ts';
+import type { JudgeTransport } from './judge-transport.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
@@ -160,8 +161,13 @@ import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
+import { composeWorkflowEvents } from './workflow/compose-events.ts';
+import { composeProjects } from './workflow/compose-projects.ts';
+import { openRunFields } from './workflow/context.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowFailpoint } from './workflow/engine.ts';
+import { flowJudge } from './workflow/judge-call.ts';
+import { RelayWaits } from './workflow/relay-waits.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -298,6 +304,8 @@ export interface EventOwnerOptions {
         readonly parts?: readonly WorkflowComposition[] | undefined;
         readonly notifier?: Notifier | undefined;
         readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
+        /** The judge transport a workflow step's judge reaches its provider through: a loopback fake under test. */
+        readonly judgeTransport?: JudgeTransport | undefined;
       }
     | undefined;
   readonly laya?:
@@ -1396,9 +1404,13 @@ async function startOwnerWithLock(
   });
   const sessionQueue = new SessionQueue({ store: database, now });
   let tickAfterRelease: () => void = () => undefined;
+  // A workflow's waits on the relay (0.36 §6.5): ended by the follower's records and snapshots, each waking its run.
+  let wakeWorkflow: (runId: string) => void = () => undefined;
+  const relayWaits = new RelayWaits({ store: database, wake: (runId) => wakeWorkflow(runId) });
   const sessionFollower = new SessionQueueFollower({
     queue: sessionQueue,
     sessions: agentSessions,
+    relayWaits,
     onReleased: () => tickAfterRelease(),
     ...(options.agentSessions?.reconcileMs === undefined ? {} : { reconcileMs: options.agentSessions.reconcileMs }),
   });
@@ -1451,6 +1463,13 @@ async function startOwnerWithLock(
     session: sessionDispatcher,
     linear,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
+    // A workflow step waits on its delivery: once a try of it settles, its run looks again (0.36 §5).
+    onDispatched: (deliveryId) => {
+      const row = database.database.prepare('SELECT run_id FROM deliveries WHERE id = ?').get(deliveryId) as
+        | { run_id: string | null }
+        | undefined;
+      if (row?.run_id !== null && row?.run_id !== undefined) wakeWorkflow(row.run_id);
+    },
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
   const deliveryActivity = new DeliveryActivity({ store: database, core, config: core.config });
@@ -1548,6 +1567,26 @@ async function startOwnerWithLock(
     },
   });
   // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  // A workflow step's judge reads its hosted key at the request boundary, as the gate's does (plan B3).
+  const flowJudgeKeyFor = async ({
+    judgeId,
+    judgeVersion,
+  }: {
+    readonly judgeId: string;
+    readonly judgeVersion: number;
+  }) => {
+    const row = database.database
+      .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+      .get(judgeId, judgeVersion) as { digest: string } | undefined;
+    if (row === undefined) return null;
+    const generations = await eventSecrets.readLiveGenerations({
+      owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+      purpose: 'judge-key',
+      cipher,
+    });
+    const current = generations.find((generation) => generation.lifecycle === 'current');
+    return current === undefined ? null : { generation: current.generation, material: current.material };
+  };
   const workflows = composeWorkflows(
     {
       store: database,
@@ -1558,9 +1597,33 @@ async function startOwnerWithLock(
       writerQuiescer,
       now,
       failpoint: options.workflows?.failpoint,
+      // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
+      standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
+      relay: () => agentSessions.relay(),
+      onRelayWait: () => sessionFollower.notify(),
+      judgeFor: (attempt) =>
+        flowJudge({
+          store: database,
+          attempt,
+          hostedApiKeyFor: flowJudgeKeyFor,
+          now,
+          ...(options.workflows?.judgeTransport === undefined ? {} : { transport: options.workflows.judgeTransport }),
+        }),
     },
-    [...(options.workflows?.parts ?? [])],
+    [
+      // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
+      // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
+      composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
+      // Track D: the Raise step and the sink every transition's ticked events go through.
+      composeWorkflowEvents({
+        cipher,
+        installationId: database.installationId,
+        fields: (run) => openRunFields(database, cipher, run.id),
+      }),
+      ...(options.workflows?.parts ?? []).map((part) => ({ ...part, executors: [] })),
+    ],
   );
+  wakeWorkflow = (runId) => workflows.wake(runId);
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -1881,6 +1944,8 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
+        // A workflow pass a wake started finishes here, before the database closes; none starts after.
+        await workflows.stop();
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();

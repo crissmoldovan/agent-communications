@@ -11,7 +11,7 @@ import {
   type TargetDocument,
   targetLane,
 } from './activation-documents.ts';
-import { assertFlowEventNameFree } from './flow.ts';
+import { assertFlowEventNameFree, flowJudgeDocuments } from './flow.ts';
 import {
   assertCreatableLayaJudge,
   assertLayaJudgeKindAvailable,
@@ -249,6 +249,11 @@ export class ImmutableVersions {
       );
     }
     this.#assertLanesFree(rule);
+    // A judge a workflow's flow asks is held to its kind as the gate's judge is: offered here, and enabled (plan B3).
+    for (const judge of flowJudgeDocuments(rule)) {
+      if (judge.kind === JUDGE_KINDS[1]) assertLayaRuleJudgeOffered(this.#layaInputs);
+      assertJudgeKindEnabled(judge.kind, this.activeVersion('judge-kind', judge.kind) !== null);
+    }
     // A workflow's events are named as it alone (W24), across active workflows, as a lane is.
     assertFlowEventNameFree(this.#database, rule);
     return normaliseActivationDocument({ documentVersion: 1, kind: 'rule', rule }) as Extract<
@@ -334,6 +339,15 @@ export class ImmutableVersions {
               document: rule.agentic.judge,
             },
           ]),
+      // Each judge a workflow's flow asks is a stored version too, byte for byte (workflows plan B3).
+      ...flowJudgeDocuments(rule).map((judge) => ({
+        kind: 'judge' as const,
+        table: 'judge_versions',
+        column: 'judge_id',
+        id: judge.judgeId,
+        version: judge.version,
+        document: judge,
+      })),
     ];
     for (const entry of embedded) {
       const row = this.#database
