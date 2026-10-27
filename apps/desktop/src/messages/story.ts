@@ -10,10 +10,17 @@
  * Takes (0.35.0, design 2026-10-26-taking-messages §9): who has the message and each take, hand-back and lapse, in the
  * person's view — the window's folder and client, which an agent never sees of another session (T7). A take's note is
  * an agent's words and may carry a sender's: it is an `untrusted` part, never the app's.
+ *
+ * Workflow runs (0.36.0, workflows design §11.2): each run's steps follow the workflow that matched — "Workflow
+ * client-asks › Project acme-site (its sender's domain) › Issue ACME-123 › Session started in ~/work/acme-site-wt/
+ * ac-acme-123 › Given 11:20 › Turn ended 11:39: done › Issue closed". Why a project was chosen is said in closed words
+ * (§8.3), never the message's; a worktree's folder is the person's own view.
  */
 import { productLabel } from '../components/ApprovalCard.tsx';
 import { shownFolder } from '../lanes.ts';
-import { isHandedBack, type JoinedMessage, type Status, type Touch } from './join.ts';
+import { outcomeWords } from '../workflows/copy.ts';
+import { providerWords, routeBecause } from '../workflows/runs.ts';
+import { isHandedBack, type JoinedMessage, type RunStep, type Status, type Touch } from './join.ts';
 import type {
   DecisionView,
   DeliveryView,
@@ -420,6 +427,147 @@ function takeEntry(touch: Touch, message: JoinedMessage, context: StoryContext):
   }
 }
 
+// ── Workflow runs (0.36.0) ─────────────────────────────────────────────────────────────────────────────────────
+
+/** "Project acme-site (its sender's domain)": the project a run chose, and why, in closed words. */
+function routedCard(run: RunStep): Part[] {
+  const project = run.project ?? null;
+  if (project === null) return words('A project');
+  const because = routeBecause(run.reason, project, run.score);
+  return [{ text: 'Project ' }, { untrusted: project }, ...(because === null ? [] : [{ text: ` (${because.short})` }])];
+}
+
+/** The deliveries a run's steps made, by their ids: the run's own steps tell them, so the card does not say them again. */
+function runDeliveries(message: JoinedMessage): ReadonlySet<string> {
+  return new Set(
+    message.touches.flatMap((touch) =>
+      touch.via === 'run' && typeof touch.run?.deliveryId === 'string' ? [touch.run.deliveryId] : [],
+    ),
+  );
+}
+
+/** A card's steps for a message's workflow runs, in the order they happened. */
+function runCardSteps(message: JoinedMessage, context: StoryContext): Part[][] {
+  const runs = message.touches.filter((touch) => touch.via === 'run' && touch.run !== undefined);
+  const steps: Part[][] = [];
+  for (const touch of runs) {
+    const run = touch.run as RunStep;
+    switch (touch.kind) {
+      case 'routed':
+        steps.push(routedCard(run));
+        break;
+      case 'issue-made':
+        steps.push(run.issue == null ? words('Issue made') : [{ text: 'Issue ' }, { untrusted: run.issue }]);
+        break;
+      case 'session-found':
+        steps.push(words(`Session found, ${outcomeWords(run.outcome ?? '')}`));
+        break;
+      case 'session-started':
+        steps.push(
+          run.folder == null
+            ? words('Session started')
+            : words(`Session started in ${shownFolder(run.folder, context.home)}`),
+        );
+        break;
+      case 'worktree-made': {
+        // A session started in it says where; the worktree is then no step of its own on the card.
+        const started = runs.some(
+          (each) => each.kind === 'session-started' && each.run?.runId === run.runId && each.run.folder != null,
+        );
+        if (!started)
+          steps.push(run.branch == null ? words('Worktree made') : [{ text: 'Worktree ' }, { untrusted: run.branch }]);
+        break;
+      }
+      case 'given':
+        steps.push(words(`Given ${context.time(touch.at)}`));
+        break;
+      case 'turn-ended':
+        steps.push(words(`Turn ended ${context.time(touch.at)}: ${outcomeWords(run.outcome ?? '')}`));
+        break;
+      case 'issue-closed':
+        steps.push(words('Issue closed'));
+        break;
+      case 'run-ended':
+        if (run.outcome === 'failed') steps.push(words('Its run failed'));
+        else if (run.outcome === 'cancelled') steps.push(words('Its run was cancelled'));
+        else if (run.outcome === 'expired') steps.push(words('Its run ran out of time'));
+        break;
+      default:
+        break;
+    }
+  }
+  return steps;
+}
+
+/** The timeline's entry for one step of a workflow's run: closed words, the person's project, and their folders. */
+function runEntry(touch: Touch, context: StoryContext): TimelineEntry {
+  const run = touch.run as RunStep;
+  const entry = (tone: EntryTone, what: Part[], sub: Part[] | null = null): TimelineEntry => ({
+    at: touch.at,
+    tone,
+    what,
+    sub,
+  });
+  const provider = providerWords(run.provider) ?? 'a session';
+  const folder = run.folder == null ? null : shownFolder(run.folder, context.home);
+  switch (touch.kind) {
+    case 'routed': {
+      const project = run.project ?? null;
+      if (project === null) return entry('accent', words('Routed to a project'));
+      const because = routeBecause(run.reason, project, run.score);
+      return entry(
+        'accent',
+        [{ text: 'Routed to the project ' }, { untrusted: project }],
+        because === null ? null : words(capital(`because ${because.long}`)),
+      );
+    }
+    case 'issue-made':
+      return entry(
+        'ok',
+        run.issue == null
+          ? words('Made a Linear issue')
+          : [{ text: 'Made the Linear issue ' }, { untrusted: run.issue }],
+      );
+    case 'session-found':
+      return entry('accent', words(`Found a session, ${outcomeWords(run.outcome ?? '')}`), words(provider));
+    case 'session-started':
+      return entry('accent', words(`Started a session: ${provider}`), folder === null ? null : words(`In ${folder}`));
+    case 'worktree-made':
+      return entry(
+        'accent',
+        run.branch == null ? words('Made a worktree') : [{ text: 'Made the worktree ' }, { untrusted: run.branch }],
+        folder === null ? null : words(`In ${folder}`),
+      );
+    case 'given':
+      return entry('accent', words('Given to the session'), [{ text: 'By the workflow ' }, { untrusted: run.ruleId }]);
+    case 'turn-ended':
+      return entry(
+        run.outcome === 'done' || run.outcome === 'completed' ? 'ok' : 'warn',
+        words(`Its turn ended: ${outcomeWords(run.outcome ?? '')}`),
+      );
+    case 'issue-closed':
+      return entry(
+        'ok',
+        run.issue == null
+          ? words('Closed the Linear issue')
+          : [{ text: 'Closed the Linear issue ' }, { untrusted: run.issue }],
+      );
+    case 'event-raised':
+      return entry('idle', [{ text: 'Raised the event ' }, { untrusted: run.eventType ?? '' }]);
+    default: {
+      const ended =
+        run.outcome === 'done'
+          ? { tone: 'ok' as const, what: 'The workflow’s run finished' }
+          : run.outcome === 'failed'
+            ? { tone: 'warn' as const, what: 'The workflow’s run failed' }
+            : run.outcome === 'expired'
+              ? { tone: 'warn' as const, what: 'The workflow’s run ran out of time' }
+              : { tone: 'idle' as const, what: 'The workflow’s run was cancelled' };
+      return entry(ended.tone, words(ended.what), run.endCode == null ? null : [{ untrusted: run.endCode }]);
+    }
+  }
+}
+
 // ── A card's steps ─────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -438,7 +586,10 @@ export function cardSteps(message: JoinedMessage, context: StoryContext): Part[]
       const judge = decision.judge === null ? null : judgeShort(decision.judge);
       if (judge !== null) steps.push(words(judge));
     }
-    for (const delivery of event.deliveries) steps.push(deliveryCardStep(delivery));
+    // A workflow's run (0.36.0) tells what it did step by step, the deliveries it made among them.
+    steps.push(...runCardSteps(message, context));
+    const told = runDeliveries(message);
+    for (const delivery of event.deliveries) if (!told.has(delivery.deliveryId)) steps.push(deliveryCardStep(delivery));
   }
   const woken = touches.find((touch) => touch.kind === 'woken');
   if (woken !== undefined) {
@@ -476,8 +627,10 @@ export function cardSteps(message: JoinedMessage, context: StoryContext): Part[]
     const verb = state === 'done' ? 'Marked done' : 'Dismissed';
     steps.push(words(marked === undefined ? verb : `${verb} by ${marked.actor === 'person' ? 'you' : 'the agent'}`));
   }
+  // A workflow gave it to a session (0.36.0): that session has it in hand, though no activity line says it read it.
+  const given = touches.some((touch) => touch.via === 'run' && touch.kind === 'given');
   if (message.notTaken !== null) steps.push(words('Nobody took it'));
-  else if (!message.agentSeen) steps.push(words('No agent has read it'));
+  else if (!message.agentSeen && !given) steps.push(words('No agent has read it'));
   else if (message.status.kind === 'acknowledged') steps.push(words('No reply yet'));
   return steps;
 }
@@ -545,6 +698,8 @@ function touchEntry(touch: Touch, message: JoinedMessage, context: StoryContext,
       return entry('idle', `${who} dismissed it in the Queue`, touch.actor === 'window' ? window : null);
     case 'reopened':
       return entry('idle', `${who} reopened it in the Queue`, touch.actor === 'window' ? window : null);
+    case 'given':
+      return touch.via === 'run' ? runEntry(touch, context) : takeEntry(touch, message, context);
     case 'offered':
     case 'taken':
     case 'handed-back':
@@ -552,9 +707,18 @@ function touchEntry(touch: Touch, message: JoinedMessage, context: StoryContext,
     case 'expired':
     case 'ended':
     case 'released':
-    case 'given':
     case 'kept':
       return takeEntry(touch, message, context);
+    case 'routed':
+    case 'issue-made':
+    case 'session-found':
+    case 'session-started':
+    case 'worktree-made':
+    case 'turn-ended':
+    case 'issue-closed':
+    case 'event-raised':
+    case 'run-ended':
+      return runEntry(touch, context);
   }
 }
 

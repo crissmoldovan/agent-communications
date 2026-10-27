@@ -155,7 +155,8 @@ async function openRun(): Promise<HTMLElement> {
       return row;
     }),
   );
-  return screen.findByRole('region', { name: 'A run of client-asks' });
+  // The run's view loads with its own chunk, as the designer does: give it the time a loaded machine takes.
+  return screen.findByRole('region', { name: 'A run of client-asks' }, { timeout: 10_000 });
 }
 
 /** A box on the run's canvas, once it is drawn. */
@@ -322,7 +323,7 @@ describe('a workflow run', () => {
     fireEvent.click(await screen.findByRole('tab', { name: /^Deliveries\b/ }));
     const open = await screen.findByRole('button', { name: 'Open the run that made this delivery' });
     fireEvent.click(open);
-    const view = await screen.findByRole('region', { name: 'A run of client-asks' });
+    const view = await screen.findByRole('region', { name: 'A run of client-asks' }, { timeout: 10_000 });
     fireEvent.click(within(view).getByRole('button', { name: 'Deliveries' }));
     expect(await screen.findByRole('region', { name: 'Deliveries' })).toBeTruthy();
   });
