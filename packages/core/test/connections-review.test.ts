@@ -496,3 +496,28 @@ test(
     assert.deepEqual(await partsOf(m, everywhere.id), ['core']);
   },
 );
+
+test(
+  'LOW 3: a person who exported CODEX_HOME is told which variable refused them, and how to clear it at their terminal',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { everywhere } = await twoConnections(m);
+    const codex = { ...m.env, CODEX_HOME: join(m.home, '.codex') };
+    const clear = '`CODEX_HOME` is set in this shell; if you’re not inside Codex, `unset CODEX_HOME` and run it again.';
+    // The re-review's probe: renaming at their own terminal, refused as an agent's shell is.
+    const renamed = await runMain(['connection', 'rename', everywhere.id, 'Y', '--json'], codex, 'darwin');
+    assert.equal(renamed.code, 10, renamed.stdout + renamed.stderr);
+    const error = renamed.json().error as { hint: string; details: Record<string, unknown> };
+    assert.deepEqual(error.details, { reason: 'NOT_OWN_CONNECTION', marker: 'CODEX_HOME' });
+    assert.ok(error.hint.endsWith(` ${clear}`), error.hint);
+    // The same words where the refusal is a person-only act's, said as text.
+    const takes = await runMain(['takes', 'list'], codex, 'darwin');
+    assert.equal(takes.code, 10, takes.stdout + takes.stderr);
+    assert.ok(takes.stderr.includes(clear), takes.stderr);
+    // Cleared, as the words say: the person renames it.
+    const person = await runMain(['connection', 'rename', everywhere.id, 'Y', '--json'], m.env, 'darwin');
+    assert.equal(person.code, 0, person.stdout + person.stderr);
+    assert.deepEqual(await names(m), ['Y', 'Acme only']);
+  },
+);

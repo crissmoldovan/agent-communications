@@ -138,6 +138,45 @@ export function agentMarker(env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+/** The coding agent each marker says this shell is inside, as a person names it. */
+const MARKED_BY: Readonly<Record<(typeof AGENT_MARKERS)[number], string>> = Object.freeze({
+  CLAUDECODE: 'Claude Code',
+  CLAUDE_CODE_ENTRYPOINT: 'Claude Code',
+  CODEX_SANDBOX: 'Codex',
+  CODEX_HOME: 'Codex',
+  CURSOR_AGENT: 'Cursor',
+  GEMINI_CLI: 'Gemini CLI',
+  AGENT_COMMS_AGENT: 'an agent’s session',
+});
+
+/**
+ * What a refusal an agent's marker caused tells a person who set that variable themselves (the re-review of 0.35.0,
+ * LOW 3): which variable it is, and how to clear it at their own terminal — `CODEX_HOME` is a setting people export,
+ * and it marks a shell as Codex's. The marker stays: dropped, it would let a Codex session pass as the person. Null for
+ * what is no variable a person sets: the MCP surface, an MCP server's process.
+ */
+export function agentMarkerHint(marker: unknown, platform: NodeJS.Platform = process.platform): string | null {
+  if (typeof marker !== 'string' || !Object.hasOwn(MARKED_BY, marker)) return null;
+  const agent = MARKED_BY[marker as keyof typeof MARKED_BY];
+  const clear = platform === 'win32' ? `Remove-Item Env:${marker}` : `unset ${marker}`;
+  return `\`${marker}\` is set in this shell; if you’re not inside ${agent}, \`${clear}\` and run it again.`;
+}
+
+/**
+ * `error` with its hint saying how to clear the agent's marker that caused it (`agentMarkerHint`), where its details
+ * name one — every person-only refusal does, `NO_SESSION` and `NOT_OWN_CONNECTION` among them — and as it was
+ * otherwise. Said where a refusal reaches the person, so every command's refusal says it, as text and in JSON.
+ */
+export function withMarkerHint(error: CommsError, platform: NodeJS.Platform = process.platform): CommsError {
+  const said = agentMarkerHint(error.details?.marker, platform);
+  if (said === null || error.hint?.includes(said) === true) return error;
+  return new CommsError(error.code, error.message, {
+    hint: error.hint === undefined || error.hint === '' ? said : `${error.hint} ${said}`,
+    ...(error.details === undefined ? {} : { details: error.details }),
+    cause: error.cause ?? error,
+  });
+}
+
 export function paint(color: boolean, format: Parameters<typeof styleText>[0], text: string): string {
   return color ? styleText(format, text, { validateStream: false }) : text;
 }
@@ -187,7 +226,7 @@ export function writeResult<T>(
 
 /** Writes an error and returns the exit code to use. */
 export function writeError(error: unknown, options: OutputOptions, streams: Streams = defaultStreams): number {
-  const commsError: CommsError = toCommsError(error);
+  const commsError: CommsError = withMarkerHint(toCommsError(error), options.platform);
   if (options.json) {
     streams.stdout.write(`${JSON.stringify(errorEnvelope(commsError))}\n`);
   } else {

@@ -846,3 +846,11 @@ The lead's decisions on the re-review of the 0.35.0 security fixes.
   is prepared, its loosening line says the app's settings could not be read to say what that reaches, and the person
   approves it, as §8.1's H1 note says.
 - **An agent changes the parts of only its own connection** (LOW 2): §8.1's table and its note.
+- **A refusal an agent's marker caused says which variable it was** (LOW 3). `CODEX_HOME` is a setting people
+  export, and it marks a shell as Codex's, so a person who exported it got `NOT_OWN_CONNECTION` at their own terminal,
+  and `NO_SESSION` on every take gate. The marker stays: dropped, it would let a Codex session pass as the person.
+  Every refusal whose details name an agent's marker — `NO_SESSION`, `NOT_OWN_CONNECTION` and the person-only ones —
+  now ends its hint with which variable it was and how to clear it: "`CODEX_HOME` is set in this shell; if you’re not
+  inside Codex, `unset CODEX_HOME` and run it again" (`Remove-Item Env:CODEX_HOME` on Windows). It is said where a
+  refusal reaches the person (`writeError`, and the event service's CLI), so every command says it, as text and in
+  JSON; the MCP surface and an MCP server's process name no variable, and say nothing more.

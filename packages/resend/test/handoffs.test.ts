@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, test } from 'node:test';
 import {
+  agentMarkerHint,
   CommsError,
   handoffSentence,
   handoffSentenceToFill,
@@ -389,10 +390,12 @@ test('approving as an agent, or with no terminal, names the approve a person run
   harness = await newHarness();
   const approve = resendInline(harness.core, ['approve', 'ap_1']);
   const agent = await harness.cli(['--json', 'approve', 'ap_1'], { env: { CLAUDECODE: '1' } });
+  // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review, LOW 3).
+  const clear = agentMarkerHint('CLAUDECODE', 'darwin');
   // And the wait that learns when they have (design 2026-10-05 §D7).
   assert.equal(
     agent.json().error?.hint,
-    `Ask the user to run ${approve} in their own terminal; learn when they have with ${resendInline(harness.core, ['send', 'wait', 'ap_1'])}.`,
+    `Ask the user to run ${approve} in their own terminal; learn when they have with ${resendInline(harness.core, ['send', 'wait', 'ap_1'])}. ${clear}`,
   );
   const script = await harness.cli(['--json', 'approve', 'ap_1']);
   assert.equal(script.json().error?.hint, `Run ${approve} directly in a terminal.`);
@@ -400,7 +403,7 @@ test('approving as an agent, or with no terminal, names the approve a person run
   const key = await harness.cli(['--json', 'account', 'add', 'acme/resend'], { env: { CLAUDECODE: '1' } });
   assert.equal(
     key.json().error?.hint,
-    `Ask the user to run ${resendInline(harness.core, ['account', 'add', 'acme/resend'])} in their own terminal. Never paste a key into a chat: the transcript keeps it.`,
+    `Ask the user to run ${resendInline(harness.core, ['account', 'add', 'acme/resend'])} in their own terminal. Never paste a key into a chat: the transcript keeps it. ${clear}`,
   );
   const install = await harness.cli(['--json', 'mcp', 'install']);
   assert.equal(
