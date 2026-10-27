@@ -74,6 +74,9 @@ function storeAt(start = '2026-10-26T10:00:00.000Z', options: TakeStoreOptions =
     running: () => true,
     probe: async () => null,
     pinLive: async () => false,
+    // These cases are about a holder's parent, which only macOS and Linux read: a Windows runner tests them as
+    // Linux would, with the fake probe above; the one Windows case says `platform: 'win32'` itself.
+    platform: process.platform === 'win32' ? 'linux' : process.platform,
     ...options,
   });
   return {
