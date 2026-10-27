@@ -160,6 +160,9 @@ import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
 import type { WebSocketTiming } from './websocket.ts';
 import { composeWorkflows } from './workflow/compose.ts';
+import { composeWorkflowEvents } from './workflow/compose-events.ts';
+import { composeProjects } from './workflow/compose-projects.ts';
+import { openRunFields } from './workflow/context.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowFailpoint } from './workflow/engine.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
@@ -1558,8 +1561,20 @@ async function startOwnerWithLock(
       writerQuiescer,
       now,
       failpoint: options.workflows?.failpoint,
+      // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
+      standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
     },
-    [...(options.workflows?.parts ?? [])],
+    [
+      // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
+      composeProjects({ store: database, sessions: agentSessions }),
+      // Track D: the Raise step and the sink every transition's ticked events go through.
+      composeWorkflowEvents({
+        cipher,
+        installationId: database.installationId,
+        fields: (run) => openRunFields(database, cipher, run.id),
+      }),
+      ...(options.workflows?.parts ?? []).map((part) => ({ ...part, executors: [] })),
+    ],
   );
   const activations = new ActivationRuntime({
     store: database,

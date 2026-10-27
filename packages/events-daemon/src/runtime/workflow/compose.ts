@@ -6,11 +6,13 @@ import {
   type FlowActivationCheck,
   NO_WORKFLOW_EVENTS,
   type PreparedEvents,
+  type StepContext,
+  type StepExecutor,
   type StepTransition,
   type WorkflowComposition,
   type WorkflowEventSink,
 } from './contracts.ts';
-import { WorkflowEngine, type WorkflowFailpoint } from './engine.ts';
+import { type FlowDeliveries, type JudgedAttempt, WorkflowEngine, type WorkflowFailpoint } from './engine.ts';
 import { createStepExecutors } from './executors.ts';
 import { conditionExecutor } from './steps/condition.ts';
 import { notifyExecutor } from './steps/notify.ts';
@@ -34,6 +36,15 @@ export interface WorkflowOwnerDeps {
   readonly now?: (() => number) | undefined;
   /** Test seam only: a crash at a point of a step's life. */
   readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
+  /**
+   * Test seam only: executors that stand in for a kind's own — a test's route or deliver — in place of whichever
+   * composition registers that kind.
+   */
+  readonly standIns?: readonly StepExecutor[] | undefined;
+  /** B3's judging call, for one attempt of one step. */
+  readonly judgeFor?: ((attempt: JudgedAttempt) => StepContext['judge']) | undefined;
+  /** B4's deliveries: a deliver step's row, sealed and inserted in its settle. */
+  readonly deliveries?: FlowDeliveries | undefined;
 }
 
 /** Several compositions' sinks as one: each prepares its own rows, and each writes them in the same transaction. */
@@ -55,10 +66,15 @@ function joinedSink(sinks: readonly WorkflowEventSink[]): WorkflowEventSink {
 
 export function composeWorkflows(deps: WorkflowOwnerDeps, parts: readonly WorkflowComposition[]): WorkflowEngine {
   const executors = createStepExecutors();
-  executors.register(conditionExecutor);
-  executors.register(splitExecutor);
-  executors.register(notifyExecutor(deps.notifier));
-  for (const part of parts) for (const executor of part.executors) executors.register(executor);
+  const stoodIn = new Set((deps.standIns ?? []).map((executor) => executor.kind));
+  for (const executor of deps.standIns ?? []) executors.register(executor);
+  const register = (executor: StepExecutor) => {
+    if (!stoodIn.has(executor.kind)) executors.register(executor);
+  };
+  register(conditionExecutor);
+  register(splitExecutor);
+  register(notifyExecutor(deps.notifier));
+  for (const part of parts) for (const executor of part.executors) register(executor);
   const sinks = parts.flatMap((part) => (part.sink === undefined ? [] : [part.sink]));
   const activationChecks: FlowActivationCheck[] = parts.flatMap((part) => [...(part.activationChecks ?? [])]);
   return new WorkflowEngine({
@@ -73,5 +89,7 @@ export function composeWorkflows(deps: WorkflowOwnerDeps, parts: readonly Workfl
     writerQuiescer: deps.writerQuiescer,
     now: deps.now,
     failpoint: deps.failpoint,
+    judgeFor: deps.judgeFor,
+    deliveries: deps.deliveries,
   });
 }

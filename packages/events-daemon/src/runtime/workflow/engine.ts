@@ -77,6 +77,14 @@ export interface RunCancelResultV1 {
   readonly interrupted: boolean;
 }
 
+/** The attempt a judging call belongs to: its run, step and attempt, under its run's switch generation. */
+export interface JudgedAttempt {
+  readonly run: RunView;
+  readonly stepId: StepId;
+  readonly attemptId: string;
+  readonly switchGeneration: number;
+}
+
 /** B4's seam: a deliver step's delivery row, sealed before the settle and inserted inside it. */
 export interface FlowDeliveries {
   prepare(input: {
@@ -97,8 +105,8 @@ export interface WorkflowEngineOptions {
   readonly sink?: WorkflowEventSink | undefined;
   readonly onRunEnded?: readonly ((run: RunView) => Promise<void>)[] | undefined;
   readonly activationChecks?: readonly FlowActivationCheck[] | undefined;
-  /** B3's judging call; until it is composed, every judge fails closed. */
-  readonly judge?: StepContext['judge'] | undefined;
+  /** B3's judging call, for one attempt of one step; until it is composed, every judge fails closed. */
+  readonly judgeFor?: ((attempt: JudgedAttempt) => StepContext['judge']) | undefined;
   /** B4's deliveries; until they are composed, a deliver step fails closed. */
   readonly deliveries?: FlowDeliveries | undefined;
   /** B6's turn interrupt through the relay, for `runs cancel --interrupt`. */
@@ -146,7 +154,7 @@ export class WorkflowEngine {
   readonly #executors: StepExecutors;
   readonly #sink: WorkflowEventSink;
   readonly #onRunEnded: readonly ((run: RunView) => Promise<void>)[];
-  readonly #judge: StepContext['judge'] | undefined;
+  readonly #judgeFor: WorkflowEngineOptions['judgeFor'];
   readonly #deliveries: FlowDeliveries | undefined;
   readonly #interrupt: WorkflowEngineOptions['interrupt'];
   readonly #quiescer: WriterQuiescer | undefined;
@@ -168,7 +176,7 @@ export class WorkflowEngine {
     this.#sink = options.sink ?? NO_WORKFLOW_EVENTS;
     this.#onRunEnded = options.onRunEnded ?? [];
     this.activationChecks = options.activationChecks ?? [];
-    this.#judge = options.judge;
+    this.#judgeFor = options.judgeFor;
     this.#deliveries = options.deliveries;
     this.#interrupt = options.interrupt;
     this.#quiescer = options.writerQuiescer;
@@ -413,7 +421,12 @@ export class WorkflowEngine {
       now: this.#now,
       sealedRecord: row.encrypted_record,
       outputs,
-      judge: this.#judge,
+      judge: this.#judgeFor?.({
+        run: runViewOf(row),
+        stepId,
+        attemptId: claim.attemptId,
+        switchGeneration: row.switch_generation,
+      }),
       fence,
     });
     let result: StepResult;
@@ -796,7 +809,6 @@ export class WorkflowEngine {
             now: this.#now,
             sealedRecord: null,
             outputs,
-            judge: this.#judge,
             fence: () => this.#fence(row),
           }),
           state,
