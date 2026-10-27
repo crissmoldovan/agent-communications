@@ -11,6 +11,7 @@ import {
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../../domain/activation-documents.ts';
 import { type QueueItemContent, queueItemContent } from '../../domain/queue-target.ts';
+import { cancelEventDeliveriesInTransaction } from '../events/event-ledger.ts';
 import type { ProjectionCipher } from '../projections.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from '../target-version-references.ts';
 import type { Output, RunMessage, RunView, WaitKind, WakeReason } from './contracts.ts';
@@ -419,6 +420,8 @@ export interface ClaimedStep {
   readonly attempt: number;
   /** The step's first claim (W.3's `started`). */
   readonly first: boolean;
+  /** Whether this claim counts as an executed step: every claim but a limit's wake, the same step going on (§7.5). */
+  readonly counted: boolean;
   readonly startedAt: number;
   readonly wake: WakeReason | null;
 }
@@ -432,8 +435,9 @@ export const EXECUTED_STEPS_MAX = 64;
 /**
  * Claims one step of a live run, as `claimDeliveryInTransaction` claims a delivery (§5): a ready step whose time has
  * come, a waiting step whose wait or delivery is over, or a running step whose lease has lapsed after a crash. The
- * claim writes a fresh attempt id, lease token and lease, and counts one executed step. A lapsed claim of a step still
- * waiting goes back to waiting; nothing is claimed while collection is off or paused.
+ * claim writes a fresh attempt id, lease token and lease, and counts one executed step — except a limit's wake: a
+ * reached limit holds a step and never drops it (§7.5), so its wakes are never what ends a run at its 64. A lapsed
+ * claim of a step still waiting goes back to waiting; nothing is claimed while collection is off or paused.
  */
 export function claimStepInTransaction(
   database: DatabaseSync,
@@ -503,7 +507,8 @@ export function claimStepInTransaction(
       return 'none';
     }
   } else if (!(step.state === 'running' && (step.lease_until ?? 0) <= input.now)) return 'none';
-  if (run.executed_steps >= EXECUTED_STEPS_MAX) return 'step-limit';
+  const counted = wake?.kind !== 'limit';
+  if (counted && run.executed_steps >= EXECUTED_STEPS_MAX) return 'step-limit';
   const leaseUntil = input.now + input.leaseMs;
   const claimed = database
     .prepare(
@@ -516,9 +521,9 @@ export function claimStepInTransaction(
   if (claimed.changes !== 1) return 'none';
   database
     .prepare(
-      "UPDATE workflow_runs SET executed_steps = executed_steps + 1, state = 'running', updated_at = ? WHERE id = ?",
+      "UPDATE workflow_runs SET executed_steps = executed_steps + ?, state = 'running', updated_at = ? WHERE id = ?",
     )
-    .run(input.now, input.runId);
+    .run(counted ? 1 : 0, input.now, input.runId);
   return {
     runId: input.runId,
     stepId: input.stepId,
@@ -527,6 +532,7 @@ export function claimStepInTransaction(
     leaseUntil,
     attempt: step.attempts + 1,
     first: step.attempts === 0,
+    counted,
     startedAt: step.started_at ?? input.now,
     wake,
   };
@@ -700,10 +706,62 @@ export interface RunEnding {
 }
 
 /**
+ * A run's end, short of its own settle (§5, W10), inside the caller's transaction: the run `state` with `code` and its
+ * sealed record purged, its steps still on the way cancelled, and its waits dropped. False when it was not live.
+ */
+function endLiveRunInTransaction(
+  database: DatabaseSync,
+  input: { readonly runId: string; readonly state: string; readonly code: string; readonly now: number },
+): boolean {
+  const ended = database
+    .prepare(
+      `UPDATE workflow_runs SET state = ?, end_code = ?, encrypted_record = NULL, updated_at = ?
+        WHERE id = ? AND state IN ('held', 'running', 'waiting')`,
+    )
+    .run(input.state, input.code, input.now, input.runId);
+  if (ended.changes !== 1) return false;
+  database
+    .prepare(
+      `UPDATE workflow_steps SET state = 'cancelled', outcome = NULL, attempt_id = NULL, lease_token = NULL,
+              lease_until = NULL, next_at = NULL, settled_at = ?
+        WHERE run_id = ? AND state IN ('ready', 'running', 'waiting')`,
+    )
+    .run(input.now, input.runId);
+  database.prepare('DELETE FROM workflow_waits WHERE run_id = ?').run(input.runId);
+  return true;
+}
+
+/**
+ * An ended run's deliveries still waiting — queued, or waiting for a retry — cancelled with `code` and their records
+ * purged, as `session-queue drop` does, inside the caller's transaction: nothing of a run that has ended is handed over
+ * after it. Returns how many.
+ */
+function cancelRunDeliveriesInTransaction(database: DatabaseSync, runId: string, code: string, now: number): number {
+  const waiting = database
+    .prepare("SELECT id FROM deliveries WHERE run_id = ? AND state IN ('queued', 'retryable')")
+    .all(runId) as Array<{ id: string }>;
+  for (const { id } of waiting) {
+    const cancelled = database
+      .prepare(
+        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL,
+                last_error_code = ?
+          WHERE id = ? AND state IN ('queued', 'retryable')`,
+      )
+      .run(code, id);
+    if (cancelled.changes === 1)
+      for (const target of removeRetainedDeliveryTargetReference(database, id))
+        purgeUnreferencedSystemTargets(database, { ...target, now });
+  }
+  return waiting.length;
+}
+
+/**
  * Ends a live run that did not run to its end (§5, §7.6, W10), inside the caller's transaction: cancelled or expired,
  * its steps still on the way cancelled, its waits dropped, its deliveries still waiting cancelled and their records
- * purged, as `session-queue drop` does, and its sealed record purged. A cancelled run's undelivered events are
- * cancelled too: its authority, or the person, ended it. An expired run's raised events still go out. Content-free.
+ * purged, as `session-queue drop` does, and its sealed record purged. A cancelled run's events are cancelled as every
+ * other ending of authority cancels them (`cancelEventDeliveriesInTransaction`): an event being sent is stopped before
+ * its send, its retained dead letters lapse, and the frames a live subscriber was given are deleted, so no replay gives
+ * them again. Its authority, or the person, ended it. An expired run's raised events still go out. Content-free.
  */
 export function endRunInTransaction(
   database: DatabaseSync,
@@ -714,54 +772,42 @@ export function endRunInTransaction(
     readonly now: number;
   },
 ): RunEnding | null {
-  const ended = database
-    .prepare(
-      `UPDATE workflow_runs SET state = ?, end_code = ?, encrypted_record = NULL, updated_at = ?
-        WHERE id = ? AND state IN ('held', 'running', 'waiting')`,
-    )
-    .run(input.state, input.code, input.now, input.runId);
-  if (ended.changes !== 1) return null;
-  database
-    .prepare(
-      `UPDATE workflow_steps SET state = 'cancelled', outcome = NULL, attempt_id = NULL, lease_token = NULL,
-              lease_until = NULL, next_at = NULL, settled_at = ?
-        WHERE run_id = ? AND state IN ('ready', 'running', 'waiting')`,
-    )
-    .run(input.now, input.runId);
-  database.prepare('DELETE FROM workflow_waits WHERE run_id = ?').run(input.runId);
-  const waiting = database
-    .prepare("SELECT id FROM deliveries WHERE run_id = ? AND state IN ('queued', 'retryable')")
-    .all(input.runId) as Array<{ id: string }>;
-  for (const { id } of waiting) {
-    const cancelled = database
-      .prepare(
-        `UPDATE deliveries SET state = 'cancelled', encrypted_record = NULL, lease_until = NULL, next_at = NULL,
-                last_error_code = ?
-          WHERE id = ? AND state IN ('queued', 'retryable')`,
-      )
-      .run(input.state === 'expired' ? 'RUN_EXPIRED' : input.code, id);
-    if (cancelled.changes === 1)
-      for (const target of removeRetainedDeliveryTargetReference(database, id))
-        purgeUnreferencedSystemTargets(database, { ...target, now: input.now });
-  }
+  if (!endLiveRunInTransaction(database, input)) return null;
+  const cancelledDeliveries = cancelRunDeliveriesInTransaction(
+    database,
+    input.runId,
+    input.state === 'expired' ? 'RUN_EXPIRED' : input.code,
+    input.now,
+  );
   let cancelledEvents = 0;
   if (input.state === 'cancelled') {
-    database
-      .prepare(
-        `UPDATE event_deliveries SET state = 'cancelled', lease_until = NULL, next_at = NULL, last_error_code = ?
-          WHERE state IN ('queued', 'retryable')
-            AND event_id IN (SELECT id FROM workflow_events WHERE run_id = ? AND state = 'open')`,
-      )
-      .run(input.code, input.runId);
-    cancelledEvents = Number(
+    cancelledEvents = (
       database
-        .prepare(
-          "UPDATE workflow_events SET state = 'cancelled', encrypted_record = NULL WHERE run_id = ? AND state = 'open'",
-        )
-        .run(input.runId).changes,
-    );
+        .prepare("SELECT COUNT(*) AS count FROM workflow_events WHERE run_id = ? AND state = 'open'")
+        .get(input.runId) as { count: number }
+    ).count;
+    cancelEventDeliveriesInTransaction(database, { runId: input.runId }, input.now, input.code);
   }
-  return { cancelledDeliveries: waiting.length, cancelledEvents };
+  return { cancelledDeliveries, cancelledEvents };
+}
+
+/**
+ * Ends a live run failed outside a settle — its 64 executed steps reached (§7.5) — inside the caller's transaction, as
+ * every other ending does: its steps still on the way cancelled, its waits dropped, its deliveries still waiting
+ * cancelled with `code` and their records purged, and its sealed record purged. Its raised events still go out, as a
+ * failed run's do. False when it was not running or waiting.
+ */
+export function failRunInTransaction(
+  database: DatabaseSync,
+  input: { readonly runId: string; readonly code: string; readonly now: number },
+): boolean {
+  const run = database.prepare('SELECT state FROM workflow_runs WHERE id = ?').get(input.runId) as
+    | { state: string }
+    | undefined;
+  if (run?.state !== 'running' && run?.state !== 'waiting') return false;
+  if (!endLiveRunInTransaction(database, { ...input, state: 'failed' })) return false;
+  cancelRunDeliveriesInTransaction(database, input.runId, input.code, input.now);
+  return true;
 }
 
 /** Which live runs an ending of authority cancels: one workflow's versions, one account's, or every run. */

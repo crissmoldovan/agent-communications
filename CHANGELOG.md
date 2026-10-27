@@ -106,12 +106,6 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
     its own Claude Code session id, so it could take a message as any session and send the conversation's next
     messages there. Now only a take by an agent window's own session counts, and the session found must work in the
     folder that window worked in, inside the relay's allowed roots and outside Agent Comms' own folders.
-- **Fixed while building it:**
-  - a raised event goes out in the tick that raised it, and a subscriber's queue drains in order at once;
-  - a subscriber that hangs slows no run;
-  - a held message let through into a workflow keeps its thread;
-  - a message whose hold ran out or was cancelled can be read, and its story says so in words.
-- **Security review fixes before release** (an independent review of this release, 2026-10-27):
   - A live listener the event service no longer needs closes within a moment, whatever its clients do. Before, a
     request left half-sent on its port — which an agent could open from its shell before removing the subscriber —
     stalled the whole event service until that client went away. A listener also cuts a request whose headers take
@@ -125,6 +119,24 @@ raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workf
     came before. A run's history — its steps, its events and their deliveries — goes when its decision's metadata does
     (90 days by default) instead of being kept for ever; a live run, an event still being delivered and a worktree that
     may still be on disk stay.
+  - One workflow's held runs no longer stop another's. A sender could give one workflow a hundred held runs (its
+    own runs-at-a-time kept them waiting, and a held run is never dropped), and every other workflow's runs then stayed
+    held until they expired. Now each workflow's oldest held runs start as its own limits allow, and a workflow its
+    limits hold is passed over.
+  - `runs cancel` applies at once. It waited behind the engine's pass, which could first go on to the run's next
+    steps: start a session, make a worktree, raise a notice. Now the run ends straight away; a step already under way
+    settles nothing, so nothing after it runs, and the cancel answers without waiting for it.
+  - A cancel stops the run's event being sent, and its frames aren't replayed. An event between its last check and
+    its send still went out, and a live subscriber reconnecting without `Last-Event-ID` got the cancelled run's frames
+    again. Now the send is stopped and the frames are deleted; the run's own `cancelled` event still goes out.
+  - A run that ends at its 64th step cancels its deliveries still waiting, as every other ending does: a prompt
+    queued on another branch could reach a session after the run had failed. And a step a limit holds is no longer
+    counted again each time it wakes, so a limit that stays reached can't end a run at 64.
+- **Fixed while building it:**
+  - a raised event goes out in the tick that raised it, and a subscriber's queue drains in order at once;
+  - a subscriber that hangs slows no run;
+  - a held message let through into a workflow keeps its thread;
+  - a message whose hold ran out or was cancelled can be read, and its story says so in words.
 
 ## 0.35.0
 

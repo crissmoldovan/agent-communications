@@ -121,15 +121,36 @@ export async function assertEventDisclosable(input: {
 }
 
 /**
+ * Whether the event and its run still let it out: the event not cancelled, and its run not cancelled — save the run's
+ * own `cancelled` event, which `runs cancel` raises after it ends the run. An event being sent is `open`; a delivered
+ * one whose frame a stream replays is `done` by then.
+ */
+function eventIsKept(database: DatabaseSync, disclosure: EventDisclosure): boolean {
+  const row = database
+    .prepare(
+      `SELECT event.state, event.step_id, event.schema, event.type, run.state AS run_state
+         FROM workflow_events AS event JOIN workflow_runs AS run ON run.id = event.run_id
+        WHERE event.id = ? AND event.run_id = ?`,
+    )
+    .get(disclosure.eventId, disclosure.runId) as
+    | { state: string; step_id: string | null; schema: string; type: string; run_state: string }
+    | undefined;
+  if (row === undefined || row.state === 'cancelled') return false;
+  if (row.run_state !== 'cancelled') return true;
+  return row.step_id === null && row.schema === 'run' && row.type.endsWith('.run.cancelled');
+}
+
+/**
  * The synchronous re-check, for the transaction directly before a write or a send: the event switch at the run's
- * generation, the emitting version neither revoked nor retired, and the subscriber version still the active, unrevoked
- * one with the same stored document. Content-free; it never awaits.
+ * generation, the event and its run not cancelled, the emitting version neither revoked nor retired, and the
+ * subscriber version still the active, unrevoked one with the same stored document. Content-free; it never awaits.
  */
 export function eventDisclosureIsCurrent(database: DatabaseSync, disclosure: EventDisclosure): boolean {
   const settings = database
     .prepare('SELECT enabled, switch_generation FROM event_settings WHERE singleton = 1')
     .get() as { enabled: number; switch_generation: number } | undefined;
   if (settings?.enabled !== 1 || settings.switch_generation !== disclosure.switchGeneration) return false;
+  if (!eventIsKept(database, disclosure)) return false;
   const rule = database
     .prepare('SELECT state, revoked_at FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(disclosure.ruleId, disclosure.ruleVersion) as { state: string | null; revoked_at: number | null } | undefined;
