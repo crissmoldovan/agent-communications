@@ -21,6 +21,8 @@ import type { EventDatabase } from '../store/database.ts';
 import { isInside, isTooWideRoot } from './agent-sessions.ts';
 import { createGitRunner, type GitRunner } from './git.ts';
 import { scanProjects } from './project-scan.ts';
+import { madeWorktreesOf, withProjectSessions } from './project-sessions.ts';
+import type { RelayClient } from './relay-client.ts';
 
 /**
  * The person's projects (workflows design §8.1, W11, W12), kept in the event service beside the relay client, the
@@ -341,6 +343,8 @@ export interface ProjectControlDeps {
     sessionRoots(): Promise<readonly string[]>;
     deniedFolders(): readonly string[];
     homeFolder(): string;
+    /** The person's relay, for which sessions work in each project (`project show`, `projects list`). */
+    relay(): Promise<{ readonly client: Pick<RelayClient, 'sessions' | 'snapshot'> }>;
   };
   readonly git?: GitRunner | undefined;
   readonly now?: (() => number) | undefined;
@@ -392,6 +396,10 @@ export async function projectControl(
     homeDirectory: () => deps.sessions.homeFolder(),
     now: deps.now,
   });
+  const sessionsInput = {
+    relay: () => deps.sessions.relay(),
+    madeWorktrees: (projectId: string) => madeWorktreesOf(deps.store.database, projectId),
+  };
   const args = request.args;
   const only = (...keys: string[]) => {
     for (const key of Object.keys(args))
@@ -400,10 +408,12 @@ export async function projectControl(
   switch (request.operation) {
     case 'projects-list':
       only();
-      return projects.list();
-    case 'project-show':
+      return { projects: await withProjectSessions(projects.list().projects, sessionsInput) };
+    case 'project-show': {
       only('projectId');
-      return projects.show(args.projectId as string);
+      const [shown] = await withProjectSessions([projects.show(args.projectId as string)], sessionsInput);
+      return shown;
+    }
     case 'project-add':
       only('document');
       return projects.add(args.document);

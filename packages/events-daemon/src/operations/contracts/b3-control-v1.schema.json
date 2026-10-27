@@ -1934,7 +1934,24 @@
           }
         },
         "createdAt": { "$ref": "#/$defs/milliseconds" },
-        "updatedAt": { "$ref": "#/$defs/milliseconds" }
+        "updatedAt": { "$ref": "#/$defs/milliseconds" },
+        "sessions": {
+          "oneOf": [{ "type": "null" }, { "type": "array", "items": { "$ref": "#/$defs/projectSession" } }]
+        },
+        "sessionsReason": { "oneOf": [{ "type": "null" }, { "type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,39}$" }] }
+      },
+      "dependentRequired": { "sessions": ["sessionsReason"], "sessionsReason": ["sessions"] }
+    },
+    "projectSession": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["session", "provider", "state", "lastActiveAt", "folder"],
+      "properties": {
+        "session": { "type": "string", "pattern": "^sess_[0-9a-f-]{36}$" },
+        "provider": { "type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$" },
+        "state": { "enum": ["idle", "busy", "watched"] },
+        "lastActiveAt": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/milliseconds" }] },
+        "folder": { "$ref": "#/$defs/absoluteFolder" }
       }
     },
     "projectScanResult": {
