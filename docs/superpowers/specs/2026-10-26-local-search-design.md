@@ -437,6 +437,12 @@ in the background, and the old vectors serve until the new set is complete. Word
   - removing an account from Search, or from Agent Comms, deletes its rows at once;
   - **Off** stops capture and indexing at once. What is kept stays searchable until its days pass, or until Delete
     everything.
+  - **Activity's days that cannot be read keep Search to 30** (2026-10-27, the re-review of 0.35.0, LOW 5). Activity
+    reads a retention it cannot read — a hand edit leaving `"retentionDays": "60"`, a later release's word — as the
+    longest, 365 days, so as to delete nothing of its log; read so for Search, a typo kept a year of message words,
+    with no approval. Search's cut-off then falls back to 30 days, the default (`searchRetentionDays`), doctor's
+    warning names both ("…so recording is off, Activity keeps 365 days and Search on this machine keeps 30"), and a
+    person who then sets more than 30 days is shown that Search keeps them too, and approves it (M6).
 - **Delete everything** (a tightening; applies from anywhere, after the app's confirm or `--confirm`). In order:
   1. stop any run;
   2. delete the inbox, the database, its WAL and SHM;
@@ -450,6 +456,13 @@ in the background, and the old vectors serve until the new set is complete. Word
   > undone, so it is now the person's alone. It is refused inside an MCP server's process and under an agent's
   > marker, as the person's searches are (S13), and the app's confirm still runs it. `off`, `accounts remove` and
   > `model none` stay anyone's: they stop keeping, or drop vectors that Rebuild makes again.
+
+  > **Note, 2026-10-27 (the re-review of 0.35.0, LOW 4; accepted).** An agent can still erase what Search keeps, at
+  > once, by tightening: `comms_activity_settings` with `retentionDays: 1` over MCP, or `search accounts remove <alias>`
+  > from its shell, deletes the rows past the new days, or the account's, and they cannot be brought back. That is by
+  > design: keeping less is a narrowing, and every narrowing applies at once — one that waited for the person would
+  > make the safe direction the slow one. What goes is Search's own copy; the mail and the Slack messages stay in their
+  > accounts, and nothing is disclosed. Delete everything stays the person's alone, as above.
 - **Who reads what:**
   - the person alone, in the app and at a terminal (S13);
   - no MCP tool reads the index;

@@ -4,7 +4,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
-import { isDangerous, openCore } from '@agentcomms/core';
+import { agentMarkerHint, isDangerous, openCore } from '@agentcomms/core';
 import { v1ChangeRecord, writeV1Record } from '../../core/test/fixtures/approval-v1-0.13.0.ts';
 import { defaultStorePath, responsibleApp } from '../src/source/location.ts';
 import { ALICE } from './support/fixture.ts';
@@ -134,9 +134,10 @@ test('add and remove are a person’s: refused to an agent, before anything is r
   assert.equal(add.code, 10);
   assert.equal(add.json().error?.code, 'LOOSENING_REFUSED');
   assert.match(String(add.json().error?.message), /only a person chooses which WhatsApp store an agent may read/);
+  // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review, LOW 3).
   assert.equal(
     add.json().error?.hint,
-    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT])} in their own terminal.`,
+    `Ask the person to run ${ownInline(harness.env, ['add', ACCOUNT])} in their own terminal. ${agentMarkerHint('CLAUDECODE', 'darwin')}`,
   );
   assert.equal(readFileSync(join(harness.configDir, 'config.json'), 'utf8'), before, 'nothing was written');
 
@@ -154,7 +155,10 @@ test('the command an agent is asked to hand over is quoted for the named POSIX o
   });
   const quoted = ownInline(harness.env, ['add', 'two words', '--source', '/tmp/store path']);
   assert.ok(quoted.endsWith(` add 'two words' --source '/tmp/store path'\``), quoted);
-  assert.equal(posix.json().error?.hint, `Ask the person to run ${quoted} in their own terminal.`);
+  assert.equal(
+    posix.json().error?.hint,
+    `Ask the person to run ${quoted} in their own terminal. ${agentMarkerHint('CLAUDECODE', 'darwin')}`,
+  );
 
   const windows = await harness.cli(['add', 'client%name', '--source', '/tmp/store', '--json'], {
     platform: 'win32',

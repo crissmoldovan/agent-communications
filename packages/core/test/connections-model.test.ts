@@ -11,6 +11,7 @@ import {
   connectionReach,
   newConnectionId,
   newConnectionKey,
+  newConnectionNameProblem,
   readConnections,
   storedConnection,
   withConnection,
@@ -279,6 +280,26 @@ test('a name is 1 to 64 printable characters with no quotes, newlines or bidi co
   ]) {
     assert.notEqual(connectionNameProblem(bad), null, JSON.stringify(bad));
   }
+});
+
+test('LOW 6: a new name has no brackets or ellipsis, which a preview’s label uses; one that has them already still reads', () => {
+  const imitation = 'Everywhere) (Claude Code, every folder, cn_0MCZ…';
+  for (const name of [imitation, 'Work (old', 'Work)', 'Work…']) {
+    assert.equal(
+      newConnectionNameProblem(name),
+      'a connection’s name has no brackets or “…”: a preview puts its app, place and id there',
+      name,
+    );
+    // Read as a name a record has: no migration, it still reads and still works.
+    assert.equal(connectionNameProblem(name), null, name);
+  }
+  // Everything the rule for a name refuses, a new name refuses too; what it allows, a new one does.
+  assert.equal(newConnectionNameProblem('Work — Claude Code'), null);
+  assert.equal(newConnectionNameProblem('quote"d'), connectionNameProblem('quote"d'));
+  assert.equal(newConnectionNameProblem(''), connectionNameProblem(''));
+  const [read] = readConnections(withRecords(storedConnection(record({ name: imitation })))).connections;
+  assert.ok(read?.readable, JSON.stringify(read));
+  assert.equal(read.record.name, imitation);
 });
 
 test('a connection loosened without consent is refused by the store, and one narrowed is written at once', async () => {

@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { access, readdir, readFile, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readActivitySettings } from '../activity-settings.ts';
+import { searchRetentionDays } from '../activity-settings.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { CommsError } from '../errors.ts';
@@ -106,9 +106,9 @@ export async function searchHoldsWords(core: Pick<Core, 'paths'>, config: Config
   return readSearchSettings(config).enabled === 'on' || (await exists(searchPaths(core.paths.stateDir).database));
 }
 
-/** The oldest `seen_at` Activity's days keep now. */
+/** The oldest `seen_at` Activity's days keep now — 30 days where they cannot be read (`searchRetentionDays`). */
 export function keptFrom(config: Config, now: number): number {
-  return now - readActivitySettings(config).retentionDays * DAY_MS;
+  return now - searchRetentionDays(config) * DAY_MS;
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -277,7 +277,7 @@ async function run(
 ): Promise<IndexRunResult> {
   const on = settings.enabled === 'on';
   const backups = on ? await ensureSearchFolder(paths, searchSystem(deps)) : 'unknown';
-  const retentionDays = readActivitySettings(config).retentionDays;
+  const retentionDays = searchRetentionDays(config);
   await pruneInboxDays(paths, retentionDays, now);
   // Off, the key is not asked for at all: a prune needs none, and nothing is taken or made.
   const master = on
@@ -424,7 +424,7 @@ export async function pruneSearchIndex(
     async () => {
       const config = await core.config.load();
       const settings = readSearchSettings(config);
-      await pruneInboxDays(paths, readActivitySettings(config).retentionDays, now);
+      await pruneInboxDays(paths, searchRetentionDays(config), now);
       const index = await openSearchStore(paths, null, { create: false });
       if (index === null) return 0;
       try {

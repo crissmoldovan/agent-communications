@@ -3,9 +3,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { searchRetentionDays } from '../src/activity-settings.ts';
 import { gatedChange } from '../src/change-flow.ts';
-import { activitySettingsChange } from '../src/operations/activity.ts';
-import { searchDeleteEverything, searchQuery, searchSettingsChange } from '../src/operations/search.ts';
+import { activitySettingsChange, activitySettingsReport } from '../src/operations/activity.ts';
+import { searchDeleteEverything, searchQuery, searchSettingsChange, searchStatus } from '../src/operations/search.ts';
 import { captureForSearch, resetCaptureForTests, type SearchCapture } from '../src/search/capture.ts';
 import { ensureSearchKey, readSearchKey, SEARCH_KEY_REF, searchSecretStore } from '../src/search/crypto.ts';
 import { searchEndpoint } from '../src/search/endpoint-rule.ts';
@@ -712,6 +713,47 @@ test('GUARD: more of Activity’s days, while Search keeps words, says in its pr
   assert.doesNotMatch(never.status === 'approval-required' ? never.prepared.preview : '', /Search/u);
   // Fewer days still applies at once, Search or not: a tightening carries no such line.
   assert.equal((await longer(machine, 7)).status, 'applied');
+});
+
+test('GUARD: Activity’s days that cannot be read keep Search to 30 days, not a year, and the warning names Search (0.35.0 re-review, LOW 5)', async () => {
+  // A hand edit leaves the days as a string: Activity keeps 365 and records nothing, so it deletes nothing it holds.
+  const machine = searchMachine(on());
+  machine.write(on(), { record: 'on', retentionDays: '60' });
+  assert.equal(searchRetentionDays({ activity: { retentionDays: '60' } }), 30);
+  assert.equal(searchRetentionDays({ activity: 'yes' }), 30);
+  assert.equal(searchRetentionDays({ activity: { record: 'sometimes', retentionDays: 90 } }), 90, 'days it can read');
+  assert.equal(searchRetentionDays({}), 30);
+  const now = Date.now();
+  await capture(
+    machine,
+    MAIL,
+    [mail({ sourceId: '18c00000000000c1', text: 'forty days old invoice' })],
+    now - 40 * DAY,
+  );
+  await capture(machine, MAIL, [mail({ sourceId: '18c00000000000c2', text: 'fresh invoice' })], now - DAY);
+  await index(machine);
+  const found = await searchQuery(machine.core, { text: 'invoice' }, { env: {}, deps: machine.deps });
+  assert.deepEqual(
+    found.hits.map((hit) => hit.sourceId),
+    ['18c00000000000c2'],
+    'Search keeps 30 days of message words, not the year Activity keeps',
+  );
+  assert.equal((await searchStatus(machine.core, { env: machine.env, deps: machine.deps })).retentionDays, 30);
+  const report = await activitySettingsReport(machine.core);
+  assert.equal(report.retentionDays, 365);
+  assert.deepEqual(report.problems, [
+    'activity.retentionDays is "60", not a whole number from 1 to 365, so recording is off, Activity keeps 365 days and Search on this machine keeps 30',
+  ]);
+  // Sixty days, set by the person: fewer for Activity, but more for Search — told, and approved first.
+  const asked = await gatedChange(machine.core, activitySettingsChange(machine.core, { retentionDays: 60 }, 'cli'), {
+    surface: 'cli',
+    channel: 'core',
+  });
+  assert.equal(asked.status, 'approval-required');
+  assert.match(
+    asked.status === 'approval-required' ? asked.prepared.preview : '',
+    /keeps the words of the messages Search on this machine holds for as long too: 60 days, not 30/u,
+  );
 });
 
 test('GUARD: an account taken out of Search loses its rows at once', async () => {

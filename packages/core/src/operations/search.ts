@@ -1,7 +1,7 @@
 import { readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { withActivity } from '../activity.ts';
-import { readActivitySettings } from '../activity-settings.ts';
+import { searchRetentionDays } from '../activity-settings.ts';
 import type { GatedChange } from '../change-flow.ts';
 import type { ChangeSurface } from '../changes.ts';
 import { isDangerous } from '../chars.ts';
@@ -403,7 +403,7 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
   return {
     on: settings.enabled === 'on',
     accounts: accountViews(config, settings),
-    retentionDays: readActivitySettings(config).retentionDays,
+    retentionDays: searchRetentionDays(config),
     folder: paths.dir,
     kept: {
       messages: held?.messages ?? 0,

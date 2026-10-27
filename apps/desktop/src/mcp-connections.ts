@@ -767,5 +767,8 @@ export function nameProblem(name: string): string | null {
   if ([...name].length > 64) return 'A name is at most 64 characters.';
   if (CONTROL_OR_FORMAT.test(name)) return 'A name has no line breaks, tabs or hidden characters.';
   if (/["'`“”‘’]/.test(name)) return 'A name has no quotation marks.';
+  // A name that imitates the label a preview gives it — `"Work" (Claude Code, every folder, cn_ABCD…)` — is refused
+  // for a new one (0.35.0 re-review, LOW 6). One that has them already still reads, and works.
+  if (/[()…]/.test(name)) return 'A name has no brackets or “…”: a preview puts its app, place and id there.';
   return null;
 }

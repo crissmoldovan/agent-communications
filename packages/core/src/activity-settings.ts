@@ -10,6 +10,8 @@
  *
  * A retention it cannot read is read as the longest, 365 days, with recording off: what it cannot read must never
  * delete what is held. Read as one day, a typo — or a later release's word — once deleted all but a day of the log.
+ * Search, which keeps a message's words while Activity keeps its day, keeps 30 days then, not the year
+ * (`searchRetentionDays`): a year of everyone's mail, kept by a typo, is the wider harm.
  *
  * `config.ts` imports this module to judge a change, so it imports nothing at all.
  */
@@ -20,6 +22,8 @@ export type ActivityRecordSetting = (typeof ACTIVITY_RECORD_SETTINGS)[number];
 export const MIN_ACTIVITY_RETENTION_DAYS = 1;
 export const MAX_ACTIVITY_RETENTION_DAYS = 365;
 export const DEFAULT_ACTIVITY_RETENTION_DAYS = 30;
+/** The days Search keeps a message's words by when Activity's days cannot be read: the default, never the most. */
+export const SEARCH_FALLBACK_RETENTION_DAYS = 30;
 
 /** The settings as they apply, and what in the file could not be read as written (empty when all of it could). */
 export interface ActivitySettings {
@@ -64,7 +68,7 @@ export function readActivitySettings(config: { readonly activity?: unknown }): A
   const stored = storedActivity(config);
   if (stored === null) {
     problems.push(
-      `activity in config.json is not an object, so recording is off and ${MAX_ACTIVITY_RETENTION_DAYS} days are kept`,
+      `activity in config.json is not an object, so recording is off, Activity keeps ${MAX_ACTIVITY_RETENTION_DAYS} days and Search on this machine keeps ${SEARCH_FALLBACK_RETENTION_DAYS}`,
     );
     return { record: 'off', retentionDays: MAX_ACTIVITY_RETENTION_DAYS, problems };
   }
@@ -84,11 +88,27 @@ export function readActivitySettings(config: { readonly activity?: unknown }): A
       retentionDays = MAX_ACTIVITY_RETENTION_DAYS;
       record = 'off';
       problems.push(
-        `activity.retentionDays is ${describe(days)}, not a whole number from ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, so recording is off and ${MAX_ACTIVITY_RETENTION_DAYS} days are kept`,
+        `activity.retentionDays is ${describe(days)}, not a whole number from ${MIN_ACTIVITY_RETENTION_DAYS} to ${MAX_ACTIVITY_RETENTION_DAYS}, so recording is off, Activity keeps ${MAX_ACTIVITY_RETENTION_DAYS} days and Search on this machine keeps ${SEARCH_FALLBACK_RETENTION_DAYS}`,
       );
     }
   }
   return { record, retentionDays, problems };
+}
+
+/**
+ * The days Search on this machine keeps a message's words (design 2026-10-26-local-search, S12): Activity's days, as
+ * `readActivitySettings` reads them — or 30 where those cannot be read (the re-review of 0.35.0, LOW 5). Activity then
+ * keeps the most, so as to delete nothing of its log; read so for Search, a hand edit such as `"retentionDays": "60"`
+ * kept a year of message words, with no approval. Doctor's warning says both.
+ */
+export function searchRetentionDays(config: { readonly activity?: unknown }): number {
+  if (config.activity === undefined) return readActivitySettings(config).retentionDays;
+  const stored = storedActivity(config);
+  if (stored === null) return SEARCH_FALLBACK_RETENTION_DAYS;
+  if (stored.retentionDays !== undefined && !isActivityRetention(stored.retentionDays)) {
+    return SEARCH_FALLBACK_RETENTION_DAYS;
+  }
+  return readActivitySettings(config).retentionDays;
 }
 
 /** A stored value in a sentence: short, and never more than a few dozen characters of whatever the file held. */

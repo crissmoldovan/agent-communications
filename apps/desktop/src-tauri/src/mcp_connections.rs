@@ -56,6 +56,10 @@ static WINDOWS_DRIVE: LazyLock<Regex> =
 /// lies.
 const QUOTES: [char; 7] = ['"', '\'', '`', '“', '”', '‘', '’'];
 
+/// The brackets and ellipsis core refuses in a new name (`newConnectionNameProblem`, the 0.35.0 re-review's LOW 6): a
+/// preview labels a connection `"Work" (Claude Code, every folder, cn_ABCD…)`, and a name must not imitate that.
+const LABEL_MARKS: [char; 3] = ['(', ')', '…'];
+
 macro_rules! connection_word {
     ($(#[$meta:meta])* $name:ident, $check:path, $what:literal) => {
         $(#[$meta])*
@@ -94,13 +98,17 @@ pub fn connection_id(value: &str) -> bool {
     grammar::plain(value) && CONNECTION_ID.is_match(value)
 }
 
-/// A connection's name, by core's rule: 1 to 64 characters, no space at either end, no quotation mark, and no
-/// control, format, bidi or invisible character; never starting with `-`, so it is never read as an option.
+/// A connection's name, by core's rule for a new one: 1 to 64 characters, no space at either end, no quotation mark,
+/// bracket or ellipsis, and no control, format, bidi or invisible character; never starting with `-`, so it is never
+/// read as an option. Only what the app asks core to add or rename passes through here: a name a connection has
+/// already is read as core gives it.
 pub fn connection_name(value: &str) -> bool {
     grammar::plain(value)
         && value.trim() == value
         && value.chars().count() <= CONNECTION_NAME_MAX
-        && !value.chars().any(|c| QUOTES.contains(&c))
+        && !value
+            .chars()
+            .any(|c| QUOTES.contains(&c) || LABEL_MARKS.contains(&c))
 }
 
 /// A part's word: a server's, as core's snapshot names it (`core`, `gmail`, `events` …).
@@ -883,6 +891,11 @@ mod tests {
             "Work\u{202E}edualC",
             "Work\u{200B}",
             "x".repeat(65).as_str(),
+            // A name that imitates the label a preview gives it (0.35.0 re-review, LOW 6): no brackets, no ellipsis.
+            "Everywhere) (Claude Code, every folder, cn_0MCZ…",
+            "Work (Claude Code",
+            "Work)",
+            "Work…",
         ] {
             refused(
                 json!({ "kind": "connectionAdd", "app": "manual", "name": name, "parts": [{ "server": "core" }] }),

@@ -478,9 +478,9 @@ does not protect.
 | Act | Agent over MCP | Person at a terminal | Person in the app (macOS, attested) | App on Windows or Linux |
 |---|---|---|---|---|
 | List or show connections; doctor | yes | yes | yes | yes |
-| Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it. Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
+| Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it — a change of parts for its own connection only, except with `add` (note below). Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
 | Add or rotate a **Manual** connection (shows the key) | refused: the key would stay in the transcript | yes | yes | yes, through the terminal |
-| Revoke, drop a part, pin, read-only on | at once | at once | at once | at once |
+| Revoke, drop a part, pin, read-only on | its own connection only: at once (note below) | at once | at once | at once |
 | Remove | its own connection only: at once — but prepared, like a loosening, where its entry shadows a wider one (note below) | at once, or approves at the terminal | at once, or approves in the app (`--app-approval`) | at once, or "Do it in Terminal" |
 | Rename; rotate (not Manual) | its own connection only: at once, audited (note below) | at once | at once | at once |
 
@@ -491,6 +491,13 @@ does not protect.
   that names a connection — its summary, each loosening's path, each effect — names it by name, app, place (its folder,
   its profile, or "every folder") and short id: `"Acme only" (Claude Code, /example/home/work/acme, cn_ABCD…)`, with
   "new" in place of the id for one being added, which has none until it is.
+- **Note, 2026-10-27 (0.35.0 re-review, LOW 2):** the own-connection rule covers changing a connection's parts too —
+  `connection change` and `comms_connection_change` with `id` and `parts`, narrowing included — over MCP, from an
+  agent's shell and inside an MCP server's process. The agent in one project narrowed the person's connection for every
+  folder to Agent Comms itself, at once, and cut their other apps off Gmail and Events until they approved putting them
+  back. `comms_connection_change` with `add`, the change Gmail's setup hands an agent, still puts a part into the app's
+  connection for every folder, approved first as every part added is, but takes nothing away there at once: a pin or
+  read-only on in another connection is refused. The person at a terminal and the app change any connection, as before.
 - **Note, 2026-10-27 (0.35.0 security review, H1):** a one-project connection's entry is Claude Code's local scope,
   under core's name, so it shadows the app's `agentcomms` for every folder (§6.1); removing it handed the agents in
   that folder the wider one, at once. A remove whose entry shadows a wider entry of the same name — a connection
@@ -828,3 +835,30 @@ The lead's decisions on the review of `1e9e1448..c0aac2d9`; H1 and M1 are notes 
 - **Accepted, and documented: the key in the gateway's initial environment.** `ps eww` shows it to programs running
   as the person while the gateway runs (§6.3, §14, core's README beside "the key is not a password"); they can read
   the app's config, which holds it, already.
+
+## 17. The 0.35.0 re-review's LOWs (2026-10-27)
+
+The lead's decisions on the re-review of the 0.35.0 security fixes.
+- **A config that cannot be parsed is one that cannot be read** (LOW 1). Claude Code's scan lists a file it cannot
+  parse rather than failing, so a remove checked while `~/.claude.json` was half written found nothing wider behind it
+  and applied at once — and once the write finished, the agents in that folder used the entry for every folder. The
+  remove's check (`widerBehind`) now reads this app's own file listed as unreadable as "could not be read": the remove
+  is prepared, its loosening line says the app's settings could not be read to say what that reaches, and the person
+  approves it, as §8.1's H1 note says.
+- **An agent changes the parts of only its own connection** (LOW 2): §8.1's table and its note.
+- **A refusal an agent's marker caused says which variable it was** (LOW 3). `CODEX_HOME` is a setting people
+  export, and it marks a shell as Codex's, so a person who exported it got `NOT_OWN_CONNECTION` at their own terminal,
+  and `NO_SESSION` on every take gate. The marker stays: dropped, it would let a Codex session pass as the person.
+  Every refusal whose details name an agent's marker — `NO_SESSION`, `NOT_OWN_CONNECTION` and the person-only ones —
+  now ends its hint with which variable it was and how to clear it: "`CODEX_HOME` is set in this shell; if you’re not
+  inside Codex, `unset CODEX_HOME` and run it again" (`Remove-Item Env:CODEX_HOME` on Windows). It is said where a
+  refusal reaches the person (`writeError`, and the event service's CLI), so every command says it, as text and in
+  JSON; the MCP surface and an MCP server's process name no variable, and say nothing more.
+- **A new name has no brackets or "…"** (LOW 6). A preview names a connection as `"Acme only" (Claude Code,
+  ~/work/acme, cn_ABCD…)`, and a name could imitate that: renamed `Everywhere) (Claude Code, every folder, cn_0MCZ…`,
+  an agent's own connection read as the person's in the summary of its next widening, and the summary's 200
+  characters could cut the real label off. `connection add` and `connection rename`, over MCP and at a terminal, and
+  the app's own check (`nameProblem`, and Rust's `connection_name` for every add and rename it runs) now refuse `(`,
+  `)` and `…` in a name, as they refused quotation marks: "a connection's name has no brackets or "…": a preview puts
+  its app, place and id there". A name that has them already — a test build's, or a hand edit's — still reads, still
+  works, and shows as it is in every preview: nothing is migrated (§6.1's rule for reading a record is unchanged).

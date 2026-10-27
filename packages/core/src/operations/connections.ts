@@ -20,11 +20,11 @@ import {
   connectionKeyHash,
   connectionKeyMatches,
   connectionLabel,
-  connectionNameProblem,
   connectionOfThisProcess,
   connectionReach,
   newConnectionId,
   newConnectionKey,
+  newConnectionNameProblem,
   PART_FACTS,
   partFacts,
   partText,
@@ -38,7 +38,7 @@ import { connectionLastUsed, type GatewayStatus, runningGateways } from '../gate
 import { handoffSentence } from '../handoff-text.ts';
 import { requireHandoffs } from '../handoffs.ts';
 import { launcherName, readPointer } from '../launcher.ts';
-import { scanRegisteredServers } from '../mcp-clients.ts';
+import { knownClientConfigs, scanRegisteredServers } from '../mcp-clients.ts';
 import {
   connectionOfEntry,
   type InstallContext,
@@ -65,7 +65,8 @@ import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange }
  *   environment, never shown — installing any part's runtime this machine lacks. A Manual connection is a snippet with
  *   its key in it, shown once, so it is added only at the person's own terminal or in the app, never over MCP: the key
  *   would stay in the chat's transcript.
- * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest.
+ * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest. An
+ *   agent changes the parts of only its own connection, and narrows only its own (`refuseAnotherConnection`).
  * - **Renaming it, and replacing its key**, give an agent nothing more, so they apply at once and are audited. A
  *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is. An agent
  *   renames, re-keys and removes only its own connection (`refuseAnotherConnection`).
@@ -90,11 +91,12 @@ function refuseKeyToAgent(env: NodeJS.ProcessEnv, surface: ChangeSurface): void 
 }
 
 /**
- * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key and
- * removing it act only on the caller's own connection: the one whose part this is, as its gateway reports it
- * (`connectionOfThisProcess`). Another connection is the person's, at their terminal or in the app (0.35.0 security
- * review, M1: an agent renamed two others so that a later preview named the wrong one, and could cut any app off). A
- * speed bump against agents, as every person-only act here is: a shell runs as the person.
+ * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key,
+ * removing it and changing its parts — narrowing included — act only on the caller's own connection: the one whose part
+ * this is, as its gateway reports it (`connectionOfThisProcess`). Another connection is the person's, at their terminal
+ * or in the app (0.35.0 security review, M1: an agent renamed two others so that a later preview named the wrong one,
+ * and could cut any app off; the re-review's LOW 2: narrowing another at once cut the person's other apps off Gmail
+ * and Events). A speed bump against agents, as every person-only act here is: a shell runs as the person.
  */
 function refuseAnotherConnection(env: NodeJS.ProcessEnv, surface: ChangeSurface, id: unknown, act: string): void {
   const marker =
@@ -546,8 +548,8 @@ export function connectionAddChange(
     });
   }
   if (request.app === 'manual') refuseKeyToAgent(env, surface);
-  const nameProblem = connectionNameProblem(request.name);
-  if (nameProblem !== null) throw new CommsError('USAGE', nameProblem);
+  const nameProblem = newConnectionNameProblem(request.name);
+  if (nameProblem !== null) throw new CommsError('USAGE', `${nameProblem}: nothing was changed`);
   if (request.launcher !== undefined && !CONNECTION_LAUNCHERS.includes(request.launcher)) {
     throw new CommsError('USAGE', `"${String(request.launcher)}" is not a launcher`, {
       hint: `One of: ${CONNECTION_LAUNCHERS.join(', ')}.`,
@@ -910,13 +912,21 @@ export function connectionChangeChange(
   surface: ChangeSurface,
   deps: ServerInstallDeps = {},
 ): GatedChange<ConnectionChangeResult> {
-  return partsChange(
+  const change = partsChange(
     core,
     env,
     { id: request.id, approvalId: request.approvalId, target: (config) => partsOf(config, request.parts) },
     surface,
     deps,
   );
+  return {
+    ...change,
+    // Before anything narrows at once: an agent's change to another connection's parts is refused whole (LOW 2).
+    plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'change the parts of');
+      return change.plan(config);
+    },
+  };
 }
 
 /**
@@ -1416,6 +1426,11 @@ export function connectionPartChange(
         servers = [facts.server];
         const target = (now: Config, record: ConnectionRecord) =>
           putPart(record.parts, partsOf(now, [asked])[0] as ConnectionPart);
+        // What narrows here applies at once, so an agent narrows only its own connection (LOW 2). What only reaches
+        // more waits for the person, as Gmail's setup hands it to an agent, whichever connection it goes into.
+        const narrowed = narrowing(into.parts, target(config, into));
+        if (JSON.stringify(narrowed) !== JSON.stringify(into.parts))
+          refuseAnotherConnection(env, surface, into.id, 'narrow the parts of');
         if (into.launcher === 'managed' && !into.parts.some((part) => part.server === facts.server)) {
           const words = ['connection', 'change', into.id, '--parts', partsWords(config, target(config, into))];
           await refuseUnverifiable(core, servers, deps, words);
@@ -1486,7 +1501,7 @@ export function connectionRenameChange(
     plan: (config) => {
       refuseAnotherConnection(env, surface, request.id, 'rename');
       const record = requireReadable(config, request.id);
-      const problem = connectionNameProblem(request.name);
+      const problem = newConnectionNameProblem(request.name);
       if (problem !== null) throw new CommsError('USAGE', `${problem}: nothing was changed`);
       if (request.name === record.name) throw new CommsError('USAGE', 'nothing was changed: that is its name already');
       const clash = readConnections(config).connections.some(
@@ -1655,8 +1670,12 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
   const home = homeDirectory(env);
   const place = `${shortenHome(record.where.folder ?? '', home)}${record.where.configDir === null ? '' : ` (profile ${shortenHome(record.where.configDir, home)})`}`;
   const client = APP_CLIENT[record.app];
-  const scan = await scanRegisteredServers(envFor(env, record)).catch(() => null);
-  if (scan === null) {
+  const appEnv = envFor(env, record);
+  const scan = await scanRegisteredServers(appEnv).catch(() => null);
+  // A scan lists a file it could not parse rather than throwing (0.35.0 re-review, LOW 1): this app's own file among
+  // them is a config that cannot be read, never one with nothing wider in it — a write in flight would let the remove
+  // through at once, and the entry for every folder would serve the folder.
+  if (scan === null || unreadableAppConfig(appEnv, client, scan.unreadable)) {
     return `removed: agents in ${place} use whatever ${APP_LABELS[record.app]} calls "${record.entry.name}" for every folder — its settings could not be read to say what that reaches`;
   }
   const behind = scan.servers.find(
@@ -1678,6 +1697,23 @@ async function widerBehind(env: NodeJS.ProcessEnv, config: Config, record: Conne
   }
   const own = PART_FACTS.find((facts) => isProductServer(behind, serverFacts(facts.server)));
   return `removed: agents in ${place} use the entry "${behind.name}" for every folder in ${shortenHome(behind.path, home)}, ${own === undefined ? 'which Agent Comms did not register' : `which starts ${own.label} on its own`}`;
+}
+
+/** Whether the scan could not read `client`'s own config file — the one an entry for every folder is kept in. */
+function unreadableAppConfig(
+  env: NodeJS.ProcessEnv,
+  client: SupportedClient,
+  unreadable: readonly { client: string; path: string }[],
+): boolean {
+  let files: string[];
+  try {
+    files = knownClientConfigs(env)
+      .filter((file) => file.client === client)
+      .map((file) => file.path);
+  } catch {
+    return true;
+  }
+  return unreadable.some((each) => each.client === client && files.includes(each.path));
 }
 
 export interface ConnectionRemoveResult {

@@ -70,6 +70,29 @@ test('PERSON-SHELL: integration show and session-queue list|drop refuse an agent
   }
 });
 
+test('PERSON-SHELL: a refusal an agent’s marker caused names the variable, and how a person at their terminal clears it (0.35.0 re-review, LOW 3)', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-person-marker-');
+  try {
+    // A person who exported CODEX_HOME at their own terminal is refused as a Codex shell is, and told why.
+    const ran = await cli(stateDir, ['session-queue', 'list', '--json'], {
+      env: { CODEX_HOME: '/example/home/.codex' },
+    });
+    assert.equal(ran.code, APPROVAL_EXIT, ran.stderr);
+    assert.ok(
+      ran.stderr.includes(
+        process.platform === 'win32'
+          ? '`CODEX_HOME` is set in this shell; if you’re not inside Codex, `Remove-Item Env:CODEX_HOME` and run it again.'
+          : '`CODEX_HOME` is set in this shell; if you’re not inside Codex, `unset CODEX_HOME` and run it again.',
+      ),
+      ran.stderr,
+    );
+  } finally {
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
 test('PERSON-SHELL: rule analyse is taken only from the app, attested on macOS, or a terminal whose output the person reads', {
   skip: WINDOWS_SKIP,
 }, async () => {

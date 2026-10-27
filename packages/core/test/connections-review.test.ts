@@ -13,6 +13,7 @@ import {
   connectionAddChange,
   connectionChangeChange,
   connectionKeyReplaceChange,
+  connectionPartChange,
   connectionRemoveChange,
   connectionRenameChange,
   parsePartsSpec,
@@ -332,5 +333,250 @@ test(
     const [was] = readConnections(before).connections;
     assert.ok(read?.readable && was?.readable);
     assert.equal(read.record.keyHash, was.record.keyHash, 'the key is the one it had');
+  },
+);
+
+test(
+  'LOW 1: a remove checked while the app’s config cannot be parsed waits for the person — never at once',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { project, acme } = await twoConnections(m);
+    const real = realpathSync(project);
+    const good = readFileSync(m.claudeJson, 'utf8');
+    // The re-review's race: a write in flight leaves half the file when the remove is checked.
+    writeFileSync(m.claudeJson, good.slice(0, Math.floor(good.length / 2)));
+    const asked = await run(m, connectionRemoveChange(m.core, partEnv(m.env, acme.id), { id: acme.id }, 'mcp'), 'mcp');
+    assert.equal(asked.status, 'approval-required', 'an unreadable config is not one with nothing wider in it');
+    if (asked.status !== 'approval-required') return;
+    assert.equal(asked.prepared.loosened.length, 1);
+    assert.match(
+      String(asked.prepared.loosened[0]?.after),
+      /^removed: agents in .* use whatever Claude Code calls "agentcomms" for every folder — its settings could not be read to say what that reaches$/,
+    );
+    // The write finishes: nothing was taken out while it waited.
+    writeFileSync(m.claudeJson, good);
+    assert.ok(claudeJson(m).projects?.[real]?.mcpServers?.agentcomms, 'the folder’s entry is still there');
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+  },
+);
+
+/** A mailbox here, `cue/gmail`, in `config.json` before anything else is written. */
+function withMailbox(m: Machine): void {
+  writeFileSync(
+    join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json'),
+    `${JSON.stringify({
+      version: 2,
+      inboxes: {
+        'cue/gmail': {
+          id: 'ibx_AAAAAAAAAAAAAAAA',
+          provider: 'gmail',
+          email: 'jo@example.test',
+          identity: 'oidc',
+          client: 'desktop',
+          tier: 'read',
+          contacts: false,
+          grantedScopes: [],
+          secretRef: 'gmail:refresh:ibx_AAAAAAAAAAAAAAAA',
+          internalDomains: ['example.test'],
+          createdAt: '2026-10-27T09:00:00.000Z',
+        },
+      },
+    })}\n`,
+  );
+}
+
+const partsOf = async (m: Machine, id: string) => {
+  const read = readConnections(await m.core.config.load()).connections.find(
+    (each) => each.readable && each.record.id === id,
+  );
+  assert.ok(read?.readable);
+  return read.record.parts.map(
+    (each) => `${each.server}${each.pin ? `:${each.pin.alias}` : ''}${each.readOnly ? ':ro' : ''}`,
+  );
+};
+
+test(
+  'LOW 2: an agent changes the parts of only its own connection — narrowing another is refused, unchanged; the person’s any',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    withMailbox(m);
+    const project = join(m.home, 'work', 'acme');
+    mkdirSync(project, { recursive: true });
+    const everywhere = await added(m, {
+      app: 'claude-code',
+      name: 'Everywhere',
+      parts: parsePartsSpec('core,gmail,events'),
+    });
+    const acme = await added(m, {
+      app: 'claude-code',
+      name: 'Acme only',
+      parts: parsePartsSpec('core,events'),
+      folder: project,
+    });
+    const inAcme = partEnv(m.env, acme.id);
+    const refusedAsAnother = (error: Error & { code?: string; hint?: string; details?: Record<string, unknown> }) => {
+      assert.equal(error.code, 'APPROVAL_REQUIRED', error.message);
+      assert.match(error.message, /only the connection it is a part of/);
+      assert.match(error.message, /nothing was changed/);
+      assert.match(error.hint ?? '', /at your terminal, or in the app/);
+      assert.equal(error.details?.reason, 'NOT_OWN_CONNECTION');
+      return true;
+    };
+    // The re-review's probe: the agent in "Acme only" narrows "Everywhere" over MCP, cutting the person's other apps off.
+    const narrow = (env: Record<string, string>, surface: ChangeSurface) =>
+      run(
+        m,
+        connectionChangeChange(m.core, env, { id: everywhere.id, parts: parsePartsSpec('core') }, surface),
+        surface,
+      );
+    await assert.rejects(narrow(inAcme, 'mcp'), refusedAsAnother);
+    // From an agent's shell, and inside an MCP server's process: the same.
+    await assert.rejects(narrow({ ...m.env, CLAUDECODE: '1' }, 'cli'), refusedAsAnother);
+    await assert.rejects(narrow({ ...m.env, AGENTCOMMS_MCP_SERVER: 'gmail' }, 'cli'), refusedAsAnother);
+    // Widening another is refused too: another connection is the person's.
+    await assert.rejects(
+      run(
+        m,
+        connectionChangeChange(
+          m.core,
+          inAcme,
+          { id: everywhere.id, parts: parsePartsSpec('core,gmail,events,slack') },
+          'mcp',
+        ),
+        'mcp',
+      ),
+      refusedAsAnother,
+    );
+    // `add` into the app's connection for every folder, narrowing its Gmail part at once: refused too.
+    await assert.rejects(
+      run(
+        m,
+        connectionPartChange(
+          m.core,
+          inAcme,
+          {
+            app: 'claude-code',
+            server: 'gmail',
+            account: 'cue/gmail',
+            readOnly: true,
+            launcher: 'local',
+            noVerify: true,
+          },
+          'mcp',
+        ),
+        'mcp',
+      ),
+      refusedAsAnother,
+    );
+    assert.deepEqual(await partsOf(m, everywhere.id), ['core', 'gmail', 'events'], 'nothing narrowed');
+    // `add` that only reaches more still waits for the person, as Gmail's setup hands it to an agent.
+    const asked = await run(
+      m,
+      connectionPartChange(
+        m.core,
+        inAcme,
+        { app: 'claude-code', server: 'slack', launcher: 'local', noVerify: true },
+        'mcp',
+      ),
+      'mcp',
+    );
+    assert.equal(asked.status, 'approval-required');
+    // Its own connection: narrowed at once, as before.
+    const own = await run(
+      m,
+      connectionChangeChange(m.core, inAcme, { id: acme.id, parts: parsePartsSpec('core') }, 'mcp'),
+      'mcp',
+    );
+    assert.equal(own.status, 'applied');
+    assert.deepEqual(await partsOf(m, acme.id), ['core']);
+    // The person at a terminal: any connection, at once.
+    assert.equal((await narrow(m.env, 'cli')).status, 'applied');
+    assert.deepEqual(await partsOf(m, everywhere.id), ['core']);
+  },
+);
+
+test(
+  'LOW 3: a person who exported CODEX_HOME is told which variable refused them, and how to clear it at their terminal',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { everywhere } = await twoConnections(m);
+    const codex = { ...m.env, CODEX_HOME: join(m.home, '.codex') };
+    const clear = '`CODEX_HOME` is set in this shell; if you’re not inside Codex, `unset CODEX_HOME` and run it again.';
+    // The re-review's probe: renaming at their own terminal, refused as an agent's shell is.
+    const renamed = await runMain(['connection', 'rename', everywhere.id, 'Y', '--json'], codex, 'darwin');
+    assert.equal(renamed.code, 10, renamed.stdout + renamed.stderr);
+    const error = renamed.json().error as { hint: string; details: Record<string, unknown> };
+    assert.deepEqual(error.details, { reason: 'NOT_OWN_CONNECTION', marker: 'CODEX_HOME' });
+    assert.ok(error.hint.endsWith(` ${clear}`), error.hint);
+    // The same words where the refusal is a person-only act's, said as text.
+    const takes = await runMain(['takes', 'list'], codex, 'darwin');
+    assert.equal(takes.code, 10, takes.stdout + takes.stderr);
+    assert.ok(takes.stderr.includes(clear), takes.stderr);
+    // Cleared, as the words say: the person renames it.
+    const person = await runMain(['connection', 'rename', everywhere.id, 'Y', '--json'], m.env, 'darwin');
+    assert.equal(person.code, 0, person.stdout + person.stderr);
+    assert.deepEqual(await names(m), ['Y', 'Acme only']);
+  },
+);
+
+test(
+  'LOW 6: a name that imitates a preview’s label is refused, added or renamed; one that has brackets already reads, works and shows as it is',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { everywhere, acme } = await twoConnections(m);
+    const refusal = /a connection’s name has no brackets or “…”: a preview puts its app, place and id there/;
+    // The re-review's scenario: the agent renames its own connection to read as the person's in a later summary.
+    const imitation = `Everywhere) (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…`;
+    await assert.rejects(
+      run(m, connectionRenameChange(m.core, partEnv(m.env, acme.id), { id: acme.id, name: imitation }, 'mcp'), 'mcp'),
+      (error: Error & { code?: string }) => {
+        assert.equal(error.code, 'USAGE');
+        assert.match(error.message, refusal);
+        assert.match(error.message, /nothing was changed/);
+        return true;
+      },
+    );
+    // At a terminal, renaming or adding: the same rule, and the same words.
+    for (const name of ['Acme (old)', 'Acme…']) {
+      const renamed = await runMain(['connection', 'rename', acme.id, name, '--json'], m.env, 'darwin');
+      assert.equal(renamed.code, 64, renamed.stdout + renamed.stderr);
+      assert.match(String((renamed.json().error as { message: string }).message), refusal);
+    }
+    const adding = await runMain(
+      ['connection', 'add', '--app', 'claude-code', '--name', 'Third (x)', '--parts', 'core', '--json'],
+      m.env,
+      'darwin',
+    );
+    assert.equal(adding.code, 64, adding.stdout + adding.stderr);
+    assert.match(String((adding.json().error as { message: string }).message), refusal);
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+    // A name an earlier release let in: no migration — it reads, its parts change, and the preview shows it as it is.
+    const file = join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json');
+    const held = JSON.parse(readFileSync(file, 'utf8'));
+    held.connections[everywhere.id].name = 'Everywhere (old)…';
+    writeFileSync(file, `${JSON.stringify(held, null, 2)}\n`);
+    assert.deepEqual(await names(m), ['Everywhere (old)…', 'Acme only']);
+    const widened = await run(
+      m,
+      connectionChangeChange(m.core, m.env, { id: everywhere.id, parts: parsePartsSpec('core,events,slack') }, 'cli'),
+      'cli',
+    );
+    assert.equal(widened.status, 'approval-required');
+    if (widened.status !== 'approval-required') return;
+    assert.equal(
+      widened.prepared.summary,
+      `Let agents in "Everywhere (old)…" (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…) reach more`,
+    );
+    // Renamed to a name without them: at once.
+    const fixed = await run(
+      m,
+      connectionRenameChange(m.core, m.env, { id: everywhere.id, name: 'Everywhere' }, 'cli'),
+      'cli',
+    );
+    assert.equal(fixed.status, 'applied');
   },
 );
