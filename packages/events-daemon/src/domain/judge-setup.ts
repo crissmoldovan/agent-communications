@@ -138,6 +138,16 @@ export function enableAllApprovalAtTerminal(approvalId: unknown): CommsError {
   });
 }
 
+/**
+ * `subscriber approve`'s refusal of an unattested origin (0.36.0, W29): a subscription is approved at the terminal there,
+ * with the approval's own `approve <approval-id>`.
+ */
+export function subscriptionApprovalAtTerminal(approvalId: unknown): CommsError {
+  return changeAtTerminal("approve a subscriber's events", ruleApprovalWords(approvalId), {
+    approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
+  });
+}
+
 /** The test build's request to an event service whose state folder is not a test profile's (0.34.0 review, finding 1). */
 export function testBuildElsewhere(): CommsError {
   return new CommsError(

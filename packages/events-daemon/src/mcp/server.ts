@@ -51,9 +51,16 @@ import {
 import { sourceShow, sourcesList } from '../operations/sources.ts';
 import { status } from '../operations/status.ts';
 import { stop } from '../operations/stop.ts';
-import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
+import {
+  addSubscriber,
+  enableSubscriber,
+  removeSubscriber,
+  subscribersList,
+  updateSubscriber,
+} from '../operations/subscribers.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { workflowEventsList, workflowEventsShow } from '../operations/workflow-events.ts';
 import type { LanePointerResultV1, LaneTaskV1 } from '../runtime/lanes.ts';
 import { VERSION } from '../version.ts';
 import { approvalViewForAgent } from './agent-approval-view.ts';
@@ -416,6 +423,14 @@ function buildEventsMcpServer(
     (args) => removeSubscriber(args.subscriberId as string, options),
     true,
   );
+  strictControlTool(
+    'events_subscriber_enable',
+    'Prepare subscriber events',
+    "Prepares the person's approval of an inert subscriber version's events: what it receives, in which namespaces, with or without what senders wrote. It approves nothing: show the person the preview (events_approval_view), and they approve it at their own terminal or in the app.",
+    { subscriberId: z.string().min(1), version: z.number().int().positive() },
+    (args) => enableSubscriber(args.subscriberId as string, args.version as number, options),
+    true,
+  );
   strictControlTool('events_judges_list', 'List judges', 'Lists content-free immutable judge metadata.', {}, () =>
     judgesList(options),
   );
@@ -570,6 +585,20 @@ function buildEventsMcpServer(
     'Shows one selectable local event definition.',
     { type: z.string() },
     (args) => catalogueShow(args.type as string, options),
+  );
+  strictControlTool(
+    'events_workflow_events_list',
+    'List step events',
+    "Lists the step event catalogue, version 1: each schema's standard and own events and the closed outputs they carry.",
+    {},
+    () => workflowEventsList(options),
+  );
+  strictControlTool(
+    'events_workflow_events_show',
+    'Show step events',
+    'Shows one schema of the step event catalogue: its standard and own events and the closed outputs they carry.',
+    { schema: z.string().min(1) },
+    (args) => workflowEventsShow(args.schema as string, options),
   );
   controlTool('events_sources_list', 'List event sources', 'Lists configured local event sources.', {}, () =>
     sourcesList(options),

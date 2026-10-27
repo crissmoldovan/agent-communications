@@ -6,7 +6,7 @@ import {
   type DisclosureVersionKind,
   neutralise,
 } from '@agentcomms/core';
-import { describeRule, isJsonValue, type JsonValue } from '@agentcomms/events';
+import { describeRule, isJsonValue, type JsonValue, WORKFLOW_EVENT_CATALOGUE_V1 } from '@agentcomms/events';
 import {
   type ActivationDocumentV1,
   type CanonicalFullRuleDocument,
@@ -66,12 +66,14 @@ import {
   OWNER_CONTROL_WIRE_OPERATIONS,
 } from '../runtime/control-operation-registry.ts';
 import type { DeliveryShowResultV1 } from '../runtime/delivery-show.ts';
+import type { WorkflowEventsListResultV1, WorkflowEventsShowResultV1 } from '../runtime/events/catalogue.ts';
 import type {
   EnableAllApprovalResultV1,
   JudgeSetupResultV1,
   ProviderKeyResultV1,
   ProviderListResultV1,
   RuleApprovalResultV1,
+  SubscriptionApprovalResultV1,
 } from '../runtime/judge-setup.ts';
 import type { JudgeShowResultV1 } from '../runtime/judge-show.ts';
 import type { IntegrationShowResultV1 } from '../runtime/linear-integration.ts';
@@ -267,6 +269,27 @@ export const B3_CAPABILITIES: readonly B3CapabilityContract[] = Object.freeze([
     true,
   ),
   exception(
+    'events-daemon.subscriber-secret.create',
+    'subscriber secret create <subscriber-id> --version <n>',
+    'subscriberSecretCreate',
+    B3_EXCEPTION_REASON_SECRET,
+    true,
+  ),
+  exception(
+    'events-daemon.subscriber-secret.rotate',
+    'subscriber secret rotate <subscriber-id> --version <n>',
+    'subscriberSecretRotate',
+    B3_EXCEPTION_REASON_SECRET,
+    true,
+  ),
+  exception(
+    'events-daemon.subscriber-url.set',
+    'subscriber url set <subscriber-id> --version <n>',
+    'subscriberUrlSet',
+    B3_EXCEPTION_REASON_SECRET,
+    true,
+  ),
+  exception(
     'events-daemon.judge-key.set',
     'judge key set <judge-id> --version <n>',
     'judgeKeySet',
@@ -376,6 +399,11 @@ type B3ApprovalViewReadyV1 = {
   readonly approvalId: string;
   readonly digest: string;
   readonly preview: ActivationDocumentV1;
+  /**
+   * A subscription's preview (0.36.0, W29): the subscriber version it names, and what it receives, in which namespaces,
+   * where it goes and whether it gets what senders wrote. Present only for a subscription.
+   */
+  readonly subscription?: { readonly subscriber: SubscriberDocument; readonly words: string } | undefined;
   /** One complete owner-built selector for each target in a pending rule preview; enable-all has none. */
   readonly pendingTargetSelectors: readonly B3PendingTargetSelectorV1[];
   readonly challenge: {
@@ -399,22 +427,24 @@ export const B3_ACTIVATION_STATUSES: readonly ['pending', 'pending-completion', 
   Object.freeze(['pending', 'pending-completion', 'completed', 'failed', 'cancelled'] as const);
 export type B3ActivationStatus = (typeof B3_ACTIVATION_STATUSES)[number];
 /** The activation document vocabulary is also `ActivationRuntime`'s `IntentKind`. */
-export const B3_INTENT_KINDS: readonly ['rule', 'judge-budget', 'judge-kind', 'enable-all'] = Object.freeze([
+export const B3_INTENT_KINDS: readonly ['rule', 'judge-budget', 'judge-kind', 'enable-all', 'subscription'] =
+  Object.freeze(['rule', 'judge-budget', 'judge-kind', 'enable-all', 'subscription'] as const);
+export type B3IntentKind = (typeof B3_INTENT_KINDS)[number];
+
+/** The core disclosure grammar is the binding authority; B3 only publishes its exact closed vocabulary. */
+export const B3_DISCLOSURE_ACTIVATION_KINDS: readonly [
   'rule',
   'judge-budget',
   'judge-kind',
   'enable-all',
-] as const);
-export type B3IntentKind = (typeof B3_INTENT_KINDS)[number];
-
-/** The core disclosure grammar is the binding authority; B3 only publishes its exact closed vocabulary. */
-export const B3_DISCLOSURE_ACTIVATION_KINDS: readonly ['rule', 'judge-budget', 'judge-kind', 'enable-all'] =
-  Object.freeze([
-    'rule',
-    'judge-budget',
-    'judge-kind',
-    'enable-all',
-  ] as const satisfies readonly DisclosureActivationKind[]);
+  'subscription',
+] = Object.freeze([
+  'rule',
+  'judge-budget',
+  'judge-kind',
+  'enable-all',
+  'subscription',
+] as const satisfies readonly DisclosureActivationKind[]);
 export type B3DisclosureActivationKind = (typeof B3_DISCLOSURE_ACTIVATION_KINDS)[number];
 export const B3_DISCLOSURE_VERSION_KINDS: readonly [
   'rule',
@@ -594,6 +624,10 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly 'session-queue-drop': SessionQueueDropResultV1;
   readonly 'rule-analyse': RuleAnalyseResultV1;
   readonly 'judge-show': JudgeShowResultV1;
+  readonly 'subscriber-enable': B3PreparedActivationResultV1;
+  readonly 'subscriber-approve': SubscriptionApprovalResultV1;
+  readonly 'workflow-events-list': WorkflowEventsListResultV1;
+  readonly 'workflow-events-show': WorkflowEventsShowResultV1;
 };
 
 /**
@@ -623,6 +657,9 @@ type B3SpecialControlResultsByOperationV1 = {
   readonly targetUrlSet: B3SecretCapabilityUnavailableV1;
   readonly subscriberTokenCreate: B3SecretCapabilityUnavailableV1;
   readonly subscriberTokenRotate: B3SecretCapabilityUnavailableV1;
+  readonly subscriberSecretCreate: B3SecretCapabilityUnavailableV1;
+  readonly subscriberSecretRotate: B3SecretCapabilityUnavailableV1;
+  readonly subscriberUrlSet: B3SecretCapabilityUnavailableV1;
   readonly judgeKeySet: B3SecretCapabilityUnavailableV1;
   readonly judgeKeyRotate: B3SecretCapabilityUnavailableV1;
   readonly migrateSecrets: B3SecretCapabilityUnavailableV1;
@@ -698,6 +735,10 @@ export interface B3ControlRequestArgumentsV1 {
   };
   readonly subscriberTokenCreate: { readonly subscriberId: string; readonly version: number };
   readonly subscriberTokenRotate: { readonly subscriberId: string; readonly version: number };
+  readonly subscriberSecretCreate: { readonly subscriberId: string; readonly version: number };
+  readonly subscriberSecretRotate: { readonly subscriberId: string; readonly version: number };
+  /** The new version to make; its URL is the person's hidden input, never an argument here. */
+  readonly subscriberUrlSet: { readonly subscriberId: string; readonly version: number };
   readonly judgeKeySet: { readonly judgeId: string; readonly version: number };
   readonly judgeKeyRotate: { readonly judgeId: string; readonly version: number };
   readonly migrateSecrets: { readonly to: B3SecretBackend };
@@ -793,6 +834,13 @@ export interface B3DesktopControlRequestArgumentsV1 extends B3ControlRequestArgu
    */
   /** One judge version's exact canonical document (0.33.0), the newest live one unless a version is named. */
   readonly 'judge-show': { readonly judgeId: string; readonly version?: number | undefined };
+  /** A subscriber version's events, prepared for the person's approval (0.36.0, W29), as `rule-enable` prepares a rule. */
+  readonly 'subscriber-enable': { readonly subscriberId: string; readonly version: number };
+  /** That approval, from the app after its preview: the approval and the digest the preview showed. */
+  readonly 'subscriber-approve': { readonly approvalId: string; readonly digest: string };
+  /** The step event catalogue (W25), content-free. */
+  readonly 'workflow-events-list': Record<string, never>;
+  readonly 'workflow-events-show': { readonly schema: string };
   readonly 'rule-analyse': {
     readonly ruleId: string;
     readonly draft?: Readonly<Record<string, JsonValue>> | undefined;
@@ -1448,6 +1496,10 @@ const B3_ORDINARY_RESULT_FIELDS: Readonly<Record<string, readonly string[]>> = O
   'session-queue-drop': ['deliveryId', 'dropped'],
   'rule-analyse': ['ruleId', 'analysed', 'counts', 'suggestions', 'model'],
   'judge-show': ['judgeId', 'version', 'document', 'digest', 'state'],
+  'subscriber-enable': ['intentId', 'approvalId', 'binding', 'kind', 'status', 'replacementOfVersion'],
+  'subscriber-approve': ['approvalId', 'subscriberId', 'version', 'approved', 'approvedBy', 'completion'],
+  'workflow-events-list': ['catalogueVersion', 'schemas'],
+  'workflow-events-show': ['catalogueVersion', 'schema', 'standard', 'own', 'outputs'],
   'dryrun-show': [
     'deliveryId',
     'ruleId',
@@ -1596,7 +1648,10 @@ function assertB3ActivationBinding(value: unknown, intentId: string, kind: B3Int
   }
 }
 
-function assertB3PreparedActivation(value: Record<string, unknown>, operation: 'enable-all' | 'rule-enable'): void {
+function assertB3PreparedActivation(
+  value: Record<string, unknown>,
+  operation: 'enable-all' | 'rule-enable' | 'subscriber-enable',
+): void {
   const fields = B3_ORDINARY_RESULT_FIELDS[operation] ?? [];
   if (Object.keys(value).some((key) => !fields.includes(key)))
     throw new TypeError(`a ${operation} result must be a closed object`);
@@ -1634,6 +1689,18 @@ function assertB3PendingVersion(value: Record<string, unknown>, kind: 'rule' | '
   }
 }
 
+/** One schema of the step event catalogue, exactly as `@agentcomms/events` holds it (Appendix W.3). */
+function assertWorkflowEventSchemaEntry(value: unknown, name: string): void {
+  assertClosedRecord(value, ['schema', 'standard', 'own', 'outputs'], name);
+  const known = (WORKFLOW_EVENT_CATALOGUE_V1 as Readonly<Record<string, unknown>>)[value.schema as string];
+  if (typeof value.schema !== 'string' || known === undefined) throw new TypeError(`${name} names a known schema`);
+  if (
+    canonicalJson({ ...(known as object) } as never) !==
+    canonicalJson({ standard: value.standard, own: value.own, outputs: value.outputs } as never)
+  )
+    throw new TypeError(`${name} is Appendix W.3's, exactly`);
+}
+
 function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, value: unknown): void {
   if (B3_ORDINARY_RESULT_ARRAY_OPERATIONS.has(operation)) {
     if (Array.isArray(value) && value.every(isJsonValue)) return;
@@ -1641,7 +1708,7 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
   }
   const fields = B3_ORDINARY_RESULT_FIELDS[operation];
   if (fields === undefined) throw new TypeError(`a ${operation} result has no ordinary result grammar`);
-  if (operation === 'enable-all' || operation === 'rule-enable') {
+  if (operation === 'enable-all' || operation === 'rule-enable' || operation === 'subscriber-enable') {
     if (!isRecord(value)) throw new TypeError(`a ${operation} result must be a closed object`);
     assertB3PreparedActivation(value, operation);
     return;
@@ -1814,6 +1881,33 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
       if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
       assertText(value.completion.usedAt, 'when the approval was used');
       return;
+    case 'subscriber-approve':
+      assertText(value.approvalId, 'an approved approval id');
+      assertText(value.subscriberId, 'an approved subscriber id');
+      assertPositiveInteger(value.version, 'an approved subscriber version');
+      if (value.approved !== true) throw new TypeError("a subscriber's approval says it approved");
+      if (
+        typeof value.approvedBy !== 'string' ||
+        value.approvedBy === 'terminal' ||
+        !(PERSON_CHANGE_APPROVERS as readonly string[]).includes(value.approvedBy)
+      )
+        throw new TypeError("a subscriber's approval names the app it came from");
+      assertClosedRecord(value.completion, ['intentId', 'status', 'usedAt'], "a subscriber approval's completion");
+      assertText(value.completion.intentId, 'a completed activation');
+      if (value.completion.status !== 'completed') throw new TypeError('an approved activation is completed');
+      assertText(value.completion.usedAt, 'when the approval was used');
+      return;
+    case 'workflow-events-list':
+      if (value.catalogueVersion !== 1 || !Array.isArray(value.schemas))
+        throw new TypeError('the step event catalogue is version 1, with its schemas');
+      for (const entry of value.schemas) assertWorkflowEventSchemaEntry(entry, 'a catalogue schema');
+      return;
+    case 'workflow-events-show': {
+      const { catalogueVersion, ...entry } = value;
+      if (catalogueVersion !== 1) throw new TypeError('the step event catalogue is version 1');
+      assertWorkflowEventSchemaEntry(entry, 'a shown catalogue schema');
+      return;
+    }
     case 'enable-all-approve':
       assertText(value.approvalId, 'an approved approval id');
       if (value.approved !== true) throw new TypeError('switching on says it approved');
@@ -2025,6 +2119,9 @@ function assertB3ControlResultForOperationV1(
     case 'targetUrlSet':
     case 'subscriberTokenCreate':
     case 'subscriberTokenRotate':
+    case 'subscriberSecretCreate':
+    case 'subscriberSecretRotate':
+    case 'subscriberUrlSet':
     case 'judgeKeySet':
     case 'judgeKeyRotate':
     case 'migrateSecrets':
@@ -2155,6 +2252,20 @@ const RULE_SUMMARY_PREFIX = 'In plain words (the rule author\'s own text is in "
  * is approved. Each rule-author part is one literal it cannot close, in place of the single quotes the sentence gives
  * it, so an operand or the judge's question cannot read on as the app's own words or start a line of its own.
  */
+/** A subscription's words (W29), daemon-authored from the stored version and neutralised as every preview line is. */
+function subscriptionLine(document: ActivationDocumentV1, subscription: unknown): readonly string[] {
+  if (document.kind !== 'subscription') return [];
+  if (!isRecord(subscription) || typeof subscription.words !== 'string')
+    throw new TypeError("a subscription's approval preview names what it receives");
+  const subscriber = canonicalSubscriber(subscription.subscriber);
+  if (
+    subscriber.subscriberId !== document.subscription.subscriberId ||
+    subscriber.version !== document.subscription.version
+  )
+    throw new TypeError("a subscription's preview names its own subscriber version");
+  return [`Subscription ${neutralise(subscription.words).text}`];
+}
+
 function ruleSummaryLine(document: ActivationDocumentV1): readonly string[] {
   if (document.kind !== 'rule') return [];
   const parts = describeRule(document.rule).map((part) => ({ ...part }));
@@ -2319,6 +2430,7 @@ export function renderB3ApprovalPreviewV1(
       expiresAt: value.challenge.expiresAt,
     },
     ...(Object.hasOwn(value, 'layaJudge') ? { layaJudge: value.layaJudge } : {}),
+    ...(Object.hasOwn(value, 'subscription') ? { subscription: value.subscription } : {}),
   };
   return {
     kind: 'READY',
@@ -2327,6 +2439,7 @@ export function renderB3ApprovalPreviewV1(
       `Approval ${value.approvalId}`,
       `Digest ${value.digest}`,
       ...ruleSummaryLine(document),
+      ...subscriptionLine(document, value.subscription),
       `Preview ${neutralise(canonicalJson(value.preview)).text}`,
       ...hostedJudgeDestination(document),
       ...sessionDisclosure(document),

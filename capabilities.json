@@ -3005,6 +3005,84 @@
       "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
     },
     {
+      "id": "events-daemon.subscriber-secret.create",
+      "package": "events-daemon",
+      "cli": "subscriber secret create",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberSecretCreate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-secret.rotate",
+      "package": "events-daemon",
+      "cli": "subscriber secret rotate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberSecretRotate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-url.set",
+      "package": "events-daemon",
+      "cli": "subscriber url set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberUrlSet",
+      "argv": ["subscriber-1", "--version", "2"],
+      "expect": { "subscriberId": "subscriber-1", "version": 2 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber.enable",
+      "package": "events-daemon",
+      "cli": "subscriber enable",
+      "mcp": "events_subscriber_enable",
+      "status": "both",
+      "operation": "enableSubscriber",
+      "argv": ["subscriber-1", "1"],
+      "args": { "subscriberId": "subscriber-1", "version": 1 },
+      "expect": { "subscriberId": "subscriber-1", "version": 1 }
+    },
+    {
+      "id": "events-daemon.subscriber.approve",
+      "package": "events-daemon",
+      "cli": "subscriber approve",
+      "mcp": null,
+      "status": "exception",
+      "operation": "approveSubscriberFromApp",
+      "argv": [
+        "ap_00000000000000000000000000",
+        "--digest",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expect": { "approvalId": "ap_00000000000000000000000000" },
+      "reason": "A subscriber's events are a standing disclosure the person approves: what it receives, in which namespaces, where it goes and whether it gets what senders wrote, in the Agent Comms app after its preview, as a workflow's activation is (0.36.0 design W29; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+    },
+    {
+      "id": "events-daemon.workflow-events.list",
+      "package": "events-daemon",
+      "cli": "workflow-events list",
+      "mcp": "events_workflow_events_list",
+      "status": "both",
+      "operation": "workflowEventsList"
+    },
+    {
+      "id": "events-daemon.workflow-events.show",
+      "package": "events-daemon",
+      "cli": "workflow-events show",
+      "mcp": "events_workflow_events_show",
+      "status": "both",
+      "operation": "workflowEventsShow",
+      "argv": ["step.wait"],
+      "args": { "schema": "step.wait" },
+      "expect": { "schema": "step.wait" }
+    },
+    {
       "id": "events-daemon.judge-key.set",
       "package": "events-daemon",
       "cli": "judge key set",

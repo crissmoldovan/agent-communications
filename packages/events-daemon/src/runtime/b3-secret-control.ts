@@ -3,6 +3,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { type SecretStore, sha256Hex } from '@agentcomms/core';
 import type { HumanSecret } from '../domain/human-secret.ts';
 import { JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
+import { canonicalWebhookSubscriber } from '../domain/webhook-subscriber.ts';
 import { canonicalWebhookTarget, secretWebhookUrlDescriptor } from '../domain/webhook-target.ts';
 import {
   EVENT_SECRET_PROVIDERS,
@@ -26,6 +27,12 @@ export type SecretReceipt =
   | { readonly kind: 'target-secret'; readonly targetId: string; readonly version: number; readonly generation: number }
   | {
       readonly kind: 'subscriber-token';
+      readonly subscriberId: string;
+      readonly version: number;
+      readonly generation: number;
+    }
+  | {
+      readonly kind: 'subscriber-secret';
       readonly subscriberId: string;
       readonly version: number;
       readonly generation: number;
@@ -203,6 +210,92 @@ export class B3SecretControl {
         material,
       );
     });
+  }
+
+  /**
+   * A webhook subscriber version's signing secret (0.36.0, W29, W32), generated here and revealed once at the terminal,
+   * as a webhook target's is. Only a live webhook subscriber version has the slot.
+   */
+  async subscriberSecretCreate(input: {
+    readonly subscriberId: string;
+    readonly version: number;
+  }): Promise<SecretReceipt> {
+    return withEventWriterLease(this.#quiescer, async () => {
+      const owner = this.#webhookSubscriber(input.subscriberId, input.version);
+      const material = this.#newSigningSecret();
+      const generation = await this.#store(owner, 'webhook-signing', material, null, false, true);
+      return generatedReceipt(
+        { kind: 'subscriber-secret', subscriberId: input.subscriberId, version: input.version, generation },
+        material,
+      );
+    });
+  }
+
+  /** Rotates it, as a webhook target's is: the previous secret keeps signing beside the new one through its overlap. */
+  async subscriberSecretRotate(input: {
+    readonly subscriberId: string;
+    readonly version: number;
+  }): Promise<SecretReceipt> {
+    return this.#quiescer.withExclusive(async () => {
+      const owner = this.#webhookSubscriber(input.subscriberId, input.version);
+      const prior = this.#requiredCurrent(owner, 'webhook-signing');
+      const retired = await this.#secrets.currentMaster();
+      await this.#cipher.rotateAndReencrypt();
+      const material = this.#newSigningSecret();
+      const generation = await this.#store(owner, 'webhook-signing', material, prior, false);
+      await this.#secrets.destroyRetiredMaster({
+        keyId: retired.keyId,
+        cipher: this.#cipher,
+        quiescer: this.#quiescer,
+      });
+      return generatedReceipt(
+        { kind: 'subscriber-secret', subscriberId: input.subscriberId, version: input.version, generation },
+        material,
+      );
+    });
+  }
+
+  /**
+   * A webhook subscriber's secret URL (0.36.0, W29): a new immutable version `version`, made from the newest earlier
+   * version with the hidden URL's public descriptor in place of its URL, and its complete URL kept only in the secret
+   * store, in one commit. The new version is inert until the person approves its events.
+   */
+  async subscriberUrlSet(input: {
+    readonly subscriberId: string;
+    readonly version: number;
+    readonly hiddenUrl: string;
+  }): Promise<{ readonly scheme: string; readonly host: string; readonly port: number; readonly sha256: string }> {
+    return withEventWriterLease(this.#quiescer, async () => {
+      if (!Number.isSafeInteger(input.version) || input.version < 1)
+        throw new Error('the new subscriber version is a positive integer');
+      const row = this.#database
+        .prepare(
+          'SELECT document FROM subscriber_versions WHERE subscriber_id = ? AND version < ? ORDER BY version DESC LIMIT 1',
+        )
+        .get(input.subscriberId, input.version) as { document: string } | undefined;
+      if (row === undefined) throw new Error('the subscriber has no earlier version to take the secret URL');
+      const draft = JSON.parse(row.document) as Record<string, unknown>;
+      if (draft.kind !== 'webhook') throw new Error('only a webhook subscriber has a URL');
+      const descriptor = secretWebhookUrlDescriptor(input.hiddenUrl);
+      const document = canonicalWebhookSubscriber({ ...draft, version: input.version, url: descriptor });
+      await this.#secrets.createSecretUrlSubscriberVersion({
+        document,
+        completeUrl: input.hiddenUrl,
+        cipher: this.#cipher,
+      });
+      return { scheme: descriptor.scheme, host: descriptor.host, port: descriptor.port, sha256: descriptor.sha256 };
+    });
+  }
+
+  /** A live webhook subscriber version: only it has a signing slot. */
+  #webhookSubscriber(subscriberId: string, version: number): ExactOwner {
+    const owner = exactOwner(this.#database, 'subscriber', subscriberId, version);
+    const row = this.#database
+      .prepare('SELECT document FROM subscriber_versions WHERE subscriber_id = ? AND version = ?')
+      .get(subscriberId, version) as { document: string };
+    if ((JSON.parse(row.document) as { kind?: unknown }).kind !== 'webhook')
+      throw new Error('only a webhook subscriber has a signing secret');
+    return owner;
   }
 
   async judgeKeySet(input: {
@@ -454,7 +547,9 @@ export class B3SecretControl {
   }
 
   #newSigningSecret(): string {
-    return this.#secretMaterial?.nextSigningSecret() ?? `whsec_${randomBytes(32).toString('base64url')}`;
+    // Standard Webhooks' `whsec_` secrets are standard base64, which `signStandardWebhook` checks byte for byte: a
+    // base64url secret could never sign (0.36.0 found every generated one was refused there).
+    return this.#secretMaterial?.nextSigningSecret() ?? `whsec_${randomBytes(32).toString('base64')}`;
   }
 
   #newToken(): string {

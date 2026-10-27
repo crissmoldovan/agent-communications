@@ -13,6 +13,7 @@ import {
   type SetupJudgeKind,
   setupBudgetDocument,
   setupJudgeDocument,
+  subscriptionApprovalAtTerminal,
   testBuildElsewhere,
 } from '../domain/judge-setup.ts';
 import {
@@ -80,6 +81,20 @@ export interface EnableAllApprovalResultV1 {
   /** Where the person was, as the CLI found them: the release app or the test build. */
   readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
   readonly ruleVersions: readonly { readonly ruleId: string; readonly ruleVersion: number }[];
+  readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
+}
+
+/**
+ * What `subscriber approve` answers (0.36.0, W29): the subscriber version whose events the person approved from the app,
+ * after its preview, now its one active version, with the activation's completion.
+ */
+export interface SubscriptionApprovalResultV1 {
+  readonly approvalId: string;
+  readonly subscriberId: string;
+  readonly version: number;
+  readonly approved: true;
+  /** Where the person was, as the CLI found them: the release app or the test build. */
+  readonly approvedBy: Exclude<PersonSetupApprover, 'terminal'>;
   readonly completion: { readonly intentId: string; readonly status: 'completed'; readonly usedAt: string };
 }
 
@@ -414,6 +429,75 @@ export class JudgeSetupService {
     });
   }
 
+  /**
+   * A subscriber version's events, approved by the person in the Agent Comms app after its preview (0.36.0, W29): the
+   * activation `subscriber enable` prepared and nothing else, for exactly the digest the person saw, on the app channel,
+   * as a rule's is approved. From the app's origins only: at a terminal the person types the challenge with `approve`.
+   * Never over MCP: no tool reaches this wire.
+   */
+  async approveSubscription(
+    args: Readonly<Record<string, unknown>>,
+    origin: string | undefined,
+  ): Promise<SubscriptionApprovalResultV1> {
+    const approvalId = args.approvalId;
+    const digest = args.digest;
+    if (typeof approvalId !== 'string' || !APPROVAL_ID.test(approvalId))
+      throw new CommsError('USAGE', 'that is not an approval id');
+    if (typeof digest !== 'string' || !DIGEST.test(digest))
+      throw new CommsError('USAGE', 'the digest is the 64 hex digits its preview showed');
+    const ids: Record<string, string> = { approvalId };
+    const approver = personSetupApprover(origin);
+    return this.#audited('subscriberApprove', origin, ids, async () => {
+      if (approver === null || approver === 'terminal')
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          "at your terminal, approve a subscriber's events with approve <approval-id>, which asks for its challenge",
+          { details: { reason: 'AT_TERMINAL' } },
+        );
+      const row = this.#store.database
+        .prepare('SELECT document, digest, status FROM activation_intents WHERE approval_id = ?')
+        .get(approvalId) as { document: string; digest: string; status: string } | undefined;
+      if (row === undefined || row.status !== 'pending')
+        throw new CommsError(
+          'APPROVAL_VOID',
+          'this approval is no longer waiting: it was approved, cancelled or replaced',
+          { details: { reason: 'APPROVAL_NOT_WAITING' } },
+        );
+      if (row.digest !== digest)
+        throw new CommsError('APPROVAL_VOID', 'the subscriber changed after you saw its preview: review it again', {
+          details: { reason: 'DIGEST_MISMATCH' },
+        });
+      const document = JSON.parse(row.document) as {
+        kind?: unknown;
+        subscription?: { subscriberId?: unknown; version?: unknown };
+      };
+      const subscriberId = document.kind === 'subscription' ? document.subscription?.subscriberId : undefined;
+      const version = document.kind === 'subscription' ? document.subscription?.version : undefined;
+      if (typeof subscriberId !== 'string' || typeof version !== 'number')
+        throw new CommsError(
+          'APPROVAL_REQUIRED',
+          "only a subscriber's events are approved here; approve anything else where it was prepared",
+          { details: { reason: 'NOT_SUBSCRIPTION' } },
+        );
+      ids.subscriberId = subscriberId;
+      ids.subscriberVersion = String(version);
+      const challenge = await this.#activations.issueApprovalViewChallenge(approvalId, this.#now() + 5 * 60_000);
+      if (challenge === null)
+        throw new CommsError('TRANSIENT', 'the approval was being opened elsewhere: try again in a moment');
+      const completion = await withEventWriterLease(this.#quiescer, () =>
+        this.#activations.approve({ approvalId, answer: challenge, via: 'app' }),
+      );
+      return {
+        approvalId,
+        subscriberId,
+        version,
+        approved: true,
+        approvedBy: approver,
+        completion: { intentId: completion.intentId, status: completion.status, usedAt: completion.usedAt },
+      };
+    });
+  }
+
   /** Reuses the latest live version when it is the judge wanted; otherwise adds the next version. */
   async #judgeVersion(wanted: Record<string, unknown>): Promise<JudgeSetupResultV1['judge']> {
     const judgeId = wanted.judgeId as string;
@@ -496,7 +580,13 @@ export class JudgeSetupService {
    * attested app and `cli` for a terminal; any other caller's line names none (`personSetupSurface`).
    */
   async #audited<T>(
-    operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
+    operation:
+      | 'judgeSetup'
+      | 'providerKeySet'
+      | 'providerKeyRemove'
+      | 'ruleApprove'
+      | 'enableAllApprove'
+      | 'subscriberApprove',
     origin: string | undefined,
     ids: Record<string, string | string[]>,
     work: () => Promise<T>,
@@ -554,10 +644,18 @@ export class JudgeSetupService {
 
 /** The terminal refusal of each person-only change, with the event service's words to type there. */
 function unattestedChange(
-  operation: 'judgeSetup' | 'providerKeySet' | 'providerKeyRemove' | 'ruleApprove' | 'enableAllApprove',
+  operation:
+    | 'judgeSetup'
+    | 'providerKeySet'
+    | 'providerKeyRemove'
+    | 'ruleApprove'
+    | 'enableAllApprove'
+    | 'subscriberApprove',
   ids: Readonly<Record<string, string | string[]>>,
 ): CommsError {
   switch (operation) {
+    case 'subscriberApprove':
+      return subscriptionApprovalAtTerminal(ids.approvalId);
     case 'ruleApprove':
       return ruleApprovalAtTerminal(ids.approvalId);
     case 'enableAllApprove':

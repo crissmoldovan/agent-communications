@@ -106,6 +106,8 @@ import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
+import { workflowEventsListResult, workflowEventsShowResult } from './events/catalogue.ts';
+import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
@@ -674,6 +676,9 @@ function secretAuditReceipt(request: B3OwnerRequest): Readonly<{
       };
     case 'subscriberTokenCreate':
     case 'subscriberTokenRotate':
+    case 'subscriberSecretCreate':
+    case 'subscriberSecretRotate':
+    case 'subscriberUrlSet':
       return {
         operation: request.operation,
         ids: auditOwnerIdentity('subscriberId', request.args.subscriberId, request.args.version),
@@ -807,6 +812,26 @@ async function handleTerminalSecretOperation(
           version: requiredVersion(request.args.version, 'subscriber version'),
         }),
       );
+    case 'subscriberSecretCreate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretCreate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberSecretRotate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretRotate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberUrlSet':
+      return secrets.subscriberUrlSet({
+        subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+        version: requiredVersion(request.args.version, 'new subscriber version'),
+        hiddenUrl: requiredText(request.args.hidden, 'hidden webhook URL'),
+      });
     case 'judgeKeySet':
       return secrets.judgeKeySet({
         judgeId: requiredText(request.args.judgeId, 'judge id'),
@@ -856,6 +881,7 @@ async function approvalViewFromOwner(
   if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
   if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
   const preview = normaliseActivationDocument(JSON.parse(row.document));
+  const subscription = subscriptionPreviewFor(store.database, preview);
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
@@ -869,6 +895,7 @@ async function approvalViewFromOwner(
       digest: row.digest,
       preview,
       ...(layaJudge === undefined ? {} : { layaJudge }),
+      ...(subscription === undefined ? {} : { subscription }),
     };
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
@@ -887,6 +914,7 @@ async function approvalViewFromOwner(
     }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
     ...(layaJudge === undefined ? {} : { layaJudge }),
+    ...(subscription === undefined ? {} : { subscription }),
   };
 }
 
@@ -2081,6 +2109,24 @@ async function handleControl(
       if (!definition) throw new CommsError('NOT_FOUND', 'the requested event type is not in the local catalogue');
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
+    // Workflow events (0.36.0): a subscription is prepared by anyone and approved by the person, from the app's origins
+    // here or with `approve` at a terminal; the step event catalogue is content-free.
+    case OWNER_CONTROL_WIRES.enableSubscriber:
+      return domainAwaited(() =>
+        activations.prepareSubscription({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case OWNER_CONTROL_WIRES.approveSubscriberFromApp:
+      return requireJudgeSetup(judgeSetup).approveSubscription(
+        personOnly(request.args, 'subscriber approve'),
+        request.origin,
+      );
+    case OWNER_CONTROL_WIRES.workflowEventsList:
+      return workflowEventsListResult();
+    case OWNER_CONTROL_WIRES.workflowEventsShow:
+      return workflowEventsShowResult(request.args.schema);
     case OWNER_CONTROL_WIRES.sourcesList:
       return sourceRows(database, sourceRegistry, await connectedAccounts());
     case OWNER_CONTROL_WIRES.sourceShow:

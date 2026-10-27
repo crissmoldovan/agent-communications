@@ -1078,5 +1078,191 @@
         "usedAt": "2026-10-26T19:04:11.479Z"
       }
     }
+  },
+  {
+    "name": "subscriber-enable-result",
+    "request": {
+      "operation": "subscriber-enable",
+      "args": {
+        "subscriberId": "events-dashboard",
+        "version": 1
+      }
+    },
+    "result": {
+      "intentId": "act_5d0c1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+      "approvalId": "ap_8M6QKZ2T5V7X9B1D3F5H7K9N2R",
+      "binding": {
+        "digest": "b4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1",
+        "activationIntentId": "act_5d0c1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+        "activationKind": "subscription",
+        "versions": [
+          {
+            "kind": "subscriber",
+            "id": "events-dashboard",
+            "version": 1
+          }
+        ]
+      },
+      "kind": "subscription",
+      "status": "pending"
+    }
+  },
+  {
+    "name": "subscriber-approve-result",
+    "request": {
+      "operation": "subscriber-approve",
+      "args": {
+        "approvalId": "ap_8M6QKZ2T5V7X9B1D3F5H7K9N2R",
+        "digest": "b4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1"
+      }
+    },
+    "result": {
+      "approvalId": "ap_8M6QKZ2T5V7X9B1D3F5H7K9N2R",
+      "subscriberId": "events-dashboard",
+      "version": 1,
+      "approved": true,
+      "approvedBy": "desktop-app",
+      "completion": {
+        "intentId": "act_5d0c1e2f3a4b5c6d7e8f9a0b1c2d3e4f",
+        "status": "completed",
+        "usedAt": "2026-10-27T11:20:04.120Z"
+      }
+    }
+  },
+  {
+    "name": "workflow-events-list-result",
+    "request": {
+      "operation": "workflow-events-list",
+      "args": {}
+    },
+    "result": {
+      "catalogueVersion": 1,
+      "schemas": [
+        {
+          "schema": "run",
+          "standard": [],
+          "own": ["started", "held", "finished", "failed", "cancelled", "expired"],
+          "outputs": ["steps", "endCode"]
+        },
+        {
+          "schema": "step.condition",
+          "standard": ["started", "succeeded", "skipped"],
+          "own": ["matched", "not-matched"],
+          "outputs": []
+        },
+        {
+          "schema": "step.judge",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["yes", "no", "unsure"],
+          "outputs": ["score"]
+        },
+        {
+          "schema": "step.route",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["matched", "none", "unsure"],
+          "outputs": ["project", "projectName", "reason", "score"]
+        },
+        {
+          "schema": "step.find-session",
+          "standard": ["started", "succeeded", "failed", "skipped", "retrying"],
+          "own": ["found", "busy", "not-found", "watched"],
+          "outputs": ["session", "provider"]
+        },
+        {
+          "schema": "step.start-session",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["session-started", "refused"],
+          "outputs": ["session", "provider", "mode", "refusal"]
+        },
+        {
+          "schema": "step.worktree",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["made", "refused"],
+          "outputs": ["branch", "refusal"]
+        },
+        {
+          "schema": "step.deliver.session",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["given", "left-in-queue"],
+          "outputs": ["delivery", "session", "turn", "ahead"]
+        },
+        {
+          "schema": "step.deliver.linear",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["created"],
+          "outputs": ["delivery", "issue"]
+        },
+        {
+          "schema": "step.deliver.linear-change",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["changed", "commented", "closed"],
+          "outputs": ["delivery", "issue", "changed", "state"]
+        },
+        {
+          "schema": "step.deliver.webhook",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["delivered"],
+          "outputs": ["delivery", "status"]
+        },
+        {
+          "schema": "step.deliver.sse",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["delivered"],
+          "outputs": ["delivery"]
+        },
+        {
+          "schema": "step.deliver.queue",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["delivered"],
+          "outputs": ["delivery"]
+        },
+        {
+          "schema": "step.deliver.dry-run",
+          "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+          "own": ["delivered"],
+          "outputs": ["delivery"]
+        },
+        {
+          "schema": "step.wait",
+          "standard": ["started", "succeeded", "waiting", "skipped"],
+          "own": ["finished", "timed-out", "free", "elapsed"],
+          "outputs": ["for", "reported"]
+        },
+        {
+          "schema": "step.notify",
+          "standard": ["started", "succeeded", "skipped"],
+          "own": ["notified"],
+          "outputs": ["raised"]
+        },
+        {
+          "schema": "step.split",
+          "standard": ["started", "succeeded", "skipped"],
+          "own": [],
+          "outputs": ["branches"]
+        },
+        {
+          "schema": "raise",
+          "standard": [],
+          "own": [],
+          "outputs": ["name", "fields"]
+        }
+      ]
+    }
+  },
+  {
+    "name": "workflow-events-show-result",
+    "request": {
+      "operation": "workflow-events-show",
+      "args": {
+        "schema": "step.wait"
+      }
+    },
+    "result": {
+      "catalogueVersion": 1,
+      "schema": "step.wait",
+      "standard": ["started", "succeeded", "waiting", "skipped"],
+      "own": ["finished", "timed-out", "free", "elapsed"],
+      "outputs": ["for", "reported"]
+    }
   }
 ]

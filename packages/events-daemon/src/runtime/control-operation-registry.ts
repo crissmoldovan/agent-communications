@@ -78,6 +78,46 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
     desktopCallable: true,
     family: 'b3',
   },
+  // Workflow events (0.36.0, W29–W33): a webhook subscriber's signing secret and secret URL are the person's, made at
+  // the terminal as a webhook target's are; a subscription is prepared by anyone and approved by the person only; the
+  // step event catalogue is content-free, for the person and an agent alike.
+  {
+    capabilityOperation: 'subscriberSecretCreate',
+    wireOperation: 'subscriberSecretCreate',
+    desktopCallable: true,
+    family: 'b3',
+  },
+  {
+    capabilityOperation: 'subscriberSecretRotate',
+    wireOperation: 'subscriberSecretRotate',
+    desktopCallable: true,
+    family: 'b3',
+  },
+  { capabilityOperation: 'subscriberUrlSet', wireOperation: 'subscriberUrlSet', desktopCallable: true, family: 'b3' },
+  {
+    capabilityOperation: 'enableSubscriber',
+    wireOperation: 'subscriber-enable',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'approveSubscriberFromApp',
+    wireOperation: 'subscriber-approve',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowEventsList',
+    wireOperation: 'workflow-events-list',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowEventsShow',
+    wireOperation: 'workflow-events-show',
+    desktopCallable: true,
+    family: 'owner',
+  },
   { capabilityOperation: 'judgeKeySet', wireOperation: 'judgeKeySet', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'judgeKeyRotate', wireOperation: 'judgeKeyRotate', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'migrateSecrets', wireOperation: 'migrateSecrets', desktopCallable: true, family: 'b3' },

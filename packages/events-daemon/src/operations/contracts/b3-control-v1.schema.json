@@ -301,24 +301,106 @@
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
     },
     "subscriberDocument": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["subscriberId", "version", "kind", "authority", "origins", "retentionMs"],
-      "properties": {
-        "subscriberId": { "$ref": "#/$defs/id" },
-        "version": { "$ref": "#/$defs/positive" },
-        "kind": { "const": "sse" },
-        "authority": {
+      "oneOf": [
+        {
           "type": "object",
           "additionalProperties": false,
-          "required": ["host", "port"],
+          "required": ["subscriberId", "version", "kind", "authority", "origins", "retentionMs"],
           "properties": {
-            "host": { "enum": ["127.0.0.1", "::1"] },
-            "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+            "subscriberId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "sse" },
+            "authority": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["host", "port"],
+              "properties": {
+                "host": { "enum": ["127.0.0.1", "::1"] },
+                "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+              }
+            },
+            "origins": { "type": "array", "items": { "$ref": "#/$defs/id" } },
+            "retentionMs": { "type": "integer", "minimum": 1, "maximum": 604800000 },
+            "events": { "$ref": "#/$defs/eventSubscription" }
+          },
+          "if": { "not": { "required": ["events"] } },
+          "then": { "properties": { "origins": { "minItems": 1 } } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "subscriberId",
+            "version",
+            "kind",
+            "url",
+            "approvedAddressSet",
+            "signing",
+            "retryLimit",
+            "events"
+          ],
+          "properties": {
+            "subscriberId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "kind": { "const": "webhook" },
+            "url": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "value"],
+                  "properties": { "kind": { "const": "plain" }, "value": { "$ref": "#/$defs/id" } }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["kind", "scheme", "host", "port", "sha256"],
+                  "properties": {
+                    "kind": { "const": "secret" },
+                    "scheme": { "enum": ["http", "https"] },
+                    "host": { "$ref": "#/$defs/id" },
+                    "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+                    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+                  }
+                }
+              ]
+            },
+            "approvedAddressSet": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
+            "signing": { "const": "standard-webhooks" },
+            "retryLimit": { "type": "integer", "minimum": 1, "maximum": 20 },
+            "events": { "$ref": "#/$defs/eventSubscription" }
+          }
+        }
+      ]
+    },
+    "eventSegment": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,31}$" },
+    "eventSubscription": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespaces", "patterns", "content"],
+      "properties": {
+        "namespaces": { "type": "array", "minItems": 1, "maxItems": 8, "items": { "$ref": "#/$defs/eventSegment" } },
+        "patterns": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "pattern": "^([a-z][a-z0-9_-]{0,31}|\\*)(\\.([a-z][a-z0-9_-]{0,31}|\\*)){3}$"
           }
         },
-        "origins": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/id" } },
-        "retentionMs": { "type": "integer", "minimum": 1, "maximum": 604800000 }
+        "content": { "enum": ["none", "enveloped"] }
+      }
+    },
+    "workflowEventSchemaEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "standard", "own", "outputs"],
+      "properties": {
+        "schema": { "type": "string", "pattern": "^(run|raise|step\\.[a-z-]+(\\.[a-z-]+)?)$" },
+        "standard": { "type": "array", "items": { "$ref": "#/$defs/eventSegment" } },
+        "own": { "type": "array", "items": { "$ref": "#/$defs/eventSegment" } },
+        "outputs": { "type": "array", "items": { "type": "string", "pattern": "^[a-zA-Z]{1,32}$" } }
       }
     },
     "judgeDocument": {
@@ -612,6 +694,25 @@
                 "additionalProperties": false,
                 "required": ["ruleId", "ruleVersion"],
                 "properties": { "ruleId": { "$ref": "#/$defs/id" }, "ruleVersion": { "$ref": "#/$defs/positive" } }
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["documentVersion", "kind", "subscription"],
+          "properties": {
+            "documentVersion": { "const": 1 },
+            "kind": { "const": "subscription" },
+            "subscription": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriberId", "version", "digest"],
+              "properties": {
+                "subscriberId": { "$ref": "#/$defs/id" },
+                "version": { "$ref": "#/$defs/positive" },
+                "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
               }
             }
           }
@@ -1250,6 +1351,64 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
+            "operation": { "const": "subscriber-enable" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["subscriberId", "version"],
+              "properties": { "subscriberId": { "$ref": "#/$defs/id" }, "version": { "$ref": "#/$defs/positive" } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "subscriber-approve" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["approvalId", "digest"],
+              "properties": {
+                "approvalId": { "type": "string", "pattern": "^ap_[0-9A-HJKMNP-TV-Z]{26}$" },
+                "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+              }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "workflow-events-list" },
+            "args": { "type": "object", "additionalProperties": false, "properties": {} },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
+            "operation": { "const": "workflow-events-show" },
+            "args": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["schema"],
+              "properties": { "schema": { "type": "string", "minLength": 1, "maxLength": 64 } }
+            },
+            "origin": { "$ref": "#/$defs/id" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "args"],
+          "properties": {
             "operation": { "const": "rule-analyse" },
             "args": {
               "type": "object",
@@ -1304,7 +1463,15 @@
           "additionalProperties": false,
           "required": ["operation", "args"],
           "properties": {
-            "operation": { "enum": ["subscriberTokenCreate", "subscriberTokenRotate"] },
+            "operation": {
+              "enum": [
+                "subscriberTokenCreate",
+                "subscriberTokenRotate",
+                "subscriberSecretCreate",
+                "subscriberSecretRotate",
+                "subscriberUrlSet"
+              ]
+            },
             "args": {
               "type": "object",
               "additionalProperties": false,
@@ -1391,6 +1558,15 @@
         "approvalId": { "$ref": "#/$defs/id" },
         "digest": { "$ref": "#/$defs/id" },
         "preview": { "$ref": "#/$defs/activationDocument" },
+        "subscription": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subscriber", "words"],
+          "properties": {
+            "subscriber": { "$ref": "#/$defs/subscriberDocument" },
+            "words": { "type": "string", "minLength": 1 }
+          }
+        },
         "pendingTargetSelectors": {
           "type": "array",
           "items": { "$ref": "#/$defs/pendingTargetSelector" }
@@ -1520,7 +1696,7 @@
       "properties": {
         "digest": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
         "activationIntentId": { "$ref": "#/$defs/id" },
-        "activationKind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all"] },
+        "activationKind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all", "subscription"] },
         "versions": { "type": "array", "items": { "$ref": "#/$defs/disclosureVersion" } }
       }
     },
@@ -1532,7 +1708,7 @@
         "intentId": { "$ref": "#/$defs/id" },
         "approvalId": { "$ref": "#/$defs/id" },
         "binding": { "$ref": "#/$defs/disclosureBinding" },
-        "kind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all"] },
+        "kind": { "enum": ["rule", "judge-budget", "judge-kind", "enable-all", "subscription"] },
         "status": { "const": "pending" },
         "replacementOfVersion": { "$ref": "#/$defs/id" }
       }
@@ -2495,6 +2671,9 @@
         "targetUrlSet": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "subscriberTokenCreate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "subscriberTokenRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "subscriberSecretCreate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "subscriberSecretRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
+        "subscriberUrlSet": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "judgeKeySet": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "judgeKeyRotate": { "$ref": "#/$defs/secretCapabilityUnavailable" },
         "migrateSecrets": { "$ref": "#/$defs/secretCapabilityUnavailable" },
@@ -2790,6 +2969,50 @@
                 "usedAt": { "type": "string", "minLength": 1 }
               }
             }
+          }
+        },
+        "subscriber-enable": { "$ref": "#/$defs/preparedActivation" },
+        "subscriber-approve": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["approvalId", "subscriberId", "version", "approved", "approvedBy", "completion"],
+          "properties": {
+            "approvalId": { "type": "string", "pattern": "^ap_[0-9A-HJKMNP-TV-Z]{26}$" },
+            "subscriberId": { "$ref": "#/$defs/id" },
+            "version": { "$ref": "#/$defs/positive" },
+            "approved": { "const": true },
+            "approvedBy": { "enum": ["desktop-app", "desktop-app (test build)"] },
+            "completion": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["intentId", "status", "usedAt"],
+              "properties": {
+                "intentId": { "$ref": "#/$defs/id" },
+                "status": { "const": "completed" },
+                "usedAt": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "workflow-events-list": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["catalogueVersion", "schemas"],
+          "properties": {
+            "catalogueVersion": { "const": 1 },
+            "schemas": { "type": "array", "items": { "$ref": "#/$defs/workflowEventSchemaEntry" } }
+          }
+        },
+        "workflow-events-show": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["catalogueVersion", "schema", "standard", "own", "outputs"],
+          "properties": {
+            "catalogueVersion": { "const": 1 },
+            "schema": { "type": "string" },
+            "standard": { "type": "array", "items": { "$ref": "#/$defs/eventSegment" } },
+            "own": { "type": "array", "items": { "$ref": "#/$defs/eventSegment" } },
+            "outputs": { "type": "array", "items": { "type": "string", "pattern": "^[a-zA-Z]{1,32}$" } }
           }
         },
         "judge-show": {
@@ -3091,7 +3314,11 @@
                     "session-queue-drop",
                     "rule-approve",
                     "enable-all-approve",
-                    "judge-show"
+                    "judge-show",
+                    "subscriber-enable",
+                    "subscriber-approve",
+                    "workflow-events-list",
+                    "workflow-events-show"
                   ]
                 }
               }
@@ -3349,6 +3576,34 @@
             {
               "if": { "properties": { "request": { "properties": { "operation": { "const": "judge-show" } } } } },
               "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/judge-show" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "subscriber-enable" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/subscriber-enable" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "subscriber-approve" } } } }
+              },
+              "then": { "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/subscriber-approve" } } }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "workflow-events-list" } } } }
+              },
+              "then": {
+                "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/workflow-events-list" } }
+              }
+            },
+            {
+              "if": {
+                "properties": { "request": { "properties": { "operation": { "const": "workflow-events-show" } } } }
+              },
+              "then": {
+                "properties": { "result": { "$ref": "#/$defs/resultsByOperation/$defs/workflow-events-show" } }
+              }
             }
           ]
         },
@@ -3438,6 +3693,9 @@
                     "targetUrlSet",
                     "subscriberTokenCreate",
                     "subscriberTokenRotate",
+                    "subscriberSecretCreate",
+                    "subscriberSecretRotate",
+                    "subscriberUrlSet",
                     "judgeKeySet",
                     "judgeKeyRotate",
                     "migrateSecrets"

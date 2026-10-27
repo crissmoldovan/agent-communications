@@ -217,6 +217,51 @@
     }
   },
   {
+    "name": "subscriber-secret-create-result",
+    "request": {
+      "operation": "subscriberSecretCreate",
+      "args": {
+        "subscriberId": "subscriber-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "subscriber-secret-rotate-result",
+    "request": {
+      "operation": "subscriberSecretRotate",
+      "args": {
+        "subscriberId": "subscriber-1",
+        "version": 1
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
+    "name": "subscriber-url-set-result",
+    "request": {
+      "operation": "subscriberUrlSet",
+      "args": {
+        "subscriberId": "subscriber-1",
+        "version": 2
+      },
+      "origin": "app-window"
+    },
+    "result": {
+      "kind": "unavailable",
+      "code": "APP_SECRET_CAPABILITY_UNAVAILABLE"
+    }
+  },
+  {
     "name": "judge-key-set-result",
     "request": {
       "operation": "judgeKeySet",

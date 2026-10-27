@@ -107,7 +107,8 @@ export function canonicalSecretWebhookUrl(value: string): {
   };
 }
 
-function canonicalAddressSet(value: unknown): readonly string[] {
+/** A webhook's approved address set: non-empty, sorted and duplicate-free (shared with webhook subscribers, W32). */
+export function canonicalAddressSet(value: unknown): readonly string[] {
   if (!Array.isArray(value) || value.length === 0) return fail('a webhook approvedAddressSet is a non-empty array');
   const addresses = value.map((entry) => text(entry, 'a webhook approvedAddressSet entry'));
   const sorted = [...addresses].sort();
@@ -117,7 +118,8 @@ function canonicalAddressSet(value: unknown): readonly string[] {
   return sorted;
 }
 
-function canonicalUrlDescriptor(value: unknown): PlainWebhookUrl | SecretWebhookUrl {
+/** A webhook URL descriptor, plain or secret: public authority only (shared with webhook subscribers, W32). */
+export function canonicalUrlDescriptor(value: unknown): PlainWebhookUrl | SecretWebhookUrl {
   const url = record(value, 'a webhook URL descriptor');
   if (url.kind === 'plain') {
     const canonical = canonicalUrl(text(url.value, 'a plain webhook URL'), false);
@@ -141,6 +143,29 @@ function canonicalUrlDescriptor(value: unknown): PlainWebhookUrl | SecretWebhook
   return fail('a webhook URL descriptor has a known kind');
 }
 
+/**
+ * Whether a webhook URL reaches only its approved address set: HTTPS anywhere the set allows, or plain HTTP to literal
+ * loopback only (shared with webhook subscribers, W32).
+ */
+export function hasApprovedNetworkAuthority(
+  url: PlainWebhookUrl | SecretWebhookUrl,
+  approvedAddressSet: readonly string[],
+): boolean {
+  try {
+    assertApprovedAddressSet(approvedAddressSet);
+    if (url.kind === 'plain' && url.value.startsWith('http:')) {
+      validateLocalEndpoint(url.value, approvedAddressSet);
+    }
+    if (url.kind === 'secret' && url.scheme === 'http') {
+      const host = url.host.includes(':') ? `[${url.host}]` : url.host;
+      validateLocalEndpoint(`http://${host}:${url.port}/`, approvedAddressSet);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** The canonical immutable webhook target contains public authority only, never a slot or complete secret URL. */
 export function canonicalWebhookTarget(value: unknown): WebhookTargetDocument {
   const target = record(value, 'a webhook target document');
@@ -154,18 +179,8 @@ export function canonicalWebhookTarget(value: unknown): WebhookTargetDocument {
   }
   const url = canonicalUrlDescriptor(target.url);
   const approvedAddressSet = canonicalAddressSet(target.approvedAddressSet);
-  try {
-    assertApprovedAddressSet(approvedAddressSet);
-    if (url.kind === 'plain' && url.value.startsWith('http:')) {
-      validateLocalEndpoint(url.value, approvedAddressSet);
-    }
-    if (url.kind === 'secret' && url.scheme === 'http') {
-      const host = url.host.includes(':') ? `[${url.host}]` : url.host;
-      validateLocalEndpoint(`http://${host}:${url.port}/`, approvedAddressSet);
-    }
-  } catch {
+  if (!hasApprovedNetworkAuthority(url, approvedAddressSet))
     return fail('a webhook target has an approved network authority');
-  }
   return {
     targetId: text(target.targetId, 'a webhook target id'),
     version: positiveInteger(target.version, 'a webhook target version'),

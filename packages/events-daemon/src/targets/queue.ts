@@ -35,7 +35,8 @@ export function assertNotMcpServer(
     | 'integration'
     | 'relay'
     | 'sessions'
-    | 'approve' = 'read',
+    | 'approve'
+    | 'secret' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -103,6 +104,12 @@ export function assertNotMcpServer(
     approve: {
       message: "approving is for a person, in the app or at a terminal — the event service's MCP server cannot do it",
       hint: 'An agent gives the person the approval id and its preview; they approve it in the Agent Comms app, or with approve <approval-id> at their terminal.',
+    },
+    // A webhook subscriber's signing secret and secret URL (0.36.0, W29): made and seen at the person's terminal only.
+    secret: {
+      message:
+        "a subscriber's signing secret or secret URL is for a person at their terminal — the event service's MCP server cannot make or see one",
+      hint: 'An agent asks the person to run the subscriber secret or subscriber url command at their own terminal.',
     },
     // The busy queue (0.33.0 §3.5): the person's to read and drop from; a bound window sees its own lane's over MCP.
     sessions: {

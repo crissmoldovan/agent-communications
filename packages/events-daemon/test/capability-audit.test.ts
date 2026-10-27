@@ -201,9 +201,40 @@ const shapedRows = (source: readonly (readonly [string, string | null, string | 
     ...(operation === undefined ? {} : { operation }),
   }));
 
+/**
+ * Workflow events (0.36.0, W29, W25): a webhook subscriber's secrets are the person's at the terminal; a subscription is
+ * prepared by anyone, CLI and MCP alike, and approved from the app only by the person; the step event catalogue is
+ * content-free. They sit after the subscriber token rows.
+ */
+const EXPECTED_WORKFLOW_EVENT_ROWS = [
+  ['events-daemon.subscriber-secret.create', 'subscriber secret create', null, 'exception', 'subscriberSecretCreate'],
+  ['events-daemon.subscriber-secret.rotate', 'subscriber secret rotate', null, 'exception', 'subscriberSecretRotate'],
+  ['events-daemon.subscriber-url.set', 'subscriber url set', null, 'exception', 'subscriberUrlSet'],
+  ['events-daemon.subscriber.enable', 'subscriber enable', 'events_subscriber_enable', 'both', 'enableSubscriber'],
+  ['events-daemon.subscriber.approve', 'subscriber approve', null, 'exception', 'approveSubscriberFromApp'],
+  [
+    'events-daemon.workflow-events.list',
+    'workflow-events list',
+    'events_workflow_events_list',
+    'both',
+    'workflowEventsList',
+  ],
+  [
+    'events-daemon.workflow-events.show',
+    'workflow-events show',
+    'events_workflow_events_show',
+    'both',
+    'workflowEventsShow',
+  ],
+] as const;
+
+const subscriberTokenRows = EXPECTED_B3_ROWS.findIndex((row) => row[0] === 'events-daemon.subscriber-token.rotate') + 1;
+
 const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
-  ...shapedRows(EXPECTED_B3_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(0, subscriberTokenRows)),
+  ...shapedRows(EXPECTED_WORKFLOW_EVENT_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(subscriberTokenRows)),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
   ...shapedRows(EXPECTED_READABLE_ROWS),
   ...shapedRows(EXPECTED_QUEUE_ROWS),
@@ -304,6 +335,24 @@ const EXPECTED_B3_EXCEPTIONS = [
     'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
   ],
   [
+    'events-daemon.subscriber-secret.create',
+    'subscriber secret create',
+    'subscriberSecretCreate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-secret.rotate',
+    'subscriber secret rotate',
+    'subscriberSecretRotate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-url.set',
+    'subscriber url set',
+    'subscriberUrlSet',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
     'events-daemon.judge-key.set',
     'judge key set',
     'judgeKeySet',
@@ -351,6 +400,7 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.integration.show-agent-sessions',
     'events-daemon.integration.set',
     'events-daemon.session-queue.drop',
+    'events-daemon.subscriber.approve',
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);

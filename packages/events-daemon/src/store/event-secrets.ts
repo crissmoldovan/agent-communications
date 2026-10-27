@@ -15,6 +15,7 @@ import {
   withFileLock,
 } from '@agentcomms/core';
 import { EVENT_SECRET_PROVIDERS, type EventSecretProvider } from '../domain/providers.ts';
+import type { WebhookSubscriberDocument } from '../domain/webhook-subscriber.ts';
 import { canonicalSecretWebhookUrl, type WebhookTargetDocument } from '../domain/webhook-target.ts';
 import type { EventPaths } from '../runtime/paths.ts';
 import type { WriterQuiescer } from '../runtime/writer-quiescer.ts';
@@ -144,6 +145,13 @@ export interface StoreSecretWebhookUrlOptions
   readonly completeUrl: string;
 }
 
+/** A webhook subscriber's new version with a secret URL (0.36.0, W29): its document, and the complete hidden URL. */
+export interface CreateSecretUrlSubscriberVersionOptions {
+  readonly document: WebhookSubscriberDocument;
+  readonly completeUrl: string;
+  readonly cipher: EventSecretReferenceCipher;
+}
+
 export interface CreateSecretUrlTargetVersionOptions {
   readonly document: WebhookTargetDocument;
   readonly completeUrl: string;
@@ -187,7 +195,8 @@ function generationLocation(
 function assertPurpose(owner: EventSecretOwner, purpose: EventSecretPurpose): void {
   const valid =
     (owner.kind === 'target' && (purpose === 'secret-url' || purpose === 'webhook-signing')) ||
-    (owner.kind === 'subscriber' && purpose === 'sse-bearer') ||
+    (owner.kind === 'subscriber' &&
+      (purpose === 'sse-bearer' || purpose === 'webhook-signing' || purpose === 'secret-url')) ||
     (owner.kind === 'judge' && purpose === 'judge-key') ||
     (owner.kind === 'provider' && purpose === 'provider-key');
   if (!valid) {
@@ -809,6 +818,96 @@ export class EventSecretStore {
               `INSERT INTO event_secret_generations
                (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref, lifecycle, expires_at, created_at)
                VALUES ('target', ?, ?, 'secret-url', 1, ?, ?, ?, 'current', NULL, ?)`,
+            )
+            .run(owner.id, owner.version, owner.digest, sha256Hex(canonical.value), encryptedRef, Date.now());
+          this.#database.exec('COMMIT');
+        } catch (error) {
+          this.#database.exec('ROLLBACK');
+          throw error;
+        }
+      } catch (error) {
+        await this.#store.delete(ref).catch(() => false);
+        throw error;
+      }
+      return {
+        owner,
+        purpose: 'secret-url',
+        generation: 1,
+        lifecycle: 'current',
+        expiresAt: null,
+        secretDigest: sha256Hex(canonical.value),
+      };
+    });
+  }
+
+  /**
+   * The only factory that can turn a hidden URL into a new immutable webhook subscriber version (0.36.0, W29), as
+   * `createSecretUrlTargetVersion` does for a target: the material is written and read back before one compensated
+   * SQLite commit inserts the inert version and its `secret-url` generation together.
+   */
+  async createSecretUrlSubscriberVersion(
+    options: CreateSecretUrlSubscriberVersionOptions,
+  ): Promise<EventSecretGeneration> {
+    if (options.document.url.kind !== 'secret')
+      throw new EventSecretError('EVENT_SECRET_REFERENCE', 'a new secret URL subscriber needs a secret URL descriptor');
+    const canonical = canonicalSecretWebhookUrl(options.completeUrl);
+    const described = options.document.url;
+    if (
+      canonical.descriptor.scheme !== described.scheme ||
+      canonical.descriptor.host !== described.host ||
+      canonical.descriptor.port !== described.port ||
+      canonical.descriptor.sha256 !== described.sha256
+    )
+      throw new EventSecretError(
+        'EVENT_SECRET_REFERENCE',
+        'the hidden URL does not match the new immutable descriptor',
+      );
+    const document = canonicalJson(options.document);
+    const owner: EventSecretOwner = {
+      kind: 'subscriber',
+      id: options.document.subscriberId,
+      version: options.document.version,
+      digest: sha256Hex(document),
+    };
+    const versionExists = () =>
+      this.#database
+        .prepare('SELECT 1 AS present FROM subscriber_versions WHERE subscriber_id = ? AND version = ?')
+        .get(owner.id, owner.version) !== undefined;
+    return this.withLock(async () => {
+      this.assertSelectedBackend();
+      if (versionExists())
+        throw new EventSecretError('EVENT_SECRET_OWNER_STALE', 'the requested new subscriber version already exists');
+      const ref = `event-secret:${randomBytes(12).toString('hex')}`;
+      await this.#store.set(ref, canonical.value);
+      try {
+        if ((await readBackend(this.#store, ref)) !== canonical.value)
+          throw new EventSecretError(
+            'EVENT_SECRET_REFERENCE',
+            'the new subscriber URL did not read back from the selected backend',
+          );
+        const encryptedRef = await options.cipher.encrypt(
+          generationLocation(owner, 'secret-url', 1),
+          Buffer.from(ref, 'utf8'),
+        );
+        this.#database.exec('BEGIN IMMEDIATE');
+        try {
+          this.assertSelectedBackend();
+          if (versionExists())
+            throw new EventSecretError(
+              'EVENT_SECRET_OWNER_STALE',
+              'the requested new subscriber version already exists',
+            );
+          this.#database
+            .prepare(
+              `INSERT INTO subscriber_versions (id, subscriber_id, version, document, digest, state)
+               VALUES (?, ?, ?, ?, ?, 'inert')`,
+            )
+            .run(`${owner.id}@${owner.version}`, owner.id, owner.version, document, owner.digest);
+          this.#database
+            .prepare(
+              `INSERT INTO event_secret_generations
+               (owner_kind, owner_id, owner_version, purpose, generation, owner_digest, secret_digest, encrypted_ref, lifecycle, expires_at, created_at)
+               VALUES ('subscriber', ?, ?, 'secret-url', 1, ?, ?, ?, 'current', NULL, ?)`,
             )
             .run(owner.id, owner.version, owner.digest, sha256Hex(canonical.value), encryptedRef, Date.now());
           this.#database.exec('COMMIT');
