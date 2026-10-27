@@ -311,6 +311,20 @@ it again with `--approval <id>`. Under the `confirm` change policy (`inbox polic
 approve with the approve command the result gives, and a code, instead, and moving a mailbox off `confirm` is itself
 approved that way ([the design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)).
 
+### One Agent Comms per app: MCP connections (0.35)
+
+Instead of one entry per channel, an app can start Agent Comms once, for a *connection*: a name, the parts it reaches
+and the account each is kept to, and a key that names it in Activity and stops every copy of it when replaced.
+
+```bash
+npx -y @agentcomms/core connection add --app claude-code --name "Work — Claude Code"
+npx -y @agentcomms/core connection migrate      # your separate entries into one connection, when you choose
+```
+
+Adding one, or letting one reach more, is approved first; taking away applies at once. Its tools appear under
+`agentcomms` in the app, so permission rules that named the old servers need allowing again. Separate entries keep
+working until you migrate. [How connections work](packages/core/README.md#mcp-connections-one-agent-comms-per-place-an-app-uses-it).
+
 ### Slack
 
 ```bash
