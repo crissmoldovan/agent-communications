@@ -520,17 +520,17 @@ test('takerIdentity: the person at a terminal is nobody; a window, or a Claude C
     env: {},
     identity: async () => session({ grouped: true }),
   });
-  assert.equal(joined?.key, 'aaaaaaaaaaaaaaaa');
+  assert.equal((joined as TakeHolder | null)?.key, 'aaaaaaaaaaaaaaaa');
   const claude = await takerIdentity(core, 'cli', undefined, {
     env: { CLAUDE_CODE_SESSION_ID: sid.toUpperCase() },
     identity: async () => session({}),
   });
-  assert.equal(claude?.sessionId, sid);
+  assert.equal((claude as TakeHolder | null)?.sessionId, sid);
   const server = await takerIdentity(core, 'mcp', undefined, {
     env: {},
     identity: async () => session({ surface: 'mcp' }),
   });
-  assert.equal(server?.grouped, false, 'a server is never the person');
+  assert.equal((server as TakeHolder | null)?.grouped, false, 'a server is never the person');
   assert.equal(claudeCodeSessionId({ CLAUDE_CODE_SESSION_ID: 'not-a-uuid' }), null);
 });
 
@@ -549,7 +549,7 @@ test('a command that joined no window holds no parent — its shell ends at once
       surface: 'cli',
     }),
   });
-  assert.equal(cli?.parent, null, 'the shell a command ran in is not the window');
+  assert.equal((cli as TakeHolder | null)?.parent, null, 'the shell a command ran in is not the window');
   // The window's server took it; the same session renews it from its shell: the window's parent is kept.
   const { store } = storeAt('2026-10-26T10:00:00.000Z', { running: (pid) => pid !== shell.pid });
   const server = holder({ sessionId: sid });

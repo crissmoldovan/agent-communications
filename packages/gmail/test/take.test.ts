@@ -229,6 +229,32 @@ test('another session’s take is respected with taking off: its reply, forward,
   await trash(bob, 'work', { messageIds: ['m2'] });
 });
 
+test('an agent’s shell that joined no window and has no session id is no person: held to every take, and takes none', async () => {
+  // Security review of 0.35.0, M4: a Codex shell — its marker set, no CLAUDE_CODE_SESSION_ID, no window in activity —
+  // counted as the person, and replied to a message another session held.
+  const { harness, session, person } = await mailbox();
+  const alice = session(ALICE);
+  const shell = new GmailContext({
+    core: harness.core,
+    env: { ...harness.env, CODEX_SANDBOX: 'seatbelt' },
+    surface: 'cli',
+  });
+  await takeMessage(alice, 'work', 'm1', {});
+  await assert.rejects(replyDraft(shell, 'work', 'm1', { text: 'Mine now.' }), refused('TAKEN_ELSEWHERE', 'HELD'));
+  await assert.rejects(trash(shell, 'work', { messageIds: ['m1'] }), refused('TAKEN_ELSEWHERE', 'HELD'));
+  // With a take required it acts on no message, and is told why; it cannot take one either.
+  await requireTakes(harness);
+  await assert.rejects(replyDraft(shell, 'work', 'm2', { text: 'Hello.' }), refused('TAKE_REQUIRED', 'NO_SESSION'));
+  await assert.rejects(takeMessage(shell, 'work', 'm2', {}), (error: unknown) => {
+    assert.ok(error instanceof CommsError);
+    assert.equal(error.code, 'USAGE');
+    assert.equal(error.details?.reason, 'NO_SESSION');
+    return true;
+  });
+  // The same command at the person's own terminal — no marker — is the person's, as before.
+  assert.ok((await replyDraft(person(), 'work', 'm2', { text: 'Hello.' })).draftId);
+});
+
 test('a reply’s send needs the take at prepare, says so in its preview, and is asked again at the claim', async () => {
   const { harness, google, session } = await mailbox();
   await requireTakes(harness);

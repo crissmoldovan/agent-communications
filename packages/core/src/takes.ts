@@ -8,7 +8,9 @@
  *   wins however many processes race for it, and written whole with `writeFileAtomic`.
  * - **Who (T2):** a take is held by a session — an agent window — worked out by the server or the command itself from
  *   core's activity session and `CLAUDE_CODE_SESSION_ID` (`takerIdentity`), and never from an argument. A command at the
- *   person's own terminal, which joined no agent window and has no session id, is the person: never held to taking.
+ *   person's own terminal, which joined no agent window and has no session id, is the person: never held to taking. The
+ *   same command in a shell a known coding agent marks is not the person, and nothing it does can be matched to a take
+ *   (`TakeUnmatched`): it is held to every gate, and takes nothing (security review of 0.35.0, M4).
  * - **What ends a take (T3):** a hand-back, the person's release, or a lapse — `ended` when the holder's parent is gone,
  *   `expired` sixty minutes after the holder's last act on the message, unless an approval prepared under the take
  *   still waits. Worked out by whoever meets the record, and written down under the lock by the next writer, at the
@@ -42,9 +44,11 @@ import {
   type SessionIdentityOptions,
   sessionIdentity,
 } from './activity.ts';
+import { agentMarker } from './cli-runtime.ts';
 import { CommsError } from './errors.ts';
 import { writeFileAtomic } from './fs.ts';
 import { withFileLock } from './lock.ts';
+import { MCP_SERVER_MARKER, mcpServerOf } from './mcp-marker.ts';
 import { wrapUntrusted } from './untrusted.ts';
 
 // ── The vocabulary ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -198,10 +202,34 @@ export interface TakePerson {
 }
 
 /**
- * Who is acting: an agent session, or — `null` — the person at their own terminal, never held to taking (T2, T6). A
- * command an agent runs in its shell joins its window, and is that session.
+ * An agent's own shell that is no session (security review of 0.35.0, M4): a command that joined no agent window and
+ * has no Claude Code session id, run where a known coding agent's marker is set (`agentMarker`) or inside an MCP
+ * server's process. It is not the person, so every gate holds for it; and nothing it does can be matched to a take —
+ * each command is a process of its own — so it holds nothing, is offered nothing and takes nothing. Where a take is
+ * required it acts on no message, and is told why.
  */
-export type TakeCaller = TakeHolder | null;
+export interface TakeUnmatched {
+  readonly unmatched: true;
+  /** What says an agent runs it: the marker's name — `CODEX_SANDBOX`, `CLAUDECODE` — or `AGENTCOMMS_MCP_SERVER`. */
+  readonly marker: string;
+}
+
+/**
+ * Who is acting: an agent session; an agent's shell that is no session (`TakeUnmatched`); or — `null` — the person at
+ * their own terminal, never held to taking (T2, T6). A command an agent runs in its shell joins its window, and is that
+ * session.
+ */
+export type TakeCaller = TakeHolder | TakeUnmatched | null;
+
+/** Whether a caller is an agent's shell that is no session (M4). */
+export function isUnmatched(caller: TakeCaller | undefined): caller is TakeUnmatched {
+  return typeof caller === 'object' && caller !== null && 'unmatched' in caller && caller.unmatched === true;
+}
+
+/** The session a caller is, when a take can be matched to it: neither the person nor an agent's shell that is none. */
+function sessionOf(caller: TakeCaller): TakeHolder | null {
+  return caller === null || isUnmatched(caller) ? null : caller;
+}
 
 /** The window an offer reserves a message for: by its Claude Code session id, its activity key, or both (T4). */
 export interface TakeWindow {
@@ -498,7 +526,8 @@ export function offeredTo(window: TakeWindow, caller: TakeHolder): boolean {
 }
 
 function holdsIt(record: TakeRecord, caller: TakeCaller): boolean {
-  return caller !== null && record.holder !== null && !isPerson(record.holder) && sameSession(record.holder, caller);
+  const session = sessionOf(caller);
+  return session !== null && record.holder !== null && !isPerson(record.holder) && sameSession(record.holder, session);
 }
 
 /** A session as a take holds it, from the activity session it was worked out as and its Claude Code session id. */
@@ -537,7 +566,8 @@ export interface TakerIdentityOptions {
  * read alone until now. Never from an argument.
  *
  * `null` for the person: a command that joined no agent window and has no session id, at their own terminal. They are
- * never held to taking (T6). A server is never the person.
+ * never held to taking (T6). A server is never the person, and neither is that same command where a known coding
+ * agent's marker is set, or inside an MCP server's process: it is `TakeUnmatched` (M4), held to every gate.
  */
 export async function takerIdentity(
   core: { readonly activity: SessionIdentityOptions['log'] },
@@ -545,7 +575,8 @@ export async function takerIdentity(
   clientInfo?: ClientInfo | undefined,
   options: TakerIdentityOptions = {},
 ): Promise<TakeCaller> {
-  const sessionId = claudeCodeSessionId(options.env ?? process.env);
+  const env = options.env ?? process.env;
+  const sessionId = claudeCodeSessionId(env);
   const session =
     options.identity === undefined
       ? await sessionIdentity(surface, clientInfo, {
@@ -554,7 +585,11 @@ export async function takerIdentity(
           ...(options.connection === undefined ? {} : { connection: options.connection }),
         })
       : await options.identity();
-  if (surface === 'cli' && !session.grouped && sessionId === null) return null;
+  if (surface === 'cli' && !session.grouped && sessionId === null) {
+    // M4: no window, no session id — the person, unless an agent's marker, or an MCP server's, says otherwise.
+    const marker = agentMarker(env) ?? (mcpServerOf(env) === undefined ? null : MCP_SERVER_MARKER);
+    return marker === null ? null : { unmatched: true, marker };
+  }
   const caller = holderOfSession(session, sessionId);
   // A command that joined no window names the process above it — the shell it ran in, which ends as soon as it has —
   // not the window's: it holds no parent, and its take lapses by its lease alone.
@@ -644,7 +679,8 @@ export function takenViewOf(record: TakeRecord | null, caller: TakeCaller): Take
       return handedBack.length > 0 ? { state: 'open', ...back } : null;
     case 'offered': {
       const offer = record.offer as TakeOffer;
-      const mine = caller !== null && offeredTo(offer.to, caller);
+      const session = sessionOf(caller);
+      const mine = session !== null && offeredTo(offer.to, session);
       return { state: 'offered', offered: { to: mine ? 'you' : 'another session', until: offer.until }, ...back };
     }
     default: {
@@ -699,6 +735,38 @@ export function takeRequired(act: TakeAct, offeredUntil?: string | null | undefi
   );
 }
 
+/**
+ * M4: `TAKE_REQUIRED` for an agent's shell that is no session — it cannot take the message, so it is told why, and where
+ * it can act on it instead.
+ */
+export function unmatchedTakeRequired(act: TakeAct, caller: TakeUnmatched): CommsError {
+  return new CommsError(
+    'TAKE_REQUIRED',
+    `${act.account} asks a session to take a message before acting on it, and this command runs in an agent’s shell that joined no agent window and has no Claude Code session id, so no take can be matched to it`,
+    {
+      hint: `Act on ${act.shown} through ${act.account}’s tools over MCP, in the agent’s window, taking it there first; or leave it for the person.`,
+      details: { reason: 'NO_SESSION', act: act.act, message: act.shown, marker: caller.marker },
+    },
+  );
+}
+
+/** M4: a take step from an agent's shell that is no session: a take made there could be matched to nothing it does next. */
+export function unmatchedTakesNothing(caller: TakeUnmatched): CommsError {
+  return new CommsError(
+    'USAGE',
+    'this command runs in an agent’s shell that joined no agent window and has no Claude Code session id, so a take made here could be matched to nothing it does next',
+    {
+      hint: 'Take it with this channel’s take tool over MCP, in the agent’s window; or leave it for the person.',
+      details: { reason: 'NO_SESSION', marker: caller.marker },
+    },
+  );
+}
+
+/** `TAKE_REQUIRED` for this caller: a session that has not taken the message, or an agent's shell that can take none. */
+function requiredOf(act: TakeAct, caller: TakeHolder | TakeUnmatched): CommsError {
+  return isUnmatched(caller) ? unmatchedTakeRequired(act, caller) : takeRequired(act);
+}
+
 const ELSEWHERE_HINT = 'Leave it. The person can give it to this session in Agent Comms → Messages.';
 
 /** §6: `TAKEN_ELSEWHERE` — someone else has this message. It never names the other session (T7). */
@@ -726,7 +794,8 @@ function elsewhere(record: TakeRecord, caller: TakeCaller): CommsError | null {
       return null;
     case 'offered': {
       const offer = record.offer as TakeOffer;
-      return caller !== null && offeredTo(offer.to, caller) ? null : takenElsewhere('OFFERED', offer.until);
+      const session = sessionOf(caller);
+      return session !== null && offeredTo(offer.to, session) ? null : takenElsewhere('OFFERED', offer.until);
     }
     default:
       if (isPerson(record.holder)) return takenElsewhere('PERSON');
@@ -1181,7 +1250,8 @@ export class TakeStore {
    * lease and, given `approvalId`, pins the take while that approval waits. Otherwise it is refused with
    * `TAKEN_ELSEWHERE` when anyone else has the message — whether or not taking is required, a take is respected
    * wherever one exists — and with `TAKE_REQUIRED` when `required` and this session has not taken it: an offer to it
-   * included, since the offered session must still take it (T4).
+   * included, since the offered session must still take it (T4). An agent's shell that is no session (M4) holds
+   * nothing: it is refused wherever anyone has the message, and wherever a take is required.
    */
   async gate(
     ref: TakeMessageRef,
@@ -1190,33 +1260,36 @@ export class TakeStore {
     options: { readonly required: boolean; readonly approvalId?: string | undefined },
   ): Promise<TakeGatePass> {
     if (caller === null) return { held: false, line: null };
+    const session = sessionOf(caller);
     const path = this.#path(ref);
     // Nothing recorded: nobody has it, and nothing is written to say so.
     if ((await this.#readFile(path)) === null) {
-      if (options.required) throw takeRequired(act);
+      if (options.required) throw requiredOf(act, caller);
       return { held: false, line: null };
     }
     const pin =
       options.approvalId !== undefined && APPROVAL_ID.test(options.approvalId) ? options.approvalId : undefined;
     return this.#update<TakeGatePass>(ref, true, (current, at) => {
       if (current === null || current.state === 'open') {
-        if (options.required) throw takeRequired(act);
+        if (options.required) throw requiredOf(act, caller);
         return { next: current, result: { held: false, line: null } };
       }
       if (current.state === 'offered') {
         const offer = current.offer as TakeOffer;
-        if (!offeredTo(offer.to, caller)) throw takenElsewhere('OFFERED', offer.until);
+        if (session === null || !offeredTo(offer.to, session)) throw takenElsewhere('OFFERED', offer.until);
         if (options.required) throw takeRequired(act, offer.until);
         return { next: current, result: { held: false, line: null } };
       }
       const refusal = elsewhere(current, caller);
       if (refusal !== null) throw refusal;
+      // Only the holder comes this far, and an agent's shell that is no session holds nothing.
+      if (session === null) throw takenElsewhere('HELD');
       const line = `Taken by this session at ${clockTime(current.takenAt ?? at)}.`;
       if (current.state === 'done') return { next: current, result: { held: true, line } };
       const pins = pin === undefined || current.pins.includes(pin) ? [...current.pins] : [...current.pins, pin];
       const next: TakeRecord = {
         ...current,
-        holder: refreshedHolder(current.holder, caller),
+        holder: refreshedHolder(current.holder, session),
         lastActAt: at,
         pins,
         updatedAt: at,
@@ -1227,7 +1300,8 @@ export class TakeStore {
 
   /**
    * T6: housekeeping — organising, binning — needs no take, but is refused on a message someone else has. The person is
-   * never refused. Nothing is written but what a lapse found.
+   * never refused; an agent's shell that is no session (M4) is refused on any message anyone has. Nothing is written but
+   * what a lapse found.
    */
   async refuseHeldElsewhere(refs: readonly TakeMessageRef[], caller: TakeCaller): Promise<void> {
     if (caller === null) return;
@@ -1268,14 +1342,19 @@ export class TakeStore {
     return views;
   }
 
-  /** The messages in one account this session holds or is offered (`taken` with no ids), newest first. */
-  async mine(channel: TakeChannel, accountId: string, caller: TakeHolder): Promise<{ id: string; view: TakenView }[]> {
+  /**
+   * The messages in one account this session holds or is offered (`taken` with no ids), newest first. The person, and
+   * an agent's shell that is no session, hold none here.
+   */
+  async mine(channel: TakeChannel, accountId: string, caller: TakeCaller): Promise<{ id: string; view: TakenView }[]> {
+    const session = sessionOf(caller);
+    if (session === null) return [];
     const listed = await this.list({ accountId });
     return listed
       .flatMap((entry) => ('record' in entry && entry.record.message.channel === channel ? [entry.record] : []))
       .filter((record) => {
-        if (record.state === 'offered') return record.offer !== null && offeredTo(record.offer.to, caller);
-        return holdsIt(record, caller);
+        if (record.state === 'offered') return record.offer !== null && offeredTo(record.offer.to, session);
+        return holdsIt(record, session);
       })
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
       .map((record) => ({ id: record.message.id, view: takenViewOf(record, caller) }));

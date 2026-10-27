@@ -5,6 +5,7 @@ import {
   checkedTakeStep,
   gateTake,
   handoffSentence,
+  isUnmatched,
   rfc822IdOf,
   type TakeAct,
   type TakeCaller,
@@ -18,6 +19,7 @@ import {
   takeRequired,
   takeRequiredIn,
   takeStep,
+  unmatchedTakeRequired,
 } from '@agentcomms/core';
 import { keyPermissionOf, type NamedAccount } from '../accounts.ts';
 import { resendRequest } from '../api/client.ts';
@@ -163,7 +165,8 @@ export async function takenMessages(
  *   nobody took cannot be told apart from one naming mail this account sent. Failing closed means a follow-up to the
  *   account's own email, In-Reply-To set, waits for the person, or goes without it. Without a take required, it passes:
  *   nobody else has it.
- * - **The person** is never held to taking.
+ * - **The person** is never held to taking. An agent's shell that is no session is held to every gate, and — where a
+ *   take is required and none is recorded — told why it cannot take one (security review of 0.35.0, M4).
  *
  * Null when the send answers nothing, or passed without a take; the gate's pass otherwise, its line for the preview.
  */
@@ -184,7 +187,9 @@ export async function replyTake(
   if (found === null) {
     if (!takeRequiredIn(config, named.account.id)) return null;
     const shown = rfc822Id === undefined ? 'the message it answers' : `<${rfc822Id}>`;
-    const refused = takeRequired({ account: named.name, shown, act, takeWith: takeWith(context, named.name, null) });
+    const taking: TakeAct = { account: named.name, shown, act, takeWith: takeWith(context, named.name, null) };
+    if (isUnmatched(caller)) throw unmatchedTakeRequired(taking, caller);
+    const refused = takeRequired(taking);
     throw new CommsError(refused.code, refused.message, {
       hint: `${refused.hint} No received email with that Message-ID has been taken: take the one it answers first. If it answers none this account received — a follow-up to its own email — leave In-Reply-To out, or ask the person to send it.`,
       details: { ...refused.details, ...(rfc822Id === undefined ? {} : { inReplyTo: rfc822Id }) },
