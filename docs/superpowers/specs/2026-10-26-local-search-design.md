@@ -242,6 +242,12 @@ open question 4).**
 - The story beside a hit comes from activity lines (S4), so a hit kept longer would have no story.
 - Lowering the days prunes at once.
 
+> **Note, 2026-10-27 (the security review of 0.35.0, finding M6; L).** Raising Activity's days kept Search's message
+> words longer too, and the preview a person approved said nothing about Search. Now, while Search keeps words — on,
+> or off with an index still holding what was kept — the preview for more days gains a line: "keeps the words of the
+> messages Search on this machine holds for as long too: N days, not M". It is only on more days. A line on fewer
+> days would make that tightening wait for an approval.
+
 **S13. No agent searches. CLI and app only (L; open question 3).**
 - **Every `search` command except `status` and the tightenings is refused:**
   - inside an MCP server's process (`MCP_SERVER_PROCESS`, as `operations/activity.ts:296-306` refuses);

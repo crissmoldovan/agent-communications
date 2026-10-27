@@ -677,6 +677,32 @@ test('GUARD: a pruned or removed message leaves no word in the file: the words i
   );
 });
 
+test('GUARD: more of Activity’s days, while Search keeps words, says in its preview that Search keeps them for as long (review 2026-10-27, M6)', async () => {
+  const longer = (machine: SearchMachine, days: number) =>
+    gatedChange(machine.core, activitySettingsChange(machine.core, { retentionDays: days }, 'cli'), {
+      surface: 'cli',
+      channel: 'core',
+    });
+  const line = /keeps the words of the messages Search on this machine holds for as long too: 365 days, not 30/u;
+  // On: the person approving a year of activity is told it is a year of message words too.
+  const machine = searchMachine(on());
+  const asked = await longer(machine, 365);
+  assert.equal(asked.status, 'approval-required');
+  assert.match(asked.status === 'approval-required' ? asked.prepared.preview : '', line);
+  // Off, with words still kept until their days pass: the same.
+  await capture(machine, MAIL, [mail()]);
+  await index(machine);
+  machine.write({ enabled: 'off', accounts: [MAIL.id] });
+  const off = await longer(machine, 365);
+  assert.match(off.status === 'approval-required' ? off.prepared.preview : '', line);
+  // Never used here: nothing about Search.
+  const never = await longer(searchMachine(), 365);
+  assert.equal(never.status, 'approval-required');
+  assert.doesNotMatch(never.status === 'approval-required' ? never.prepared.preview : '', /Search/u);
+  // Fewer days still applies at once, Search or not: a tightening carries no such line.
+  assert.equal((await longer(machine, 7)).status, 'applied');
+});
+
 test('GUARD: an account taken out of Search loses its rows at once', async () => {
   const machine = searchMachine(on());
   await capture(machine, MAIL, [mail()]);

@@ -98,6 +98,14 @@ export function keptAccounts(
   return kept;
 }
 
+/**
+ * Whether Search keeps message words here: on, or off with an index still holding what was kept until its days pass.
+ * What Activity's days change for Search, which keeps a message while Activity keeps its day (S12).
+ */
+export async function searchHoldsWords(core: Pick<Core, 'paths'>, config: Config): Promise<boolean> {
+  return readSearchSettings(config).enabled === 'on' || (await exists(searchPaths(core.paths.stateDir).database));
+}
+
 /** The oldest `seen_at` Activity's days keep now. */
 export function keptFrom(config: Config, now: number): number {
   return now - readActivitySettings(config).retentionDays * DAY_MS;
