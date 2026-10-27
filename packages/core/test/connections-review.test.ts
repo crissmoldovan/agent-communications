@@ -521,3 +521,62 @@ test(
     assert.deepEqual(await names(m), ['Y', 'Acme only']);
   },
 );
+
+test(
+  'LOW 6: a name that imitates a preview’s label is refused, added or renamed; one that has brackets already reads, works and shows as it is',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { everywhere, acme } = await twoConnections(m);
+    const refusal = /a connection’s name has no brackets or “…”: a preview puts its app, place and id there/;
+    // The re-review's scenario: the agent renames its own connection to read as the person's in a later summary.
+    const imitation = `Everywhere) (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…`;
+    await assert.rejects(
+      run(m, connectionRenameChange(m.core, partEnv(m.env, acme.id), { id: acme.id, name: imitation }, 'mcp'), 'mcp'),
+      (error: Error & { code?: string }) => {
+        assert.equal(error.code, 'USAGE');
+        assert.match(error.message, refusal);
+        assert.match(error.message, /nothing was changed/);
+        return true;
+      },
+    );
+    // At a terminal, renaming or adding: the same rule, and the same words.
+    for (const name of ['Acme (old)', 'Acme…']) {
+      const renamed = await runMain(['connection', 'rename', acme.id, name, '--json'], m.env, 'darwin');
+      assert.equal(renamed.code, 64, renamed.stdout + renamed.stderr);
+      assert.match(String((renamed.json().error as { message: string }).message), refusal);
+    }
+    const adding = await runMain(
+      ['connection', 'add', '--app', 'claude-code', '--name', 'Third (x)', '--parts', 'core', '--json'],
+      m.env,
+      'darwin',
+    );
+    assert.equal(adding.code, 64, adding.stdout + adding.stderr);
+    assert.match(String((adding.json().error as { message: string }).message), refusal);
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme only']);
+    // A name an earlier release let in: no migration — it reads, its parts change, and the preview shows it as it is.
+    const file = join(m.env.AGENT_COMMS_CONFIG_DIR as string, 'config.json');
+    const held = JSON.parse(readFileSync(file, 'utf8'));
+    held.connections[everywhere.id].name = 'Everywhere (old)…';
+    writeFileSync(file, `${JSON.stringify(held, null, 2)}\n`);
+    assert.deepEqual(await names(m), ['Everywhere (old)…', 'Acme only']);
+    const widened = await run(
+      m,
+      connectionChangeChange(m.core, m.env, { id: everywhere.id, parts: parsePartsSpec('core,events,slack') }, 'cli'),
+      'cli',
+    );
+    assert.equal(widened.status, 'approval-required');
+    if (widened.status !== 'approval-required') return;
+    assert.equal(
+      widened.prepared.summary,
+      `Let agents in "Everywhere (old)…" (Claude Code, every folder, ${everywhere.id.slice(0, 7)}…) reach more`,
+    );
+    // Renamed to a name without them: at once.
+    const fixed = await run(
+      m,
+      connectionRenameChange(m.core, m.env, { id: everywhere.id, name: 'Everywhere' }, 'cli'),
+      'cli',
+    );
+    assert.equal(fixed.status, 'applied');
+  },
+);

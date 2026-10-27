@@ -1321,7 +1321,11 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         app: z
           .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
           .describe('the app it is for'),
-        name: z.string().describe('what the person calls it: shown in previews and in Activity, 1 to 64 characters'),
+        name: z
+          .string()
+          .describe(
+            'what the person calls it: shown in previews and in Activity, 1 to 64 characters, with no quotation marks, brackets or “…”',
+          ),
         parts: partArg.optional(),
         folder: z.string().optional().describe('Claude Code only: the one project folder it is for'),
         profile: z.string().optional().describe('another Claude profile’s folder, or another Codex home'),
@@ -1429,7 +1433,10 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       title: 'Rename an MCP connection',
       description:
         'Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
-      inputSchema: { id: connectionId, name: z.string().describe('its new name, 1 to 64 characters') },
+      inputSchema: {
+        id: connectionId,
+        name: z.string().describe('its new name, 1 to 64 characters, with no quotation marks, brackets or “…”'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (args) => change(() => connectionRenameChange(core, env, { id: args.id, name: args.name }, 'mcp'), undefined),

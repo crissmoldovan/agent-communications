@@ -20,11 +20,11 @@ import {
   connectionKeyHash,
   connectionKeyMatches,
   connectionLabel,
-  connectionNameProblem,
   connectionOfThisProcess,
   connectionReach,
   newConnectionId,
   newConnectionKey,
+  newConnectionNameProblem,
   PART_FACTS,
   partFacts,
   partText,
@@ -548,8 +548,8 @@ export function connectionAddChange(
     });
   }
   if (request.app === 'manual') refuseKeyToAgent(env, surface);
-  const nameProblem = connectionNameProblem(request.name);
-  if (nameProblem !== null) throw new CommsError('USAGE', nameProblem);
+  const nameProblem = newConnectionNameProblem(request.name);
+  if (nameProblem !== null) throw new CommsError('USAGE', `${nameProblem}: nothing was changed`);
   if (request.launcher !== undefined && !CONNECTION_LAUNCHERS.includes(request.launcher)) {
     throw new CommsError('USAGE', `"${String(request.launcher)}" is not a launcher`, {
       hint: `One of: ${CONNECTION_LAUNCHERS.join(', ')}.`,
@@ -1501,7 +1501,7 @@ export function connectionRenameChange(
     plan: (config) => {
       refuseAnotherConnection(env, surface, request.id, 'rename');
       const record = requireReadable(config, request.id);
-      const problem = connectionNameProblem(request.name);
+      const problem = newConnectionNameProblem(request.name);
       if (problem !== null) throw new CommsError('USAGE', `${problem}: nothing was changed`);
       if (request.name === record.name) throw new CommsError('USAGE', 'nothing was changed: that is its name already');
       const clash = readConnections(config).connections.some(

@@ -327,6 +327,10 @@ describe('what the person types', () => {
     expect(nameProblem('x'.repeat(65))).toContain('64');
     expect(nameProblem('Work\nCode')).toContain('line breaks');
     expect(nameProblem('Work “Code”')).toContain('quotation');
+    // A name that imitates the label a preview gives it (0.35.0 re-review, LOW 6).
+    for (const name of ['Everywhere) (Claude Code, every folder, cn_0MCZ…', 'Work (x', 'Work)', 'Work…']) {
+      expect(nameProblem(name)).toBe('A name has no brackets or “…”: a preview puts its app, place and id there.');
+    }
   });
 });
 

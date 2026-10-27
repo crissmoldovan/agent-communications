@@ -854,3 +854,11 @@ The lead's decisions on the re-review of the 0.35.0 security fixes.
   inside Codex, `unset CODEX_HOME` and run it again" (`Remove-Item Env:CODEX_HOME` on Windows). It is said where a
   refusal reaches the person (`writeError`, and the event service's CLI), so every command says it, as text and in
   JSON; the MCP surface and an MCP server's process name no variable, and say nothing more.
+- **A new name has no brackets or "…"** (LOW 6). A preview names a connection as `"Acme only" (Claude Code,
+  ~/work/acme, cn_ABCD…)`, and a name could imitate that: renamed `Everywhere) (Claude Code, every folder, cn_0MCZ…`,
+  an agent's own connection read as the person's in the summary of its next widening, and the summary's 200
+  characters could cut the real label off. `connection add` and `connection rename`, over MCP and at a terminal, and
+  the app's own check (`nameProblem`, and Rust's `connection_name` for every add and rename it runs) now refuse `(`,
+  `)` and `…` in a name, as they refused quotation marks: "a connection's name has no brackets or "…": a preview puts
+  its app, place and id there". A name that has them already — a test build's, or a hand edit's — still reads, still
+  works, and shows as it is in every preview: nothing is migrated (§6.1's rule for reading a record is unchanged).

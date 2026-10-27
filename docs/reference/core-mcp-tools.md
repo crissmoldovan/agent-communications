@@ -373,7 +373,7 @@ Add a connection for an app — its own key, and one entry in that app that star
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `app` | `claude-code` \\| `claude-desktop` \\| `codex` \\| `cursor` \\| `gemini` \\| `vscode` | **yes** | the app it is for |
-| `name` | string | **yes** | what the person calls it: shown in previews and in Activity, 1 to 64 characters |
+| `name` | string | **yes** | what the person calls it: shown in previews and in Activity, 1 to 64 characters, with no quotation marks, brackets or “…” |
 | `parts` | object[] | no | every part, each server once |
 | `folder` | string | no | Claude Code only: the one project folder it is for |
 | `profile` | string | no | another Claude profile’s folder, or another Codex home |
@@ -403,7 +403,7 @@ Rename the connection this server is a part of: another connection is the person
 | Argument | Type | Required | What it is |
 |---|---|---|---|
 | `id` | string | **yes** | the connection, by its id: cn_ and 26 letters and digits |
-| `name` | string | **yes** | its new name, 1 to 64 characters |
+| `name` | string | **yes** | its new name, 1 to 64 characters, with no quotation marks, brackets or “…” |
 
 ### `comms_connection_key_replace`
 
