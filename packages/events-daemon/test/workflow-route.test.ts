@@ -315,7 +315,12 @@ test("C's composition holds the route executor and the candidates' activation ch
         composition.executors.map((entry) => entry.kind),
         ['route', 'find-session', 'start-session', 'worktree'],
       );
-      assert.deepEqual(composition.activationChecks, [routeCandidatesCheck]);
+      assert.equal(composition.activationChecks?.length, 2);
+      assert.equal(
+        composition.activationChecks?.[0],
+        routeCandidatesCheck,
+        "the candidates, then a start step's folder",
+      );
       assert.equal(profileHash(''), createHash('sha256').update('').digest('hex'));
     } finally {
       store.close();

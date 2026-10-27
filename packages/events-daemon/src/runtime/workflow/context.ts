@@ -2,7 +2,7 @@ import type { AgenticConditionV1, FlowStep, JsonValue, StepId } from '@agentcomm
 import type { CanonicalFullRuleDocument } from '../../domain/activation-documents.ts';
 import type { EventDatabase } from '../../store/database.ts';
 import type { ProjectionCipher } from '../projections.ts';
-import type { JudgeAnswer, Output, RunView, StepContext } from './contracts.ts';
+import type { JudgeAnswer, Output, RunMessage, RunView, StepContext } from './contracts.ts';
 import { chargeInTransaction } from './limits.ts';
 import { type RunRecord, runRecordLocation } from './runs.ts';
 
@@ -98,6 +98,9 @@ export function stepContextFor(input: {
     },
     async trigger(): Promise<Output | null> {
       return (await record())?.trigger ?? null;
+    },
+    async message(): Promise<RunMessage | null> {
+      return (await record())?.message ?? null;
     },
     output(stepId: StepId): Output | null {
       return input.outputs.get(stepId) ?? null;

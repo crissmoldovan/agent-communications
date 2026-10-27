@@ -16,6 +16,7 @@ import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
 import { keepSenderDomain, senderDomainLocation } from './sender-domains.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
+import { runMessageOf } from './workflow/run-message.ts';
 import { prepareFlowRun } from './workflow/runs.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
@@ -378,6 +379,7 @@ export class EventEvaluator {
                     event: projection.event,
                     classification: evaluated.classification,
                   },
+                  message: runMessageOf(rule, projection.event),
                 });
           // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
           // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
@@ -495,6 +497,7 @@ export class EventEvaluator {
               event: projection.event,
               classification: evaluated.classification,
             },
+            message: runMessageOf(rule, projection.event),
           });
     // Taint is part of the disclosure boundary. A failed flush retains the projection and creates no outbox row.
     if (evaluated !== null)

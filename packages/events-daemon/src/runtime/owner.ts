@@ -1612,7 +1612,8 @@ async function startOwnerWithLock(
     },
     [
       // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
-      composeProjects({ store: database, sessions: agentSessions }),
+      // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
+      composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
       // Track D: the Raise step and the sink every transition's ticked events go through.
       composeWorkflowEvents({
         cipher,
