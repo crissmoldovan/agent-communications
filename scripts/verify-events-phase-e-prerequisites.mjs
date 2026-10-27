@@ -53,10 +53,22 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * from the app after its preview, its arguments (the approval and the digest the preview showed) and its result, whose
  * `approvedBy` names `desktop-app` or `desktop-app (test build)`. No existing branch changed.
  *
- * 0.36.0 (workflows, design §6.7) is another, also only additive: a delivery's target kind, in `deliveries list`,
- * `delivery show` and a message's deliveries, gains the value `linear-change` — a workflow's change of the Linear issue
- * its run made — and such a row may carry the optional `linear: { identifier, url }` of that issue. No existing branch
- * changed.
+ * 0.36.0 (workflows, design W19) is another, also only additive. The schema and vectors gain the person's owner wires
+ * `runs-list`, `run-show` and `run-cancel` — a run's state, path, steps, waits and events, and its closed `summary`: the
+ * project chosen, the issue made, a session found or started, how the turn ended; `projects-list`, `project-show`,
+ * `project-add`, `project-update`, `project-remove` and `project-scan`, a project naming the sessions working in it,
+ * busy or idle; `workflow-describe`; and `subscriber-approve`. They gain the wires an agent may call as well,
+ * `rule-check`, `subscriber-enable`, `workflow-events-list` and `workflow-events-show`, and the terminal's secret
+ * operations `subscriberSecretCreate`, `subscriberSecretRotate` and `subscriberUrlSet` for a webhook subscriber.
+ * `rule-test` gains its optional `outcomes`, and its result and `rule-test-retained`'s may be a flow's try; `rule-show`
+ * its optional `version`; a workflow document its optional `flow`; `subscriber-add|update` a subscriber's optional
+ * `events` part and the `webhook` kind; an activation the `subscription` kind; a delivery's target kind, in
+ * `deliveries list`, `delivery show` and a message's deliveries, the value `linear-change` — a workflow's change of the
+ * Linear issue its run made — whose row may carry that issue's `linear: { identifier, url }`; and a message's decision
+ * outcome a chained workflow's `awaiting-chain` and `not-chained`. The ordinary result vectors also show a webhook
+ * subscriber's public `address` in `subscribers list`, whose entries the schema already holds as any JSON. The target
+ * document is unchanged: a `linear-change` target is checked by the event service, not by B3 v1. The CLI's `workflow`
+ * words (W22) reach no vector. No existing branch changed.
  *
  * 0.36.0's one word (design W22) changes no branch, only two example values the seeded vectors carry, as the event
  * service now writes them: `judge-setup`'s `destination` ("Messages your workflows choose …") and `rule-analyse`'s
