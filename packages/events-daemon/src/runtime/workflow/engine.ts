@@ -41,6 +41,7 @@ import {
   claimableSteps,
   claimStepInTransaction,
   endRunInTransaction,
+  failRunInTransaction,
   isCurrentStepClaim,
   RUN_STEP_LEASE_MS,
   type RunRow,
@@ -148,6 +149,15 @@ function isAuthorityGone(error: unknown): error is CommsError {
   return error instanceof CommsError && (error.code === 'APPROVAL_VOID' || isRemovedAccountError(error));
 }
 
+/** The refusal of a run that is no longer going: `runs cancel`'s, and a step's whose run ended while it ran. */
+function runNotLive(): CommsError {
+  return new CommsError('NOT_FOUND', 'no run that is still going has this id', { details: { reason: 'RUN_NOT_LIVE' } });
+}
+
+function isRunNotLive(error: unknown): boolean {
+  return error instanceof CommsError && error.details?.reason === 'RUN_NOT_LIVE';
+}
+
 function reasonOf(error: CommsError): string {
   const reason = error.details?.reason;
   return typeof reason === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/u.test(reason) ? reason : error.code;
@@ -241,13 +251,37 @@ export class WorkflowEngine {
   }
 
   /**
-   * The person cancels a live run (§7.6), a tightening, at once: its waiting deliveries and undelivered events are
-   * cancelled, its waits dropped and its record purged. Its session's turn is interrupted only when asked.
+   * The person cancels a live run (§7.6), a tightening, at once: in its own transaction, never behind the pass in
+   * flight, its waiting deliveries and undelivered events are cancelled, its waits dropped and its record purged, as an
+   * ending of authority cancels it. A step of it the pass is running settles nothing further. Only what follows an end
+   * — each step's cleanup, and the turn's interrupt when asked — waits for that pass, so the cleanup finds what the
+   * pass's step left. It answers once the run has ended; with `interrupt`, once the interrupt was tried, so
+   * `interrupted` says whether it did.
    */
-  cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
-    const work = this.#queue.then(() => this.#cancel(runId, input));
-    this.#queue = work.catch(() => undefined);
-    return work;
+  async cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
+    const row = readRun(this.#store.database, runId);
+    if (row === undefined || !['held', 'running', 'waiting'].includes(row.state)) throw runNotLive();
+    const rule = this.#ruleOf(row);
+    const prepared = await this.#sink.prepare([this.#runTransition(row, rule, 'run-cancelled', 'CANCELLED_BY_PERSON')]);
+    const ending = this.#store.immediate(() => {
+      const ended = endRunInTransaction(this.#store.database, {
+        runId,
+        state: 'cancelled',
+        code: 'CANCELLED_BY_PERSON',
+        now: this.#now(),
+      });
+      if (ended !== null) this.#sink.commitInTransaction(this.#store.database, prepared);
+      return ended;
+    });
+    if (ending === null) throw runNotLive();
+    const finishing = this.#queue.then(async () => {
+      await this.#ended(row, rule, 'cancelled');
+      return input.interrupt && this.#interrupt !== undefined ? await this.#interrupt(runViewOf(row)) : false;
+    });
+    this.#queue = finishing.catch(() => undefined);
+    // The run has ended whatever its cleanup or the relay does: neither fails the cancel.
+    const interrupted = input.interrupt ? await finishing.catch(() => false) : false;
+    return { runId, state: 'cancelled', ...ending, interrupted };
   }
 
   /**
@@ -310,34 +344,6 @@ export class WorkflowEngine {
         return null;
       }
     };
-  }
-
-  async #cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
-    const row = readRun(this.#store.database, runId);
-    if (row === undefined || !['held', 'running', 'waiting'].includes(row.state))
-      throw new CommsError('NOT_FOUND', 'no run that is still going has this id', {
-        details: { reason: 'RUN_NOT_LIVE' },
-      });
-    const rule = this.#ruleOf(row);
-    const prepared = await this.#sink.prepare([this.#runTransition(row, rule, 'run-cancelled', 'CANCELLED_BY_PERSON')]);
-    const ending = this.#store.immediate(() => {
-      const ended = endRunInTransaction(this.#store.database, {
-        runId,
-        state: 'cancelled',
-        code: 'CANCELLED_BY_PERSON',
-        now: this.#now(),
-      });
-      if (ended !== null) this.#sink.commitInTransaction(this.#store.database, prepared);
-      return ended;
-    });
-    if (ending === null)
-      throw new CommsError('NOT_FOUND', 'no run that is still going has this id', {
-        details: { reason: 'RUN_NOT_LIVE' },
-      });
-    await this.#ended(row, rule, 'cancelled');
-    const interrupted =
-      input.interrupt && this.#interrupt !== undefined ? await this.#interrupt(runViewOf(row)) : false;
-    return { runId, state: 'cancelled', ...ending, interrupted };
   }
 
   async #tick(): Promise<number> {
@@ -542,10 +548,16 @@ export class WorkflowEngine {
       return true;
     }
     this.#failpoint?.('after-claim');
-    const fence = () => this.#fence(row);
+    // Before the step runs, and before each effect it makes: its authority, and its claim still its own, in a run still
+    // going. A run the person cancelled meanwhile — in its own transaction, not behind this pass — runs nothing more.
+    const fence = async () => {
+      await this.#fence(row);
+      if (!isCurrentStepClaim(database, claim)) throw runNotLive();
+    };
     try {
       await fence();
     } catch (error) {
+      if (isRunNotLive(error)) return false;
       if (isAuthorityGone(error)) await this.#cancelForAuthority(row, rule, reasonOf(error));
       else this.#release(claim);
       return isAuthorityGone(error);
@@ -600,6 +612,8 @@ export class WorkflowEngine {
         result = claim.wake === null ? await executor.run(context) : await executor.resume(context, claim.wake);
       }
     } catch (error) {
+      // The run ended while the step ran: what it had begun goes no further, and nothing settles.
+      if (isRunNotLive(error)) return true;
       if (isAuthorityGone(error)) {
         await this.#cancelForAuthority(row, rule, reasonOf(error));
         return true;
@@ -661,9 +675,10 @@ export class WorkflowEngine {
             WHERE run_id = ? AND step_id = ? AND attempt_id = ? AND lease_token = ?`,
         )
         .run(back, claim.runId, claim.stepId, claim.attemptId, claim.leaseToken);
-      database
-        .prepare('UPDATE workflow_runs SET executed_steps = MAX(executed_steps - 1, 0) WHERE id = ?')
-        .run(claim.runId);
+      if (claim.counted)
+        database
+          .prepare('UPDATE workflow_runs SET executed_steps = MAX(executed_steps - 1, 0) WHERE id = ?')
+          .run(claim.runId);
     });
   }
 
@@ -926,26 +941,15 @@ export class WorkflowEngine {
     };
   }
 
-  /** Ends a run failed or done outside a settle — its 64 executed steps reached (§7.5) — with its event. */
+  /**
+   * Ends a run failed outside a settle — its 64 executed steps reached (§7.5) — with its event, as any other ending:
+   * its deliveries still waiting are cancelled and purged, so none is handed over after it failed.
+   */
   async #endRun(row: RunRow, rule: CanonicalFullRuleDocument, state: 'failed', code: string): Promise<void> {
     const prepared = await this.#sink.prepare([this.#runTransition(row, rule, 'run-failed', code)]);
     const ended = this.#store.immediate(() => {
       const database = this.#store.database;
-      const changed = database
-        .prepare(
-          `UPDATE workflow_runs SET state = ?, end_code = ?, encrypted_record = NULL, updated_at = ?
-            WHERE id = ? AND state IN ('running', 'waiting')`,
-        )
-        .run(state, code, this.#now(), row.id);
-      if (changed.changes !== 1) return false;
-      database
-        .prepare(
-          `UPDATE workflow_steps SET state = 'cancelled', outcome = NULL, attempt_id = NULL, lease_token = NULL,
-                  lease_until = NULL, next_at = NULL, settled_at = ?
-            WHERE run_id = ? AND state IN ('ready', 'running', 'waiting')`,
-        )
-        .run(this.#now(), row.id);
-      database.prepare('DELETE FROM workflow_waits WHERE run_id = ?').run(row.id);
+      if (!failRunInTransaction(database, { runId: row.id, code, now: this.#now() })) return false;
       this.#sink.commitInTransaction(database, prepared);
       return true;
     });
