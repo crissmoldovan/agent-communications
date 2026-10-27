@@ -1,6 +1,7 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Call, CliResult, Installation } from '../ipc.ts';
+import { MESSAGES_COPY } from '../screens/Messages.tsx';
 import { PEOPLE_COPY, SEARCH_COPY, SEARCH_SETTINGS_COPY } from '../screens/search/copy.ts';
 import { createFakeBridge, EXAMPLE_INSTALLATION, type FakeBridge, failed, ok } from './fake-bridge.ts';
 import activityItems from './fixtures/activity-items.json';
@@ -227,7 +228,11 @@ describe('Ask about past messages', () => {
       activityItems: () => ok({ items: {} }),
     });
     renderApp(bridge, { screen: 'messages' });
-    const tabs = await screen.findByRole('navigation', { name: 'Messages' });
+    // Messages draws its tabs over a spinner first, and again once it knows the event service: the first ones are gone
+    // by then, and a click on them is lost. Under load that is what kept this test from ever seeing Search; take the
+    // tabs the settled screen draws.
+    await screen.findByText(MESSAGES_COPY.nothing, {}, { timeout: 15_000 });
+    const tabs = screen.getByRole('navigation', { name: 'Messages' });
     expect(within(tabs).getByRole('button', { name: 'All messages' }).getAttribute('aria-current')).toBe('page');
     fireEvent.click(within(tabs).getByRole('button', { name: SEARCH_COPY.heading }));
     // The whole app renders Search for the first time here: it is given room on a loaded machine.
