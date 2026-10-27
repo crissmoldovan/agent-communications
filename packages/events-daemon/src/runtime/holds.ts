@@ -11,6 +11,7 @@ import { evaluateRuleProjection } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher, type ProjectionReference } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
 import type { FencedWhatsAppEventVisibility, WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import { runMessageOf } from './workflow/run-message.ts';
 import { prepareFlowRun } from './workflow/runs.ts';
 
 export type HoldBoundBy = 'hold-window' | 'ingest-retention';
@@ -513,7 +514,14 @@ export class HoldResolver {
     const run =
       evaluated === null || 'rejected' in evaluated
         ? undefined
-        : await prepareFlowRun({ cipher: this.#cipher, rule: after.rule, data: evaluated.mapped.data, createdAt });
+        : await prepareFlowRun({
+            cipher: this.#cipher,
+            rule: after.rule,
+            data: evaluated.mapped.data,
+            createdAt,
+            // The message and its thread, for a flow that finds the session that took the conversation (W36).
+            message: runMessageOf(after.rule, projection.event),
+          });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({
         eventId: after.reference.eventId,
