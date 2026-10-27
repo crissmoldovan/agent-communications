@@ -13,6 +13,7 @@ import { type Loadable, useAppData } from '../../data.tsx';
 import { supports } from '../../gates.ts';
 import { useReloadOnReturn } from '../../hooks/use-reload-on-return.ts';
 import { errorMessage, type Product } from '../../ipc.ts';
+import { type AccountsInfo, readAccounts } from '../../messages/accounts.ts';
 import type { JoinedMessage } from '../../messages/join.ts';
 import type { Millis } from '../../messages/read.ts';
 import { cardSteps, type StoryContext } from '../../messages/story.ts';
@@ -30,7 +31,6 @@ import {
   type ToJoin,
 } from '../../search.ts';
 import { Said, StatusChip } from '../MessageParts.tsx';
-import { type AccountsInfo, readAccounts } from '../../messages/accounts.ts';
 import type { MessagesReads } from '../Messages.tsx';
 import { MESSAGES_TABS_COPY, PEOPLE_COPY, SEARCH_COPY } from './copy.ts';
 
