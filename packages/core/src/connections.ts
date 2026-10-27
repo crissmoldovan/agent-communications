@@ -140,6 +140,22 @@ export function connectionNameProblem(name: unknown): string | null {
   return null;
 }
 
+/**
+ * Why a connection cannot be given `name` now, as it is added or renamed, or null when it can: the rule for a name
+ * (`connectionNameProblem`), and no brackets or ellipsis (the re-review of 0.35.0, LOW 6). A preview names a connection
+ * as `"Acme only" (Claude Code, ~/work/acme, cn_ABCD…)`, and a name such as `Everywhere) (Claude Code, every folder,
+ * cn_0MCZ…` read as another connection's label, while the summary's 200 characters could cut the real one off. A name
+ * that has them already still reads and still works, shown as it is: nothing is migrated.
+ */
+export function newConnectionNameProblem(name: unknown): string | null {
+  const problem = connectionNameProblem(name);
+  if (problem !== null) return problem;
+  if (/[()…]/u.test(name as string)) {
+    return 'a connection’s name has no brackets or “…”: a preview puts its app, place and id there';
+  }
+  return null;
+}
+
 // ── Parts ─────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /**

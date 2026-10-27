@@ -1,6 +1,6 @@
 import { readdir, readFile, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { readActivitySettings } from '../activity-settings.ts';
+import { searchRetentionDays } from '../activity-settings.ts';
 import type { Config } from '../config.ts';
 import type { Core } from '../core.ts';
 import { appendPrivateLine, writeFileAtomic } from '../fs.ts';
@@ -326,7 +326,7 @@ export async function captureForSearch(
     // The day's first capture prunes the inbox by its days, on or off: captures waiting without the app go all the same.
     if (prunedDay !== today) {
       prunedDay = today;
-      await pruneInboxDays(paths, readActivitySettings(config).retentionDays, now).catch(() => 0);
+      await pruneInboxDays(paths, searchRetentionDays(config), now).catch(() => 0);
     }
     if (!searchKeeps(settings, account.id)) return 0;
     const own = new Set([...ownHandles(config, account.id), ...(options.own ?? []).map(ownHandle)]);

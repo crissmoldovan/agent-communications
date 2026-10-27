@@ -23,6 +23,7 @@ import {
   MAX_ACTIVITY_RETENTION_DAYS,
   MIN_ACTIVITY_RETENTION_DAYS,
   readActivitySettings,
+  searchRetentionDays,
   storedActivity,
 } from '../activity-settings.ts';
 import type { GatedChange } from '../change-flow.ts';
@@ -590,8 +591,10 @@ export function activitySettingsChange(
       const same = storedActivity(config)?.[field] === value;
       // Search keeps a message's words while Activity keeps its day (design 2026-10-26-local-search, S12): more days
       // are more days of message words too, and the person approving them is told so (the review of 2026-10-27, M6).
-      // Only on a loosening — an effect on fewer days would make a tightening wait for approval.
-      const keptNow = readActivitySettings(config).retentionDays;
+      // Only on a loosening — an effect on fewer days would make a tightening wait for approval. Judged by the days
+      // Search keeps now, which are 30 where Activity's cannot be read (LOW 5): from there, 60 days are fewer for
+      // Activity, which keeps the most, and more for Search.
+      const keptNow = searchRetentionDays(config);
       const longer =
         field === 'retentionDays' && !same && typeof value === 'number' && value > keptNow
           ? await searchHoldsWords(core, config)

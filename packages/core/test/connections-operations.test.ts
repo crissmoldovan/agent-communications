@@ -32,7 +32,7 @@ import {
   parsePartsSpec,
 } from '../src/operations/connections.ts';
 import { VERSION } from '../src/version.ts';
-import { asPartOf } from './helpers/gateway/as-part.ts';
+import { asPartOf, partEnv } from './helpers/gateway/as-part.ts';
 import { fakeClaude } from './helpers/gateway/fake-claude.ts';
 import { runMain } from './helpers/main-in-process.ts';
 import { tempDir } from './helpers/temp.ts';
@@ -469,7 +469,13 @@ test(
     );
     const id = added.connection.id;
     // Events out — at once — and Gmail in, which waits: one call, from a chat, where each call builds the change afresh.
-    const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null, platform: 'darwin' });
+    // The agent asks of its own connection, as its gateway reports it: another's parts are the person's (LOW 2).
+    const { server } = await createCoreMcpServer({
+      core: m.core,
+      env: partEnv(m.env, id),
+      keyring: null,
+      platform: 'darwin',
+    });
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: 'test', version: '0' });
     await Promise.all([client.connect(clientSide), server.connect(serverSide)]);

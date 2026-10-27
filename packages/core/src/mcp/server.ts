@@ -1321,7 +1321,11 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
         app: z
           .enum(CONNECTION_APPS.filter((app) => app !== 'manual') as [string, ...string[]])
           .describe('the app it is for'),
-        name: z.string().describe('what the person calls it: shown in previews and in Activity, 1 to 64 characters'),
+        name: z
+          .string()
+          .describe(
+            'what the person calls it: shown in previews and in Activity, 1 to 64 characters, with no quotation marks, brackets or “…”',
+          ),
         parts: partArg.optional(),
         folder: z.string().optional().describe('Claude Code only: the one project folder it is for'),
         profile: z.string().optional().describe('another Claude profile’s folder, or another Codex home'),
@@ -1355,7 +1359,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
     {
       title: 'Change an MCP connection’s parts',
       description:
-        'Every part a connection has from now on, with `id` and `parts`. Or, with `add`, one part put into an app’s connection — what a channel’s own `mcp install` does: `app` names the app, and its connection for every folder takes the part, kept to the account and read-only `add` names; an app with none gets a connection made for it, with Agent Comms itself and that part; one with several needs `id` to say which. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits, and the preview marks it done. Giving more — a part added, an account let go or moved, read-only off, a connection made — returns `approvalRequired` with a preview naming the connection and an approvalId: call again with it once the person agrees. A running app sees a change of parts through tools/list_changed where it supports it; a connection made needs the app restarted — tell the person.',
+        'Every part a connection has from now on, with `id` and `parts` — of the connection this server is a part of: another’s parts are the person’s, at their terminal or in the app, and are refused here. Or, with `add`, one part put into an app’s connection — what a channel’s own `mcp install` does: `app` names the app, and its connection for every folder takes the part, kept to the account and read-only `add` names; an app with none gets a connection made for it, with Agent Comms itself and that part; one with several needs `id` to say which. Taking away applies at once — a part taken out, a part kept to one account, read-only on — even beside what waits, and the preview marks it done; `add` takes away only in this server’s own connection. Giving more — a part added, an account let go or moved, read-only off, a connection made — returns `approvalRequired` with a preview naming the connection and an approvalId: call again with it once the person agrees. A running app sees a change of parts through tools/list_changed where it supports it; a connection made needs the app restarted — tell the person.',
       inputSchema: {
         id: connectionId.optional().describe('the connection, by its id: cn_ and 26 letters and digits'),
         parts: partArg.optional(),
@@ -1429,7 +1433,10 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
       title: 'Rename an MCP connection',
       description:
         'Rename the connection this server is a part of: another connection is the person’s, at their terminal or in the app, and is refused here. It gives agents nothing more, so it applies at once and takes no approvalId; Activity uses the new name from then on.',
-      inputSchema: { id: connectionId, name: z.string().describe('its new name, 1 to 64 characters') },
+      inputSchema: {
+        id: connectionId,
+        name: z.string().describe('its new name, 1 to 64 characters, with no quotation marks, brackets or “…”'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
     async (args) => change(() => connectionRenameChange(core, env, { id: args.id, name: args.name }, 'mcp'), undefined),

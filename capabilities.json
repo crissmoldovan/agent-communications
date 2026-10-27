@@ -931,7 +931,7 @@
       "operation": "connectionChangeChange",
       "argv": ["cn_0123456789ABCDEFGHJKMNPQRS", "--parts", "core"],
       "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS", "parts": [{ "server": "core" }] },
-      "reason": "Every part a connection has from now on: what narrows applies at once, beside what waits; a part added, an account let go or moved, and read-only off are approved first (design §6.2)."
+      "reason": "Every part a connection has from now on: what narrows applies at once, beside what waits; a part added, an account let go or moved, and read-only off are approved first (design §6.2). Over MCP and from an agent's shell, only the connection the caller is a part of, narrowing included: another's parts are the person's (0.35.0 re-review, LOW 2)."
     },
     {
       "id": "core.connection.rename",

@@ -5,6 +5,7 @@ import { PassThrough } from 'node:stream';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import {
+  agentMarkerHint,
   asV2,
   commandText,
   EXIT_CODES,
@@ -1070,7 +1071,8 @@ test('approving a send refuses an agent, and refuses a pipe', async () => {
     assert.equal(agent.code, EXIT_CODES.APPROVAL);
     assert.equal(
       agent.json<Envelope<never>>().error?.hint,
-      `Ask the user to run ${gmailInline(harness.core.paths, ['approve', 'ap_whatever'], platform)} in their own terminal; learn when they have with ${gmailInline(harness.core.paths, ['send', 'wait', 'ap_whatever'], platform)}.`,
+      // And, for a person who set the marker themselves, which variable it is and how to clear it (0.35.0 re-review).
+      `Ask the user to run ${gmailInline(harness.core.paths, ['approve', 'ap_whatever'], platform)} in their own terminal; learn when they have with ${gmailInline(harness.core.paths, ['send', 'wait', 'ap_whatever'], platform)}. ${agentMarkerHint('CLAUDECODE', platform)}`,
       platform,
     );
   }
