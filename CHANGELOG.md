@@ -80,6 +80,11 @@ The screens were drawn first and approved (`docs/prototypes/2026-10-26-messages-
   - An agent can rename, re-key or remove only its own connection; every preview names a connection by app, place and
     id; the gateway's instructions no longer carry a connection's name.
   - The gateway stops serving when `config.json` becomes unreadable; a re-key never writes back an entry you removed.
+  - An agent can change the parts of only its own connection, narrowing included; a remove checked while the app's
+    config can't be read waits for you; a new connection name can't hold brackets or "…".
+  - A refusal caused by an agent's marker in your own shell names the variable and how to clear it (`CODEX_HOME` is
+    one people export).
+  - When Activity's settings can't be read, Search keeps words 30 days, not a year.
   - The take and search fixes above (`NO_SESSION`, lapsing offers, hashed words, the retention line, Delete
     everything).
 - **Gmail's setup** joins the connection like `mcp install`, and leaves a Gmail part kept to another mailbox alone,
