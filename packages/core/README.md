@@ -139,9 +139,10 @@ what each person asked (design 2026-10-26-local-search). Off by default; `search
   `<state>/search/inbox/<UTC day>-<pid>.jsonl`. It never throws and never changes a result.
 - **The store:** `<state>/search/search.sqlite` through `node:sqlite`, opened only by the person's search commands —
   the indexer is its one writer, run by `search index`, before every search for two seconds, and by the app. Full-text
-  search is probed (FTS5, contentless, `unicode61 remove_diacritics 2`), so a Node without it — before 22.18 — says
-  so and keeps nothing. Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index`
-  in the configured secret store; the words index, the vectors and the handles are not.
+  search is probed (FTS5, contentless, deleting), so a Node without it — before 22.18 — says so and keeps nothing.
+  Text, subject, sender's name and a person's label are AES-256-GCM sealed under `search-index` in the configured
+  secret store. The words index holds no word: each word, folded, is an HMAC under a subkey of that key, with no
+  position kept. The vectors and the handles are not encrypted.
 - **Meaning:** a loopback Ollama only, a reviewed model only (`qwen3-embedding:0.6b`, `embeddinggemma`, `bge-m3`),
   checked against `/api/tags` before any word is sent; words only without one.
 - **Who reads it:** the person alone. Every command but `status` and the tightenings is refused inside an MCP

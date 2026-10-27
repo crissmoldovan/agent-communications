@@ -444,9 +444,9 @@ on, and only you search it: at your terminal, or in the app.
   and never WhatsApp or Resend, or a message from your own address or Slack user. It is kept for as long as Activity
   keeps its days, 30 by default.
 - **Where:** `<state>/search/` on this machine, owner-only, left out of Time Machine on macOS. Each message's text,
-  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store). The words
-  index and the vectors are not encrypted, and vectors can be turned back into text close to the original: treat
-  this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
+  subject and sender's name are encrypted with a key kept in the Keychain (the configured secret store), and the words
+  index holds keyed hashes of the words under that key, not the words. The vectors are not encrypted, and vectors can
+  be turned back into text close to the original: treat this folder like your mail. With a file secret store the key sits beside the data. Doctor's `search` line says
   whether FileVault is on.
 - **Meaning, on this machine only:** `agentcomms search model set http://127.0.0.1:11434` uses your own Ollama, at a
   literal `127.0.0.1` or `[::1]` address, with `qwen3-embedding:0.6b` (the default), `embeddinggemma` or `bge-m3`.

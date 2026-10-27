@@ -401,7 +401,7 @@ function ModeLine({ result }: { result: SearchResultView }) {
   );
 }
 
-/** What Ask looks through (§10: coverage looks complete when it is not), and that its index is not encrypted (S11). */
+/** What Ask looks through (§10: coverage looks complete when it is not), and what of it is not encrypted (S11). */
 function Coverage({ status, onSettings }: { status: SearchStatusView; onSettings?: (() => void) | undefined }) {
   return (
     <div

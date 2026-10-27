@@ -11,7 +11,8 @@ import {
 } from '../src/operations/search.ts';
 import { captureForSearch, resetCaptureForTests, type SearchCapture } from '../src/search/capture.ts';
 import { runSearchIndex } from '../src/search/indexer.ts';
-import { excerpt, fuse, queryTerms, wordsExpression } from '../src/search/rank.ts';
+import { excerpt, fuse, queryTerms } from '../src/search/rank.ts';
+import { queryWords, WORD_TOKEN, WordHasher, wordTokens } from '../src/search/words.ts';
 import { UNTRUSTED_TAG } from '../src/untrusted.ts';
 import { MAIL, QWEN_LOCAL, type SearchMachine, SLACK, searchMachine, startFakeOllama } from './helpers/search.ts';
 
@@ -486,8 +487,26 @@ test('ranking pieces: terms, the words expression, the excerpt, and the fusion',
     'about',
     'invoices',
   ]);
-  assert.equal(wordsExpression(['a"b', 'factura']), '"ab" OR "factura"*');
-  assert.equal(wordsExpression([]), undefined);
+  // The words index's words: folded as a message's are, hashed under the key, the last whole or as a prefix.
+  assert.deepEqual(wordTokens('Factură, ÎNȚELES — e-mail'), ['factura', 'inteles', 'e', 'mail']);
+  assert.deepEqual(queryWords('Invoice INVOICE invoices'), ['invoice', 'invoices']);
+  const hasher = new WordHasher({ keyId: 'sk-0000000000000000', key: Buffer.alloc(32, 7) });
+  const other = new WordHasher({ keyId: 'sk-1111111111111111', key: Buffer.alloc(32, 8) });
+  assert.match(hasher.word('factura'), WORD_TOKEN);
+  assert.notEqual(hasher.word('factura'), other.word('factura'), 'another key, another token');
+  assert.notEqual(hasher.word('fac'), hasher.prefix('fac'), 'a prefix is a token of its own kind');
+  assert.deepEqual(hasher.terms('a"b Factură'), [
+    `"${hasher.word('a')}"`,
+    `"${hasher.word('b')}"`,
+    `("${hasher.word('factura')}" OR "${hasher.prefix('factura')}")`,
+  ]);
+  assert.deepEqual(hasher.terms('—'), []);
+  assert.deepEqual(hasher.terms('of'), [`"${hasher.word('of')}"`], 'a last word of two letters is whole only');
+  const document = hasher.document('Factură', 'factura nouă').split(' ');
+  assert.deepEqual(document, [...new Set(document)].sort(), 'each token once, sorted: no count, no order');
+  for (const start of ['fac', 'fact', 'factu', 'factur']) assert.ok(document.includes(hasher.prefix(start)), start);
+  assert.equal(document.includes(hasher.prefix('fa')), false);
+  assert.equal(document.includes(hasher.prefix('factura')), false, 'the whole word is its word token');
   const text = `${'lorem '.repeat(80)}Am primit factura ieri. ${'ipsum '.repeat(80)}`;
   const cut = excerpt(text, ['FACTURĂ']);
   assert.ok(cut.includes('factura'));

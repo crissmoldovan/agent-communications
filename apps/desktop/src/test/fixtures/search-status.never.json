@@ -37,7 +37,7 @@
   "key": "none",
   "lastCaptureFailure": null,
   "notes": [
-    "Treat this folder like your mail: the words index and the vectors are not encrypted, and vectors can be turned back into text close to what was said."
+    "Treat this folder like your mail: the words index holds keyed hashes of the words, not the words, but the vectors are not encrypted, and vectors can be turned back into text close to what was said."
   ],
   "problems": []
 }

@@ -13,8 +13,9 @@ import type { SecretStore } from '../secrets.ts';
  * made when Search is first switched on (or first needed while on), under a lock so two processes cannot each make
  * one, and deleted by Delete everything: whatever copy of the folder is left anywhere then opens for nobody.
  *
- * What is not encrypted, and cannot be: the words index (full-text search must read its tokens), the vectors (a scan
- * must read them) and the handles (lookups need them). The screens and doctor say so.
+ * The words index holds no word: each is an HMAC under the `words` subkey (`words.ts`), so full-text search reads
+ * tokens nobody can turn back into words without the key. What is not encrypted, and cannot be: the vectors (a scan must
+ * read them) and the handles (lookups need them). The screens and doctor say so.
  */
 
 export const SEARCH_KEY_REF = 'search-index';
@@ -30,8 +31,11 @@ export interface SearchKey {
   readonly key: Buffer;
 }
 
-/** What each subkey is for: the inbox's lines, a message's record, a person's label, a handle's latest name. */
-export type SearchKeyPurpose = 'inbox' | 'messages' | 'people' | 'handles';
+/**
+ * What each subkey is for: the inbox's lines, a message's record, a person's label, a handle's latest name — and the
+ * keyed hashes the words index holds in place of words (`words`, which hashes and never seals).
+ */
+export type SearchKeyPurpose = 'inbox' | 'messages' | 'people' | 'handles' | 'words';
 
 /** A purpose's subkey, from the master. */
 export function searchSubkey(master: SearchKey, purpose: SearchKeyPurpose): Buffer {

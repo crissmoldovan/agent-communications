@@ -8,7 +8,10 @@
 const MAX_TERMS = 32;
 const MAX_TERM_CHARS = 64;
 
-/** A query's terms: its runs of letters and digits, in order, each once, case kept for the words index to fold. */
+/**
+ * A query's terms: its runs of letters and digits, in order, each once, case kept — what an excerpt is centred on. The
+ * words index takes a query's words folded and hashed instead (`words.ts`).
+ */
 export function queryTerms(text: string): string[] {
   const seen = new Set<string>();
   const terms: string[] = [];
@@ -23,19 +26,7 @@ export function queryTerms(text: string): string[] {
   return terms;
 }
 
-/**
- * The words index's expression for `terms`: each quoted — so no word is read as FTS5 syntax — the last as a prefix,
- * since a person may still be typing it, and any of them enough (bm25 ranks a message with more of them higher).
- * Undefined when there is no term.
- */
-export function wordsExpression(terms: readonly string[]): string | undefined {
-  if (terms.length === 0) return undefined;
-  return terms
-    .map((term, index) => `"${term.replaceAll('"', '')}"${index === terms.length - 1 ? '*' : ''}`)
-    .join(' OR ');
-}
-
-/** Folds case and diacritics, as the words index does: `Factură` and `factura` are one. */
+/** Folds case and diacritics, as the words index does before it hashes a word: `Factură` and `factura` are one. */
 export function folded(text: string): string {
   return text
     .normalize('NFD')

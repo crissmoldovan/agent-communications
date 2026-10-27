@@ -213,6 +213,29 @@ open question 4).**
 - *Rejected:* whole-database encryption. SQLCipher is not in `node:sqlite`, and it is a native build.
 - *Rejected:* plaintext text, as activity keeps subjects. A body is more than a subject.
 
+> **Note, 2026-10-27 (the security review of 0.35.0, finding M2; L).** "A contentless table keeps the tokens but not
+> the text" was false. FTS5's default `detail=full` keeps each token's position, and `fts5vocab 'instance'` gave a
+> message's subject and text back in order, with no key. The words index is changed, and it is now encrypted in all
+> but name:
+> - **Keyed hashes, not words.** The words are made into tokens in JS: case and diacritics are folded as
+>   `unicode61 remove_diacritics 2` folded them for English and Romanian (`Factură` = `factura`, `înțeles` = `INTELES`),
+>   and each run of letters and digits is one word. Each word is replaced by HMAC-SHA256 under the `words` subkey of
+>   `search-index` (HKDF, `agentcomms-search/words/v1`), cut to 128 bits as 32 hex digits. FTS5 sees only those
+>   tokens (`tokenize='ascii'`), each once a message, sorted. A search's words are hashed the same way.
+> - **No positions:** `detail=none`. Each word of a search is looked for alone, so no phrase needs them.
+> - **Prefixes are kept.** The last word of a search still matches as a prefix: each word is also kept by its first 3
+>   to 24 characters, under a hash of their own kind. A last word of one or two letters now matches whole only.
+> - **Ranking:** bm25 needs positions in a contentless table, so a row scores the bm25 weight of each word it holds,
+>   `ln((N − n + ½)/(n + ½))`, without counts or length; newer first on ties.
+> - **What the file still shows without the key:** which rows share a token, and how many tokens a row has. It shows no
+>   word, and no word's place. With the key a guessed word can be tested, but the key opens the sealed text anyway.
+> - **An index of schema 1** (only a 0.35 test build made one; 0.35.0 was never released with it) is upgraded on its
+>   first open. Its words table is dropped at once, under `secure_delete`, and the WAL is checkpointed. Then the hashes
+>   are made from the sealed text at the first open that has the key, before anything is searched. Schema is now 2.
+>
+> The words index therefore moves out of "not encrypted" above. The vectors and the handles stay there, and the
+> approval for `on` and `model set`, `search status`, doctor and the app's notes now say exactly that.
+
 **S12. Retention follows Activity's days (L; open question 5).**
 - A message is kept while Activity keeps its day: `activity.retentionDays`, 30 by default, 1–365
   (`activity-settings.ts:21-22`), counted from `seen_at`.
@@ -273,6 +296,8 @@ CREATE TABLE messages (
 ) STRICT;
 CREATE VIRTUAL TABLE words USING fts5(subject, text,
   content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2');
+  -- 2026-10-27 (S11's note): fts5(tokens, content='', contentless_delete=1, detail=none, tokenize='ascii'),
+  -- holding keyed hashes of the words
 CREATE TABLE vectors (
   message_id INTEGER PRIMARY KEY REFERENCES messages(id) ON DELETE CASCADE,
   generation INTEGER NOT NULL,
@@ -332,7 +357,8 @@ in the background, and the old vectors serve until the new set is complete. Word
 **`agentcomms search query <text> [--person <id>] [--account <alias>…] [--channel gmail|slack] [--since] [--until]
 [--limit ≤50] --json`:**
 1. **Filter first, in SQL:** account, channel, time, and the person's handles; `direction = 'in'` unless asked.
-2. **Words:** FTS5 `MATCH` on the query's terms (each quoted, the last as a prefix), ranked by `bm25`.
+2. **Words:** FTS5 `MATCH` on the query's terms (each quoted, the last as a prefix), ranked by `bm25`. (2026-10-27:
+   the terms are keyed hashes, and the rank is bm25's weight of each word without counts; S11's note.)
 3. **Meaning:** embed the query with the profile's query template, then an exact cosine over the filtered rows' current
    vectors.
 4. **Fuse** the two top-50 lists by reciprocal rank (k = 60), newer first on ties. With no model, or one that fails its

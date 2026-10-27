@@ -10,7 +10,7 @@ import { captureForSearch, resetCaptureForTests, type SearchCapture } from '../s
 import { ensureSearchKey, readSearchKey, SEARCH_KEY_REF, searchSecretStore } from '../src/search/crypto.ts';
 import { searchEndpoint } from '../src/search/endpoint-rule.ts';
 import { searchPaths } from '../src/search/folder.ts';
-import { runSearchIndex } from '../src/search/indexer.ts';
+import { pruneSearchIndex, runSearchIndex } from '../src/search/indexer.ts';
 import { isCloudModelName, searchModelName } from '../src/search/models.ts';
 import { OllamaClient } from '../src/search/ollama.ts';
 import { loadSearchSqlite } from '../src/search/sqlite.ts';
@@ -339,11 +339,19 @@ test('GUARD: inbox lines and kept records are ciphertext: a planted name, subjec
         assert.equal(bytes.includes(Buffer.from(marker, 'utf8')), false, `${file} holds ${marker}`);
       }
     }
-    // What is not encrypted, and is pinned here: the words index holds the tokens, and finds them.
+    // The words as the words index would have folded them are in no file either: it holds keyed hashes (M2). The
+    // sender's address is a handle, kept plain for lookups (S11), so its words are not looked for here.
+    for (const file of files) {
+      const bytes = readFileSync(file);
+      for (const token of ['tangerine', 'kettle', 'zephyrine', 'quillon', 'budget', 'recap']) {
+        assert.equal(bytes.includes(Buffer.from(token, 'utf8')), false, `${file} holds ${token}`);
+      }
+    }
+    // What is not encrypted, and is pinned here: the vectors. The words index finds nothing by a word without the key.
     const sqlite = await loadSearchSqlite();
     const db = new sqlite.DatabaseSync(searchPaths(machine.stateDir).database, { readOnly: true });
     try {
-      assert.equal(db.prepare("SELECT count(*) AS n FROM words WHERE words MATCH 'tangerine'").get()?.n, 1);
+      assert.equal(db.prepare("SELECT count(*) AS n FROM words WHERE words MATCH 'tangerine'").get()?.n, 0);
       assert.equal(db.prepare('SELECT count(*) AS n FROM vectors').get()?.n, 1);
       const record = db.prepare('SELECT encrypted_record FROM messages').get()?.encrypted_record as Uint8Array;
       assert.equal(Buffer.from(record).includes(Buffer.from('TANGERINE')), false);
@@ -361,6 +369,103 @@ test('GUARD: inbox lines and kept records are ciphertext: a planted name, subjec
   } finally {
     await ollama.close();
   }
+});
+
+/** The words index read as someone without the key would read it: each term, and where it stood, row by row. */
+async function wordsWithoutTheKey(machine: SearchMachine): Promise<{ doc: number; term: string; offset: unknown }[]> {
+  const sqlite = await loadSearchSqlite();
+  const raw = new sqlite.DatabaseSync(searchPaths(machine.stateDir).database);
+  try {
+    raw.exec("CREATE VIRTUAL TABLE temp.v USING fts5vocab(main, words, 'instance')");
+    return raw.prepare('SELECT doc, term, offset FROM temp.v ORDER BY doc, col, offset').all() as {
+      doc: number;
+      term: string;
+      offset: unknown;
+    }[];
+  } finally {
+    raw.close();
+  }
+}
+
+test('GUARD: the words index holds keyed hashes of words, never the words: without the key no message is read back from it, in order or out of it (review 2026-10-27, M2)', async () => {
+  const machine = searchMachine(on());
+  // The review's scenario: a message whose subject and text were rebuilt, in order, from `fts5vocab 'instance'`.
+  const secret = 'The new salary for Ioana is 9731 lei and the door code is marmotlantern';
+  await capture(machine, MAIL, [
+    mail({ sourceId: '18c00000000000m1', subject: 'Quarterly salaries', text: secret }),
+    ...Array.from({ length: 30 }, (_, at) =>
+      mail({ sourceId: `18c00000000001${String(at).padStart(2, '0')}`, subject: `lunch ${at}`, text: `note ${at}` }),
+    ),
+  ]);
+  assert.equal((await index(machine)).inserted, 31);
+  const terms = await wordsWithoutTheKey(machine);
+  assert.ok(terms.length > 0);
+  const words = new Set(terms.map((entry) => entry.term));
+  for (const word of ['salary', 'ioana', '9731', 'lei', 'door', 'code', 'marmotlantern', 'quarterly', 'salaries']) {
+    assert.equal(words.has(word), false, `the words index holds "${word}"`);
+  }
+  for (const entry of terms) {
+    assert.match(entry.term, /^[0-9a-f]{32}$/u, 'a term is a keyed hash, nothing a word can be read from');
+    assert.equal(entry.offset, null, 'no position is kept: the order of the words is not in the file');
+  }
+  for (const file of filesBelow(searchPaths(machine.stateDir).dir)) {
+    const bytes = readFileSync(file);
+    for (const word of ['salary', 'ioana', 'marmotlantern', 'salaries']) {
+      assert.equal(bytes.includes(Buffer.from(word, 'utf8')), false, `${file} holds ${word}`);
+    }
+  }
+  // With the key, the words still find it — whole, folded, and the last one as a prefix.
+  for (const words of ['marmotlantern', 'IOANA salary', 'door marmotlan', 'Quarterly']) {
+    const found = await searchQuery(machine.core, { text: words }, { env: {}, deps: machine.deps });
+    assert.equal(found.hits[0]?.sourceId, '18c00000000000m1', words);
+  }
+});
+
+test('GUARD: an index a 0.35 test build made, whose words index held the words, is rebuilt with keyed hashes on its first open — the words leave the file, and the same words find the same message (M2)', async () => {
+  const machine = searchMachine(on());
+  await capture(machine, MAIL, [
+    mail({ sourceId: '18c00000000000n1', subject: 'Gate code', text: 'the gate code is plumquandary' }),
+    mail({ sourceId: '18c00000000000n2', subject: 'Lunch', text: 'lunch on friday' }),
+  ]);
+  await index(machine);
+  // The file as that build left it: its words table, holding the words, and schema 1.
+  const paths = searchPaths(machine.stateDir);
+  const sqlite = await loadSearchSqlite();
+  const old = new sqlite.DatabaseSync(paths.database);
+  old.exec('DROP TABLE words');
+  old.exec(
+    "CREATE VIRTUAL TABLE words USING fts5(subject, text, content='', contentless_delete=1, tokenize='unicode61 remove_diacritics 2')",
+  );
+  const ids = old.prepare('SELECT id, source_id FROM messages').all() as { id: number; source_id: string }[];
+  for (const row of ids) {
+    const [subject, text] =
+      row.source_id === '18c00000000000n1'
+        ? ['Gate code', 'the gate code is plumquandary']
+        : ['Lunch', 'lunch on friday'];
+    old.prepare('INSERT INTO words(rowid, subject, text) VALUES (?, ?, ?)').run(row.id, subject, text);
+  }
+  old.exec("UPDATE meta SET value = '1' WHERE key = 'schema'");
+  old.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+  old.close();
+  const holds = () => filesBelow(paths.dir).some((file) => readFileSync(file).includes(Buffer.from('plumquandary')));
+  assert.equal(holds(), true, 'the old words index holds the word');
+  // Upkeep with no key opens it first — a prune — and the words go at once; their hashes need the key, so they wait.
+  await pruneSearchIndex(machine.core, machine.deps);
+  assert.equal(holds(), false, 'the words left the file at the first open, before any key was asked for');
+  // The first open with the key makes the hashes from the sealed text, and the same words find the same message.
+  const found = await searchQuery(machine.core, { text: 'plumquandary' }, { env: {}, deps: machine.deps });
+  assert.deepEqual(
+    found.hits.map((hit) => hit.sourceId),
+    ['18c00000000000n1'],
+  );
+  assert.equal(holds(), false);
+  const after = new sqlite.DatabaseSync(paths.database, { readOnly: true });
+  try {
+    assert.equal(after.prepare("SELECT value FROM meta WHERE key = 'schema'").get()?.value, '2');
+  } finally {
+    after.close();
+  }
+  assert.ok((await wordsWithoutTheKey(machine)).every((entry) => /^[0-9a-f]{32}$/u.test(entry.term)));
 });
 
 test('GUARD: a record moved to another row does not open, and a line sealed with another key is not kept', async () => {

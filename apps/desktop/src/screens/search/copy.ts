@@ -91,7 +91,7 @@ export const SEARCH_COPY = {
       ? `Ask looks through what Agent Comms saw, kept ${days} days: no account is kept yet.`
       : `Ask looks through what Agent Comms saw: the messages agents read in ${listWords(accounts)}, and the replies sent, kept ${days} days. Messages agents didn’t read aren’t here.`,
   notEncrypted:
-    'The words and names are kept encrypted. The words index and the vectors can’t be, so treat Search’s folder like your mail.',
+    'The words and names are kept encrypted, and the words index holds keyed hashes of the words, not the words. The vectors can’t be encrypted, so treat Search’s folder like your mail.',
   settings: 'Settings → Search on this Mac',
   off: 'Search on this Mac is off.',
   offEmpty: 'Nothing is kept, so there is nothing to ask about yet. Switch it on in Settings → Search on this Mac.',
@@ -173,7 +173,7 @@ export const SEARCH_SETTINGS_COPY = {
   offEmpty: 'Nothing is kept.',
   askOn: {
     title: 'Keep the words of messages on this Mac, to search them? Approve it',
-    body: 'From now on, the words of new messages agents read in the accounts below, and the replies sent, are kept on this Mac, encrypted, for as long as Activity keeps its days. Activity keeps no message’s words; this would.',
+    body: 'From now on, the words of new messages agents read in the accounts below, and the replies sent, are kept on this Mac for as long as Activity keeps its days: the text encrypted, and the words index as keyed hashes that can’t be read back without the key. Activity keeps no message’s words; this would.',
     approved: 'Approved. New messages agents read are kept on this Mac, to search.',
   },
   switchedOff: 'Switched off at once. Nothing new is kept.',
@@ -244,7 +244,7 @@ export const SEARCH_SETTINGS_COPY = {
   wordsOnlyApplied: 'Words only, at once: every vector was dropped.',
   askModel: (name: string, address: string) => ({
     title: `Make kept messages searchable by meaning with ${name}? Approve it`,
-    body: `The words of each kept message would be sent to the model server at ${address}, on this Mac only, to make them searchable by meaning.`,
+    body: `The words of each kept message would be sent to the model server at ${address}, on this Mac only, to make them searchable by meaning. The vectors it makes aren’t encrypted: they can be turned back into text close to what was said.`,
     approved: `Approved. Kept messages are made searchable by meaning with ${name}.`,
   }),
   download: (download: string, licence: string) => `${download} · ${licence}`,

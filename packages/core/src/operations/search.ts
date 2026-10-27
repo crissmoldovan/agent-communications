@@ -45,7 +45,7 @@ import {
 } from '../search/indexer.ts';
 import { DEFAULT_SEARCH_MODEL, SEARCH_MODELS, searchModelName } from '../search/models.ts';
 import { OllamaClient, type SearchModelCheck, type SearchModelState } from '../search/ollama.ts';
-import { excerpt, fuse, nearest, queryTerms, wordsExpression } from '../search/rank.ts';
+import { excerpt, fuse, nearest, queryTerms } from '../search/rank.ts';
 import { readSearchSettings, type SearchModelSetting, type SearchSettings, storedSearch } from '../search/settings.ts';
 import { loadSearchSqlite, probeSearchSqlite } from '../search/sqlite.ts';
 import {
@@ -342,7 +342,7 @@ export async function searchStatus(core: Core, options: SearchOptions = {}): Pro
   const backups = await backupState(paths, system);
   const diskEncryption = await diskEncryptionState(system);
   const notes = [
-    'Treat this folder like your mail: the words index and the vectors are not encrypted, and vectors can be turned back into text close to what was said.',
+    'Treat this folder like your mail: the words index holds keyed hashes of the words, not the words, but the vectors are not encrypted, and vectors can be turned back into text close to what was said.',
     ...(keyStore === 'file'
       ? [
           'The key is kept in a file beside the data, so the encryption protects only a copy of the search folder alone.',
@@ -659,8 +659,7 @@ export async function searchQuery(
         ...(person === undefined ? {} : { handles: handlesOfPerson(store, person, own) }),
       };
       const terms = queryTerms(text);
-      const expression = wordsExpression(terms);
-      const words = expression === undefined ? [] : store.wordsMatch(expression, filter, MAX_SEARCH_LIMIT);
+      const words = store.wordsMatch(text, filter, MAX_SEARCH_LIMIT);
       let meaning: number[] = [];
       let mode: SearchQueryResult['mode'] = 'words';
       let modelNote: string | null = null;
@@ -1146,7 +1145,7 @@ function searchableAccount(config: Config, alias: string): { id: string; alias: 
 }
 
 const SEARCH_SUMMARIES = {
-  on: 'Keep the words of new messages agents read, and the replies sent, on this machine — encrypted, for as long as Activity keeps its days — so you can search them',
+  on: 'Keep the words of new messages agents read, and the replies sent, on this machine for as long as Activity keeps its days — the text encrypted, the words as keyed hashes — so you can search them',
   off: 'Stop keeping the words of new messages on this machine for Search',
 } as const;
 
@@ -1205,7 +1204,7 @@ export function searchSettingsChange(
     }
     return model === null || model === undefined
       ? 'Search by words only: no model, and no vector kept'
-      : `Make kept messages searchable by meaning with ${model.name}, run by the model server at ${model.address} on this machine`;
+      : `Make kept messages searchable by meaning with ${model.name}, run by the model server at ${model.address} on this machine — the vectors it makes are kept unencrypted`;
   };
   const same = (before: Config, after: Config): boolean =>
     JSON.stringify(storedSearch(before) ?? {}) === JSON.stringify(storedSearch(after) ?? {}) &&
