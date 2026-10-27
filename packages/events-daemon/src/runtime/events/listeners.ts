@@ -5,6 +5,7 @@ import type { EventSecretStore } from '../../store/event-secrets.ts';
 import type { EventRecordCipher } from '../../store/records.ts';
 import type { SseFrameVisibilityGate } from '../phase-d-whatsapp-seam.ts';
 import { type SseServer, type SseServerOptions, startSseServer } from '../sse-server.ts';
+import type { WebSocketTiming } from '../websocket.ts';
 
 /**
  * The owner's live listeners (workflows design W31): one loopback listener for each subscriber version something may
@@ -29,6 +30,8 @@ export interface SubscriberListenersOptions {
   readonly now?: (() => number) | undefined;
   readonly visibilityGate?: SseFrameVisibilityGate | undefined;
   readonly hasConcreteWhatsAppVisibilityFence?: boolean | undefined;
+  /** Test seam: a WebSocket's ping interval and pong deadline. Production: 30 and 60 seconds. */
+  readonly websocket?: WebSocketTiming | undefined;
   /** Test seam: the listener factory. Production uses `startSseServer`. */
   readonly startServer?: ((options: SseServerOptions) => Promise<SseServer>) | undefined;
 }
@@ -128,6 +131,7 @@ export class SubscriberListeners {
           now: this.#options.now,
           visibilityGate: this.#options.visibilityGate,
           hasConcreteWhatsAppVisibilityFence: this.#options.hasConcreteWhatsAppVisibilityFence,
+          websocket: this.#options.websocket,
         });
         const unregister = this.#options.registry.register({
           rotate: (input) => server.rotate(input),

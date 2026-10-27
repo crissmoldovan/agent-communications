@@ -1,5 +1,6 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo, Socket } from 'node:net';
+import type { Duplex } from 'node:stream';
 import type { ApprovalStore, ConfigStore } from '@agentcomms/core';
 import { canonicalSseSubscriber, type SseSubscriberDocument } from '../domain/sse-subscriber.ts';
 import { installErrorSink } from '../network/error-sink.ts';
@@ -14,6 +15,15 @@ import {
   type SubscriberStreamAdmission,
   SubscriberStreams,
 } from './subscriber-streams.ts';
+import {
+  acceptWebSocket,
+  isWebSocketHandshake,
+  offeredProtocols,
+  refuseWebSocket,
+  WEBSOCKET_CLOSE,
+  type WebSocketPush,
+  type WebSocketTiming,
+} from './websocket.ts';
 
 export interface SseServerOptions {
   readonly store: EventDatabase;
@@ -31,6 +41,8 @@ export interface SseServerOptions {
   readonly hasConcreteWhatsAppVisibilityFence?: boolean | undefined;
   /** Test seam: an already-bound loopback server, so its ephemeral port is never released and reacquired. */
   readonly listener?: Server | undefined;
+  /** Test seam: a WebSocket's ping interval and pong deadline (production: 30 and 60 seconds). */
+  readonly websocket?: WebSocketTiming | undefined;
 }
 
 export interface SseBearerMaterial {
@@ -70,8 +82,28 @@ interface LiveConnection {
   readonly generation: number;
   /** An overlap-bearer stream's authority ends here; a current-bearer stream has none until a rotation. */
   readonly authorizedUntil: number | undefined;
-  readonly response: ServerResponse;
+  /** SSE (the response stream) or WebSocket (0.36.0, W31): the same admission, a different framing. */
+  readonly transport: 'sse' | 'websocket';
+  readonly write: (frame: string) => void;
   readonly close: () => void;
+}
+
+/** A rule frame's CloudEvent, for a WebSocket: the one `data:` line of its SSE frame. */
+function frameData(frame: string): string {
+  return (
+    frame
+      .split('\n')
+      .find((line) => line.startsWith('data: '))
+      ?.slice('data: '.length) ?? ''
+  );
+}
+
+/** A value a browser offers as a subprotocol (W31): `agentcomms.bearer.<token>`, `agentcomms.after.<event id>`. */
+function subprotocolValue(request: IncomingMessage, prefix: string): string | null {
+  const offered = offeredProtocols(request).filter((entry) => entry.startsWith(prefix));
+  if (offered.length !== 1) return null;
+  const value = (offered[0] as string).slice(prefix.length);
+  return value.length > 0 ? value : null;
 }
 
 function expectedHost(authority: SseSubscriberDocument['authority']): string {
@@ -154,6 +186,8 @@ class LoopbackSseServer implements SseServer {
   readonly #requestListener = (request: IncomingMessage, response: ServerResponse) =>
     void this.#handle(request, response);
   readonly #connectionListener = (socket: Socket) => installErrorSink(socket);
+  readonly #upgradeListener = (request: IncomingMessage, socket: Duplex, head: Buffer) =>
+    void this.#upgrade(request, socket, head).catch(() => socket.destroy());
   #preflightCount = 0;
 
   private constructor(options: SseServerOptions, subscriber: PersistedSubscriber) {
@@ -175,6 +209,7 @@ class LoopbackSseServer implements SseServer {
     this.#server.on('request', this.#requestListener);
     if (this.#ownsServer) installErrorSink(this.#server);
     this.#server.on('connection', this.#connectionListener);
+    this.#server.on('upgrade', this.#upgradeListener);
   }
 
   static async start(options: SseServerOptions): Promise<LoopbackSseServer> {
@@ -204,6 +239,7 @@ class LoopbackSseServer implements SseServer {
     for (const connection of this.#connections) connection.close();
     this.#server.off('request', this.#requestListener);
     this.#server.off('connection', this.#connectionListener);
+    this.#server.off('upgrade', this.#upgradeListener);
     if (!this.#ownsServer) return;
     await new Promise<void>((resolve, reject) =>
       this.#server.close((error) => (error === undefined ? resolve() : reject(error))),
@@ -249,7 +285,7 @@ class LoopbackSseServer implements SseServer {
           }) &&
           this.#bearerGenerationLive(connection.generation),
         writeFrame: (frame) => {
-          connection.response.write(frame);
+          connection.write(connection.transport === 'sse' ? frame : frameData(frame));
         },
       });
       if (wrote) written += 1;
@@ -267,10 +303,11 @@ class LoopbackSseServer implements SseServer {
       }
       const wrote = await this.#replay.writeEvent({
         eventStreamLogId: input.eventStreamLogId,
+        transport: connection.transport,
         isStreamCurrent: () =>
           this.#connections.has(connection) && this.#subscriberIsCurrent() && this.#connectionIsCurrent(connection),
         writeFrame: (frame) => {
-          connection.response.write(frame);
+          connection.write(frame);
         },
       });
       if (wrote) written += 1;
@@ -351,7 +388,15 @@ class LoopbackSseServer implements SseServer {
       });
       response.end();
     };
-    const connection: LiveConnection = { generation, authorizedUntil, response, close };
+    const connection: LiveConnection = {
+      generation,
+      authorizedUntil,
+      transport: 'sse',
+      write: (frame) => {
+        response.write(frame);
+      },
+      close,
+    };
     if (
       !this.#streams.register({
         subscriberId: subscriber.subscriberId,
@@ -412,6 +457,109 @@ class LoopbackSseServer implements SseServer {
         ) {
           response.write(frame);
         }
+      },
+    });
+  }
+
+  /**
+   * WebSocket on the same listener and path (0.36.0, W31): the same Host, query, cookie and Origin refusals, the
+   * same bearer admission — from `Authorization`, or offered by a browser as the subprotocol
+   * `agentcomms.bearer.<token>` — and the same replay, from Last-Event-ID or `agentcomms.after.<event id>`. The answer
+   * names `agentcomms.events.v1` only. A rotated or revoked bearer closes it with 4401.
+   */
+  async #upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
+    installErrorSink(socket as Socket);
+    const subscriber = this.#subscriber.document;
+    const parsed = new URL(request.url ?? '/', 'http://loopback.invalid');
+    if (parsed.pathname !== pathFor(subscriber.subscriberId)) return refuseWebSocket(socket, 404);
+    if (parsed.search !== '' || request.headers.host !== expectedHost(subscriber.authority))
+      return refuseWebSocket(socket, 403);
+    if (request.headers.cookie !== undefined) return refuseWebSocket(socket, 403);
+    if (corsHeaders(request.headers.origin, subscriber) === null) return refuseWebSocket(socket, 403);
+    if (!isWebSocketHandshake(request)) return refuseWebSocket(socket, 400);
+    const token = bearer(request.headers.authorization) ?? subprotocolValue(request, 'agentcomms.bearer.');
+    if (token === null) return refuseWebSocket(socket, 403);
+    let admission: SubscriberStreamAdmission | null;
+    try {
+      const generations = await this.#bearerGenerations();
+      if (!this.#subscriberIsCurrent()) return refuseWebSocket(socket, 403);
+      admission = this.#streams.admit({ bearer: token, generations: asBearerGenerations(generations) });
+    } catch {
+      return refuseWebSocket(socket, 403);
+    }
+    if (admission === null) return refuseWebSocket(socket, 403);
+    const { generation, currentGeneration, authorizedUntil } = admission;
+    const current = () =>
+      this.#subscriberIsCurrent() &&
+      this.#streams.isCurrent({
+        subscriberId: subscriber.subscriberId,
+        subscriberVersion: subscriber.version,
+        generation,
+        authorizedUntil,
+      }) &&
+      this.#bearerGenerationLive(generation);
+    let push: WebSocketPush | null = null;
+    let closed = false;
+    const forget = () => {
+      this.#connections.delete(connection);
+      this.#streams.unregister({
+        subscriberId: subscriber.subscriberId,
+        subscriberVersion: subscriber.version,
+        generation,
+        close,
+      });
+    };
+    // The registry's close: a rotated or revoked bearer ends the socket with 4401, as an SSE stream is ended.
+    const close = () => {
+      if (closed) return;
+      closed = true;
+      forget();
+      push?.close(WEBSOCKET_CLOSE.unauthorised);
+    };
+    const connection: LiveConnection = {
+      generation,
+      authorizedUntil,
+      transport: 'websocket',
+      write: (text) => push?.send(text),
+      close,
+    };
+    if (
+      !this.#streams.register({
+        subscriberId: subscriber.subscriberId,
+        subscriberVersion: subscriber.version,
+        generation,
+        close,
+        currentGeneration,
+        authorizedUntil,
+      }) ||
+      !current()
+    ) {
+      closed = true;
+      forget();
+      return refuseWebSocket(socket, 403);
+    }
+    // This is the handshake gate: no await occurs between the current-generation check and the 101.
+    push = acceptWebSocket(request, socket, head, this.#options.websocket);
+    if (push === null) {
+      closed = true;
+      forget();
+      return;
+    }
+    this.#connections.add(connection);
+    push.onClose(() => {
+      if (closed) return;
+      closed = true;
+      forget();
+    });
+    const header = request.headers['last-event-id'];
+    const afterId = typeof header === 'string' ? header : subprotocolValue(request, 'agentcomms.after.');
+    await this.#replay.replay({
+      subscriberId: subscriber.subscriberId,
+      subscriberVersion: subscriber.version,
+      afterId,
+      transport: 'websocket',
+      writeFrame: (text) => {
+        if (!closed && current()) push?.send(text);
       },
     });
   }

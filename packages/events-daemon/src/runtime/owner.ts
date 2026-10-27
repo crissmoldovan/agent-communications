@@ -153,6 +153,7 @@ import type { SseServer } from './sse-server.ts';
 import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
+import type { WebSocketTiming } from './websocket.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -272,6 +273,8 @@ export interface EventOwnerOptions {
     | undefined;
   /** Test seam only: a point inside one event delivery's attempt (0.36.0), after which its own gates decide. */
   readonly eventDispatchTestPoint?: EventDispatcherOptions['testPoint'];
+  /** Test seam only: the live listeners' WebSocket ping interval and pong deadline (production: 30 and 60 seconds). */
+  readonly eventsWebSocket?: WebSocketTiming | undefined;
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -1298,6 +1301,7 @@ async function startOwnerWithLock(
     now,
     visibilityGate: whatsappComposition.visibilityFence,
     hasConcreteWhatsAppVisibilityFence: true,
+    websocket: options.eventsWebSocket,
   });
   const eventDispatcher = new EventDispatcher({
     store: database,

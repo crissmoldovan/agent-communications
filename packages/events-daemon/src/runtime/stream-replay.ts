@@ -169,8 +169,11 @@ export class StreamReplay {
     readonly subscriberId: string;
     readonly subscriberVersion: number;
     readonly afterId: string | null;
+    /** SSE frames (the default), or a WebSocket's text messages: each frame's CloudEvent alone (W31). */
+    readonly transport?: 'sse' | 'websocket' | undefined;
     readonly writeFrame: (frame: string) => void;
   }): Promise<number> {
+    const transport = input.transport ?? 'sse';
     // One order for both kinds of frame (W31): a workflow's rule-target frames and the events it raised, by when each
     // was delivered into this subscriber's log, then by id. A Last-Event-ID names either; an unknown one replays none.
     const cursor = this.#cursor(input.subscriberId, input.subscriberVersion, input.afterId);
@@ -190,14 +193,18 @@ export class StreamReplay {
     for (const frame of frames) {
       const wrote =
         frame.kind === 'rule'
-          ? await this.#replayRuleRow(frame.row, input.writeFrame)
-          : await this.#replayEventRow(frame.row, () => true, input.writeFrame);
+          ? await this.#replayRuleRow(frame.row, transport, input.writeFrame)
+          : await this.#replayEventRow(frame.row, transport, () => true, input.writeFrame);
       if (wrote) delivered += 1;
     }
     return delivered;
   }
 
-  async #replayRuleRow(row: StreamLogRow, writeFrame: (frame: string) => void): Promise<boolean> {
+  async #replayRuleRow(
+    row: StreamLogRow,
+    transport: 'sse' | 'websocket',
+    writeFrame: (frame: string) => void,
+  ): Promise<boolean> {
     const request = this.#fenceRequest(row);
     try {
       await this.#fence(request);
@@ -249,7 +256,7 @@ export class StreamReplay {
         );
       return false;
     }
-    const frame = `id: ${row.id}\ndata: ${bytes.toString('utf8')}\n\n`;
+    const frame = transport === 'sse' ? `id: ${row.id}\ndata: ${bytes.toString('utf8')}\n\n` : bytes.toString('utf8');
     const allowed = this.#store.immediate(() => this.#isFrameCurrent(row));
     if (!allowed) return false;
     // Task 9 passes the physical socket callback through writeReplaySseFrame; this Task 8 path is non-WhatsApp only.
@@ -386,6 +393,7 @@ export class StreamReplay {
    */
   async #replayEventRow(
     row: EventStreamLogRow,
+    transport: 'sse' | 'websocket',
     isStreamCurrent: () => boolean,
     writeFrame: (frame: string) => void,
   ): Promise<boolean> {
@@ -420,7 +428,7 @@ export class StreamReplay {
     } catch {
       return false;
     }
-    const frame = eventSseFrame(row.event_id, disclosure.type, text);
+    const frame = transport === 'sse' ? eventSseFrame(row.event_id, disclosure.type, text) : text;
     let wrote = false;
     this.#store.immediate(() => {
       if (!this.#isEventFrameCurrent(row, disclosure) || !isStreamCurrent()) return;
@@ -433,12 +441,13 @@ export class StreamReplay {
   /** The live writer for an event frame: the same gate as replay, and the stream's own current-generation check. */
   async writeEvent(input: {
     readonly eventStreamLogId: string;
+    readonly transport?: 'sse' | 'websocket' | undefined;
     readonly isStreamCurrent: () => boolean;
     readonly writeFrame: (frame: string) => void;
   }): Promise<boolean> {
     const row = this.#eventRow(input.eventStreamLogId);
     if (row === undefined) return false;
-    return this.#replayEventRow(row, input.isStreamCurrent, input.writeFrame);
+    return this.#replayEventRow(row, input.transport ?? 'sse', input.isStreamCurrent, input.writeFrame);
   }
 
   #isEventFrameCurrent(row: EventStreamLogRow, disclosure: EventDisclosure): boolean {
