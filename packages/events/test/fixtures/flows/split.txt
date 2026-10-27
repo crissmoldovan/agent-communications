@@ -1,0 +1,13 @@
+workflow invoices-split, version 1
+
+when a new message arrives in cue/gmail, in the inbox
+match subject contains "invoice"
+
+flow
+  step both: split into log and tell
+  step log: dry run invoices-log, version 1, keep 1 day
+    then stop
+  step tell: tell me "An invoice arrived in cue/gmail"
+
+keep subject
+at most 60 an hour

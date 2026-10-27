@@ -59,7 +59,7 @@ export const RETENTION_LINES: readonly (readonly [words: readonly string[], fiel
   [['queue', 'items'], 'queueMs'],
 ];
 
-/** The fields of the canonical rule document in the order a parsed document carries them. */
+/** The fields of the canonical rule document in the order a parsed document carries them (`flow`: workflows §4.1). */
 export const RULE_FIELDS: readonly string[] = [
   'ruleId',
   'version',
@@ -70,6 +70,7 @@ export const RULE_FIELDS: readonly string[] = [
   'mapping',
   'cloudEventType',
   'targets',
+  'flow',
   'subscribers',
   'judges',
   'deliveryRateCap',
@@ -78,18 +79,22 @@ export const RULE_FIELDS: readonly string[] = [
 
 /** Fields a rule's text must account for, by a section or by `raw`, and what to say when it does not. */
 export const REQUIRED_SECTIONS: readonly { readonly fields: readonly string[]; readonly message: string }[] = [
-  { fields: ['ruleId', 'version'], message: "a rule's text starts with its id and version: rule <id>, version <n>" },
+  {
+    fields: ['ruleId', 'version'],
+    message: "a workflow's text starts with its id and version: workflow <id>, version <n>",
+  },
   {
     fields: ['source', 'event'],
-    message: 'a rule says when it applies: when a new message arrives in <account>, in the inbox',
+    message: 'a workflow says when it applies: when a new message arrives in <account>, in the inbox',
   },
   {
     fields: ['condition'],
-    message: 'a rule says which messages match: match <condition>, or match any with conditions below it',
+    message: 'a workflow says which messages match: match <condition>, or match any with conditions below it',
   },
   {
     fields: ['targets'],
-    message: 'a rule says what happens to a match: then, with each target on its own indented line below it',
+    message:
+      'a workflow says what happens to a match: then, with each target on its own indented line below it, or flow, with its steps',
   },
 ];
 
@@ -226,4 +231,71 @@ export function suggestion(word: string, phrases: readonly string[]): string | u
     }
   }
   return best !== undefined && bestDistance <= Math.max(1, Math.floor(word.length / 3)) ? best : undefined;
+}
+
+/**
+ * The flow line's limits (workflows design §4.1), in the order printed: the limit, and its words for one and for
+ * more. A run's deadline is written `each run up to <duration>` instead.
+ */
+export const FLOW_LIMIT_WORDS: readonly (readonly [
+  field:
+    | 'runsPerHour'
+    | 'concurrentRuns'
+    | 'sessionsPerHour'
+    | 'worktreesPerDay'
+    | 'linearWritesPerHour'
+    | 'eventsPerHour',
+  singular: readonly string[],
+  plural: readonly string[],
+])[] = [
+  ['runsPerHour', ['run', 'an', 'hour'], ['runs', 'an', 'hour']],
+  ['concurrentRuns', ['at', 'a', 'time'], ['at', 'a', 'time']],
+  ['sessionsPerHour', ['session', 'an', 'hour'], ['sessions', 'an', 'hour']],
+  ['worktreesPerDay', ['worktree', 'a', 'day'], ['worktrees', 'a', 'day']],
+  ['linearWritesPerHour', ['Linear', 'write', 'an', 'hour'], ['Linear', 'writes', 'an', 'hour']],
+  ['eventsPerHour', ['event', 'an', 'hour'], ['events', 'an', 'hour']],
+];
+
+/** The phrase each kind of step starts with, for a message that names the closest one to a typo. */
+export const STEP_PHRASES: readonly string[] = [
+  'find a session',
+  'find an idle session',
+  'find the session that took this conversation',
+  'start a session',
+  'if',
+  'ask',
+  'choose a project',
+  'make a worktree',
+  'wait for',
+  'tell me',
+  'split into',
+  'raise',
+  'deliver',
+  'session',
+  'linear issue',
+  'linear change',
+  'queue',
+  'dry run',
+  'webhook',
+  'stream',
+  'raw',
+];
+
+/** An arrow, at the start of a step's line: an outcome (or `otherwise`, or `then`), then `→` or `->`. */
+export const ARROW: RegExp = /^([a-z][a-z0-9-]*?) *(?:→|->)/u;
+
+/** A character of a pattern written bare: a segment's, a `.` between segments, or `*`. */
+export const PATTERN_CHARACTER: RegExp = /[A-Za-z0-9_.*-]/u;
+
+/**
+ * Whether one of a step's lines is the step's own — an arrow, `then stop`, `emits …`, `label "…"`, and a delivery's
+ * `report …` — rather than one its kind reads (a condition's members, a judge's lines, a target's options). The parser
+ * sorts a step's lines by this, and the printer never writes a kind's line that it would take for the step's own.
+ */
+export function isStepOwnLine(text: string, kind: string): boolean {
+  if (ARROW.test(text)) return true;
+  if (/^(?:then|otherwise) +stop$/u.test(text)) return true;
+  if (/^emits(?: |$)/u.test(text)) return true;
+  if (/^label +"/u.test(text)) return true;
+  return kind === 'deliver' && /^report(?: |$)/u.test(text);
 }

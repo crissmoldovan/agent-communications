@@ -1,0 +1,161 @@
+{
+  "condition": {
+    "op": "exists",
+    "path": "/text"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "slack.message.posted",
+    "version": 1
+  },
+  "flow": {
+    "events": {
+      "namespace": "acme",
+      "workflow": "client-thread"
+    },
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 2,
+      "eventsPerHour": 120,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 10,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "start": "thread",
+    "steps": {
+      "find": {
+        "in": {
+          "project": "route"
+        },
+        "kind": "find-session",
+        "next": {
+          "idle": "give",
+          "otherwise": "tell"
+        },
+        "provider": "claude"
+      },
+      "give": {
+        "kind": "deliver",
+        "next": {
+          "otherwise": "end"
+        },
+        "target": {
+          "targetId": "client-prompt",
+          "version": 2
+        },
+        "to": {
+          "session": ["thread", "find"]
+        }
+      },
+      "queued": {
+        "for": {
+          "sessionIdle": "thread"
+        },
+        "kind": "wait",
+        "next": {
+          "free": "give",
+          "otherwise": "tell"
+        },
+        "timeoutMs": 7200000
+      },
+      "route": {
+        "by": ["hints"],
+        "candidates": [
+          {
+            "folders": ["/example/home/work/acme-site"],
+            "name": "acme-site",
+            "projectId": "acme-site",
+            "worktreeRoot": null
+          },
+          {
+            "folders": ["/example/home/work/billing", "/example/home/work/billing-api"],
+            "name": "billing",
+            "projectId": "billing",
+            "worktreeRoot": null
+          }
+        ],
+        "inputs": ["/text"],
+        "kind": "route",
+        "next": {
+          "none": "tell",
+          "otherwise": "find"
+        }
+      },
+      "tell": {
+        "kind": "notify",
+        "next": {},
+        "text": "A message in acme/slack needs you"
+      },
+      "thread": {
+        "emit": ["found", "not-found"],
+        "in": {
+          "thread": true
+        },
+        "kind": "find-session",
+        "next": {
+          "busy": "queued",
+          "idle": "give",
+          "none": "route",
+          "otherwise": "tell"
+        },
+        "provider": "claude"
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "author": {
+      "name": {
+        "$path": "/author/name"
+      }
+    },
+    "text": {
+      "$path": "/text"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "queueMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "client-thread",
+  "source": {
+    "accountIds": ["acme/slack"],
+    "channel": "slack",
+    "options": {
+      "channel": "slack",
+      "conversations": ["C0123"]
+    }
+  },
+  "subscribers": [],
+  "targets": [
+    {
+      "context": [
+        {
+          "fields": ["/text"]
+        },
+        {
+          "text": "Do what they ask. Don't push."
+        }
+      ],
+      "find": {
+        "flow": true
+      },
+      "ifBusy": "queue",
+      "ifNone": "queue-only",
+      "kind": "session",
+      "mode": "manual",
+      "provider": "claude",
+      "targetId": "client-prompt",
+      "version": 2
+    }
+  ],
+  "version": 2
+}
