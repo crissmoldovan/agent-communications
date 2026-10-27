@@ -1,6 +1,7 @@
 /** `printRuleText`: a rule document as the rule text. */
 import { canonicalJson, type JsonValue } from '../json.ts';
 import { EventsError } from '../result.ts';
+import { type FlowPrintHelpers, flowSectionLines } from './flow-print.ts';
 import { parseRuleText } from './parse.ts';
 import { sessionTargetLines } from './session.ts';
 import {
@@ -56,7 +57,7 @@ function writeDocument(doc: Doc, readable: boolean): string {
   const blocks: string[][] = [];
   if (readable) {
     if (typeof doc.ruleId === 'string' && isCount(doc.version)) {
-      blocks.push([`rule ${formatName(doc.ruleId)}, version ${doc.version}`]);
+      blocks.push([`workflow ${formatName(doc.ruleId)}, version ${doc.version}`]);
       said.add('ruleId').add('version');
     }
     const head: string[] = [];
@@ -75,7 +76,13 @@ function writeDocument(doc: Doc, readable: boolean): string {
       blocks.push(ask);
       said.add('agentic');
     }
-    if (Array.isArray(doc.targets) && doc.targets.length > 0) {
+    // A workflow with a flow says what happens by its steps, which write its targets (workflows design §4.4).
+    const flow = Object.hasOwn(doc, 'flow') ? flowSectionLines(doc, FLOW_HELPERS) : undefined;
+    if (flow !== undefined) {
+      blocks.push(flow.lines);
+      said.add('flow');
+      if (flow.targets) said.add('targets');
+    } else if (Array.isArray(doc.targets) && doc.targets.length > 0) {
       blocks.push(thenLines(doc.targets));
       said.add('targets');
     }
@@ -291,8 +298,14 @@ function webhookUrl(url: JsonValue | undefined): string | undefined {
   return undefined;
 }
 
-/** One target's lines at level 1, its options indented at level 2; a target the readable form cannot say is `raw`. */
-function targetLines(target: JsonValue): string[] {
+/** What the flow section's printer (`flow-print.ts`) borrows from this one. */
+const FLOW_HELPERS: FlowPrintHelpers = { conditionLines, askLines, targetLines };
+
+/**
+ * One target's lines at level 1, its options indented at level 2; a target the readable form cannot say is `raw`. On
+ * a workflow's step (`inStep`), a session target may be the one the flow chose.
+ */
+function targetLines(target: JsonValue, inStep = false): string[] {
   const raw = [`  raw ${canonicalJson(target)}`];
   if (!isRecord(target) || typeof target.targetId !== 'string' || !isCount(target.version)) return raw;
   const head = `${formatName(target.targetId)}, version ${target.version}`;
@@ -347,9 +360,11 @@ function targetLines(target: JsonValue): string[] {
       return [`  stream ${head}${to}${representation === undefined ? '' : `, ${representation}`}`];
     }
     case 'session':
-      return sessionTargetLines(target) ?? raw;
+      return sessionTargetLines(target, inStep) ?? raw;
     case 'linear':
       return linearLines(target, head) ?? raw;
+    case 'linear-change':
+      return linearChangeLines(target, head) ?? raw;
     default:
       return raw;
   }
@@ -411,6 +426,91 @@ function linearLines(target: Doc, head: string): string[] | undefined {
       : [`    ${one ? 'label id' : 'label ids'} ${formatNames(named.map((label) => label.id as string))}`]),
     ...(title === null ? [] : [`    title ${JSON.stringify(title)}`]),
     ...(description === null ? [] : [`    description ${JSON.stringify(description)}`]),
+  ];
+}
+
+/** Who a Linear change assigns the issue to, after its line (nobody included), or undefined when it cannot be said. */
+function assignedText(assignee: JsonValue | undefined): string | undefined {
+  if (assignee === null) return ', assigned to nobody';
+  if (assignee === 'me') return ', assigned to me';
+  if (isRecord(assignee) && hasKeys(assignee, ['id']) && typeof assignee.id === 'string')
+    return `, assigned to user ${formatName(assignee.id)}`;
+  return undefined;
+}
+
+/** A label's name in a list after `add label`: `id` and `ids` are quoted, which the line's next word could be. */
+const labelName = (name: string) => (name === 'id' || name === 'ids' ? JSON.stringify(name) : formatName(name));
+
+/** One side of a Linear change's labels: its names line and ids line, or undefined when it cannot be said. */
+function labelSide(verb: 'add' | 'remove', labels: JsonValue | undefined): string[] | undefined {
+  if (!Array.isArray(labels)) return undefined;
+  if (labels.length === 0) return [];
+  const named = labels.filter(
+    (label): label is Doc =>
+      isRecord(label) &&
+      hasKeys(label, ['name'], ['id']) &&
+      typeof label.name === 'string' &&
+      (label.id === undefined || typeof label.id === 'string'),
+  );
+  const withIds = named.filter((label) => label.id !== undefined).length;
+  if (named.length !== labels.length || (withIds !== 0 && withIds !== named.length)) return undefined;
+  const one = named.length === 1;
+  return [
+    `    ${verb} ${one ? 'label' : 'labels'} ${named.map((label) => labelName(label.name as string)).join(' and ')}`,
+    ...(withIds === 0
+      ? []
+      : [`    ${verb} ${one ? 'label id' : 'label ids'} ${formatNames(named.map((label) => label.id as string))}`]),
+  ];
+}
+
+/**
+ * A Linear change target (workflows design §4.2): its line names the team by key and who it assigns the issue to; its
+ * indented lines give the team's id, the comment, the state it moves the issue to by name with its id, and the labels
+ * it adds and removes. Each is written only when the document has it.
+ */
+function linearChangeLines(target: Doc, head: string): string[] | undefined {
+  if (!hasKeys(target, ['targetId', 'version', 'kind'], ['team', 'comment', 'state', 'labels', 'assignee']))
+    return undefined;
+  const { team, comment, state, labels, assignee } = target;
+  if (team !== undefined) {
+    if (!isRecord(team) || Object.keys(team).length === 0 || !hasKeys(team, [], ['id', 'key'])) return undefined;
+    if (
+      (team.id !== undefined && typeof team.id !== 'string') ||
+      (team.key !== undefined && typeof team.key !== 'string')
+    )
+      return undefined;
+  }
+  const commentText = templateText(comment);
+  if (commentText === undefined) return undefined;
+  let stateLines: string[] = [];
+  if (state !== undefined) {
+    if (!isRecord(state) || !hasKeys(state, ['name'], ['id', 'type'])) return undefined;
+    const { name, id, type } = state;
+    if (typeof name !== 'string' || (id !== undefined && typeof id !== 'string')) return undefined;
+    if (type !== undefined && typeof type !== 'string') return undefined;
+    stateLines = [
+      `    state ${name === 'id' ? JSON.stringify(name) : formatName(name)}${type === undefined ? '' : `, a ${formatName(type)} state`}`,
+      ...(id === undefined ? [] : [`    state id ${formatName(id)}`]),
+    ];
+  }
+  let labelLines: string[] = [];
+  if (labels !== undefined) {
+    if (!isRecord(labels) || !hasKeys(labels, ['add', 'remove'])) return undefined;
+    const add = labelSide('add', labels.add);
+    const remove = labelSide('remove', labels.remove);
+    if (add === undefined || remove === undefined || add.length + remove.length === 0) return undefined;
+    labelLines = [...add, ...remove];
+  }
+  const assigned = assignee === undefined ? '' : assignedText(assignee);
+  if (assigned === undefined) return undefined;
+  const key = isRecord(team) && typeof team.key === 'string' ? team.key : undefined;
+  const id = isRecord(team) && typeof team.id === 'string' ? team.id : undefined;
+  return [
+    `  linear change ${head}${key === undefined ? '' : `, in team ${formatName(key)}`}${assigned}`,
+    ...(id === undefined ? [] : [`    team id ${formatName(id)}`]),
+    ...(commentText === null ? [] : [`    comment ${JSON.stringify(commentText)}`]),
+    ...stateLines,
+    ...labelLines,
   ];
 }
 

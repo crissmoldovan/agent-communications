@@ -311,6 +311,20 @@ it again with `--approval <id>`. Under the `confirm` change policy (`inbox polic
 approve with the approve command the result gives, and a code, instead, and moving a mailbox off `confirm` is itself
 approved that way ([the design](docs/superpowers/specs/2026-09-25-cli-mcp-parity-design.md)).
 
+### One Agent Comms per app: MCP connections (0.35)
+
+Instead of one entry per channel, an app can start Agent Comms once, for a *connection*: a name, the parts it reaches
+and the account each is kept to, and a key that names it in Activity and stops every copy of it when replaced.
+
+```bash
+npx -y @agentcomms/core connection add --app claude-code --name "Work — Claude Code"
+npx -y @agentcomms/core connection migrate      # your separate entries into one connection, when you choose
+```
+
+Adding one, or letting one reach more, is approved first; taking away applies at once. Its tools appear under
+`agentcomms` in the app, so permission rules that named the old servers need allowing again. Separate entries keep
+working until you migrate. [How connections work](packages/core/README.md#mcp-connections-one-agent-comms-per-place-an-app-uses-it).
+
 ### Slack
 
 ```bash
@@ -456,6 +470,12 @@ whatever the setting, `TAKEN_ELSEWHERE`. Turning it off again is approved, as ev
 `gmail_take`, `slack_take` or `resend_take`, hands a message back with a closed reason, or marks it done; every read
 says who has each message in closed words, never which session. `agentcomms takes list|release|give|keep` are yours: who
 has each message across every window, and ending, giving or keeping one. [More](packages/core/README.md).
+
+With the take required, the event service offers each message a rule delivers to a lane or a session to that window:
+no other session may act on it until fifteen minutes after the window is woken for it, or after its prompt is posted,
+and the window still takes it itself — its pointer or prompt says until when. The event service never takes a message. Once a minute it reminds you of the rule-delivered messages nobody took within the account's
+reminder time — "2 messages in cue/slack have waited 15 minutes and no session took them." — and of one handed back as
+needing you at once; the notice never says what they are, and the app lists them under Not taken.
 
 ### Agent sessions, through claude-stream
 

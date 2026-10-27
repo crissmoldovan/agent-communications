@@ -1,11 +1,15 @@
 import {
+  activityClient,
+  type ClientInfo,
   type CommsError,
+  isGatewayPart,
+  stdinClosed,
   strictToolArguments,
   toCommsError,
   UNTRUSTED_NOTICE,
   updateToolNotice,
 } from '@agentcomms/core';
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type Transport } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { WhatsAppContext, type WhatsAppContextOptions } from '../context.ts';
 import { draftMessage } from '../operations/draft.ts';
@@ -39,6 +43,11 @@ export interface WhatsAppMcpOptions extends WhatsAppContextOptions {}
 export interface WhatsAppMcpServer {
   readonly server: McpServer;
   connectStdio(): Promise<void>;
+  /**
+   * Serves `transport` — stdio's by default — with `serveStdio`, in whichever protocol era the client opens with: this
+   * server for the first connection, and one built afresh for any later one. For a test, an in-memory transport.
+   */
+  serve(transport?: Transport): Promise<{ close(): Promise<void> }>;
 }
 
 async function buildInstructions(context: WhatsAppContext): Promise<string> {
@@ -81,17 +90,41 @@ async function buildInstructions(context: WhatsAppContext): Promise<string> {
   ].join('\n');
 }
 
+/**
+ * WhatsApp's brief, as a part of an MCP connection (single-server design D14, §5.6): that nothing here sends, `account`
+ * on every call, and last its accounts — the first line to go when the gateway's budget is short.
+ */
+async function gatewayBrief(context: WhatsAppContext): Promise<string> {
+  let names: string[] = [];
+  try {
+    names = await context.accountNames();
+  } catch {
+    // For the tools to report.
+  }
+  const pinned = context.pinned !== undefined ? names[0] : undefined;
+  return [
+    'Nothing here sends: whatsapp_draft returns a link the person checks and sends themselves. Never say a message was sent.',
+    pinned !== undefined
+      ? `This part serves only the account ${pinned}; \`account\` may be left out.`
+      : 'Pass `account` on every call but whatsapp_status: there is no default.',
+    names.length > 0
+      ? `Known accounts: ${names.slice(0, 8).join(', ')}${names.length > 8 ? `, and ${names.length - 8} more` : ''}.`
+      : 'No account is set up yet.',
+  ].join('\n');
+}
+
 export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}): Promise<WhatsAppMcpServer> {
   // What the client said it is, once one has connected: the activity log's session names it (design 2026-10-25-activity).
-  const client: { info?: () => { name: string; version?: string } | undefined } = {};
+  const client: { info?: () => ClientInfo | undefined } = {};
   const context = new WhatsAppContext({ ...options, surface: 'mcp', clientInfo: () => client.info?.() });
   // A pin naming no WhatsApp account is refused here, so the server does not start serving nothing.
   await context.checkPin();
   const server = new McpServer(
     { name: 'agent-whatsapp', version: VERSION },
-    { instructions: await buildInstructions(context) },
+    { instructions: isGatewayPart(context.env) ? await gatewayBrief(context) : await buildInstructions(context) },
   );
-  client.info = () => server.server.getClientVersion();
+  // The client each call came from: its 2026-07-28 envelope's, or the one it named on connecting (single-server D7).
+  client.info = activityClient(() => server.server.getClientVersion());
 
   /*
    * As JSON, so the structured half is what the text half says: a command a result holds is written out as its text
@@ -296,11 +329,31 @@ export async function createWhatsAppMcpServer(options: WhatsAppMcpOptions = {}):
     },
   );
 
+  /*
+   * One server per connection, in either era (single-server design D6): `serveStdio` decides the era from the client's
+   * opening and builds the instance it pins from this factory. This one goes to the first; any later one — a probe
+   * that was discarded, then the real opening — is built afresh, since an instance is pinned to one connection.
+   */
+  let unserved: McpServer | undefined = server;
+  const serve = async (transport?: Transport) => {
+    const { serveStdio } = await import('@modelcontextprotocol/server/stdio');
+    return serveStdio(
+      async () => {
+        const next = unserved ?? (await createWhatsAppMcpServer(options)).server;
+        unserved = undefined;
+        return next;
+      },
+      { ...(transport === undefined ? {} : { transport }), onerror: () => undefined },
+    );
+  };
   return {
     server,
+    /** Serves stdio and resolves when the client disconnects, so the process does not outlive its client. */
     async connectStdio(): Promise<void> {
-      const { StdioServerTransport } = await import('@modelcontextprotocol/server/stdio');
-      await server.connect(new StdioServerTransport());
+      const closed = stdinClosed();
+      await serve();
+      await closed;
     },
+    serve,
   };
 }

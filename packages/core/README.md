@@ -295,6 +295,9 @@ is the one registration that cannot come from chat. After a restart of the clien
 | `comms_server_install` | register a declared channel or service server with a client; the server appears once the client restarts |
 | `comms_server_prune` | remove the managed runtimes old releases left behind: every managed server's, listed by server, or one `channel`'s; `dryRun` lists them |
 | `comms_server_uninstall` | take one `channel`'s server out of one `client`, at once, as `mcp uninstall`: every user-scope entry of it there, saved first; a project's own entry is left, and said |
+| `comms_connections_list`, `comms_connection_show` | the MCP connections — each place an app uses Agent Comms, its parts, accounts and entry — never with a key; with no id inside a connection, `comms_connection_show` is that connection |
+| `comms_connection_add`, `comms_connection_change`, `comms_connection_migrate` | add a connection, change its parts, or move an app's separate entries into one: approved first where it reaches more, at once where it only narrows |
+| `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` | rename one, give it a new key (written into its entry, the old one stopping), or remove it: each at once |
 | `comms_update` | what is behind the latest release (`check`), and bringing every registration, runtime and global package there as one change; `level` sets how this machine updates (`auto`, `every-14-days`, `never`), `pause` holds the notice for 1, 7 or 14 days and `resume` ends a pause |
 | `comms_change_policy` | report or set the change policy of the defaults, a mailbox or a workspace |
 | `comms_attach` | which files may be attached, as `attach`; `rootsAdd` allows another folder once the person approves, and `rootsRemove`, `denyAdd` and `denyRemove` change the rest |
@@ -311,6 +314,50 @@ Every change is shown to a person before it happens: the first call returns a pr
 tool called again with that id applies it — after the person's yes in the conversation under the `chat` change policy,
 or after they run the approve command the result gives under `confirm`. No tool approves a change, and none applies a
 change it did not plan itself.
+
+## MCP connections: one Agent Comms per place an app uses it
+
+From 0.35.0 an app can start Agent Comms as **one** MCP server instead of one per channel: a *connection*. It is a
+place an app uses Agent Comms — Claude Code in every folder, Claude Code in one project, another Claude profile, Codex,
+Cursor, Claude Desktop, Gemini, VS Code, or a snippet you paste into any other app — with a name, the parts it reaches
+(Agent Comms itself, Gmail, Slack, Resend, WhatsApp, Events), the one account each part is kept to or every one,
+read-only where Gmail offers it, and a key of its own.
+
+```bash
+agentcomms connection add --app claude-code --name "Work — Claude Code" --parts core,gmail:acme/gmail:read-only,events
+agentcomms connection list
+agentcomms connection show <id>
+agentcomms connection change <id> --parts core,gmail:acme/gmail,slack
+agentcomms connection rename <id> "Acme — Claude Code"
+agentcomms connection key replace <id>
+agentcomms connection remove <id>
+agentcomms connection migrate            # your app's separate entries into one connection; --undo <id> goes back
+```
+
+- **What the app starts** is `agentcomms mcp --connection <id>`, which starts each part as its own process — the same
+  program its own entry starts — and passes their tools through under their own names. One part that crashes or hangs
+  holds up none of the others. The app shows the tools as `mcp__agentcomms__gmail_search` rather than
+  `mcp__gmail__gmail_search`, so permission rules that named the old servers need allowing again after a migration.
+- **Adding a connection, or letting one reach more** — a part added, an account let go or moved, read-only off — is
+  shown first and approved, at your terminal, in the app (`--app-approval`, macOS), or in a chat under the `chat` change
+  policy. **Taking away applies at once**: a part removed, kept to one account, read-only on, the connection removed.
+  Renaming it and replacing its key give an agent nothing more, and apply at once too.
+- **The key** is not a password: apps on this Mac start Agent Comms as you, so it keeps out no program running as you —
+  such a program can read the app's config, or start a channel's server itself, as it always could. What it does: it
+  says which connection a call came through, so Activity says "used by <name>", and removing the connection or
+  replacing its key stops every copy of it at once. Agent Comms keeps only its hash, writes it into the app's entry
+  (in the entry's environment, never its arguments), and shows it only for a Manual snippet, once — at your terminal
+  or in the app, never to an agent. If Agent Comms is ever reachable over a network, the key becomes a real secret.
+- **One project** is Claude Code's own local scope, kept in `~/.claude.json` and never in a `.mcp.json`, which is
+  often committed and would carry the key into the repository.
+- **Your existing separate entries keep working**: nothing moves until you run `connection migrate`, which makes one
+  connection per app reaching exactly what those entries reached, saves each entry it removes, and can be undone.
+- `connection` commands are `comms_connections_list`, `comms_connection_show`, `comms_connection_add`,
+  `comms_connection_change`, `comms_connection_rename`, `comms_connection_key_replace`, `comms_connection_remove` and
+  `comms_connection_migrate` over MCP; a Manual connection is the one thing they do not do. Inside a connection,
+  `comms_connection_show` with no id says which connection this is.
+
+The design: [docs/superpowers/specs/2026-10-26-single-server-design.md](../../docs/superpowers/specs/2026-10-26-single-server-design.md).
 
 ## Licence
 

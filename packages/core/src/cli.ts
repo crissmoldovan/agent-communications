@@ -23,6 +23,7 @@ import {
   writeError,
   writeResult,
 } from './cli-runtime.ts';
+import { connectionCommand } from './connection-command.ts';
 import { openCore } from './core.ts';
 import { CommsError, EXIT_CODES } from './errors.ts';
 import {
@@ -270,6 +271,27 @@ Usage — run these with this CLI, each as the words after its program:
   attach deny remove <path> [--approval <id>]
                                 take one of your own deny entries away: approved first
   channels                      which declared servers exist, which are installed, and where they are registered
+  connection list               every MCP connection: each place an app uses Agent Comms, its parts and accounts,
+                                where its entry is and whether its key matches, and when it was last used
+  connection show [<id>]        one connection, and the Agent Comms running for it now, part by part
+  connection add --app <app> --name <name> [--parts <part,…>] [--folder <dir>] [--profile <dir>]
+                                [--launcher managed|npx|local] [--approval <id>]
+                                add a connection, with its own key, and register its one entry with the app:
+                                approved first. --app is claude-code, claude-desktop, codex, cursor, gemini,
+                                vscode or manual; a part is a server, then its account and read-only, as
+                                gmail:cue/gmail:read-only; --folder is one project, for Claude Code only
+  connection change <id> --parts <part,…> [--approval <id>]
+                                every part it has from now on: taking away applies at once, giving more is
+                                approved first
+  connection rename <id> <name> rename it: applies at once
+  connection key replace <id>   a new key, written into its entry, the old one stopping at once: applies at once
+  connection remove <id>        remove it and its entry: its key stops working at once
+  connection migrate [--client <client>] [--approval <id>]
+                                move each app's separate Agent Comms entries into one connection that
+                                reaches exactly what they reached, each removed entry saved first: approved
+                                first. The tools then appear under that one entry: allow them again
+  connection migrate --undo <id> [--approval <id>]
+                                its parts as entries of their own again, and the connection taken out
   org add <file> [--for-other-addresses] [--adopt <client>] [--store keychain|file] [--approval <id>]
                                 add an organisation's profile — its Google client and Slack apps,
                                 beside what is here: approved first
@@ -343,6 +365,8 @@ Usage — run these with this CLI, each as the words after its program:
                                 start the missing profile file for that place from a starter, and print
                                 its path; never overwrites one, and no tool can do it for an agent
   mcp                           run the core MCP server on stdio (what an MCP client starts)
+  mcp --connection <id>         run Agent Comms for one MCP connection on stdio: what an app's entry starts,
+                                with the connection's key in its environment
   mcp install --client <client> [--server <server>[,<server>…]] [--name <name>] [--account <account>|--inbox <inbox>|--workspace <workspace>] [--read-only]
                                 [--launcher managed|npx|local] [--force]
                                 [--print] [--no-verify] [--approval <id>]
@@ -482,6 +506,14 @@ function parse(argv: string[]) {
       'app-approval': { type: 'string' },
       client: { type: 'string' },
       server: { type: 'string' },
+      // `mcp --connection <id>`: the gateway an app starts for one MCP connection (single-server design D2).
+      connection: { type: 'string' },
+      // `connection add|change`; refused on every other command (`refuseConnectionOptionsElsewhere`).
+      app: { type: 'string' },
+      parts: { type: 'string' },
+      undo: { type: 'string' },
+      folder: { type: 'string' },
+      profile: { type: 'string' },
       name: { type: 'string' },
       launcher: { type: 'string' },
       force: { type: 'boolean', default: false },
@@ -596,9 +628,33 @@ function takesApproval(command: string | undefined, sub: string | undefined): bo
       return sub === 'on' || sub === 'off' || sub === 'accounts' || sub === 'model';
     case 'taking':
       return sub !== undefined;
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate';
     default:
       return false;
   }
+}
+
+/** `connection add|change`'s own options, as typed. */
+const CONNECTION_OPTIONS = ['app', 'parts', 'folder', 'profile', 'undo'] as const;
+
+/**
+ * Refuses `connection`'s own options on any other command, as USAGE, before anything runs — as `label`'s are: an option
+ * a command does not read is refused rather than quietly doing nothing.
+ */
+function refuseConnectionOptionsElsewhere(
+  command: string | undefined,
+  values: Partial<Record<(typeof CONNECTION_OPTIONS)[number], unknown>>,
+  help: Handoff,
+): void {
+  if (command === 'connection') return;
+  const given = CONNECTION_OPTIONS.filter((flag) => values[flag] !== undefined);
+  if (given.length === 0) return;
+  throw new CommsError(
+    'USAGE',
+    `${given.map((flag) => `--${flag}`).join(', ')} ${given.length === 1 ? 'is an option' : 'are options'} of the connection command only`,
+    { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
+  );
 }
 
 /**
@@ -630,6 +686,8 @@ function takesAppApproval(command: string | undefined, sub: string | undefined):
   switch (command) {
     case 'mcp':
       return sub === 'install';
+    case 'connection':
+      return sub === 'add' || sub === 'change' || sub === 'migrate';
     case 'label':
     case 'behaviour':
     case 'taking':
@@ -838,6 +896,17 @@ export async function main(
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform,
   deps: {
+    /** Starts the gateway for one connection. Injected so a test can inspect its inputs without opening stdio. */
+    startGateway?:
+      | ((options: {
+          core: ReturnType<typeof openCore>;
+          env: NodeJS.ProcessEnv;
+          connection: string;
+          platform: NodeJS.Platform;
+        }) => Promise<{ close(): Promise<void> }>)
+      | undefined;
+    /** When the gateway's client has gone: its stdin ending, unless a test says otherwise. */
+    gatewayClosed?: Promise<void> | undefined;
     /** Starts the stdio server. Injected so a test can inspect its inputs without opening stdio. */
     startMcp?:
       | ((options: {
@@ -908,10 +977,11 @@ export async function main(
     refuseActivityOptionsElsewhere(command, values, help);
     refuseSearchOptionsElsewhere(command, values, help);
     refuseTakingOptionsElsewhere(command, sub, values, help);
+    refuseConnectionOptionsElsewhere(command, values, help);
     if (values['app-approval'] !== undefined && !takesAppApproval(command, sub)) {
       throw new CommsError(
         'USAGE',
-        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp install, search on, search accounts add and search model set only',
+        '--app-approval is an option of label word, name, rule, icon and style, behaviour allow and clear, taking, update, mcp install, connection add, change and migrate, search on, search accounts add and search model set only',
         { hint: handoffSentence(help, (command) => `Run ${command} for what each command takes. Nothing was run.`) },
       );
     }
@@ -933,6 +1003,34 @@ export async function main(
   const appApproval = values['app-approval'];
   /** An exit status for a command that printed its result and still did not do what was asked. */
   let softExit: number = EXIT_CODES.OK;
+
+  if (values.connection !== undefined && !(command === 'mcp' && sub === undefined)) {
+    return writeError(
+      usage('--connection is an option of `mcp` only, which runs the gateway an app starts for that connection'),
+      output,
+    );
+  }
+  // The gateway an app starts for one connection (single-server design D2, §4): on stdio, outside `runCommand` too.
+  if (command === 'mcp' && sub === undefined && values.connection !== undefined) {
+    if (values.json) return writeError(usage('`mcp` runs the server; it prints no result'), output);
+    // Every part it starts inherits the mark, so none of them can make a person's read, or approve in the app (§8.3).
+    markMcpServerProcess(env, 'gateway');
+    if (env !== process.env) markMcpServerProcess(process.env, 'gateway');
+    const toStderr = (...args: unknown[]): void => {
+      process.stderr.write(`${args.map((arg) => (typeof arg === 'string' ? arg : JSON.stringify(arg))).join(' ')}\n`);
+    };
+    console.log = toStderr;
+    console.info = toStderr;
+    console.debug = toStderr;
+    console.warn = toStderr;
+    const runGateway = deps.startGateway ?? (await import('./gateway/serve.ts')).runGateway;
+    const { stdinClosed } = await import('./mcp-request.ts');
+    const closed = deps.gatewayClosed ?? stdinClosed();
+    const gateway = await runGateway({ core, env, connection: values.connection, platform });
+    await closed;
+    await gateway.close();
+    return EXIT_CODES.OK;
+  }
 
   // The server speaks on stdout, so nothing else may: it is run outside `runCommand`, which prints a result there.
   if (command === 'mcp' && sub === undefined) {
@@ -1645,6 +1743,17 @@ export async function main(
           conversations: conversations.length === 0 ? undefined : conversations,
         });
         writeResult(view, output, (shown) => renderProfile(shown, handoffs, account));
+        return;
+      }
+      case 'connection': {
+        await connectionCommand(core, parsed.positionals, values, {
+          env,
+          output,
+          approval,
+          appApproval,
+          installDeps: installVerification(deps.update ?? coreUpdateDeps(core), npmRegistry(env)),
+          usage,
+        });
         return;
       }
       case 'channels': {

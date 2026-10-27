@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { CommsError } from './errors.ts';
+import { withToolRequest } from './mcp-request.ts';
 import type { ToolNotice } from './update-gate.ts';
 
 /**
@@ -108,13 +109,16 @@ export function strictToolArguments(
     return register(
       name,
       { ...registered, inputSchema: passThrough(schema) },
-      async (input: unknown, context: unknown) => {
-        const parsed = await schema.safeParseAsync(input ?? {});
-        if (!parsed.success) return refuse(refusal(name, published, input, parsed.error.issues, retired[name] ?? {}));
-        const result = await (declared ? handler(parsed.data, context) : handler(context));
-        const line = notice ? await notice(name, parsed.data).catch(() => null) : null;
-        return line === null ? result : withUpdateNotice(result, line, room);
-      },
+      // With its request's client in scope (`withToolRequest`): the activity line the call records names the client
+      // this request came from, by its 2026-07-28 envelope where it has one, wherever in the operation it is written.
+      async (input: unknown, context: unknown) =>
+        withToolRequest(context, async () => {
+          const parsed = await schema.safeParseAsync(input ?? {});
+          if (!parsed.success) return refuse(refusal(name, published, input, parsed.error.issues, retired[name] ?? {}));
+          const result = await (declared ? handler(parsed.data, context) : handler(context));
+          const line = notice ? await notice(name, parsed.data).catch(() => null) : null;
+          return line === null ? result : withUpdateNotice(result, line, room);
+        }),
     );
   };
   Object.defineProperty(target, APPLIED, { value: true });

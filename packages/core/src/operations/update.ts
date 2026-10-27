@@ -12,6 +12,7 @@ import {
 } from '../channel-servers.ts';
 import { accountNoun, pinOption } from '../channel-words.ts';
 import type { Config } from '../config.ts';
+import { registeredOrConnected } from '../connection-registrations.ts';
 import type { Core } from '../core.ts';
 import { CommsError, toCommsError } from '../errors.ts';
 import { type GlobalInstallDeps, installVerifiedGlobal, readRemovedGlobals } from '../global-install.ts';
@@ -26,7 +27,7 @@ import {
   writeLauncher,
 } from '../launcher.ts';
 import { type ManagedShimWriteResult, managedShimPath, managedShimsSupported } from '../managed-shims.ts';
-import { type RegisteredServer, scanRegisteredServers, type UnreadableConfig } from '../mcp-clients.ts';
+import type { RegisteredServer, UnreadableConfig } from '../mcp-clients.ts';
 import {
   clientCliSearch,
   entryDestination,
@@ -518,7 +519,9 @@ async function runtimesNeeded(
 
 async function inspect(core: Core, env: NodeJS.ProcessEnv, deps: UpdateDeps): Promise<Inspection> {
   const context: InstallContext = { env, core, platform: deps.platform };
-  const scan = await scanRegisteredServers(env);
+  // Every entry in the apps' configs, and every part a connection's gateway starts (D19): a part reached only through
+  // a connection would otherwise keep running the old release.
+  const scan = await registeredOrConnected(core, env);
   const handoffs = requireHandoffs(core, deps.platform).withRegistrations(scan.servers);
   const unreadable: UnreadableConfig[] = [...scan.unreadable];
   const found = registrations(scan.servers).map(({ channel, server }) => {

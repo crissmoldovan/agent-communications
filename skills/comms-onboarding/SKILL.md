@@ -64,6 +64,14 @@ preview, get their yes, call again with `approvalId`. Under `confirm`, `comms_ap
 when they have approved it at their terminal. When the person says no, revoke it at once with
 `comms_approval_revoke`: the server never hears a "no".
 
+**Or one entry for all of it: a connection.** `comms_connection_add` with their app and a name registers one entry
+that starts every part they chose: by default Agent Comms itself, each channel with an account here and Events where
+it is installed — or name them in `parts`, each kept to one account, and Gmail read-only. It is a change: preview, yes,
+`approvalId`. It suits a new setup; an app that already has separate entries moves only when the person asks, with
+`comms_connection_migrate`, whose preview says the tools then appear under `agentcomms` and permission rules that named
+the old servers need allowing again. A Manual connection, whose snippet carries its key, is the person's to add at
+their own terminal or in the app — never in chat.
+
 Then ask them to restart the client **now**, once, after every server is registered: the channels'
 tools below (`gmail_…`, `slack_…`, `resend_…`, `whatsapp_…`) exist only in the next session. Claude Code resumes this conversation with
 `claude --continue`. If you can run commands, you may instead carry on in this session with the
@@ -192,6 +200,7 @@ Every step has a command, for a person at a terminal or an agent that can run co
 | What is there | `agentcomms channels` |
 | An organisation's profile | `agentcomms org add <file>`, then `agentcomms org show <organisation>` for its client's name; later `agentcomms org update <organisation>` or `agentcomms org remove <organisation>` |
 | Register a server | `agent-gmail mcp install --client <client>`, and the same with `agent-slack`, `agent-resend` or `agent-whatsapp` |
+| One connection instead | `agentcomms connection add --app <app> --name <name> [--parts <part,…>]`; `agentcomms connection migrate` moves separate entries into one |
 | Gmail, in one command | `agent-gmail setup --inbox <name>` — the Google Cloud screens, the client, a mailbox and the registration. With `--profile <file>` its separate profile preview is claimed with `--org-approval <id>`. With `--json` it acts only on the flags it is given (`--client-json <path>`, `--inbox <name>`, `--email <address>`, `--mcp-client <client>`) and names the one it needs next |
 | Gmail, step by step | `agent-gmail client add <path>`, then `agent-gmail inbox add <name> --tier <tier> --start`, then `agent-gmail inbox add --finish <flowId>` |
 | Slack, organisation profile | `agent-slack workspace add rgc/slack --start` (or `--mode send --start`), then `agent-slack workspace add --finish <flowId>`; the profile selects its app and port |

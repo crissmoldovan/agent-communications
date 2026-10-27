@@ -143,6 +143,36 @@ export interface InstallOptions {
    * Only ever an entry this product wrote: see `claimName`.
    */
   force?: boolean | undefined;
+  /**
+   * More of the entry's own environment, beside its PATH: an MCP connection's key (single-server design D10), which an
+   * entry carries in its environment and never in its arguments. Never printed back: a caller that has one hands the
+   * person the snippet only where it shows the key on purpose (a Manual connection).
+   */
+  entryEnv?: Readonly<Record<string, string>> | undefined;
+  /**
+   * The MCP connection this entry is (D18): an entry of ours under the name is replaced only when it carries
+   * `--connection <this id>`, and no other entry carrying `--connection` is ever replaced — it is another connection's.
+   */
+  connection?: string | undefined;
+  /** Claude Code's scope for the entry: `user`, the default, or `local` — one project, private, run in `folder`. */
+  scope?: 'user' | 'local' | undefined;
+  /** The project folder a `local` entry is for: Claude Code's own CLI is run there. */
+  folder?: string | undefined;
+  /**
+   * With `connection`: core's own entry under the name, which this connection's entry takes the place of — a migration
+   * (single-server design §9.1, "It takes core's name, `agentcomms`, replacing core's own entry"). Saved first, and put
+   * back if the connection's entry does not land.
+   */
+  replaceCore?: boolean | undefined;
+}
+
+/** The MCP connection an entry starts the gateway for — the value of its `--connection` — or null for one that is none. */
+export function connectionOfEntry(args: readonly string[]): string | null {
+  for (const [index, argument] of args.entries()) {
+    if (argument === '--connection') return args[index + 1] ?? null;
+    if (argument.startsWith('--connection=')) return argument.slice('--connection='.length);
+  }
+  return null;
 }
 
 /** What narrows what a server may reach: its pin to one account, and `--read-only`. */
@@ -615,9 +645,13 @@ export async function findNpmCli(): Promise<string> {
  * never to take a program from its current folder: `npm` and a client's command both start programs of their own by
  * name.
  */
-function run(env: NodeJS.ProcessEnv, command: string, args: string[]): Promise<void> {
+function run(env: NodeJS.ProcessEnv, command: string, args: string[], cwd?: string): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { stdio: ['ignore', 'ignore', 'pipe'], env: childEnvironment(env) });
+    const child = spawn(command, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      env: childEnvironment(env),
+      ...(cwd === undefined ? {} : { cwd }),
+    });
     let stderr = '';
     child.stderr?.on('data', (chunk) => {
       stderr += String(chunk);
@@ -644,7 +678,7 @@ async function buildEntry(
 ): Promise<{ entry: ServerEntry; launcher: Launcher; runtimeMissing: boolean }> {
   const launcher = options.launcher ?? 'managed';
   const { node } = resolved;
-  const env = minimalEnv(context, node);
+  const env = { ...minimalEnv(context, node), ...(options.entryEnv ?? {}) };
   const pathArgs = registrationPathArgs(context);
   const serverArgs = product.serverArgs(options);
 
@@ -809,9 +843,42 @@ function claimName(
   existing: readonly RegisteredServer[],
   _platform: NodeJS.Platform | undefined,
 ): RegisteredServer[] {
+  const scope = options.scope ?? 'user';
   const taken = existing.filter(
-    (server) => server.client === options.client && server.name === name && server.scope !== 'project',
+    (server) =>
+      server.client === options.client &&
+      server.name === name &&
+      (scope === 'local'
+        ? server.scope === 'project' && server.folder === options.folder && !server.path.endsWith('.mcp.json')
+        : server.scope !== 'project'),
   );
+  /*
+   * An entry that starts the gateway for an MCP connection is that connection's (single-server design §9.2): replaced
+   * only by the install of that same connection — its key replaced, say — and never by `--force`, nor by another one.
+   */
+  const connections = taken.filter((server) => connectionOfEntry(server.args) !== null);
+  if (connections.some((server) => connectionOfEntry(server.args) !== options.connection)) {
+    throw new CommsError(
+      'CONFIG',
+      `${options.client} has an entry called "${name}" that belongs to an MCP connection, so it is not replaced`,
+      {
+        hint: 'Change or remove that connection with the connection command, or register this under another --name. --force does not replace a connection’s entry.',
+      },
+    );
+  }
+  if (options.connection !== undefined) {
+    const others = taken.filter(
+      (server) =>
+        connectionOfEntry(server.args) !== options.connection &&
+        !(options.replaceCore === true && connectionOfEntry(server.args) === null && isProductServer(server, product)),
+    );
+    if (others.length > 0) {
+      throw new CommsError('CONFIG', `${options.client} already has an MCP server called "${name}"`, {
+        hint: 'Choose another name for the connection’s entry.',
+      });
+    }
+    return taken;
+  }
   const foreign = taken.find((server) => !isProductServer(server, product));
   if (foreign) {
     // Never the arguments or the env, and of a URL only where it points: any of them may hold somebody's token.
@@ -1518,9 +1585,11 @@ export async function mcpInstall(
     if (cliName && cliPath && writes) {
       const codexEnv = (values: Record<string, string> | undefined) =>
         Object.entries(values ?? {}).flatMap(([key, value]) => ['--env', `${key}=${value}`]);
+      const scope = options.scope ?? 'user';
+      const cwd = scope === 'local' ? options.folder : undefined;
       const args =
         options.client === 'claude-code'
-          ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', 'user']
+          ? ['mcp', 'add-json', name, JSON.stringify(entry), '--scope', scope]
           : ['mcp', 'add', name, ...codexEnv(entry.env), '--', entry.command, ...entry.args];
 
       /*
@@ -1532,9 +1601,9 @@ export async function mcpInstall(
       const replacing = previous.find((server) => server.client === options.client);
       if (replacing) {
         const removal =
-          options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', 'user'] : ['mcp', 'remove', name];
+          options.client === 'claude-code' ? ['mcp', 'remove', name, '--scope', scope] : ['mcp', 'remove', name];
         try {
-          await run(context.env, cliPath, removal);
+          await run(context.env, cliPath, removal, cwd);
         } catch (error) {
           // Nothing registered under that name is the state we wanted anyway. Anything else is a real failure and
           // must not be swallowed: proceeding would add beside an entry we failed to remove.
@@ -1543,7 +1612,7 @@ export async function mcpInstall(
         }
 
         try {
-          await run(context.env, cliPath, args);
+          await run(context.env, cliPath, args, cwd);
         } catch (error) {
           // What was there goes back if the replacement does not land. Otherwise `--force` removes a working entry
           // and leaves the client with no server at all — strictly worse than the stale one it was asked to replace.
@@ -1561,7 +1630,7 @@ export async function mcpInstall(
                     ...(replacing.env ? { env: replacing.env } : {}),
                   }),
                   '--scope',
-                  'user',
+                  scope,
                 ]
               : ['mcp', 'add', name, ...codexEnv(replacing.env), '--', replacing.command, ...replacing.args];
 
@@ -1569,7 +1638,7 @@ export async function mcpInstall(
           // their working server survived, when in fact nothing is registered at all.
           let restored = true;
           try {
-            await run(context.env, cliPath, restore);
+            await run(context.env, cliPath, restore, cwd);
           } catch {
             restored = false;
           }
@@ -1592,7 +1661,7 @@ export async function mcpInstall(
         }
       } else {
         try {
-          await run(context.env, cliPath, args);
+          await run(context.env, cliPath, args, cwd);
         } catch (error) {
           const message = error instanceof CommsError ? error.message : String(error);
           if (/already exists/i.test(message)) {
@@ -1827,7 +1896,11 @@ export async function mcpUninstall(
   const platform = platformOf(context);
   const scan = await scanRegisteredServers(context.env);
   const unreadable = scan.unreadable.filter((file) => file.client === client);
-  const mine = scan.servers.filter((server) => server.client === client && isProductServer(server, product, platform));
+  // An entry that starts the gateway for an MCP connection is that connection's: `connection remove` takes it out.
+  const mine = scan.servers.filter(
+    (server) =>
+      server.client === client && isProductServer(server, product, platform) && connectionOfEntry(server.args) === null,
+  );
   const kept: KeptEntry[] = [];
   const toRemove: RegisteredServer[] = [];
   for (const server of mine) {
@@ -1885,6 +1958,139 @@ export async function mcpUninstall(
   }
   return { client, removed, kept, unreadable, backupPath };
 }
+
+/** The client configs every install recorded writing to or printing for (`HandedOut.config`), as `prune` reads them. */
+export async function recordedClientConfigs(dataDir: string): Promise<{ client: string; path: string }[] | null> {
+  const handedOut = await readHandedOut(handedOutRuntimesPath(dataDir));
+  if (handedOut === null) return null;
+  return handedOut.flatMap((record) => (record.config ? [{ client: record.client, path: record.config }] : []));
+}
+
+/**
+ * Takes exactly these entries out of one client — a migration's (single-server design §9.1, step 5.4) — each saved
+ * first, owner-only, and only while it is still there as it was read: nothing else of that client is touched.
+ */
+export async function removeEntries(
+  context: InstallContext,
+  client: SupportedClient,
+  entries: readonly RegisteredServer[],
+  product: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'>,
+  now: Date = new Date(),
+): Promise<UninstallResult> {
+  const platform = platformOf(context);
+  const kept: KeptEntry[] = [];
+  const removed: UninstalledEntry[] = [];
+  if (entries.length === 0) return { client, removed, kept, unreadable: [], backupPath: undefined };
+  const backupPath = await backUpRemoved(context, client, entries, now);
+  const target = await installTarget(context, { client });
+  if (target.cliName !== null) {
+    for (const server of entries) {
+      const words =
+        target.cliName === 'claude'
+          ? ['mcp', 'remove', server.name, '--scope', 'user']
+          : ['mcp', 'remove', server.name];
+      if (target.cliPath === null) {
+        kept.push({
+          name: server.name,
+          path: server.path,
+          reason: `${target.cliName} was not found ${clientCliSearch(context.env)}`,
+        });
+        continue;
+      }
+      try {
+        await run(context.env, target.cliPath, words);
+        removed.push({ name: server.name, path: server.path });
+      } catch (error) {
+        const message = error instanceof CommsError ? error.message : String(error);
+        if (/no (mcp )?server|not found|does not exist/i.test(message))
+          removed.push({ name: server.name, path: server.path });
+        else kept.push({ name: server.name, path: server.path, reason: message });
+      }
+    }
+  } else {
+    const byFile = new Map<string, RegisteredServer[]>();
+    for (const server of entries) byFile.set(server.path, [...(byFile.get(server.path) ?? []), server]);
+    for (const [path, servers] of byFile) {
+      const outcome = await removeFromJsonConfig(path, servers, product, platform);
+      removed.push(...outcome.removed);
+      kept.push(...outcome.kept);
+    }
+  }
+  return { client, removed, kept, unreadable: [], backupPath };
+}
+
+/**
+ * Takes one MCP connection's entry out of its app (single-server design §9.1, `connection remove`): only an entry under
+ * `name`, at the connection's scope, whose arguments carry `--connection <id>` — never another entry of that name —
+ * saved first, owner-only. Nothing to take out is what was asked for, and said so.
+ */
+export async function removeConnectionEntry(
+  context: InstallContext,
+  client: SupportedClient,
+  where: { name: string; connection: string; scope?: 'user' | 'local' | undefined; folder?: string | undefined },
+  now: Date = new Date(),
+): Promise<UninstallResult> {
+  const platform = platformOf(context);
+  const scope = where.scope ?? 'user';
+  const scan = await scanRegisteredServers(context.env);
+  const unreadable = scan.unreadable.filter((file) => file.client === client);
+  const toRemove = scan.servers.filter(
+    (server) =>
+      server.client === client &&
+      server.name === where.name &&
+      connectionOfEntry(server.args) === where.connection &&
+      (scope === 'local' ? server.scope === 'project' && server.folder === where.folder : server.scope !== 'project'),
+  );
+  const kept: KeptEntry[] = [];
+  const removed: UninstalledEntry[] = [];
+  if (toRemove.length === 0) return { client, removed, kept, unreadable, backupPath: undefined };
+  const backupPath = await backUpRemoved(context, client, toRemove, now);
+  const target = await installTarget(context, { client });
+  if (target.cliName !== null) {
+    const words =
+      target.cliName === 'claude' ? ['mcp', 'remove', where.name, '--scope', scope] : ['mcp', 'remove', where.name];
+    const command = clientCommandHint([target.cliName, ...words], platform, `${target.cliName}'s own \`mcp remove\``);
+    if (target.cliPath === null) {
+      kept.push({
+        name: where.name,
+        path: toRemove[0]?.path ?? '',
+        reason: `${target.cliName} was not found ${clientCliSearch(context.env)}: remove it with ${command}`,
+      });
+    } else {
+      try {
+        await run(context.env, target.cliPath, words, scope === 'local' ? where.folder : undefined);
+        removed.push({ name: where.name, path: toRemove[0]?.path ?? '' });
+      } catch (error) {
+        const message = error instanceof CommsError ? error.message : String(error);
+        if (/no (mcp )?server|not found|does not exist/i.test(message)) {
+          removed.push({ name: where.name, path: toRemove[0]?.path ?? '' });
+        } else {
+          kept.push({
+            name: where.name,
+            path: toRemove[0]?.path ?? '',
+            reason: `${command} did not remove it: ${message}`,
+          });
+        }
+      }
+    }
+  } else {
+    const byFile = new Map<string, RegisteredServer[]>();
+    for (const server of toRemove) byFile.set(server.path, [...(byFile.get(server.path) ?? []), server]);
+    for (const [path, servers] of byFile) {
+      const outcome = await removeFromJsonConfig(path, servers, GATEWAY_PRODUCT_FACTS, platform);
+      removed.push(...outcome.removed);
+      kept.push(...outcome.kept);
+    }
+  }
+  return { client, removed, kept, unreadable, backupPath };
+}
+
+/** What tells core's own entries apart, which a connection's entry is: it starts core's launcher. */
+const GATEWAY_PRODUCT_FACTS: Pick<McpProduct, 'packageName' | 'npxPackage' | 'entryFiles' | 'binary' | 'bins'> = {
+  packageName: '@agentcomms/core',
+  npxPackage: '@agentcomms/core',
+  binary: 'agentcomms',
+};
 
 /** Saves the entries an uninstall is about to take out, owner-only, and returns where. */
 async function backUpRemoved(

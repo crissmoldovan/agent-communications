@@ -133,7 +133,7 @@ const FIELD_NAMES: Readonly<Record<string, string>> = {
 };
 
 /** A judge as a person knows it: Jev by TypeSafe, a local model server, Laya, or the judge's id. */
-function judgeName(judge: { readonly judgeId: string; readonly kind?: unknown }): string {
+export function judgeName(judge: { readonly judgeId: string; readonly kind?: unknown }): string {
   switch (judge.kind) {
     case 'typesafe':
       return 'Jev';
@@ -155,7 +155,7 @@ function words(token: string): string {
 }
 
 /** A pointer's label: the reader's own, then the catalogue's, then the pointer itself as rule-author text. */
-function fieldPart(pointer: string, rule: DescribableRuleDocument, labels: FieldLabels | undefined): RulePart {
+export function fieldPart(pointer: string, rule: DescribableRuleDocument, labels: FieldLabels | undefined): RulePart {
   const given = labels?.fields?.[pointer];
   if (given !== undefined) return plain(given);
   const entry = catalogueEntry(rule.event.type, rule.event.version);
@@ -171,6 +171,14 @@ function fieldPart(pointer: string, rule: DescribableRuleDocument, labels: Field
   if (!tokens.ok || tokens.value.length === 0) return untrusted(pointer);
   return plain(`the ${tokens.value.map(words).join(' ')}`);
 }
+
+/** How a condition's path is named in its sentence: by `fieldPart` for a rule's, by its flow for a step's. */
+export type PathNamer = (pointer: string) => RulePart | readonly RulePart[];
+
+const named = (name: PathNamer, pointer: string): readonly RulePart[] => {
+  const found = name(pointer);
+  return Array.isArray(found) ? found : [found as RulePart];
+};
 
 const operand = (scalar: Scalar): RulePart => untrusted(typeof scalar === 'string' ? scalar : canonicalJson(scalar));
 const quoted = (scalar: Scalar): readonly RulePart[] => [plain("'"), operand(scalar), plain("'")];
@@ -200,63 +208,59 @@ function comparison(op: 'gt' | 'gte' | 'lt' | 'lte', operandValue: number | stri
 }
 
 /** One leaf as a predicate: "the subject contains 'invoice'". */
-function leaf(condition: Leaf, rule: DescribableRuleDocument, labels: FieldLabels | undefined): readonly RulePart[] {
-  const field = fieldPart(condition.path, rule, labels);
+function leaf(condition: Leaf, name: PathNamer): readonly RulePart[] {
+  const field = named(name, condition.path);
   switch (condition.op) {
     case 'exists':
-      return [field, plain(' is present')];
+      return [...field, plain(' is present')];
     case 'equals':
-      return [field, plain(' is '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
+      return [...field, plain(' is '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
     case 'notEquals':
-      return [field, plain(' is not '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
+      return [...field, plain(' is not '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
     case 'contains':
-      return [field, plain(' contains '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
+      return [...field, plain(' contains '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
     case 'startsWith':
-      return [field, plain(' starts with '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
+      return [...field, plain(' starts with '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
     case 'endsWith':
-      return [field, plain(' ends with '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
+      return [...field, plain(' ends with '), ...quoted(condition.value), ...caseText(condition.caseSensitive)];
     case 'in':
-      return [field, plain(' is one of '), ...list(condition.values.map(quoted), ', ')];
+      return [...field, plain(' is one of '), ...list(condition.values.map(quoted), ', ')];
     case 'gt':
     case 'gte':
     case 'lt':
     case 'lte':
-      return [field, plain(comparison(condition.op, condition.value)), ...quoted(condition.value)];
+      return [...field, plain(comparison(condition.op, condition.value)), ...quoted(condition.value)];
     case 'domainIs':
       return [
-        field,
+        ...field,
         plain(' is at '),
         ...quoted(condition.value),
         ...(condition.includeSubdomains ? [plain(' or a subdomain')] : []),
       ];
     default:
-      return [field, plain(' matches a condition this release cannot name')];
+      return [...field, plain(' matches a condition this release cannot name')];
   }
 }
 
-function predicate(
-  condition: CanonicalCondition,
-  rule: DescribableRuleDocument,
-  labels: FieldLabels | undefined,
-  nested = false,
-): readonly RulePart[] {
+/** A condition as a predicate, its paths named by `name`: groups in brackets, `not (…)`, leaves as words. */
+export function predicate(condition: CanonicalCondition, name: PathNamer, nested = false): readonly RulePart[] {
   const group = (parts: readonly RulePart[]) => (nested ? [plain('('), ...parts, plain(')')] : parts);
   if ('all' in condition)
     return group(
       list(
-        condition.all.map((child) => predicate(child, rule, labels, true)),
+        condition.all.map((child) => predicate(child, name, true)),
         ' and ',
       ),
     );
   if ('any' in condition)
     return group(
       list(
-        condition.any.map((child) => predicate(child, rule, labels, true)),
+        condition.any.map((child) => predicate(child, name, true)),
         ' or ',
       ),
     );
-  if ('not' in condition) return [plain('not ('), ...predicate(condition.not, rule, labels), plain(')')];
-  return leaf(condition, rule, labels);
+  if ('not' in condition) return [plain('not ('), ...predicate(condition.not, name), plain(')')];
+  return leaf(condition, name);
 }
 
 /** "with 'invoice' or 'receipt' in the subject": a contains, or any/all of contains on one field. */
@@ -387,7 +391,8 @@ function session(entry: DescribableTarget): readonly RulePart[] {
   return [...where, ...none, ...busy];
 }
 
-function target(entry: DescribableTarget): readonly RulePart[] {
+/** What a rule does with a match at one target, as a phrase: "put it in the Queue, lane billing". */
+export function target(entry: DescribableTarget): readonly RulePart[] {
   switch (entry.kind) {
     case 'dry-run':
       return [plain('record it in the '), value('Dry-run log')];
@@ -426,7 +431,10 @@ export function describeRule(rule: DescribableRuleDocument, labels?: FieldLabels
       : [plain(opening)]),
     ...list(accounts, ' or '),
     ...scope(rule),
-    ...(containsPhrase(rule.condition, rule, labels) ?? [plain(' where '), ...predicate(rule.condition, rule, labels)]),
+    ...(containsPhrase(rule.condition, rule, labels) ?? [
+      plain(' where '),
+      ...predicate(rule.condition, (pointer) => fieldPart(pointer, rule, labels)),
+    ]),
   ];
   const targets = list(rule.targets.map(target), ' and ');
   const agentic = rule.agentic;

@@ -1,3 +1,4 @@
+import { sessionOfferLine } from '@agentcomms/events';
 import type { QueueChannel } from './queue-target.ts';
 
 /**
@@ -176,16 +177,29 @@ export interface LanePointer {
   readonly ruleId: string;
   /** How many open items in the lane this window has not been woken for, the named one included. */
   readonly waiting: number;
+  /**
+   * When the named item's message is offered to this window (taking messages T4): the time on the person's clock the
+   * offer lasts until, as `11:20`. The pointer then carries the offer's one fixed line.
+   */
+  readonly offeredUntil?: string | undefined;
 }
+
+/** A clock time as the pointer writes it: hours and minutes, nothing else. */
+const CLOCK_TIME = /^(?:[01][0-9]|2[0-3]):[0-5][0-9]$/u;
 
 /**
  * The pointer a wake carries (§2, §3.4). It lands in a privileged spot — a task result the model starts a turn on — so
- * it is only what the service itself writes: the lane, the item's id, its channel and its rule. No sender, subject or
+ * it is only what the service itself writes: the lane, the item's id, its channel and its rule, and — when the item's
+ * message is offered to this window (taking T4) — the offer's one fixed line with its clock time. No sender, subject or
  * text; those come only through `events_lane_item`, enveloped.
  */
 export function lanePointerText(pointer: LanePointer): string {
   const where = `(${LANE_POINTER_CHANNEL_NAMES[pointer.channel]}, rule ${pointerRuleId(pointer.ruleId)})`;
-  const read = `read it with events_lane_item, item ${pointer.itemId}.`;
+  const offered =
+    pointer.offeredUntil !== undefined && CLOCK_TIME.test(pointer.offeredUntil)
+      ? ` ${sessionOfferLine(pointer.offeredUntil)}`
+      : '';
+  const read = `read it with events_lane_item, item ${pointer.itemId}.${offered}`;
   const again = `Then call events_watch for lane ${pointer.lane} again to keep watching.`;
   return pointer.waiting <= 1
     ? `1 new item in lane ${pointer.lane} ${where}: ${read} ${again}`

@@ -404,9 +404,10 @@ const MCP_SERVER_MARKER = 'AGENTCOMMS_MCP_SERVER';
  * 0.33.0; the app offers Approve in Terminal), and the refusal is audited as `desktop-app (unattested)`, so
  * `approvedVia: 'app'` means the attested app. Always refused to an agent's shell (its marker) and inside an MCP
  * server's process, before the approval is touched, and the refusal audited. What: only the change the approval was
- * prepared for, and only on a command that passes this option — `mcp install` (0.32.0), and the person-only changes
- * the app makes from 0.34.0: `label word|name|rule add|rule remove|icon|style`, `behaviour allow|clear` and `update`
- * (design 2026-10-26-desktop-0340 §3, B1–B3). No MCP tool does. Where nothing attests the app, the refusal names the
+ * prepared for, and only on a command that passes this option — `mcp install` (0.32.0), the person-only changes the
+ * app makes from 0.34.0: `label word|name|rule add|rule remove|icon|style`, `behaviour allow|clear` and `update` (design
+ * 2026-10-26-desktop-0340 §3, B1–B3), and `connection add|change|migrate` from 0.35.0 (single-server design §8.1). No
+ * MCP tool does. Where nothing attests the app, the refusal names the
  * command itself, without the option, to run at the person's terminal.
  */
 async function appliedFromApp<T>(
@@ -525,6 +526,11 @@ export interface AppReach {
   readonly clients?: boolean | undefined;
   /** npm's global packages, in its global folder (`npm_config_prefix`). */
   readonly npmGlobal?: boolean | undefined;
+  /**
+   * Further folders it writes in, each said: an MCP connection's other Claude profile or Codex home (single-server design
+   * §8.1), so a test build approves a connection only inside its own profile.
+   */
+  readonly folders?: readonly TouchedFolder[] | undefined;
 }
 
 /** The app-origin check, handed the config folder and every other folder the command touches (`desktopAppOrigin`). */
@@ -554,6 +560,7 @@ function touchedFolders(core: Core, env: NodeJS.ProcessEnv, reach: AppReach | un
   if (reach?.npmGlobal === true) {
     folders.push({ what: "npm's global folder", path: env.npm_config_prefix || env.NPM_CONFIG_PREFIX || undefined });
   }
+  folders.push(...(reach?.folders ?? []));
   return folders;
 }
 

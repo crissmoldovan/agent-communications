@@ -364,4 +364,32 @@ export class Cursor {
   nextIs(character: string): boolean {
     return this.text[this.#next()] === character;
   }
+
+  /** Reads `symbol` — punctuation such as `'s` or `→` — if it comes next, with nothing between it and what follows. */
+  symbol(symbol: string): boolean {
+    const at = this.#next();
+    if (!this.text.startsWith(symbol, at)) return false;
+    this.#at = at + symbol.length;
+    return true;
+  }
+
+  /** Reads the run of characters each matching `character` (a one-character pattern), if one comes next. */
+  run(character: RegExp): string | undefined {
+    this.#skip();
+    let end = this.#at;
+    while (end < this.text.length && character.test(this.text[end] as string)) end += 1;
+    if (end === this.#at) return undefined;
+    const found = this.text.slice(this.#at, end);
+    this.#at = end;
+    return found;
+  }
+}
+
+/**
+ * A line made from part of another, `line` from position `at` on, with the lines given under it: what a step's phrase
+ * reads, so a target or a condition can be read with the same functions as at the top level, and a refusal still
+ * points at the right column.
+ */
+export function subLine(line: TextLine, at: number, children: TextLine[] = line.children): TextLine {
+  return { number: line.number, level: line.level, column: line.column + at, text: line.text.slice(at), children };
 }

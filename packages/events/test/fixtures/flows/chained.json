@@ -1,0 +1,79 @@
+{
+  "condition": {
+    "op": "exists",
+    "path": "/text"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "slack.message.posted",
+    "version": 1
+  },
+  "flow": {
+    "events": {
+      "namespace": "acme",
+      "run": ["finished"],
+      "workflow": "issue-followup"
+    },
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 1,
+      "eventsPerHour": 120,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 4,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "on": {
+      "raised": ["acme.client-asks.issue.created", "acme.client-asks.run.failed"],
+      "withinMs": 7200000
+    },
+    "start": "known",
+    "steps": {
+      "known": {
+        "kind": "condition",
+        "next": {
+          "no": "end",
+          "otherwise": "tell"
+        },
+        "when": {
+          "op": "exists",
+          "path": "/trigger/outputs/issue/identifier"
+        }
+      },
+      "tell": {
+        "emit": ["notified"],
+        "kind": "notify",
+        "next": {},
+        "text": "{{trigger.outputs.issue.identifier}} was made for a message in acme/slack"
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "text": {
+      "$path": "/text"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "issue-followup",
+  "source": {
+    "accountIds": ["acme/slack"],
+    "channel": "slack",
+    "options": {
+      "channel": "slack",
+      "conversations": ["C0123"]
+    }
+  },
+  "subscribers": [],
+  "targets": [],
+  "version": 1
+}

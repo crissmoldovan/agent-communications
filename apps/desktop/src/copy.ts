@@ -3,11 +3,13 @@
  * Constraints). A screen's own sentences live with the screen.
  */
 
-/** The app's screens: the sections, then Settings. */
+/** The app's screens: the sections, then Settings. Search (0.35.0) is Messages' second part, with no row of its own. */
 export type Screen =
   | 'overview'
   | 'queue'
   | 'messages'
+  | 'people'
+  | 'search'
   | 'accounts'
   | 'connections'
   | 'approvals'
@@ -20,13 +22,14 @@ export type Screen =
 
 /**
  * The sections in the sidebar's order (DA3; Queue, 0.30.0, first after Overview; Messages, 0.32.0, after Queue;
- * Activity, 0.29.0, between Approvals and Agent; Connections, 0.32.0, after Accounts), then Settings. `isNew` marks a
- * section "New" in this release.
+ * People, 0.35.0, after Messages; Activity, 0.29.0, between Approvals and Agent; Connections, 0.32.0, after Accounts),
+ * then Settings. `isNew` marks a section "New" in this release.
  */
-export const SECTIONS: readonly { screen: Exclude<Screen, 'settings'>; label: string; isNew?: true }[] = [
+export const SECTIONS: readonly { screen: Exclude<Screen, 'settings' | 'search'>; label: string; isNew?: true }[] = [
   { screen: 'overview', label: 'Overview' },
   { screen: 'queue', label: 'Queue' },
   { screen: 'messages', label: 'Messages', isNew: true },
+  { screen: 'people', label: 'People', isNew: true },
   { screen: 'accounts', label: 'Accounts' },
   { screen: 'connections', label: 'Connections', isNew: true },
   { screen: 'approvals', label: 'Approvals' },
@@ -42,11 +45,15 @@ export const SETTINGS = { screen: 'settings', label: 'Settings' } as const;
 /** Every screen's label. */
 export const SCREEN_LABELS: Readonly<Record<Screen, string>> = {
   ...(Object.fromEntries(SECTIONS.map(({ screen, label }) => [screen, label])) as Record<
-    Exclude<Screen, 'settings'>,
+    Exclude<Screen, 'settings' | 'search'>,
     string
   >),
+  search: 'Ask about past messages',
   settings: SETTINGS.label,
 };
+
+/** The section a screen with no row of its own lights in the sidebar: Search is Messages' (0.35.0). */
+export const SECTION_OF: Readonly<Partial<Record<Screen, Screen>>> = { search: 'messages' };
 
 export const COPY = {
   appName: 'Agent Comms',

@@ -1,0 +1,119 @@
+{
+  "condition": {
+    "caseSensitive": false,
+    "op": "contains",
+    "path": "/subject",
+    "value": "invoice"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "gmail.message.received",
+    "version": 1
+  },
+  "flow": {
+    "events": {
+      "namespace": "cue",
+      "run": ["failed"],
+      "workflow": "invoices"
+    },
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 2,
+      "eventsPerHour": 120,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 10,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "start": "issue",
+    "steps": {
+      "issue": {
+        "emit": ["created", "failed"],
+        "kind": "deliver",
+        "next": {
+          "otherwise": "log"
+        },
+        "target": {
+          "targetId": "billing-issues",
+          "version": 2
+        }
+      },
+      "log": {
+        "emit": ["delivered"],
+        "kind": "deliver",
+        "next": {},
+        "target": {
+          "targetId": "invoices-log",
+          "version": 1
+        }
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "from": {
+      "address": {
+        "$path": "/from/address"
+      }
+    },
+    "subject": {
+      "$path": "/subject"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "invoices",
+  "source": {
+    "accountIds": ["cue/gmail"],
+    "channel": "gmail",
+    "options": {
+      "channel": "gmail",
+      "includeSpamTrash": false,
+      "labels": "inbox"
+    }
+  },
+  "subscribers": [],
+  "targets": [
+    {
+      "assignee": "me",
+      "description": {
+        "text": "Check it against Stripe.\n\n{{subject}}"
+      },
+      "kind": "linear",
+      "labels": [
+        {
+          "id": "1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d",
+          "name": "Billing"
+        },
+        {
+          "id": "3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60",
+          "name": "Urgent"
+        }
+      ],
+      "targetId": "billing-issues",
+      "team": {
+        "id": "0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11",
+        "key": "CUE"
+      },
+      "title": {
+        "text": "Invoice from {{from.address}}"
+      },
+      "version": 2
+    },
+    {
+      "kind": "dry-run",
+      "retentionMs": 86400000,
+      "targetId": "invoices-log",
+      "version": 1
+    }
+  ],
+  "version": 5
+}

@@ -1,8 +1,13 @@
 /**
  * What the Messages screen reads (spec 2026-10-26-owner-feedback-0320 §3.6), field by field into the few shapes the
- * join takes: the event service's `messages list --json` and `message show <eventId> --json`, and core's `activity
- * items --json`. Every reader is lenient about what it does not need and strict about what it joins on: an entry with
+ * join takes: the event service's `messages list --json` and `message show <eventId> --json`, core's `activity
+ * items --json`, and — from core 0.35.0 (design 2026-10-26-taking-messages §9) — core's `takes list --json` and
+ * `taking --json`. Every reader is lenient about what it does not need and strict about what it joins on: an entry with
  * no id, or a line with no time, is left out rather than guessed at.
+ *
+ * A take's note is an agent's words, which may carry a sender's: it arrives enveloped, and is kept as it came, a string
+ * the screen shows only through `UntrustedText`, to the person alone. A holder's folder and client are the person's
+ * view of their own windows (T7), and are shown as text through `UntrustedText` too.
  *
  * Nothing here makes markup. What a sender wrote — the kept sender and subject, an activity line's subject and sender —
  * arrives inside the untrusted-content envelope and is kept as it came, a string the screen shows only through
@@ -84,6 +89,8 @@ export interface MessageSource {
   messageId: string | null;
   channelId: string | null;
   ts: string | null;
+  /** A Resend email's id, which a take names it by (0.35.0). */
+  emailId?: string | null;
 }
 
 /** One event the event service observed. */
@@ -292,7 +299,13 @@ function keptOf(value: unknown): SenderView | null {
 
 function sourceOf(value: unknown): MessageSource {
   const given = isRecord(value) ? value : {};
-  return { messageId: word(given.messageId), channelId: word(given.channelId), ts: word(given.ts) };
+  const emailId = word(given.emailId);
+  return {
+    messageId: word(given.messageId),
+    channelId: word(given.channelId),
+    ts: word(given.ts),
+    ...(emailId === null ? {} : { emailId }),
+  };
 }
 
 /** The id the activity log knows the message by: Gmail's message id, or Slack's `<channelId>/<ts>`. */
@@ -417,4 +430,227 @@ export function readActivityItems(value: unknown): ActivityItems | null {
     if (read.length > 0) items.set(id, read);
   }
   return items;
+}
+
+// ── Core's takes (0.35.0) ──────────────────────────────────────────────────────────────────────────────────────
+
+export const TAKE_STATES = ['open', 'offered', 'taken', 'done'] as const;
+export type TakeState = (typeof TAKE_STATES)[number];
+
+/** Why a session handed a message back: core's closed words (T8). */
+export const HAND_BACK_REASONS = ['not-mine', 'wrong-account', 'needs-the-person', 'duplicate', 'other'] as const;
+export type HandBackReason = (typeof HAND_BACK_REASONS)[number];
+
+/** What one line of a take's history says happened (§4). */
+export const TAKE_LINE_KINDS = [
+  'offered',
+  'taken',
+  'handed-back',
+  'done',
+  'expired',
+  'ended',
+  'released',
+  'given',
+  'kept',
+  'acknowledged',
+] as const;
+export type TakeLineKind = (typeof TAKE_LINE_KINDS)[number];
+
+/** An agent window as a take names it: its activity key, its Claude Code session id, its folder and client. */
+export interface TakeWindowView {
+  /** Its activity session key, or null when the take names it by its Claude Code session id alone. */
+  key: string | null;
+  sessionId: string | null;
+  /** Its folder as recorded (a real path), or null. */
+  folder: string | null;
+  client: { name: string; version: string | null } | null;
+}
+
+/** One line of a take's history, oldest first. */
+export interface TakeLineView {
+  at: Millis;
+  kind: TakeLineKind;
+  by: 'window' | 'person' | 'service';
+  /** The window the line is about — the holder's, the offered one's — or null. */
+  window: TakeWindowView | null;
+  /** A person's act: the folder of the terminal it came from, and the processes above it, nearest first. */
+  terminal: { folder: string | null; ancestors: string[] } | null;
+  reason: HandBackReason | null;
+  /** An agent's note, enveloped: the person's alone, shown only through `UntrustedText`. */
+  note: string | null;
+  /** What a 👀 on taking came to. */
+  ack: 'sent' | 'failed' | 'unknown' | 'not-made' | null;
+}
+
+/** One take record, as `takes list` gives it to the person. */
+export interface TakeView {
+  /** `<channel>:<accountId>:<id>`: what the join finds it by. */
+  key: string;
+  channel: 'gmail' | 'slack' | 'resend';
+  accountId: string;
+  /** The account's name now, or null for one no connected account holds. */
+  account: string | null;
+  /** The message's id: Gmail's, Slack's `<channelId>/<ts>`, or Resend's email id. */
+  messageId: string;
+  state: TakeState;
+  /** Who has it: the person, an agent window, or nobody. */
+  holder: 'person' | TakeWindowView | null;
+  /** Who it is offered to and until when, while it is; by a rule's delivery or by the person. */
+  offer: { to: TakeWindowView; until: Millis | null; rule: string | null; byPerson: boolean } | null;
+  takenAt: Millis | null;
+  /** When the take lapses with no further act, or null. */
+  leaseUntil: Millis | null;
+  history: TakeLineView[];
+  updatedAt: Millis | null;
+}
+
+export interface TakesRead {
+  takes: TakeView[];
+  /** Records core could not read: each counts as held by another session until the person releases it. */
+  unreadable: number;
+}
+
+/** Each account's taking settings, as `taking` gives them (§4). */
+export interface TakingSettingView {
+  account: string;
+  channel: 'gmail' | 'slack' | 'resend';
+  required: boolean;
+  acknowledge: 'eyes' | 'nothing';
+  unclaimed: { afterMinutes: number; notify: boolean };
+  /** False when nothing is set for it, and these are the defaults. */
+  stored: boolean;
+}
+
+export interface TakingRead {
+  accounts: TakingSettingView[];
+  /** Values core read as something stricter, each in a sentence. */
+  problems: string[];
+}
+
+const TAKE_CHANNELS = ['gmail', 'slack', 'resend'] as const;
+type TakeChannel = (typeof TAKE_CHANNELS)[number];
+
+function closed<T extends string>(list: readonly T[], value: unknown): T | null {
+  return typeof value === 'string' && (list as readonly string[]).includes(value) ? (value as T) : null;
+}
+
+function clientOf(value: unknown): { name: string; version: string | null } | null {
+  if (!isRecord(value) || typeof value.name !== 'string' || value.name === '') return null;
+  return { name: value.name, version: word(value.version) };
+}
+
+/** A window a take names: by its activity key, its session id, or both; null when it names neither. */
+function takeWindowOf(key: unknown, value: unknown): TakeWindowView | null {
+  const given = isRecord(value) ? value : {};
+  const keyText = text(key) ?? text(given.key);
+  const windowKey = keyText !== null && isSessionKey(keyText) ? keyText : null;
+  const sessionId = word(given.sessionId);
+  if (windowKey === null && sessionId === null) return null;
+  return { key: windowKey, sessionId, folder: word(given.folder), client: clientOf(given.client) };
+}
+
+function takeLineOf(value: unknown): TakeLineView | null {
+  if (!isRecord(value)) return null;
+  const at = millisOf(value.at);
+  const kind = closed(TAKE_LINE_KINDS, value.kind);
+  const by = closed(['window', 'person', 'service'] as const, value.by);
+  if (at === null || kind === null || by === null) return null;
+  const terminal = isRecord(value.terminal) ? value.terminal : null;
+  const ack = isRecord(value.ack)
+    ? closed(['sent', 'failed', 'unknown', 'not-made'] as const, value.ack.outcome)
+    : null;
+  return {
+    at,
+    kind,
+    by,
+    window: takeWindowOf(value.windowKey, value.window),
+    terminal:
+      terminal === null
+        ? null
+        : {
+            folder: word(terminal.folder),
+            ancestors: Array.isArray(terminal.ancestors)
+              ? terminal.ancestors.flatMap((each) => (typeof each === 'string' ? [each] : []))
+              : [],
+          },
+    reason: closed(HAND_BACK_REASONS, value.reason),
+    note: word(value.note),
+    ack,
+  };
+}
+
+function holderOf(value: unknown): TakeView['holder'] {
+  if (!isRecord(value)) return null;
+  if (value.person === true) return 'person';
+  return takeWindowOf(value.key, value);
+}
+
+function offerOf(value: unknown): TakeView['offer'] {
+  if (!isRecord(value)) return null;
+  const to = isRecord(value.to) ? takeWindowOf(value.to.key, value.to) : null;
+  if (to === null) return null;
+  const by = isRecord(value.by) ? value.by : {};
+  return { to, until: millisOf(value.until), rule: word(by.rule), byPerson: by.person === true };
+}
+
+function takeOf(value: unknown): TakeView | null {
+  if (!isRecord(value) || !isRecord(value.message)) return null;
+  const message = value.message;
+  const channel = closed<TakeChannel>(TAKE_CHANNELS, message.channel);
+  const accountId = word(message.accountId);
+  const messageId = word(message.id);
+  const state = closed(TAKE_STATES, value.state);
+  if (channel === null || accountId === null || messageId === null || state === null) return null;
+  const history = Array.isArray(value.history) ? value.history.flatMap((each) => takeLineOf(each) ?? []) : [];
+  return {
+    key: `${channel}:${accountId}:${messageId}`,
+    channel,
+    accountId,
+    account: word(value.account),
+    messageId,
+    state,
+    holder: holderOf(value.holder),
+    offer: offerOf(value.offer),
+    takenAt: millisOf(value.takenAt),
+    leaseUntil: millisOf(value.leaseUntil),
+    history: history.sort((a, b) => a.at - b.at),
+    updatedAt: millisOf(value.updatedAt),
+  };
+}
+
+/** `takes list --json`, read: `{ takes: [...], unreadable: [...] }`, or null when it is not that answer at all. */
+export function readTakesList(value: unknown): TakesRead | null {
+  if (!isRecord(value) || !Array.isArray(value.takes)) return null;
+  return {
+    takes: value.takes.flatMap((each) => takeOf(each) ?? []),
+    unreadable: Array.isArray(value.unreadable) ? value.unreadable.length : 0,
+  };
+}
+
+function takingAccountOf(value: unknown): TakingSettingView | null {
+  if (!isRecord(value)) return null;
+  const account = word(value.account);
+  const channel = closed<TakeChannel>(TAKE_CHANNELS, value.channel);
+  if (account === null || channel === null) return null;
+  const unclaimed = isRecord(value.unclaimed) ? value.unclaimed : {};
+  return {
+    account,
+    channel,
+    // A value that cannot be read counts as the stricter one, as core reads it (§4).
+    required: value.required !== false,
+    acknowledge: value.acknowledge === 'eyes' ? 'eyes' : 'nothing',
+    unclaimed: { afterMinutes: whole(unclaimed.afterMinutes) ?? 5, notify: unclaimed.notify !== false },
+    stored: value.stored === true,
+  };
+}
+
+/** `taking --json`, read: `{ accounts: [...], problems: [...] }`, or null when it is not that answer at all. */
+export function readTaking(value: unknown): TakingRead | null {
+  if (!isRecord(value) || !Array.isArray(value.accounts)) return null;
+  return {
+    accounts: value.accounts.flatMap((each) => takingAccountOf(each) ?? []),
+    problems: Array.isArray(value.problems)
+      ? value.problems.flatMap((each) => (typeof each === 'string' ? [each] : []))
+      : [],
+  };
 }

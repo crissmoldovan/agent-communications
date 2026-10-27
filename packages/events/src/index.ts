@@ -18,6 +18,7 @@ export { formatPointer, getPointer, parsePointer, relatePointers } from './point
 export * from './result.ts';
 export * from './retention.ts';
 export * from './rule-text/index.ts';
+export { describeFlow, type FlowLine } from './rules/describe-flow.ts';
 export {
   type DescribableRuleDocument,
   type DescribableTarget,

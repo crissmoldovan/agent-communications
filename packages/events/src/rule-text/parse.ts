@@ -1,6 +1,7 @@
 /** `parseRuleText`: the rule text back to its rule document. */
 import type { JsonObject, JsonValue } from '../json.ts';
 import { setOwn } from '../own-property.ts';
+import { type FlowParseHelpers, type FlowSection, parseFlowSection, type StepClauses } from './flow-parse.ts';
 import { Cursor, lineTree, RuleTextFailure, type TextLine } from './lines.ts';
 import { parseSessionTarget, type SessionParseHelpers } from './session.ts';
 import type { RuleTextError, RuleTextParseResult } from './types.ts';
@@ -25,18 +26,20 @@ type Record_ = Record<string, JsonValue>;
 
 /** The top-level keywords, and the document fields each one's section sets. */
 const STATEMENTS: ReadonlyMap<string, readonly string[]> = new Map([
-  ['rule', ['ruleId', 'version']],
+  ['workflow', ['ruleId', 'version']],
   ['when', ['source', 'event']],
   ['match', ['condition']],
   ['ask', ['agentic']],
   ['then', ['targets']],
+  ['flow', ['flow', 'targets']],
 ]);
 const TOP_LEVEL = [
-  'rule',
+  'workflow',
   'when',
   'match',
   'ask',
   'then',
+  'flow',
   'keep',
   'keep for',
   'at most',
@@ -56,6 +59,8 @@ interface State {
   readonly subscribers: JsonValue[];
   /** Every refusal so far; a section that can report several (one per target) adds them here. */
   readonly errors: RuleTextError[];
+  /** The `flow` section's targets, as its steps wrote them, and whether any step wrote one (workflows design §4.4). */
+  flowTargets?: { readonly targets: JsonValue[]; readonly written: boolean; readonly line: number };
 }
 
 /**
@@ -65,7 +70,7 @@ interface State {
  */
 export function parseRuleText(text: string): RuleTextParseResult {
   if (typeof text !== 'string')
-    return { ok: false, errors: [{ line: 1, column: 1, message: 'rule text is a string' }] };
+    return { ok: false, errors: [{ line: 1, column: 1, message: "a workflow's text is a string" }] };
   const errors: RuleTextError[] = [];
   const lines = lineTree(text, errors);
   const state: State = { natural: new Map(), raw: new Map(), seen: new Map(), subscribers: [], errors };
@@ -108,8 +113,24 @@ function noChildren(line: TextLine, what: string): void {
 function once(state: State, keyword: string, line: TextLine, cursor: Cursor): void {
   const first = state.seen.get(keyword);
   if (first !== undefined)
-    cursor.fail(`a rule has one ${keyword} section; this repeats the one on line ${first}`, cursor.mark());
+    cursor.fail(
+      keyword === 'workflow'
+        ? `a workflow's text names it once; this repeats the line on line ${first}`
+        : `a workflow has one ${keyword} section; this repeats the one on line ${first}`,
+      cursor.mark(),
+    );
   state.seen.set(keyword, line.number);
+}
+
+/** A workflow says what happens to a match once: by its targets (`then`), or by its steps (`flow`), never both. */
+function eitherThenOrFlow(state: State, keyword: 'then' | 'flow', cursor: Cursor): void {
+  const other = keyword === 'then' ? 'flow' : 'then';
+  const first = state.seen.get(other);
+  if (first !== undefined)
+    cursor.fail(
+      `a workflow says what happens to a match once: by a then section, or by the steps of a flow section, not both; the ${other} section is on line ${first}`,
+      cursor.mark(),
+    );
 }
 
 function setNatural(state: State, section: string, line: TextLine, field: string, value: JsonValue): void {
@@ -122,7 +143,8 @@ function statement(line: TextLine, state: State): void {
   const keyword = cursor.peekWord();
   switch (keyword) {
     case 'rule':
-      once(state, 'rule', line, cursor);
+    case 'workflow':
+      once(state, 'workflow', line, cursor);
       ruleLine(cursor, line, state);
       break;
     case 'when':
@@ -139,8 +161,14 @@ function statement(line: TextLine, state: State): void {
       setNatural(state, 'ask', line, 'agentic', ask(cursor, line));
       break;
     case 'then':
+      eitherThenOrFlow(state, 'then', cursor);
       once(state, 'then', line, cursor);
       thenSection(cursor, line, state);
+      break;
+    case 'flow':
+      eitherThenOrFlow(state, 'flow', cursor);
+      once(state, 'flow', line, cursor);
+      flowSection(cursor, line, state);
       break;
     case 'keep': {
       const saved = cursor.save();
@@ -190,15 +218,16 @@ function statement(line: TextLine, state: State): void {
   }
 }
 
+/** `workflow <id>, version <n>`; `rule <id>, version <n>`, the word before 0.36, still reads the same (W17, W22). */
 function ruleLine(cursor: Cursor, line: TextLine, state: State): void {
-  cursor.take('rule');
-  const ruleId = cursor.name('the rule id');
-  cursor.expect([',', 'version'], '", version <n>" after the rule id');
-  const version = cursor.integer('the rule version');
-  cursor.expectEnd('the rule version');
-  noChildren(line, 'the rule line');
-  setNatural(state, 'rule', line, 'ruleId', ruleId);
-  setNatural(state, 'rule', line, 'version', version);
+  if (!cursor.take('workflow')) cursor.take('rule');
+  const ruleId = cursor.name("the workflow's id");
+  cursor.expect([',', 'version'], `", version <n>" after the workflow's id`);
+  const version = cursor.integer("the workflow's version");
+  cursor.expectEnd("the workflow's version");
+  noChildren(line, 'the workflow line');
+  setNatural(state, 'workflow', line, 'ruleId', ruleId);
+  setNatural(state, 'workflow', line, 'version', version);
 }
 
 /** Names joined by `and`: `a`, `a and b`. */
@@ -267,17 +296,17 @@ function sourceOptions(cursor: Cursor, channel: string): Record_ {
         options.includeSpamTrash = true;
       } else
         cursor.fail(
-          `a Gmail rule's options are in the inbox, in any label, in labels <label> and <label>, and including spam and trash; found ${cursor.describeNext()}`,
+          `a Gmail workflow's options are in the inbox, in any label, in labels <label> and <label>, and including spam and trash; found ${cursor.describeNext()}`,
           at,
         );
     } else if (channel === 'slack') {
       if (!(cursor.take('in', 'conversation') || cursor.take('in', 'conversations')))
-        cursor.fail(`a Slack rule's option is in conversations <id> and <id>; found ${cursor.describeNext()}`, at);
+        cursor.fail(`a Slack workflow's option is in conversations <id> and <id>; found ${cursor.describeNext()}`, at);
       one('conversations', at);
       options.conversations = names(cursor, 'a conversation');
     } else if (channel === 'resend') {
       if (!(cursor.take('kind') || cursor.take('kinds')))
-        cursor.fail(`a Resend rule's option is kinds received and status; found ${cursor.describeNext()}`, at);
+        cursor.fail(`a Resend workflow's option is kinds received and status; found ${cursor.describeNext()}`, at);
       one('kinds', at);
       options.kinds = names(cursor, 'a kind');
     } else if (channel === 'whatsapp') {
@@ -289,7 +318,7 @@ function sourceOptions(cursor: Cursor, channel: string): Record_ {
         options.chats = names(cursor, 'a chat');
       } else
         cursor.fail(
-          `a WhatsApp rule's option is in all allowed chats, or in chats <id> and <id>; found ${cursor.describeNext()}`,
+          `a WhatsApp workflow's option is in all allowed chats, or in chats <id> and <id>; found ${cursor.describeNext()}`,
           at,
         );
     } else
@@ -470,7 +499,7 @@ function representationReader(cursor: Cursor, target: Record_, word: 'plain' | '
   };
 }
 
-const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'session', 'linear issue', 'raw'];
+const TARGET_KINDS = ['dry run', 'queue', 'webhook', 'stream', 'session', 'linear issue', 'linear change', 'raw'];
 
 /** What the session target's parser (`session.ts`) borrows from this one. */
 const SESSION_HELPERS: SessionParseHelpers = { targetHead, clauses, block, field, noChildren };
@@ -484,7 +513,33 @@ function thenSection(cursor: Cursor, line: TextLine, state: State): void {
   if (state.errors.length === failed) setNatural(state, 'then', line, 'targets', targets as JsonValue[]);
 }
 
-function target(line: TextLine): JsonValue {
+/** What the flow section's parser (`flow-parse.ts`) borrows from this one. */
+const FLOW_HELPERS: FlowParseHelpers = {
+  clauses,
+  block,
+  field,
+  noChildren,
+  names,
+  duration,
+  condition,
+  ask,
+  askBody,
+  target,
+};
+
+/** The `flow` section (workflows design §4.4): its steps, which also give the workflow's targets. */
+function flowSection(cursor: Cursor, line: TextLine, state: State): void {
+  const failed = state.errors.length;
+  const section: FlowSection | undefined = attempt(state, () =>
+    parseFlowSection(cursor, line, FLOW_HELPERS, (read) => attempt(state, read)),
+  );
+  if (state.errors.length !== failed || section === undefined) return;
+  setNatural(state, 'flow', line, 'flow', section.flow);
+  state.flowTargets = { targets: section.targets, written: section.targetsWritten, line: line.number };
+}
+
+/** One target: of the `then` section, or (with `step`) the one a workflow's deliver step writes in full. */
+function target(line: TextLine, step?: StepClauses): JsonValue {
   const cursor = new Cursor(line);
   const at = cursor.mark();
   if (cursor.take('raw')) {
@@ -572,8 +627,11 @@ function target(line: TextLine): JsonValue {
     noChildren(line, 'a stream');
     return target;
   }
-  if (cursor.take('session')) return parseSessionTarget(cursor, line, SESSION_HELPERS);
+  if (cursor.take('session'))
+    return parseSessionTarget(cursor, line, SESSION_HELPERS, step === undefined ? undefined : step(cursor, 'session'));
   if (cursor.take('linear', 'issue')) return linearIssue(cursor, line);
+  if (cursor.take('linear', 'change'))
+    return linearChange(cursor, line, step === undefined ? undefined : step(cursor, 'linear-change'));
   const word = cursor.peekWord();
   const close = word === undefined ? undefined : suggestion(word, TARGET_KINDS);
   return cursor.fail(
@@ -660,6 +718,123 @@ function linearIssue(cursor: Cursor, line: TextLine): JsonValue {
     return id === undefined ? { name } : { id, name };
   });
   if (!Object.hasOwn(target, 'assignee')) target.assignee = null;
+  return target;
+}
+
+/**
+ * A Linear change target (workflows design §4.2, §6.7), valid only on a workflow's step: it comments on, moves, labels
+ * or assigns the issue a create step made. Its line names the team by key and who it assigns the issue to; its
+ * indented lines give the team's id, the comment, the state by name (and the kind of state) with its id, and the labels
+ * it adds and removes, by name with their ids, as a Linear issue's are.
+ */
+function linearChange(
+  cursor: Cursor,
+  line: TextLine,
+  step: Readonly<Record<string, readonly [phrase: string, read: () => void]>> | undefined,
+): JsonValue {
+  const target: Record_ = { ...targetHead(cursor), kind: 'linear-change' };
+  const team = (): Record_ => {
+    if (!isRecord(target.team)) target.team = {};
+    return target.team as Record_;
+  };
+  clauses(cursor, 'a Linear change', {
+    ...step,
+    in: [
+      'in team <key>',
+      () => {
+        cursor.expect(['in', 'team'], '"in team <key>"');
+        team().key = cursor.name('the team key');
+      },
+    ],
+    assigned: [
+      'assigned to me, nobody or user <id>',
+      () => {
+        cursor.expect(['assigned', 'to'], '"assigned to <who>"');
+        if (cursor.take('me')) target.assignee = 'me';
+        else if (cursor.take('nobody')) target.assignee = null;
+        else if (cursor.take('user')) target.assignee = { id: cursor.name('the user id') };
+        else cursor.fail(`expected me, nobody or user <id> after "assigned to"; found ${cursor.describeNext()}`);
+      },
+    ],
+  });
+  const state = (): Record_ => {
+    if (!isRecord(target.state)) target.state = {};
+    return target.state as Record_;
+  };
+  const labels = {
+    add: { names: undefined as string[] | undefined, ids: undefined as { ids: string[]; line: TextLine } | undefined },
+    remove: {
+      names: undefined as string[] | undefined,
+      ids: undefined as { ids: string[]; line: TextLine } | undefined,
+    },
+  };
+  const labelNames = (side: 'add' | 'remove') => (inner: Cursor) => {
+    labels[side].names = names(inner, 'a label name');
+  };
+  const labelIds = (side: 'add' | 'remove') => (inner: Cursor, child: TextLine) => {
+    if (labels[side].ids !== undefined)
+      inner.fail(
+        `a Linear change gives the ids of the labels it ${side}s once; they are on line ${labels[side].ids?.line.number}`,
+      );
+    labels[side].ids = { ids: names(inner, 'a label id'), line: child };
+  };
+  block(line, 'a Linear change', [
+    [
+      ['team', 'id'],
+      (inner) => {
+        team().id = inner.name('the team id');
+      },
+    ],
+    [
+      ['comment'],
+      (inner) => {
+        target.comment = { text: inner.string('the comment') };
+      },
+    ],
+    [
+      ['state', 'id'],
+      (inner) => {
+        state().id = inner.name("the state's id");
+      },
+    ],
+    [
+      ['state'],
+      (inner) => {
+        state().name = inner.name('the state');
+        if (inner.comma()) {
+          inner.expect(['a'], '", a <kind> state" after the state');
+          state().type = inner.name('the kind of state: started, completed or canceled');
+          inner.expect(['state'], '"state" after the kind of state');
+        }
+      },
+    ],
+    [['add', 'label', 'id'], labelIds('add')],
+    [['add', 'label', 'ids'], labelIds('add')],
+    [['add', 'label'], labelNames('add')],
+    [['add', 'labels'], labelNames('add')],
+    [['remove', 'label', 'id'], labelIds('remove')],
+    [['remove', 'label', 'ids'], labelIds('remove')],
+    [['remove', 'label'], labelNames('remove')],
+    [['remove', 'labels'], labelNames('remove')],
+  ]);
+  if (isRecord(target.state) && !Object.hasOwn(target.state, 'name'))
+    fail(line, 'a Linear change names the state it moves the issue to: state <name>, with its id below it');
+  const side = (which: 'add' | 'remove'): JsonValue[] => {
+    const { names: given, ids } = labels[which];
+    if (ids !== undefined) {
+      if (given === undefined)
+        fail(ids.line, `label ids pair with the names of the labels it ${which}s, which no line names`);
+      if (ids.ids.length !== (given as string[]).length)
+        fail(ids.line, `it ${which}s ${(given as string[]).length} labels, and this line gives ${ids.ids.length} ids`);
+    }
+    return (given ?? []).map((name, index) => {
+      const id = ids?.ids[index];
+      return id === undefined ? { name } : { id, name };
+    });
+  };
+  const add = side('add');
+  const remove = side('remove');
+  if (labels.add.names !== undefined || labels.remove.names !== undefined) target.labels = { add, remove };
   return target;
 }
 
@@ -755,6 +930,11 @@ function rawLine(cursor: Cursor, line: TextLine, state: State): void {
 
 /** The document from what the sections and `raw` said, with the defaults for what neither did. */
 function assemble(state: State, errors: RuleTextError[], end: number): JsonObject {
+  // A flow's targets are the ones its steps wrote in full; when they wrote none, raw /targets may give them.
+  if (state.flowTargets !== undefined) {
+    const { targets, written, line } = state.flowTargets;
+    if (written || !state.raw.has('targets')) state.natural.set('targets', { value: targets, line, section: 'flow' });
+  }
   if (state.subscribers.length > 0)
     state.natural.set('subscribers', {
       value: state.subscribers,
@@ -841,7 +1021,7 @@ function unsure(cursor: Cursor): string {
   const word = cursor.word();
   if (word === undefined || !Object.hasOwn(UNSURE, word))
     return cursor.fail(
-      `when the judge is unsure, the rule can drop the message or hold it; found ${word === undefined ? cursor.describeNext() : JSON.stringify(word)}`,
+      `when the judge is unsure, the workflow can drop the message or hold it; found ${word === undefined ? cursor.describeNext() : JSON.stringify(word)}`,
       at,
     );
   return UNSURE[word] as string;
@@ -859,7 +1039,16 @@ function ask(cursor: Cursor, line: TextLine): JsonValue {
   }
   cursor.expectEnd('the judge');
   const agentic: Record_ = { judge };
-  block(line, 'an ask', [
+  askBody(line, agentic, judge, 'an ask');
+  return agentic;
+}
+
+/**
+ * The lines of an ask, indented under `line`, into `agentic` and its `judge`: under the `ask` section, a judge step and
+ * a route's `asking`.
+ */
+function askBody(line: TextLine, agentic: Record_, judge: Record_, what: string): void {
+  block(line, what, [
     [
       ['question'],
       (inner) => {
@@ -989,7 +1178,6 @@ function ask(cursor: Cursor, line: TextLine): JsonValue {
       'takes lines',
     ],
   ]);
-  return agentic;
 }
 
 /** The `keep for` block: one retention per line, each a duration. */
