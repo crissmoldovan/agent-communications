@@ -80,6 +80,13 @@ Today nothing can answer "what did David ask about invoices?":
   only counts for it (activity spec S4). **Never Resend in v1.**
 - **Never the person's own messages.** A message from the account's own address, its send-as addresses or its own Slack
   user is not an ask.
+
+  > **Note, 2026-10-27 (the security review of 0.35.0, a LOW finding; L).** 0.35's Gmail capture never passed the
+  > send-as addresses, so a message from one was kept as someone's ask. Now Gmail's capture reads the mailbox's
+  > send-as list (`users.settings.sendAs.list`, which fetches no message). It reads it only while Search keeps that
+  > mailbox and a read holds someone's message, keeps it for 15 minutes in the process (1 minute after a failure),
+  > and waits for it at most 2 seconds. A message labelled `SENT` or `DRAFT` is the person's own too, which still
+  > keeps out what the mailbox sent should the list not come.
 - *Rejected:* indexing whole mailboxes and workspaces. That is a new reader of all mail, against Gmail quota and Slack
   rate limits, and the widest store possible. It is open question 1, as a per-person fill-in.
 - *Rejected:* indexing only activity's subjects and senders. That is too thin to find "about invoices".
