@@ -47,6 +47,17 @@ export interface B3ControlPorts {
     readonly subscriberId: string;
     readonly subscriberVersion: number;
   }) => void;
+  /**
+   * The owner's subscriber listeners (0.36.0, W31): where an exact subscriber version is listening, or why it is not,
+   * for `subscribers list`. Absent: nothing is listening.
+   */
+  readonly subscriberListening?: (
+    subscriberId: string,
+    subscriberVersion: number,
+  ) => {
+    readonly listening: { readonly host: string; readonly port: number } | null;
+    readonly listenError: 'PORT_IN_USE' | null;
+  };
   assertObjectSecretReady(input: {
     readonly owner: { readonly kind: 'target' | 'subscriber' | 'judge'; readonly id: string; readonly version: number };
   }): Promise<{ readonly ready: true }>;

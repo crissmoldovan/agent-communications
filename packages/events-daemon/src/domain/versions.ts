@@ -104,7 +104,11 @@ export class ImmutableVersions {
 
   createSubscriber(input: SubscriberDocument): PendingVersion {
     const document = canonicalSubscriber(input);
-    return this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
+    const created = this.insert('subscriber_versions', 'subscriber', document.subscriberId, document.version, document);
+    // A version given events receives none until the person approves its subscription (0.36.0, W29).
+    if (document.events !== undefined)
+      this.#database.prepare("UPDATE subscriber_versions SET state = 'inert' WHERE id = ?").run(created.id);
+    return created;
   }
 
   /**

@@ -66,6 +66,8 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
       [
         'events_catalogue_list',
         'events_catalogue_show',
+        'events_workflow_events_list',
+        'events_workflow_events_show',
         'events_approval_view',
         'events_rule_test',
         'events_target_test',
@@ -73,6 +75,7 @@ test('PAR-B1/B3: runtime CLI commands and tools expose every paired operation, w
         'events_subscriber_add',
         'events_subscriber_update',
         'events_subscriber_remove',
+        'events_subscriber_enable',
         'events_judges_list',
         'events_judge_show',
         'events_judge_add',

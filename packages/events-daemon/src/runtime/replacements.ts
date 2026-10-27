@@ -5,6 +5,7 @@ import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import type { PreparedSourceStageTerminalisation } from './expiry.ts';
 import { expireHeldDecisionsInTransaction } from './holds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
@@ -429,6 +430,9 @@ export function purgeRevokedRuleWork(
   // A judge-kind disable purges a rule's work but keeps the rule able to resume once the kind is re-enabled (D11):
   // its activation points, target references, WhatsApp admissions and replacement drains are authority, not work.
   const keepAuthority = options.keepAuthority === true;
+  // A revoked workflow's raised events stop at once (0.36.0, W35): their undelivered deliveries are cancelled.
+  if (!keepAuthority)
+    cancelEventDeliveriesInTransaction(database, { ruleId, ruleVersions: versions }, now, 'WORKFLOW_REVOKED');
   new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   // The action queue (Q6): a revoked version's items go with its dry-run rows, in this same transaction.

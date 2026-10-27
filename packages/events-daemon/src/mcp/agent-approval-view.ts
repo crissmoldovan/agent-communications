@@ -15,5 +15,6 @@ export function approvalViewForAgent(view: unknown): unknown {
     digest: record.digest,
     preview: record.preview,
     ...(Object.hasOwn(record, 'layaJudge') ? { layaJudge: record.layaJudge } : {}),
+    ...(Object.hasOwn(record, 'subscription') ? { subscription: record.subscription } : {}),
   };
 }

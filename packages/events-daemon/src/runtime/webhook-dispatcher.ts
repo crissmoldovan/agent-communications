@@ -73,6 +73,102 @@ export type WebhookOutcome =
   | { readonly kind: 'response'; readonly status: number; readonly success: boolean }
   | { readonly kind: 'network' };
 
+/** One signed POST through the pinned webhook transport (0.36.0, W32): the step a subscriber's delivery shares. */
+export interface PostSignedInput {
+  readonly url: string;
+  readonly approvedAddressSet: readonly string[];
+  readonly body: string;
+  /** Every header but the transport's own: the content type and `signStandardWebhook`'s three. */
+  readonly headers: Readonly<Record<string, string>>;
+  /** The whole attempt — DNS, TCP, TLS and the status line — ends by this instant. */
+  readonly deadline: number;
+  /** The await-capable policy reads before each phase; false stops before it, with nothing sent. */
+  readonly prepare: (phase: WebhookFencePhase) => Promise<boolean>;
+  /** The synchronous gate directly before each physical step; false stops before it, with nothing sent. */
+  readonly gate: (phase: WebhookFencePhase) => boolean;
+  readonly resolver?: AddressResolver | undefined;
+  readonly tcpConnect?: ((options: PinnedTcpOptions) => Promise<net.Socket>) | undefined;
+  readonly tlsConnect?: ((options: PinnedTlsOptions) => Promise<tls.TLSSocket>) | undefined;
+}
+
+/** What a signed POST came to: the peer's answer, a network failure, or a gate that stopped it before that phase. */
+export type PostSignedResult = WebhookOutcome | { readonly kind: 'stopped'; readonly phase: WebhookFencePhase };
+
+/**
+ * The webhook transport's one attempt, as `WebhookDispatcher` makes it: the pinned connection to the approved address
+ * set (HTTPS, or plain HTTP to literal loopback only), every phase fenced twice — the caller's await-capable reads, then
+ * its synchronous gate directly before the physical step — the request written in the same synchronous turn as its
+ * gate, and only the status line read. Bytes leave only at `write`, so a `stopped` result before it sent nothing.
+ */
+export async function postSigned(input: PostSignedInput): Promise<PostSignedResult> {
+  const stop = async (phase: WebhookFencePhase): Promise<PostSignedResult | null> =>
+    (await input.prepare(phase)) && input.gate(phase) ? null : { kind: 'stopped', phase };
+  const beforeDns = await stop('dns');
+  if (beforeDns !== null) return beforeDns;
+  let connection: Awaited<ReturnType<typeof preparePinnedConnection>>;
+  try {
+    connection = await beforeDeadline(
+      preparePinnedConnection({
+        url: input.url,
+        approvedAddressSet: input.approvedAddressSet,
+        approvedAddressSetDigest: addressSetDigest(input.approvedAddressSet),
+        ...(input.resolver === undefined ? {} : { resolver: input.resolver }),
+      }),
+      input.deadline,
+    );
+  } catch {
+    return { kind: 'network' };
+  }
+  const beforeTcp = await stop('tcp');
+  if (beforeTcp !== null) return beforeTcp;
+  let socket: net.Socket | tls.TLSSocket;
+  try {
+    socket = await beforeDeadline(
+      (input.tcpConnect ?? connectPinnedTcp)({ host: connection.address, port: connection.port }),
+      input.deadline,
+      (late) => late.destroy(),
+    );
+  } catch {
+    return { kind: 'network' };
+  }
+  installErrorSink(socket);
+  if (connection.useTls) {
+    const beforeTls = await stop('tls');
+    if (beforeTls !== null) {
+      socket.destroy();
+      return beforeTls;
+    }
+    const tcp = socket;
+    try {
+      socket = await beforeDeadline(
+        (input.tlsConnect ?? connectPinnedTls)({ socket: tcp, ...connection.tls }),
+        input.deadline,
+        (late) => late.destroy(),
+      );
+      installErrorSink(socket);
+    } catch {
+      tcp.destroy();
+      return { kind: 'network' };
+    }
+  }
+  const request = requestBytesForPinnedConnection(connection, 'POST', Buffer.from(input.body, 'utf8'), input.headers);
+  if (!(await input.prepare('write'))) {
+    socket.destroy();
+    return { kind: 'stopped', phase: 'write' };
+  }
+  // The write is deliberately synchronous with its immediately preceding gate: no callback or await may intervene.
+  if (!input.gate('write')) {
+    socket.destroy();
+    return { kind: 'stopped', phase: 'write' };
+  }
+  socket.write(request);
+  const live = socket;
+  return beforeDeadline(responseStatus(live), input.deadline)
+    .then(classifyWebhookResponseStatus)
+    .catch((): WebhookOutcome => ({ kind: 'network' }))
+    .finally(() => live.destroy());
+}
+
 /** A 3xx is deliberately an ordinary non-success response: webhook transport never follows a Location. */
 export function classifyWebhookResponseStatus(status: number): Extract<WebhookOutcome, { readonly kind: 'response' }> {
   return { kind: 'response', status, success: status >= 200 && status < 300 };
@@ -640,6 +736,11 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
 
 const DEFAULT_DEAD_LETTER_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 const MAX_RETRY_BACKOFF_MS = 60 * 60 * 1000;
+
+/** The retry wait after a failed attempt (exported for subscribers' event deliveries, which retry the same way). */
+export function webhookRetryBackoffMs(attempts: number, key: string): number {
+  return retryBackoffMs(attempts, key);
+}
 
 /**
  * Settles one issued webhook attempt. The exact owner predicate is deliberately the first durable decision: a late

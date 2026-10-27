@@ -108,8 +108,11 @@ import {
   judgeKeyRotate,
   judgeKeySet,
   migrateSecrets,
+  subscriberSecretCreate,
+  subscriberSecretRotate,
   subscriberTokenCreate,
   subscriberTokenRotate,
+  subscriberUrlSet,
   targetSecretCreate,
   targetSecretRotate,
   targetUrlSet,
@@ -117,10 +120,18 @@ import {
 import { sourceShow, sourcesList } from '../operations/sources.ts';
 import { status } from '../operations/status.ts';
 import { stop } from '../operations/stop.ts';
-import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
+import {
+  addSubscriber,
+  approveSubscriberFromApp,
+  enableSubscriber,
+  removeSubscriber,
+  subscribersList,
+  updateSubscriber,
+} from '../operations/subscribers.ts';
 import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { workflowEventsList, workflowEventsShow } from '../operations/workflow-events.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { parseJudgeShowArguments } from '../runtime/judge-show.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
@@ -680,19 +691,24 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     });
 
-  const subscribers = program.command('subscribers').description('inspect immutable SSE subscriber versions');
+  const subscribers = program
+    .command('subscribers')
+    .description('inspect immutable subscriber versions: live on this Mac, or by signed webhook');
   subscribers.command('list').action(async () => {
     ran = true;
     print(await subscribersList(controlOptions(program)));
   });
-  const subscriber = program.command('subscriber').description('create, update, and revoke immutable SSE subscribers');
+  const subscriber = program
+    .command('subscriber')
+    .description('create, update, enable and revoke immutable subscribers: live on this Mac, or by signed webhook');
+  // A document given as `-` is read from stdin (0.36.0, plan I7): the app hands the subscriber it made there.
   subscriber.command('add <document>').action(async (document: string) => {
     ran = true;
-    print(await addSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+    print(await addSubscriber(await documentArgument(document, 'subscriber document'), controlOptions(program)));
   });
   subscriber.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+    print(await updateSubscriber(await documentArgument(document, 'subscriber document'), controlOptions(program)));
   });
   subscriber.command('remove <subscriber-id>').action(async (subscriberId: string) => {
     ran = true;
@@ -717,6 +733,83 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         );
       });
   }
+  // Workflow events (0.36.0, W29): a subscriber version given events is inert until the person approves it. `enable`
+  // prepares that approval — an agent may — and the person approves it with `approve` at a terminal or `subscriber
+  // approve` from the app; a webhook subscriber's signing secret and secret URL are made at the terminal only.
+  subscriber
+    .command('enable <subscriber-id> <version>')
+    .description("prepare the person's approval of an inert subscriber version's events; nothing is approved here")
+    .action(async (subscriberId: string, version: string) => {
+      ran = true;
+      print(await enableSubscriber(subscriberId, parseVersion(version), controlOptions(program)));
+    });
+  subscriber
+    .command('approve <approval-id>')
+    .description("approve a subscriber version's events from the Agent Comms app, after its preview, as the person")
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      // As for a workflow: Windows and Linux attest nothing, so there the person is sent to their terminal; the owner
+      // refuses the same origin too.
+      const origin = await personSetupOrigin("approve a subscriber's events", {
+        where: 'Events → Subscribers, Approve',
+        action: 'approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
+      print(await approveSubscriberFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+  const subscriberSecret = subscriber
+    .command('secret')
+    .description("create or rotate a webhook subscriber's terminal-only signing secret");
+  for (const [name, operation, request] of [
+    ['create', subscriberSecretCreate, 'subscriberSecretCreate'],
+    ['rotate', subscriberSecretRotate, 'subscriberSecretRotate'],
+  ] as const) {
+    subscriberSecret
+      .command(`${name} <subscriber-id>`)
+      .requiredOption('--version <version>')
+      .action(async (subscriberId: string, options) => {
+        ran = true;
+        assertNotMcpServer(env, 'secret');
+        assertHuman();
+        const version = parseVersion(options.version as string);
+        printHumanResult(
+          await humanB3(request, { subscriberId, version }, () =>
+            operation(subscriberId, version, controlOptions(program)),
+          ),
+        );
+      });
+  }
+  subscriber
+    .command('url')
+    .description("set a webhook subscriber's concealed URL into a new immutable version")
+    .command('set <subscriber-id>')
+    .requiredOption('--version <version>', 'the new version to make, from the newest one before it')
+    .action(async (subscriberId: string, options) => {
+      ran = true;
+      assertNotMcpServer(env, 'secret');
+      assertHuman();
+      const version = parseVersion(options.version as string);
+      const value = await hidden('Webhook URL');
+      printHumanResult(
+        await humanB3('subscriberUrlSet', { subscriberId, version, hidden: value }, () =>
+          subscriberUrlSet(subscriberId, version, { ...controlOptions(program), hidden: value }),
+        ),
+      );
+    });
+
+  // The step event catalogue (W25, Appendix W.3): every schema's words and closed outputs, content-free.
+  const workflowEvents = program
+    .command('workflow-events')
+    .description('the step event catalogue: the events each step kind can raise, and what they carry');
+  workflowEvents.command('list').action(async () => {
+    ran = true;
+    print(await workflowEventsList(controlOptions(program)));
+  });
+  workflowEvents.command('show <schema>').action(async (schema: string) => {
+    ran = true;
+    print(await workflowEventsShow(schema, controlOptions(program)));
+  });
 
   const judges = program.command('judges').description('inspect immutable content-free judge metadata');
   judges.command('list').action(async () => {

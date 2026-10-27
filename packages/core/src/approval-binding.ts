@@ -28,8 +28,11 @@ import { CommsError } from './errors.ts';
  */
 export type ApprovalRoute = 'chat' | 'confirm' | 'standing';
 
-/** The four activation documents that may receive standing disclosure authority. */
-export type DisclosureActivationKind = 'rule' | 'judge-budget' | 'judge-kind' | 'enable-all';
+/**
+ * The activation documents that may receive standing disclosure authority. `subscription` (0.36.0, workflows design
+ * W29) approves one subscriber version's events: what it receives, in which namespaces, and whether senders' words.
+ */
+export type DisclosureActivationKind = 'rule' | 'judge-budget' | 'judge-kind' | 'enable-all' | 'subscription';
 
 /** An immutable version named by a standing disclosure authorisation. */
 export type DisclosureVersionKind = 'rule' | 'target' | 'subscriber' | 'judge' | 'judge-budget' | 'judge-kind';
@@ -67,6 +70,7 @@ const DISCLOSURE_ACTIVATION_KINDS: readonly DisclosureActivationKind[] = [
   'judge-budget',
   'judge-kind',
   'enable-all',
+  'subscription',
 ];
 const HEX64 = /^[0-9a-f]{64}$/;
 
@@ -120,6 +124,8 @@ export function canonicalDisclosureBinding(binding: DisclosureBinding): Disclosu
     if (versions.length !== 1 || versions[0]?.kind !== 'judge-budget') return disclosureFailure();
   } else if (binding.activationKind === 'judge-kind') {
     if (versions.length !== 1 || versions[0]?.kind !== 'judge-kind') return disclosureFailure();
+  } else if (binding.activationKind === 'subscription') {
+    if (versions.length !== 1 || versions[0]?.kind !== 'subscriber') return disclosureFailure();
   } else if (versions.some((entry) => entry.kind !== 'rule')) {
     return disclosureFailure();
   }

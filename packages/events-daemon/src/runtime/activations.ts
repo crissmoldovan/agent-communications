@@ -6,6 +6,7 @@ import {
   canonicalJson,
   type DisclosureBinding,
   hashChallenge,
+  sha256Hex,
 } from '@agentcomms/core';
 import type { GmailEventSource } from '@agentcomms/gmail';
 import {
@@ -32,6 +33,7 @@ import {
 import { gmailBaseline, persistSourceBaseline } from './baseline.ts';
 import type { CutoverFailpoint } from './cutover-failpoint.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import { activateSubscriptionInTransaction } from './events/subscriptions.ts';
 import type { AsyncSourceStageExpiry } from './expiry.ts';
 import {
   applyDerivedTightening,
@@ -456,6 +458,37 @@ export class ActivationRuntime {
         disableGeneration,
       },
     });
+  }
+
+  /**
+   * Prepares one subscriber version's events for the person's approval (0.36.0, workflows design W29): the exact inert
+   * version, bound by its stored digest. Completion makes it the subscriber's one active version and the previous one
+   * superseded. Nothing here starts a listener or sends: delivery waits for the completed activation.
+   */
+  async prepareSubscription(input: {
+    readonly subscriberId: string;
+    readonly version: number;
+  }): Promise<PreparedActivation> {
+    const row = this.#store.database
+      .prepare(
+        'SELECT document, digest, state, revoked_at FROM subscriber_versions WHERE subscriber_id = ? AND version = ?',
+      )
+      .get(input.subscriberId, input.version) as
+      | { document: string; digest: string; state: string | null; revoked_at: number | null }
+      | undefined;
+    if (row === undefined || row.revoked_at !== null)
+      throw new CommsError('NOT_FOUND', 'the subscriber has no live version with that number');
+    if (row.state === 'active') throw new CommsError('CONFIG', 'that subscriber version is already active');
+    if (row.state !== 'inert')
+      throw new CommsError('CONFIG', 'only an inert subscriber version that is given events can be enabled', {
+        details: { reason: row.state === null ? 'NO_EVENTS' : 'SUPERSEDED' },
+      });
+    const document: Extract<ActivationDocumentV1, { kind: 'subscription' }> = {
+      documentVersion: 1,
+      kind: 'subscription',
+      subscription: { subscriberId: input.subscriberId, version: input.version, digest: row.digest },
+    };
+    return this.#prepare(document, [], { switchGeneration: this.#switch().generation });
   }
 
   async approve(input: {
@@ -1270,6 +1303,14 @@ export class ActivationRuntime {
           );
           return;
         }
+      } else if (document.kind === 'subscription') {
+        try {
+          this.#assertSubscriptionLive(document);
+        } catch (_error) {
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
+          settled = new CommsError('APPROVAL_VOID', 'the subscriber version changed before its subscription completed');
+          return;
+        }
       } else {
         throw new CommsError('CONFIG', 'this activation kind is not enabled in B1');
       }
@@ -1346,6 +1387,14 @@ export class ActivationRuntime {
         this.#store.database
           .prepare('UPDATE event_settings SET enabled = 1, activation_id = ?, changed_at = ? WHERE singleton = 1')
           .run(intent.id, this.#now());
+      } else if (document.kind === 'subscription') {
+        activateSubscriptionInTransaction(this.#store.database, {
+          subscriberId: document.subscription.subscriberId,
+          version: document.subscription.version,
+          approvalId: intent.approval_id,
+          at: Date.parse(usedAt),
+          now: this.#now(),
+        });
       } else {
         const pointer = effect.judgePointer;
         if (pointer === undefined) throw new CommsError('APPROVAL_VOID', 'the judge pointer expectation is missing');
@@ -1457,8 +1506,29 @@ export class ActivationRuntime {
       }
     } else if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
       this.#assertJudgeActivationLive(document, JSON.parse(intent.effect) as ActivationEffect);
+    } else if (document.kind === 'subscription') {
+      this.#assertSubscriptionLive(document);
     }
     return binding;
+  }
+
+  /** The exact subscriber version a subscription names is still live, inert and the document its digest binds. */
+  #assertSubscriptionLive(document: Extract<ActivationDocumentV1, { kind: 'subscription' }>): void {
+    const row = this.#store.database
+      .prepare(
+        'SELECT document, digest, state, revoked_at FROM subscriber_versions WHERE subscriber_id = ? AND version = ?',
+      )
+      .get(document.subscription.subscriberId, document.subscription.version) as
+      | { document: string; digest: string; state: string | null; revoked_at: number | null }
+      | undefined;
+    if (
+      row === undefined ||
+      row.revoked_at !== null ||
+      row.state !== 'inert' ||
+      row.digest !== document.subscription.digest ||
+      sha256Hex(row.document) !== row.digest
+    )
+      throw new CommsError('APPROVAL_VOID', 'the subscriber version changed after its subscription was prepared');
   }
 
   /** The prepare, claim and final-pointer transactions all call this exact immutable-pointer fence. */
@@ -1526,6 +1596,10 @@ export class ActivationRuntime {
       const current = active === null ? null : `${document.rule.ruleId}@${active.version}`;
       if (current !== (replacementOfVersion ?? null) || this.#switch().generation !== effect.switchGeneration)
         throw new CommsError('APPROVAL_VOID', 'the rule activation pointer plan changed during preparation');
+      return;
+    }
+    if (document.kind === 'subscription') {
+      this.#assertSubscriptionLive(document);
       return;
     }
     if (document.kind !== 'enable-all') return;

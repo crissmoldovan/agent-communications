@@ -1,5 +1,6 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeAllQueueItems } from './queue-retention.ts';
@@ -80,6 +81,8 @@ export class EventLifecycle {
         "UPDATE deliveries SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE state = 'disclosing'",
       );
       database.exec("UPDATE deliveries SET encrypted_record = NULL WHERE state = 'dead-lettered'");
+      // Raised workflow events (0.36.0) go the same way: switching off revokes every workflow's disclosure.
+      cancelEventDeliveriesInTransaction(database, { all: true }, now, 'SWITCHED_OFF');
       for (const delivery of retained) {
         for (const target of removeRetainedDeliveryTargetReference(database, delivery.id))
           purgeUnreferencedSystemTargets(database, { ...target, now });

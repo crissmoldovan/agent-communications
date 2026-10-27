@@ -50,8 +50,9 @@ Scripts should read these rather than parse output.
 | [`workflow\|rule`](#agent-events-workflow) | create, inspect and control immutable workflows |
 | [`targets`](#agent-events-targets) | inspect immutable local event target versions |
 | [`target`](#agent-events-target) | create, inspect and revoke immutable dry-run targets |
-| [`subscribers`](#agent-events-subscribers) | inspect immutable SSE subscriber versions |
-| [`subscriber`](#agent-events-subscriber) | create, update, and revoke immutable SSE subscribers |
+| [`subscribers`](#agent-events-subscribers) | inspect immutable subscriber versions: live on this Mac, or by signed webhook |
+| [`subscriber`](#agent-events-subscriber) | create, update, enable and revoke immutable subscribers: live on this Mac, or by signed webhook |
+| [`workflow-events`](#agent-events-workflow-events) | the step event catalogue: the events each step kind can raise, and what they carry |
 | [`judges`](#agent-events-judges) | inspect immutable content-free judge metadata |
 | [`judge`](#agent-events-judge) | manage immutable judges and run fixed synthetic tests |
 | [`budget`](#agent-events-budget) | inspect or prepare the immutable global judge budget |
@@ -411,7 +412,7 @@ agent-events target url set [options] <target-id>
 
 ### `agent-events subscribers`
 
-inspect immutable SSE subscriber versions
+inspect immutable subscriber versions: live on this Mac, or by signed webhook
 
 ```
 agent-events subscribers [options] [command]
@@ -425,7 +426,7 @@ agent-events subscribers list [options]
 
 ### `agent-events subscriber`
 
-create, update, and revoke immutable SSE subscribers
+create, update, enable and revoke immutable subscribers: live on this Mac, or by signed webhook
 
 ```
 agent-events subscriber [options] [command]
@@ -476,6 +477,92 @@ agent-events subscriber token rotate [options] <subscriber-id>
 | Option | What it does | Default |
 |---|---|---|
 | `--version <version>` |  | — |
+
+### `agent-events subscriber enable`
+
+prepare the person's approval of an inert subscriber version's events; nothing is approved here
+
+```
+agent-events subscriber enable [options] <subscriber-id> <version>
+```
+
+### `agent-events subscriber approve`
+
+approve a subscriber version's events from the Agent Comms app, after its preview, as the person
+
+```
+agent-events subscriber approve [options] <approval-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--digest <digest>` | the fingerprint of the activation the preview showed | — |
+
+### `agent-events subscriber secret`
+
+create or rotate a webhook subscriber's terminal-only signing secret
+
+```
+agent-events subscriber secret [options] [command]
+```
+
+### `agent-events subscriber secret create`
+
+```
+agent-events subscriber secret create [options] <subscriber-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events subscriber secret rotate`
+
+```
+agent-events subscriber secret rotate [options] <subscriber-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` |  | — |
+
+### `agent-events subscriber url`
+
+set a webhook subscriber's concealed URL into a new immutable version
+
+```
+agent-events subscriber url [options] [command]
+```
+
+### `agent-events subscriber url set`
+
+```
+agent-events subscriber url set [options] <subscriber-id>
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--version <version>` | the new version to make, from the newest one before it | — |
+
+### `agent-events workflow-events`
+
+the step event catalogue: the events each step kind can raise, and what they carry
+
+```
+agent-events workflow-events [options] [command]
+```
+
+### `agent-events workflow-events list`
+
+```
+agent-events workflow-events list [options]
+```
+
+### `agent-events workflow-events show`
+
+```
+agent-events workflow-events show [options] <schema>
+```
 
 ### `agent-events judges`
 

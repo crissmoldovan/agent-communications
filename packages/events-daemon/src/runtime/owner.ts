@@ -108,6 +108,11 @@ import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
+import { workflowEventsListResult, workflowEventsShowResult } from './events/catalogue.ts';
+import { assertAgentMayStopEventDelivery } from './events/event-deliveries.ts';
+import { EventDispatcher, type EventDispatcherOptions } from './events/event-dispatcher.ts';
+import { SubscriberListeners } from './events/listeners.ts';
+import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
@@ -152,6 +157,7 @@ import { TAKE_SWEEP_INTERVAL_MS, TakeOffers, type TakeSweepReport } from './take
 import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
+import type { WebSocketTiming } from './websocket.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -274,6 +280,10 @@ export interface EventOwnerOptions {
         readonly reconcileMs?: number | undefined;
       }
     | undefined;
+  /** Test seam only: a point inside one event delivery's attempt (0.36.0), after which its own gates decide. */
+  readonly eventDispatchTestPoint?: EventDispatcherOptions['testPoint'];
+  /** Test seam only: the live listeners' WebSocket ping interval and pong deadline (production: 30 and 60 seconds). */
+  readonly eventsWebSocket?: WebSocketTiming | undefined;
   readonly laya?:
     | {
         readonly assets?: LayaReviewedAssetSource | undefined;
@@ -692,6 +702,9 @@ function secretAuditReceipt(request: B3OwnerRequest): Readonly<{
       };
     case 'subscriberTokenCreate':
     case 'subscriberTokenRotate':
+    case 'subscriberSecretCreate':
+    case 'subscriberSecretRotate':
+    case 'subscriberUrlSet':
       return {
         operation: request.operation,
         ids: auditOwnerIdentity('subscriberId', request.args.subscriberId, request.args.version),
@@ -825,6 +838,26 @@ async function handleTerminalSecretOperation(
           version: requiredVersion(request.args.version, 'subscriber version'),
         }),
       );
+    case 'subscriberSecretCreate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretCreate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberSecretRotate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretRotate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberUrlSet':
+      return secrets.subscriberUrlSet({
+        subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+        version: requiredVersion(request.args.version, 'new subscriber version'),
+        hiddenUrl: requiredText(request.args.hidden, 'hidden webhook URL'),
+      });
     case 'judgeKeySet':
       return secrets.judgeKeySet({
         judgeId: requiredText(request.args.judgeId, 'judge id'),
@@ -874,6 +907,7 @@ async function approvalViewFromOwner(
   if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
   if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
   const preview = normaliseActivationDocument(JSON.parse(row.document));
+  const subscription = subscriptionPreviewFor(store.database, preview);
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
@@ -887,6 +921,7 @@ async function approvalViewFromOwner(
       digest: row.digest,
       preview,
       ...(layaJudge === undefined ? {} : { layaJudge }),
+      ...(subscription === undefined ? {} : { subscription }),
     };
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
@@ -905,6 +940,7 @@ async function approvalViewFromOwner(
     }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
     ...(layaJudge === undefined ? {} : { layaJudge }),
+    ...(subscription === undefined ? {} : { subscription }),
   };
 }
 
@@ -1286,6 +1322,37 @@ async function startOwnerWithLock(
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
   });
+  // Workflow events (0.36.0, W31–W33): the owner's live listeners — one per subscriber version something may deliver to
+  // — and the dispatcher that delivers raised events to them and to webhook subscribers, both run every tick.
+  const listeners = new SubscriberListeners({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    eventSecrets,
+    registry: sseStreams,
+    now,
+    visibilityGate: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    websocket: options.eventsWebSocket,
+  });
+  const eventDispatcher = new EventDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    listeners,
+    now,
+    testPoint: options.eventDispatchTestPoint,
+    secretReader: async ({ subscriberId, subscriberVersion, subscriberDigest, purpose }) =>
+      (
+        await eventSecrets.readLiveGenerations({
+          owner: { kind: 'subscriber', id: subscriberId, version: subscriberVersion, digest: subscriberDigest },
+          purpose,
+          cipher,
+        })
+      ).map(({ generation, lifecycle, secretDigest, material }) => ({ generation, lifecycle, secretDigest, material })),
+  });
   // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
   const agentSessions = new AgentSessionService({
@@ -1643,6 +1710,10 @@ async function startOwnerWithLock(
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     writerQuiescer,
+    workflowWork: async () => {
+      await listeners.reconcile();
+      await eventDispatcher.tick();
+    },
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
@@ -1660,6 +1731,7 @@ async function startOwnerWithLock(
       whatsappVisibilityFence: whatsappComposition.visibilityFence,
     }),
     closeSubscriberStreams: (input) => sseStreams.closeSubscriberStreams(input),
+    subscriberListening: (subscriberId, subscriberVersion) => listeners.status(subscriberId, subscriberVersion),
   };
   const ownerB3Service =
     options.b3OwnerService ??
@@ -1780,6 +1852,7 @@ async function startOwnerWithLock(
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();
+        await listeners.close();
       } finally {
         unregisterLayaWorker();
         unregisterLayaInputs();
@@ -1854,6 +1927,8 @@ async function startOwnerWithLock(
       await verifyControlSocket(instance.endpoint);
     }
     await writeInstance(paths, instance);
+    // The live listeners start before the first tick, so an approved subscriber can connect at once.
+    await listeners.start();
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     takeOffers.start(options.takes?.sweepMs ?? TAKE_SWEEP_INTERVAL_MS);
@@ -1968,6 +2043,8 @@ async function handleControl(
       assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
     if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
       lanes.assertAgentMayStop(args.deliveryId, caller);
+    if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
+      assertAgentMayStopEventDelivery(database.database, args.deliveryId);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
@@ -2120,6 +2197,24 @@ async function handleControl(
       if (!definition) throw new CommsError('NOT_FOUND', 'the requested event type is not in the local catalogue');
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
+    // Workflow events (0.36.0): a subscription is prepared by anyone and approved by the person, from the app's origins
+    // here or with `approve` at a terminal; the step event catalogue is content-free.
+    case OWNER_CONTROL_WIRES.enableSubscriber:
+      return domainAwaited(() =>
+        activations.prepareSubscription({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case OWNER_CONTROL_WIRES.approveSubscriberFromApp:
+      return requireJudgeSetup(judgeSetup).approveSubscription(
+        personOnly(request.args, 'subscriber approve'),
+        request.origin,
+      );
+    case OWNER_CONTROL_WIRES.workflowEventsList:
+      return workflowEventsListResult();
+    case OWNER_CONTROL_WIRES.workflowEventsShow:
+      return workflowEventsShowResult(request.args.schema);
     case OWNER_CONTROL_WIRES.sourcesList:
       return sourceRows(database, sourceRegistry, await connectedAccounts());
     case OWNER_CONTROL_WIRES.sourceShow:

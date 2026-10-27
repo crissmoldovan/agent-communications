@@ -48,6 +48,7 @@ import {
   type SseSubscriberDocument,
   type SseTargetDocument,
 } from './sse-subscriber.ts';
+import { canonicalWebhookSubscriber, type WebhookSubscriberDocument } from './webhook-subscriber.ts';
 import { canonicalWebhookTarget, type WebhookTargetDocument } from './webhook-target.ts';
 
 export interface DryRunTargetDocument {
@@ -85,7 +86,8 @@ export type CanonicalAgenticCondition = Omit<AgenticConditionV1, 'judge'> & {
   readonly judge: CanonicalJudgeDocument;
 };
 
-export type SubscriberDocument = SseSubscriberDocument;
+/** A subscriber version: live on this Mac (`sse`), or off it by signed webhook (`webhook`, 0.36.0, W29). */
+export type SubscriberDocument = SseSubscriberDocument | WebhookSubscriberDocument;
 
 export interface RuleRetentionDocument {
   readonly ingestMs: number;
@@ -136,7 +138,8 @@ export interface CanonicalFullRuleDocument {
   /** D2/D6: the optional exact CloudEvent `type` override, part of the approval when present; absent means the default. */
   readonly cloudEventType?: string;
   readonly targets: readonly TargetDocument[];
-  readonly subscribers: readonly SubscriberDocument[];
+  /** The SSE subscribers this workflow's SSE targets bind; a webhook subscriber is never bound by a target. */
+  readonly subscribers: readonly SseSubscriberDocument[];
   readonly judges: readonly JudgeDocument[];
   readonly deliveryRateCap: number;
   readonly retention: RuleRetentionDocument;
@@ -155,6 +158,15 @@ export type ActivationDocumentV1 =
       readonly kind: 'enable-all';
       readonly switchGeneration: number;
       ruleVersions: readonly { readonly ruleId: string; readonly ruleVersion: number }[];
+    }
+  /**
+   * One subscriber version's events, approved by the person (0.36.0, W29): the exact version, bound by its stored
+   * document's digest, so the approval names what it receives, in which namespaces, with or without senders' words.
+   */
+  | {
+      readonly documentVersion: 1;
+      readonly kind: 'subscription';
+      readonly subscription: { readonly subscriberId: string; readonly version: number; readonly digest: string };
     };
 
 /** Synthetic fixtures can replace only reviewed Laya asset bytes in an otherwise production path. */
@@ -242,7 +254,15 @@ export { canonicalJudge } from './judges.ts';
 /** The one canonical form of a subscriber version — stored, and embedded in every rule that names it. */
 export function canonicalSubscriber(value: unknown): SubscriberDocument {
   const subscriber = cloneJsonRecord(value, 'a subscriber document');
-  if (subscriber.kind !== 'sse') return fail('a subscriber document has a known kind');
+  if (subscriber.kind === 'sse') return canonicalSseSubscriber(subscriber);
+  if (subscriber.kind === 'webhook') return canonicalWebhookSubscriber(subscriber);
+  return fail('a subscriber document has a known kind');
+}
+
+/** A subscriber a workflow's SSE targets bind: an SSE one only (§4.2). */
+function canonicalBoundSubscriber(value: unknown): SseSubscriberDocument {
+  const subscriber = cloneJsonRecord(value, 'a subscriber document');
+  if (subscriber.kind !== 'sse') return fail("a workflow's subscribers are SSE subscribers its SSE targets bind");
   return canonicalSseSubscriber(subscriber);
 }
 
@@ -337,7 +357,7 @@ export function canonicalFullRuleDocument(value: unknown): CanonicalFullRuleDocu
   if (targets.length === 0) return fail('a B1 rule has at least one dry-run target');
   assertOneTargetPerLane(targets);
   const subscribers = Array.isArray(rule.subscribers)
-    ? rule.subscribers.map(canonicalSubscriber)
+    ? rule.subscribers.map(canonicalBoundSubscriber)
     : fail('rule subscribers are an array');
   for (const target of targets) {
     if (target.kind !== 'sse') continue;
@@ -417,6 +437,27 @@ function canonicalEnableAll(value: unknown): Extract<ActivationDocumentV1, { kin
   };
 }
 
+function canonicalSubscription(value: unknown): Extract<ActivationDocumentV1, { kind: 'subscription' }> {
+  const document = cloneJsonRecord(value, 'a subscription document');
+  for (const key of Object.keys(document))
+    if (!['documentVersion', 'kind', 'subscription'].includes(key))
+      return fail(`a subscription document has no field ${key}`);
+  const subscription = cloneJsonRecord(document.subscription, 'a subscription');
+  for (const key of Object.keys(subscription))
+    if (!['digest', 'subscriberId', 'version'].includes(key)) return fail(`a subscription has no field ${key}`);
+  const digest = requiredText(subscription.digest, "a subscription's subscriber digest");
+  if (!/^[0-9a-f]{64}$/.test(digest)) return fail("a subscription's subscriber digest is a lowercase SHA-256");
+  return {
+    documentVersion: 1,
+    kind: 'subscription',
+    subscription: {
+      subscriberId: requiredText(subscription.subscriberId, "a subscription's subscriber id"),
+      version: positiveInteger(subscription.version, "a subscription's subscriber version"),
+      digest,
+    },
+  };
+}
+
 /** Validates exactly one v1 activation document and normalises only D2's unordered enable-all list. */
 export function normaliseActivationDocument(
   value: unknown,
@@ -438,6 +479,8 @@ export function normaliseActivationDocument(
       };
     case 'enable-all':
       return canonicalEnableAll(document);
+    case 'subscription':
+      return canonicalSubscription(document);
     default:
       return fail('an activation document has a known kind');
   }
@@ -494,6 +537,8 @@ function derivedVersions(document: ActivationDocumentV1): DisclosureVersion[] {
       return [{ kind: 'judge-kind', id: document.enablement.kind, version: document.enablement.version }];
     case 'enable-all':
       return document.ruleVersions.map((rule) => ({ kind: 'rule', id: rule.ruleId, version: rule.ruleVersion }));
+    case 'subscription':
+      return [{ kind: 'subscriber', id: document.subscription.subscriberId, version: document.subscription.version }];
   }
 }
 

@@ -11,6 +11,8 @@ export interface AgentApprovalViewV1 {
   readonly digest: string;
   readonly preview: ActivationDocumentV1;
   readonly layaJudge?: unknown;
+  /** A subscription's preview (0.36.0, W29): the subscriber version, and what it receives. */
+  readonly subscription?: unknown;
 }
 
 /**

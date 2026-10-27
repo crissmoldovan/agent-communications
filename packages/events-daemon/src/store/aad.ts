@@ -13,6 +13,9 @@ const PRIMARY_KEY_COMPONENT_COUNTS = {
   'system_reset_outbox.encryptedRecord': 1,
   'queue_items.encryptedRecord': 1,
   'decision_sender_domains.encryptedDomain': 1,
+  // Workflow events (0.36.0, §4.3): a raised event's sealed record, and each subscriber's frame of it.
+  'workflow_events.encryptedRecord': 1,
+  'event_stream_log.encryptedRecord': 1,
 } as const;
 
 export type AadComponent =

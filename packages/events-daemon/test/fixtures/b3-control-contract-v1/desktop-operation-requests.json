@@ -268,5 +268,41 @@
         "digest": "75518500da9318b19a1148deebe93db44b3f6351f6488d79acf0ada8a2b7552c"
       }
     }
+  },
+  {
+    "name": "subscriber-enable-request",
+    "request": {
+      "operation": "subscriber-enable",
+      "args": {
+        "subscriberId": "events-dashboard",
+        "version": 1
+      }
+    }
+  },
+  {
+    "name": "subscriber-approve-request",
+    "request": {
+      "operation": "subscriber-approve",
+      "args": {
+        "approvalId": "ap_8M6QKZ2T5V7X9B1D3F5H7K9N2R",
+        "digest": "b4f1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1"
+      }
+    }
+  },
+  {
+    "name": "workflow-events-list-request",
+    "request": {
+      "operation": "workflow-events-list",
+      "args": {}
+    }
+  },
+  {
+    "name": "workflow-events-show-request",
+    "request": {
+      "operation": "workflow-events-show",
+      "args": {
+        "schema": "step.wait"
+      }
+    }
   }
 ]

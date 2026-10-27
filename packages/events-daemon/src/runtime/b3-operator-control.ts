@@ -16,6 +16,16 @@ import type { ActivationRuntime } from './activations.ts';
 import type { B3ControlPorts } from './b3-control-ports.ts';
 import { judgeUnavailable } from './b3-judge-unavailable.ts';
 import { type DeliveryListRowV1, listDeliveryRows } from './delivery-rows.ts';
+import {
+  dropEventDeliveryInTransaction,
+  type EventDeliveryListRowV1,
+  listEventDeliveryRows,
+  parseEventDeliveryKey,
+  retryEventDeliveryInTransaction,
+  type SubscriberEntryV2,
+  subscriberEntries,
+} from './events/event-deliveries.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import type { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
@@ -38,7 +48,10 @@ export interface SubscriberMetadata {
  */
 export class B3OperatorControl implements B3OwnerService {
   readonly #store: EventDatabase;
-  readonly #ports: Pick<B3ControlPorts, 'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams'>;
+  readonly #ports: Pick<
+    B3ControlPorts,
+    'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams' | 'subscriberListening'
+  >;
   readonly #now: () => number;
   readonly #activations:
     | Pick<
@@ -60,7 +73,10 @@ export class B3OperatorControl implements B3OwnerService {
 
   constructor(input: {
     readonly store: EventDatabase;
-    readonly ports: Pick<B3ControlPorts, 'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams'>;
+    readonly ports: Pick<
+      B3ControlPorts,
+      'quiescer' | 'withDeliveryWriteFence' | 'closeSubscriberStreams' | 'subscriberListening'
+    >;
     readonly now?: (() => number) | undefined;
     readonly activations?:
       | Pick<
@@ -415,26 +431,20 @@ export class B3OperatorControl implements B3OwnerService {
     });
   }
 
-  subscribersList(): readonly SubscriberMetadata[] {
-    return (
-      this.#store.database
-        .prepare(
-          `SELECT subscriber_id, version, digest, revoked_at
-             FROM subscriber_versions
-            ORDER BY subscriber_id, version`,
-        )
-        .all() as Array<{ subscriber_id: string; version: number; digest: string; revoked_at: number | null }>
-    ).map((row) => ({
-      subscriberId: row.subscriber_id,
-      version: row.version,
-      digest: row.digest,
-      revokedAt: row.revoked_at,
-    }));
+  /**
+   * Every subscriber version: today's metadata, and from 0.36.0 its kind, what it is given, its state, its listener and
+   * its backlog (plan I6, `SubscriberEntryV2`). Content-free.
+   */
+  subscribersList(): readonly SubscriberEntryV2[] {
+    return subscriberEntries(this.#store.database, this.#ports.subscriberListening);
   }
 
-  /** Content-free delivery metadata; 0.32.0's additive fields are described with the row (delivery-rows.ts). */
-  deliveriesList(): readonly DeliveryListRowV1[] {
-    return listDeliveryRows(this.#store.database);
+  /**
+   * Content-free delivery metadata; 0.32.0's additive fields are described with the row (delivery-rows.ts). From 0.36.0
+   * subscribers' event deliveries follow, each `kind: 'event'` and keyed `<event id>:<subscriber id>`.
+   */
+  deliveriesList(): readonly (DeliveryListRowV1 | EventDeliveryListRowV1)[] {
+    return [...listDeliveryRows(this.#store.database), ...listEventDeliveryRows(this.#store.database)];
   }
 
   async retryDelivery(deliveryId: string): Promise<{
@@ -442,6 +452,9 @@ export class B3OperatorControl implements B3OwnerService {
     readonly deliveryId: string;
     readonly nextAt: number;
   }> {
+    const eventKey = parseEventDeliveryKey(deliveryId);
+    if (eventKey !== null)
+      return this.#store.immediate(() => retryEventDeliveryInTransaction(this.#store.database, eventKey, this.#now()));
     const candidate = this.#deliveryRow(deliveryId);
     // The fence owns the one IMMEDIATE transaction: it re-checks every live authority, then runs this work inside it.
     return this.#withDeliveryWriteFence(candidate, 'retry', () => {
@@ -488,6 +501,14 @@ export class B3OperatorControl implements B3OwnerService {
           .run(now, subscriberId, row.version);
       }
       this.#cancelSubscriberActivationIntents(subscriberId, removedVersions, now);
+      // Its undelivered events go at once (W29), and no version of it receives events any more.
+      cancelEventDeliveriesInTransaction(this.#store.database, { subscriberId }, now, 'SUBSCRIBER_REMOVED');
+      this.#store.database
+        .prepare(
+          `UPDATE subscriber_versions SET state = 'superseded', superseded_at = ?
+            WHERE subscriber_id = ? AND state = 'active'`,
+        )
+        .run(now, subscriberId);
       const bound = this.#store.database
         .prepare("SELECT rule_id, version, document FROM rule_versions WHERE state IN ('active', 'superseded')")
         .all() as Array<{ rule_id: string; version: number; document: string }>;
@@ -515,6 +536,9 @@ export class B3OperatorControl implements B3OwnerService {
   }
 
   async dropDelivery(deliveryId: string): Promise<{ readonly kind: 'delivery-dropped'; readonly deliveryId: string }> {
+    const eventKey = parseEventDeliveryKey(deliveryId);
+    if (eventKey !== null)
+      return this.#store.immediate(() => dropEventDeliveryInTransaction(this.#store.database, eventKey, this.#now()));
     const candidate = this.#deliveryRow(deliveryId);
     return this.#withDeliveryWriteFence(candidate, 'drop', () => {
       const row = this.#deliveryRow(deliveryId);
@@ -712,6 +736,14 @@ function activationIntentReferencesSubscriber(
       rule?: unknown;
       ruleVersions?: Array<{ ruleId?: unknown; ruleVersion?: unknown }>;
     };
+    if (intent.kind === 'subscription') {
+      const subscription = (intent as { subscription?: { subscriberId?: unknown; version?: unknown } }).subscription;
+      return (
+        subscription?.subscriberId === subscriberId &&
+        typeof subscription.version === 'number' &&
+        versions.has(subscription.version)
+      );
+    }
     if (intent.kind === 'rule') {
       const rule = JSON.stringify(intent.rule);
       return rule === undefined || ruleReferencesSubscriber(rule, subscriberId, versions);
