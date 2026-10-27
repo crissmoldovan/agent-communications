@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import type { AgenticConditionV1, FlowDocumentV1, FlowStep, JsonValue, StepId } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument } from '../../src/domain/activation-documents.ts';
-import type { JudgeAnswer, Output, RunView, StepContext } from '../../src/runtime/workflow/contracts.ts';
+import type { JudgeAnswer, Output, RunMessage, RunView, StepContext } from '../../src/runtime/workflow/contracts.ts';
 
 /**
  * A `StepContext` for one executor's unit test (workflows plan T0.2): every part may be given, the rest are the owner
@@ -32,6 +32,8 @@ export interface StepContextParts {
   readonly fields?: Readonly<Record<string, JsonValue>>;
   /** A chained run's `/trigger`. */
   readonly trigger?: Output | null;
+  /** The message the run is about, as its record keeps it for a flow that finds by thread (W36). */
+  readonly message?: RunMessage | null;
   /** Settled steps' closed outputs, by step id. */
   readonly outputs?: Readonly<Record<StepId, Output>>;
   readonly charge?: (kind: ChargeKind) => { ok: true } | { ok: false; until: number };
@@ -85,6 +87,7 @@ export function stepContext(partial: StepContextParts = {}): RecordedStepContext
     now,
     fields: async () => partial.fields ?? {},
     trigger: async () => partial.trigger ?? null,
+    message: async () => partial.message ?? null,
     output: (id: StepId) => partial.outputs?.[id] ?? null,
     charge: (kind: ChargeKind) => {
       charged.push(kind);
