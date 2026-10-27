@@ -195,6 +195,34 @@ describe('a story', () => {
     expect(said(timeline(asked, CONTEXT)[2]?.sub ?? [])).toBe('“⟨Is this <b>urgent</b>?⟩”');
   });
 
+  it('a hold that ran out, or was cancelled, says so in words, never the outcome’s own word', () => {
+    const event = invoice.event;
+    if (event === null) throw new Error('the invoice has its event');
+    const decision = event.decisions[0];
+    if (decision === undefined) throw new Error('the invoice was decided');
+    const ended = {
+      ...invoice,
+      event: {
+        ...event,
+        deliveries: [],
+        decisions: [
+          { ...decision, ruleId: 'invoices', outcome: 'hold-expired', judge: null },
+          { ...decision, ruleId: 'mail-subject', outcome: 'cancelled', judge: null },
+        ],
+      },
+    };
+    expect(cardSteps(ended, CONTEXT).map(said).slice(0, 2)).toEqual([
+      'Workflow ⟨invoices⟩: its judge did not answer in time',
+      'Workflow ⟨mail-subject⟩: its hold was cancelled',
+    ]);
+    const told = timeline(ended, CONTEXT).map((entry) => said(entry.what));
+    expect(told.slice(1, 3)).toEqual([
+      'The judge of the workflow ⟨invoices⟩ did not answer in time',
+      'The hold of the workflow ⟨mail-subject⟩ was cancelled',
+    ]);
+    expect(told.join('\n')).not.toMatch(/hold-expired|: cancelled/);
+  });
+
   it('without the approval’s time, the send says it came after your approval', () => {
     const entries = timeline(invoice, CONTEXT);
     expect(entries.some((entry) => said(entry.what) === 'You approved the reply')).toBe(false);

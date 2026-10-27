@@ -141,6 +141,12 @@ function ruleCardStep(decision: DecisionView): Part[] {
       return [...rule, { text: ' could not use it' }];
     case 'retention-expired':
       return [...rule, { text: ': its hold ran out' }];
+    // How a hold ends unanswered (0.36.0, B3 v1's ended holds): its own bound passed, or it was cancelled — its
+    // account removed, the person's drop, or a WhatsApp message no longer visible.
+    case 'hold-expired':
+      return [...rule, { text: ': its judge did not answer in time' }];
+    case 'cancelled':
+      return [...rule, { text: ': its hold was cancelled' }];
     default:
       return [...rule, { text: `: ${decision.outcome}` }];
   }
@@ -156,6 +162,14 @@ function ruleStoryStep(decision: DecisionView): Part[] {
       return [{ text: 'The workflow ' }, { untrusted: decision.ruleId }, { text: ' could not use it' }];
     case 'retention-expired':
       return [{ text: 'The hold of the workflow ' }, { untrusted: decision.ruleId }, { text: ' ran out' }];
+    case 'hold-expired':
+      return [
+        { text: 'The judge of the workflow ' },
+        { untrusted: decision.ruleId },
+        { text: ' did not answer in time' },
+      ];
+    case 'cancelled':
+      return [{ text: 'The hold of the workflow ' }, { untrusted: decision.ruleId }, { text: ' was cancelled' }];
     default:
       return [{ text: 'The workflow ' }, { untrusted: decision.ruleId }, { text: `: ${decision.outcome}` }];
   }

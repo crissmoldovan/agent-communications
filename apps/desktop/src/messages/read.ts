@@ -33,11 +33,14 @@ export interface JudgeAnswer {
   uncalibrated: boolean;
 }
 
-/** One rule's decision on the event. */
+/** One workflow's decision on the event. */
 export interface DecisionView {
   ruleId: string;
   ruleVersion: number | null;
-  /** `matched`, `no-match`, `mapping-rejected`, `retention-expired` or `hold`. */
+  /**
+   * `matched`, `no-match`, `mapping-rejected`, `retention-expired` or `hold`; from 0.36.0 also a hold's end unanswered,
+   * `hold-expired` or `cancelled`, and a chained workflow's `awaiting-chain` or `not-chained`. Read as any word.
+   */
   outcome: string;
   judge: JudgeAnswer | null;
   /** When it was decided, if the service says. */
