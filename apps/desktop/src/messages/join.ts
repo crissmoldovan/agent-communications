@@ -113,6 +113,11 @@ export interface RunStep {
   endCode?: string | null;
   /** The delivery a deliver step made, by its id. */
   deliveryId?: string | null;
+  /**
+   * Told by a listed run's summary (B6), not by its steps: the card says it, without a time of its own; the story reads
+   * the run in full.
+   */
+  fromSummary?: boolean;
 }
 
 /** What a take's step says beyond who and when (0.35.0). */
@@ -576,6 +581,17 @@ export function runTouches(run: MessageRun): Touch[] {
     }
     for (const event of run.events)
       touches.push(touch('event-raised', event.raisedAt, { stepId: null, outcome: null, eventType: event.type }));
+  } else if (run.summary !== undefined) {
+    // A listed run says its story in a few closed words (B6's summary): the project, the issue, the session, the turn.
+    const said = { stepId: null, fromSummary: true } as const;
+    const { project, issue, session, turn } = run.summary;
+    if (project !== null) touches.push(touch('routed', run.startedAt, { ...said, outcome: 'chosen', project }));
+    if (issue !== null) touches.push(touch('issue-made', run.startedAt, { ...said, outcome: 'done', issue }));
+    if (session !== null)
+      touches.push(
+        touch(session === 'started' ? 'session-started' : 'session-found', run.startedAt, { ...said, outcome: null }),
+      );
+    if (turn !== null) touches.push(touch('turn-ended', run.startedAt, { ...said, outcome: turn }));
   }
   if (RUN_ENDS.has(run.state))
     touches.push(touch('run-ended', run.updatedAt, { stepId: null, outcome: run.state, endCode: run.endCode }));

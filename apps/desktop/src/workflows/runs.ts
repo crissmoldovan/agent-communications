@@ -8,7 +8,8 @@
  * Nothing here reads a workflow's flow, so the list of runs and the cards load none of the designer's code.
  */
 import type { ChipTone } from '../messages/story.ts';
-import type { RunListEntryV1, RunWaitingV1 } from './types.ts';
+import { outcomeWords } from './copy.ts';
+import type { RunListEntryV1, RunSummaryV1, RunWaitingV1 } from './types.ts';
 
 /** A run's state, as its chip says it (spec §7.1). */
 export const RUN_STATE_WORDS = {
@@ -158,4 +159,19 @@ export function eventDeliveryWords(state: string): string {
     default:
       return 'not delivered yet';
   }
+}
+
+/**
+ * A run's story in a few words, for a list (B6's `summary`): the project Which project? chose, the issue made, whether a
+ * session was found or started, and how its turn ended. A project's name is the person's; the rest are closed words.
+ * An event service before it sends none, and nothing is said.
+ */
+export function summaryWords(summary: RunSummaryV1 | undefined): string[] {
+  if (summary === undefined) return [];
+  return [
+    summary.project,
+    summary.issue,
+    summary.session === 'started' ? 'a session started' : summary.session === 'found' ? 'a session found' : null,
+    summary.turn === null ? null : `its turn: ${outcomeWords(summary.turn)}`,
+  ].filter((word): word is string => word !== null);
 }

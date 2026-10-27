@@ -6,11 +6,12 @@
 import { Chip, EmptyState, Panel, Row, Spinner } from '@cueplusplus/ui';
 import { ChevronRight } from 'lucide-react';
 import { useId, useMemo } from 'react';
+import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY } from '../../copy.ts';
 import { isRunId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import { useReloadOnServiceTurn } from '../../hooks/use-reload-on-return.ts';
-import { RUN_STATE_WORDS, runTone } from '../../workflows/runs.ts';
+import { RUN_STATE_WORDS, runTone, summaryWords } from '../../workflows/runs.ts';
 import { type RunListEntryV1, readRunsList } from '../../workflows/types.ts';
 import { FactsLine, Problem, Short } from '../events/parts.tsx';
 
@@ -51,6 +52,11 @@ function RunLine({ run, onOpen }: { run: RunListEntryV1; onOpen: () => void }) {
             run.shadow ? RUNS_COPY.shadow : null,
             run.waiting === null ? null : RUNS_COPY.waitingFor[run.waiting.kind],
             run.waiting?.needsYouInClaudeStream === true ? RUNS_COPY.needsYou : null,
+            ...summaryWords(run.summary).map((word) => (
+              <span key={word} data-slot="run-summary">
+                <UntrustedText text={word} />
+              </span>
+            )),
           ]}
         />
       </span>

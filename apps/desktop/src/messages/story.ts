@@ -460,7 +460,7 @@ function runCardSteps(message: JoinedMessage, context: StoryContext): Part[][] {
         steps.push(run.issue == null ? words('Issue made') : [{ text: 'Issue ' }, { untrusted: run.issue }]);
         break;
       case 'session-found':
-        steps.push(words(`Session found, ${outcomeWords(run.outcome ?? '')}`));
+        steps.push(words(run.outcome === null ? 'Session found' : `Session found, ${outcomeWords(run.outcome)}`));
         break;
       case 'session-started':
         steps.push(
@@ -482,7 +482,13 @@ function runCardSteps(message: JoinedMessage, context: StoryContext): Part[][] {
         steps.push(words(`Given ${context.time(touch.at)}`));
         break;
       case 'turn-ended':
-        steps.push(words(`Turn ended ${context.time(touch.at)}: ${outcomeWords(run.outcome ?? '')}`));
+        steps.push(
+          words(
+            run.fromSummary === true
+              ? `Turn ended: ${outcomeWords(run.outcome ?? '')}`
+              : `Turn ended ${context.time(touch.at)}: ${outcomeWords(run.outcome ?? '')}`,
+          ),
+        );
         break;
       case 'issue-closed':
         steps.push(words('Issue closed'));
@@ -627,8 +633,13 @@ export function cardSteps(message: JoinedMessage, context: StoryContext): Part[]
     const verb = state === 'done' ? 'Marked done' : 'Dismissed';
     steps.push(words(marked === undefined ? verb : `${verb} by ${marked.actor === 'person' ? 'you' : 'the agent'}`));
   }
-  // A workflow gave it to a session (0.36.0): that session has it in hand, though no activity line says it read it.
-  const given = touches.some((touch) => touch.via === 'run' && touch.kind === 'given');
+  // A workflow gave it to a session (0.36.0): that session has it in hand, though no activity line says it read it. A
+  // listed run's summary says its turn ended, which only a given message's does.
+  const given = touches.some(
+    (touch) =>
+      touch.via === 'run' &&
+      (touch.kind === 'given' || (touch.kind === 'turn-ended' && touch.run?.fromSummary === true)),
+  );
   if (message.notTaken !== null) steps.push(words('Nobody took it'));
   else if (!message.agentSeen && !given) steps.push(words('No agent has read it'));
   else if (message.status.kind === 'acknowledged') steps.push(words('No reply yet'));
@@ -766,6 +777,8 @@ export function timeline(message: JoinedMessage, context: StoryContext): Timelin
   const after: TimelineEntry[] = [];
   const sends = message.touches.filter((touch) => touch.kind === 'sent');
   for (const touch of message.touches) {
+    // A listed run's summary has no times of its own: the card says it; the story tells the steps once read in full.
+    if (touch.run?.fromSummary === true) continue;
     after.push(
       touchEntry(
         touch,

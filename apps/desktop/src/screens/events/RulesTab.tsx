@@ -41,7 +41,7 @@ import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import type { Call } from '../../ipc.ts';
 import { EDITOR_COPY } from '../../rule-editor/copy.ts';
-import { runFacts, thisWeekWords } from '../../workflows/runs.ts';
+import { runFacts, summaryWords, thisWeekWords } from '../../workflows/runs.ts';
 import { NewWorkflow } from '../workflows/NewWorkflow.tsx';
 import { type EventsLists, type EventsNav, readVersions } from './lists.ts';
 import { Day, DRY_RUN, FactsLine, Problem, Sentence, Short, STATUS_WORDS, StatusChip, statusOf } from './parts.tsx';
@@ -163,10 +163,18 @@ function runsFacts(lists: EventsLists, ruleId: string): ReactNode[] {
   if (lists.runs === 'off' || lists.runs.state !== 'ready') return [];
   const { thisWeek, last, capped } = runFacts(lists.runs.value, ruleId, Date.now());
   if (last === null) return [];
+  // The newest run's story in a few words (B6's summary): its project, its issue, its session and its turn.
+  const newest = lists.runs.value.find((run) => run.ruleId === ruleId && run.startedAt === last);
+  const story = summaryWords(newest?.summary);
   return [
     thisWeekWords(thisWeek, capped),
     <>
       {RULES_COPY.lastRun} <Short at={last} />
+      {story.length === 0 ? null : (
+        <span data-slot="last-run-summary">
+          : <UntrustedText text={story.join(', ')} />
+        </span>
+      )}
     </>,
   ];
 }

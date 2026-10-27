@@ -269,6 +269,33 @@ describe('a workflow run', () => {
     expect(await within(view).findByText('Cancelled. 1 delivery and 0 events were cancelled.')).toBeTruthy();
   });
 
+  it("a workflow's Runs and its card say each run's story in a few words: project, issue, session, turn", async () => {
+    renderApp(service().bridge, { screen: 'events' });
+    fireEvent.click(await screen.findByRole('tab', { name: /^Workflows\b/ }));
+    const card = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('[data-rule="client-asks"]');
+      if (found?.querySelector('[data-slot="last-run-summary"]') == null) throw new Error('no summary yet');
+      return found;
+    });
+    expect(card.querySelector('[data-slot="last-run-summary"]')?.textContent).toBe(
+      ': acme-site, ACME-123, a session found',
+    );
+    expect(card.textContent).toMatch(/2 runs this week|runs this week/);
+    fireEvent.click(card);
+    const page = await screen.findByRole('region', { name: 'Workflow client-asks' });
+    const runs = await within(page).findByRole('region', { name: 'Runs' });
+    const row = await waitFor(() => {
+      const found = runs.querySelector<HTMLElement>(`[data-run="${RUN}"]`);
+      if (found === null) throw new Error('no run yet');
+      return found;
+    });
+    expect([...row.querySelectorAll('[data-slot="run-summary"]')].map((each) => each.textContent)).toEqual([
+      'acme-site',
+      'ACME-123',
+      'a session found',
+    ]);
+  });
+
   it('a run that cannot be read says so, and asks nothing else', async () => {
     const fake = workflowService(undefined, { eventsRunShow: { runId: RUN, state: 'paused' } });
     renderApp(fake.bridge, { screen: 'events' });

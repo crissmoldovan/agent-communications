@@ -247,6 +247,21 @@ describe("a message's story follows its workflow", () => {
     expect(failed.map((entry) => text(entry.what))).toContain('The workflow’s run failed');
   });
 
+  it('a listed run says its summary on the card, without times of its own, and nothing in the timeline', () => {
+    const { steps: _s, events: _e, path: _p, notRaised: _n, ...listed } = run();
+    const summarised = {
+      ...listed,
+      summary: { project: 'acme-site', issue: 'ACME-123', session: 'started' as const, turn: 'done' },
+    };
+    const line = story([summarised]);
+    expect(line).toBe(
+      'Workflow client-asks › Project acme-site › Issue ACME-123 › Session started › Turn ended: done › Delivered to client-issues › Delivered to client-prompt',
+    );
+    const entries = timeline(messageWith([summarised]), context).map((entry) => text(entry.what));
+    expect(entries.some((entry) => entry.startsWith('Routed to'))).toBe(false);
+    expect(entries).toContain('The workflow’s run finished');
+  });
+
   it('the timeline tells each step in the person’s view: the worktree’s folder, the session, the turn', () => {
     const entries = timeline(messageWith([run()]), context).map((entry) => [
       text(entry.what),
