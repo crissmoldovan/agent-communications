@@ -232,7 +232,7 @@ export const DESCRIBE_BRIEF: string = [
   'watches their accounts (Gmail, Slack, WhatsApp, Resend) and, for each message a workflow matches, runs its steps.',
   'A workflow is written as text, in the grammar given below; the person reads and approves it before it runs.',
   '',
-  'Write the workflow as that text, and follow these rules:',
+  'Write the workflow as that text, and follow these instructions:',
   '1. Say every step in words. Never write raw JSON: a draft with a raw line is refused.',
   '2. Use only the names listed under "Names you may use": accounts by their id, judges, targets, lanes, projects,',
   '   namespaces and event words. Never invent one. Where a name is missing, ask a question instead.',

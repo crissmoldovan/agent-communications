@@ -28,6 +28,9 @@ const KEPT: Readonly<Record<string, string>> = {
   // `if (!isCatalogueForm)` is on, and the whole of `target-test-needs-exact-active-reference`'s.
   'a rule test catalogue selector is malformed': 'on a B3-anchored line',
   'the target has no active exact rule reference': 'a B3-anchored line',
+  // Describe it's grammar is GRAMMAR.md's own words, which name the older header word the parser still reads.
+  '`rule <id>, version <n>`, the word before 0.36, still parses to the same document; the printer writes `workflow`.':
+    'GRAMMAR.md names the older header keyword',
 };
 
 interface Literal {

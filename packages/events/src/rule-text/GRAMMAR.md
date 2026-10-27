@@ -150,7 +150,7 @@ ask <judge id>, version <n>[, via <provider>]
 ```
 
 `if unsure drop` is `onUncertain: "no-match"`, and `if unsure hold` is `"hold"`; `if unsure …` may also stand alone.
-The judge's document is embedded in the rule, so every field of it is written. Each line is optional and sets only its
+The judge's document is embedded in the workflow, so every field of it is written. Each line is optional and sets only its
 own fields: the prototype's short `ask` parses, and the event service refuses what it leaves out.
 
 The app fills a short `ask`'s judge document and limits from the judge's stored version, by its id; the parser does not.
@@ -194,7 +194,7 @@ below it the ids Linear knows them by, and its title and description:
 - `team id <id>` is `team.id`; `label id <id>` (or `label ids <id> and <id>…`) pairs each id, in order, with a name on
   the target's line, so there are as many of each.
 - `title "<text>"` and `description "<text>"` are the templates `{ "text": … }`: quoted text, whose `{{field}}` slots
-  name the rule's mapped fields (the event service checks them when the rule is activated). A model-written part
+  name the workflow's mapped fields (the event service checks them when the workflow is activated). A model-written part
   (`title written by …`) is refused for now: it arrives with the session target's context.
 - `assigned to me` is `"me"`, `assigned to user <id>` is `{ "id": … }`, and `assigned to nobody`, or nothing, is `null`.
   No labels is `[]`. The parser fills both, and the printer leaves out each only when the document holds exactly that.
@@ -235,7 +235,7 @@ window's, so the printer writes `if none` for a lane only when it is not `leave 
 `ifNone: "queue-only"`, `ifBusy: "queue"`, `mode: "manual"` and `context: []` when the text says nothing of them, and
 the printer leaves out exactly those (`if busy` is always written, as the prototype draws it). A part the readable
 form has no words for is `raw <JSON>` in its place; a target it cannot say at all is `raw` whole. A session target
-that leaves an item in the Queue — found by a lane, or with either `leave it in the queue` — gives its rule a queue
+that leaves an item in the Queue — found by a lane, or with either `leave it in the queue` — gives its workflow a queue
 retention, as a queue target does (`targetQueues`, exported by this package).
 
 ### `flow` — `flow`, and `targets` (workflows design §4.4)
@@ -347,7 +347,7 @@ its line.
 | `otherwise → <step or end>` · `then → <step or end>` | `next.otherwise` |
 | `otherwise stop` · `then stop` | no `otherwise` |
 
-**The arrow rule.** A step that writes no `otherwise` of its own goes on to the next step written:
+**Arrows by default.** A step that writes no `otherwise` of its own goes on to the next step written:
 `{ "otherwise": "<that step>" }`, whether or not it writes other arrows. The last step written, and a step that writes
 `then stop`, have no `otherwise`. So a straight line needs no arrows, and the printer leaves out exactly the `otherwise`
 the parser fills. It writes `then` when the step has no other arrow and `otherwise` when it has, and the arrows in each
