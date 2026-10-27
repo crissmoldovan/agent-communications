@@ -199,8 +199,10 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
       .catch(() => undefined);
   };
 
+  /** What the last look found: null to serve, or the reason to refuse — what a look that finds nothing new answers. */
+  let verdict: string | null = null;
   /** D15: `config.json` as it is now, and what changed for this connection. Null to serve; the reason to refuse. */
-  const follow = async (): Promise<string | null> => {
+  const look = async (): Promise<string | null> => {
     let stamp: string;
     try {
       const facts = await stat(core.config.path);
@@ -208,8 +210,13 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     } catch {
       stamp = 'missing';
     }
-    if (stamp === lastStat) return null;
+    if (stamp === lastStat) return verdict;
     lastStat = stamp;
+    verdict = await apply();
+    return verdict;
+  };
+  /** The record read again, and what changed for this connection applied: null to serve, or the reason to refuse. */
+  const apply = async (): Promise<string | null> => {
     let next: Config;
     try {
       next = await core.config.load();
@@ -218,14 +225,26 @@ export async function runGateway(options: GatewayOptions): Promise<Gateway> {
     }
     const why = connectionRefusal(next, options.connection, key);
     if (why !== null) return why;
-    const read = connectionById(next, options.connection);
-    if (read === undefined || !read.readable) return 'this connection’s record in Agent Comms could not be read';
+    const found = connectionById(next, options.connection);
+    if (found === undefined || !found.readable) return 'this connection’s record in Agent Comms could not be read';
     config = next;
-    name = read.record.name;
-    const { start, stop } = partsDiff(router.specs(), await specsOf(read.record, next));
+    name = found.record.name;
+    const { start, stop } = partsDiff(router.specs(), await specsOf(found.record, next));
     for (const server of stop) await router.removePart(server);
     for (const spec of start) await router.addPart(spec);
     return null;
+  };
+  /*
+   * One look at a time, each after the one before. The timer and a request each look; the stamp is recorded as soon as
+   * a look sees it, and the change it found applies only after the record is read and the parts are worked out. A
+   * request that looked in between found the stamp unchanged and was served before that change — Slack's tools still
+   * listed after Slack was taken out, a call answered on a key already replaced. Now it waits for the look in flight,
+   * and a look that finds nothing new answers with the last look's verdict.
+   */
+  let looking: Promise<string | null> = Promise.resolve(null);
+  const follow = (): Promise<string | null> => {
+    looking = looking.then(look, look);
+    return looking;
   };
 
   const router: Router = new Router({

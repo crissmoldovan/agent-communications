@@ -228,6 +228,126 @@ test('D15: a part taken out stops at once and its tools go; a connection cut off
   assert.ok(served.router.status().every((part) => part.state === 'stopped'));
 });
 
+test('D15: a request that arrives while the timer’s look is applying a change waits for it, rather than being served before it', async (t) => {
+  /*
+   * The flake this test pins (about 1 run in 4 of the test above): the timer's look saw the narrowed `config.json`,
+   * recorded its stamp, and was still working out the parts when `tools/list` arrived. That request's own look found
+   * the stamp unchanged — "nothing new" — and was served with Slack still in. Here the timer's look is held inside the
+   * parts it works out, so the order is certain: the request must not be answered until the look it raced has applied.
+   */
+  const m = machine();
+  const key = newConnectionKey();
+  const held = record({ key });
+  await put(m, held);
+  const env = { ...m.env, AGENT_COMMS_CONNECTION_KEY: key };
+  const real = fakes(m);
+  let looks = 0;
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const served = await runGateway({
+    core: m.core,
+    env,
+    connection: held.id,
+    transport: serverSide,
+    log: () => undefined,
+    parts: (async (next: ConnectionRecord) => {
+      looks += 1;
+      // The start's own look goes through; the next one — the timer's, on the narrowed record — is held.
+      if (looks > 1) await released;
+      return real(next);
+    }) as never,
+    followEveryMs: 50,
+  });
+  const client = new Client({ name: 'claude-code', version: '2.1.310' }, { capabilities: {} });
+  await client.connect(clientSide);
+  t.after(async () => {
+    release();
+    await client.close().catch(() => undefined);
+    await served.close();
+  });
+  assert.ok((await client.listTools()).tools.some((tool) => tool.name.startsWith('slack_')));
+  await put(m, { ...held, parts: [{ server: 'gmail' }] }, false);
+  // No request is in flight: the look that reaches the parts now is the timer's.
+  await waitFor(() => looks > 1);
+  let answered = false;
+  const listed = client.listTools().then((result) => {
+    answered = true;
+    return result;
+  });
+  await sleep(300);
+  assert.equal(answered, false, 'the request was served before the change the timer had seen was applied');
+  release();
+  const names = (await listed).tools.map((tool) => tool.name);
+  assert.equal(
+    names.some((name) => name.startsWith('slack_')),
+    false,
+    names.join(', '),
+  );
+});
+
+test('D15: a re-keyed connection refuses the request that arrives while the timer’s look is still reading it', async (t) => {
+  /*
+   * The same race on the refusal: the timer's look recorded the new stamp, and had the reason only once it had read the
+   * record — a request in between found the stamp unchanged and was served on the replaced key. Here the timer's read
+   * of `config.json` is held, so the request comes in between for certain: it must wait, and be refused.
+   */
+  const m = machine();
+  const key = newConnectionKey();
+  const held = record({ key, parts: [{ server: 'gmail' }] });
+  await put(m, held);
+  const env = { ...m.env, AGENT_COMMS_CONNECTION_KEY: key };
+  let holding = false;
+  let reads = 0;
+  let release: () => void = () => undefined;
+  const released = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const config = {
+    path: m.core.config.path,
+    load: async () => {
+      if (holding) {
+        reads += 1;
+        await released;
+      }
+      return m.core.config.load();
+    },
+  };
+  const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+  const served = await runGateway({
+    core: { paths: m.core.paths, config } as never,
+    env,
+    connection: held.id,
+    transport: serverSide,
+    log: () => undefined,
+    parts: fakes(m) as never,
+    followEveryMs: 50,
+  });
+  const client = new Client({ name: 'claude-code', version: '2.1.310' }, { capabilities: {} });
+  await client.connect(clientSide);
+  t.after(async () => {
+    release();
+    await client.close().catch(() => undefined);
+    await served.close();
+  });
+  assert.ok((await client.listTools()).tools.some((tool) => tool.name === 'gmail_whoami'));
+  holding = true;
+  await put(m, { ...held, keyHash: connectionKeyHash(newConnectionKey()) }, false);
+  // No request is in flight: the look reading the record now is the timer's.
+  await waitFor(() => reads > 0);
+  let answered = false;
+  const called = client.callTool({ name: 'gmail_whoami', arguments: {} }).finally(() => {
+    answered = true;
+  });
+  called.catch(() => undefined);
+  await sleep(300);
+  assert.equal(answered, false, 'the call was answered before the replaced key the timer had seen was refused');
+  release();
+  await assert.rejects(called, /replaced/);
+});
+
 test('D15: the gateway follows its connection on a timer too, and a connection removed is refused the next call', async (t) => {
   const m = machine();
   const key = newConnectionKey();
