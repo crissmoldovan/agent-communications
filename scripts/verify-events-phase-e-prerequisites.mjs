@@ -61,10 +61,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * 0.36.0's one word (design W22) changes no branch, only two example values the seeded vectors carry, as the event
  * service now writes them: `judge-setup`'s `destination` ("Messages your workflows choose …") and `rule-analyse`'s
  * `sent` ("The workflow's own text …"). Both stay plain strings in the schema.
+ *
+ * 0.36.0's subscriber state is another, also only additive: `addSubscriber` and `updateSubscriber`'s result `state`,
+ * always `null` before, may also be `inert` — what `subscribers list` says of a version given events until the person
+ * approves its subscription — and the ordinary webhook vector, regenerated from the owner, says so. A version given no
+ * events still answers `null`. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'f107b667abb7c2e3469881b9af7f78568ff3874f6722ce9eb2d6b40d24693feb',
+    'a1f6e4b29667a76a269a19a11b08ea4a44d2b0359903d2057ad5fbead81abfc6',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -88,7 +93,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
     'cea5d4fb1a36f9c3648e6d2333382ce615c383af88d2632ba2065f12e163d0f3',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
-    '6a53c157ac7d8605b58754e1979f2002223882d821731b79ec547f8e5fc356d4',
+    'd2e11df428e6d660eac8637130a401504930468bcb4fbc7ef68b163c2d72122c',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
     'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':

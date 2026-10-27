@@ -538,6 +538,9 @@ type B3VersionResultV1<Kind extends 'rule' | 'target' | 'subscriber', Document> 
   digest: string;
   state: null;
 }>;
+/** A created subscriber version: `inert` when it is given events, as `subscribers list` says (0.36.0, W29). */
+type B3SubscriberVersionResultV1 = Omit<B3VersionResultV1<'subscriber', SubscriberDocument>, 'state'> &
+  Readonly<{ state: null | 'inert' }>;
 /** A created rule version; one that narrows the active version carries its tightening's preview (action queue Q6). */
 type B3RuleVersionResultV1 = B3VersionResultV1<'rule', CanonicalFullRuleDocument> &
   Readonly<{ tightening?: TighteningPreview }>;
@@ -621,8 +624,8 @@ type B3OrdinaryControlResultsByOperationV1 = {
   readonly targetTest: B3TargetTestResultV1;
   readonly targetResume: B3TargetResumeResultV1;
   readonly subscribersList: readonly JsonValue[];
-  readonly addSubscriber: B3VersionResultV1<'subscriber', SubscriberDocument>;
-  readonly updateSubscriber: B3VersionResultV1<'subscriber', SubscriberDocument>;
+  readonly addSubscriber: B3SubscriberVersionResultV1;
+  readonly updateSubscriber: B3SubscriberVersionResultV1;
   readonly removeSubscriber: Readonly<{ subscriberId: string; removed: true }>;
   readonly deliveriesList: readonly JsonValue[];
   readonly retryDelivery: B3DeliveryRetryResultV1;
@@ -2004,17 +2007,26 @@ function assertB3PendingVersion(value: Record<string, unknown>, kind: 'rule' | '
   if (value.id !== `${value.objectId}@${value.version}`)
     throw new TypeError(`a pending ${kind} version id does not name its object version`);
   assertText(value.digest, `a pending ${kind} digest`);
-  if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
   switch (kind) {
     case 'rule':
+      if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
       canonicalFullRuleDocument(value.document);
       return;
     case 'target':
+      if (value.state !== null) throw new TypeError(`a pending ${kind} version must be inert`);
       canonicalTarget(value.document);
       return;
-    case 'subscriber':
-      canonicalSubscriber(value.document);
+    case 'subscriber': {
+      // Inert by name exactly when it is given events (0.36.0, W29), as `subscribers list` says; otherwise no state.
+      const inert = canonicalSubscriber(value.document).events !== undefined;
+      if (value.state !== (inert ? 'inert' : null))
+        throw new TypeError(
+          inert
+            ? 'a subscriber version given events is inert until its subscription is approved'
+            : 'a subscriber version given no events has no state',
+        );
       return;
+    }
   }
 }
 
