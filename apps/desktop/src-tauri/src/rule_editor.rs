@@ -265,10 +265,11 @@ impl ProjectDocument {
 }
 
 /// What Describe it is asked (0.36.0, spec §11.4, plan I7): one JSON object of `words`, the person's description, 1 to
-/// `DESCRIBE_WORDS_LIMIT` characters; `answers`, when it has them, at most `DESCRIBE_ANSWERS_LIMIT`, each a JSON object
-/// or a string; and `draft`, the current draft sent along, its text or its document, at most `DESCRIBE_DRAFT_LIMIT`
-/// bytes. Nothing else is taken, and the whole is at most `DESCRIBE_REQUEST_LIMIT` bytes. The event service checks
-/// the rest.
+/// `DESCRIBE_WORDS_LIMIT` characters; `example`, a message the person pasted, which the event service sends inside the
+/// untrusted envelope as an example, at most `DESCRIBE_WORDS_LIMIT` characters; `answers`, when it has them, at most
+/// `DESCRIBE_ANSWERS_LIMIT`, each a JSON object or a string; and `draft`, the current draft sent along, its text or its
+/// document, at most `DESCRIBE_DRAFT_LIMIT` bytes. Nothing else is taken, and the whole is at most
+/// `DESCRIBE_REQUEST_LIMIT` bytes. The event service checks the rest.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "Value", into = "Value")]
 pub struct DescribeRequest(Value);
@@ -284,11 +285,21 @@ impl TryFrom<Value> for DescribeRequest {
         };
         if map
             .keys()
-            .any(|key| !["words", "answers", "draft"].contains(&key.as_str()))
+            .any(|key| !["words", "example", "answers", "draft"].contains(&key.as_str()))
         {
             return Err(AppError::refused(
-                "Describe it is asked your words, your answers and the draft, and nothing else",
+                "Describe it is asked your words, an example, your answers and the draft, and nothing else",
             ));
+        }
+        if let Some(example) = map.get("example") {
+            if example
+                .as_str()
+                .is_none_or(|example| example.chars().count() > DESCRIBE_WORDS_LIMIT)
+            {
+                return Err(AppError::refused(
+                    "a pasted example is text of at most 4,000 characters",
+                ));
+            }
         }
         let words = map.get("words").and_then(Value::as_str).unwrap_or("");
         if words.trim().is_empty() || words.chars().count() > DESCRIBE_WORDS_LIMIT {
@@ -706,7 +717,8 @@ mod tests {
         }
     }
 
-    /// Describe it (0.36.0, spec §11.4): the words, up to five answers and the draft; nothing else, and within bounds.
+    /// Describe it (0.36.0, spec §11.4): the words, an example, up to five answers and the draft; nothing else, and
+    /// within bounds.
     #[test]
     fn describe_it_is_asked_words_answers_and_a_draft_and_nothing_else() {
         for good in [
@@ -720,6 +732,8 @@ mod tests {
             }),
             json!({ "words": "Open an issue.", "draft": { "ruleId": "client-asks", "version": 1 } }),
             json!({ "words": "Open an issue.", "answers": [] }),
+            json!({ "words": "Open an issue.", "example": "Can we add a download button?" }),
+            json!({ "words": "Open an issue.", "example": "é".repeat(DESCRIBE_WORDS_LIMIT) }),
         ] {
             let request = DescribeRequest::try_from(good.clone()).expect("a request");
             assert_eq!(
@@ -750,6 +764,8 @@ mod tests {
             json!({ "words": "Open an issue.", "provider": "anthropic" }),
             json!({ "words": "Open an issue.", "key": "fake-key" }),
             json!({ "words": "Open an issue.", "profile": "fake-profile" }),
+            json!({ "words": "Open an issue.", "example": 7 }),
+            json!({ "words": "Open an issue.", "example": "x".repeat(DESCRIBE_WORDS_LIMIT + 1) }),
         ] {
             assert!(DescribeRequest::try_from(bad.clone()).is_err(), "{bad}");
         }

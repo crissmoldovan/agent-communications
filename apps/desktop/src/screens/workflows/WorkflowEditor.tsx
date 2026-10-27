@@ -8,6 +8,9 @@
  * Save draft stores what the workflow needs — each changed or new target as a version of its own, then the workflow's
  * next version — and Review and approve… prepares that version's activation and shows its own preview (`RuleReview`).
  * Nothing switches on until the person approves it there; the version that runs keeps running until then.
+ *
+ * Describe it… (0.36.0 §11.4) drafts the workflow from the person's words into the same document, as any edit: open at
+ * once for a new workflow started from their own words, and saved nowhere until they save it.
  */
 import { Button, Chip, Spinner } from '@cueplusplus/ui';
 import { useCallback, useMemo, useState } from 'react';
@@ -41,6 +44,7 @@ import { BackTo, Problem } from '../events/parts.tsx';
 import type { EditTarget } from '../events/RuleEditor.tsx';
 import { type PreparedReview, RuleReview } from '../events/RuleReview.tsx';
 import type { JudgeChoice, VisualContext } from '../events/RuleVisual.tsx';
+import { Describe } from './Describe.tsx';
 import type { DesignerContext } from './Designer.tsx';
 import { Views } from './Views.tsx';
 
@@ -332,6 +336,13 @@ export function WorkflowEditor({
           {notice}
         </p>
       )}
+      <Describe
+        ruleId={target.ruleId}
+        version={version}
+        document={document}
+        onDraft={(next) => apply(() => next)}
+        startOpen={target.kind === 'new' && target.from === 'words'}
+      />
       <Views history={history} context={context} />
       {problem === null ? null : <Problem message={problem} />}
       <div className="sticky bottom-0 flex flex-wrap items-center gap-(--cue-space-2) bg-bg py-(--cue-space-3)">
