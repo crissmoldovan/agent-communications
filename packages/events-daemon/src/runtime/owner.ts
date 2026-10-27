@@ -121,6 +121,7 @@ import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeSetupService } from './judge-setup.ts';
 import { JudgeReader } from './judge-show.ts';
 import { JudgeTestControl } from './judge-test.ts';
+import type { JudgeTransport } from './judge-transport.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
@@ -165,6 +166,7 @@ import { composeProjects } from './workflow/compose-projects.ts';
 import { openRunFields } from './workflow/context.ts';
 import type { WorkflowComposition } from './workflow/contracts.ts';
 import type { WorkflowFailpoint } from './workflow/engine.ts';
+import { flowJudge } from './workflow/judge-call.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -301,6 +303,8 @@ export interface EventOwnerOptions {
         readonly parts?: readonly WorkflowComposition[] | undefined;
         readonly notifier?: Notifier | undefined;
         readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
+        /** The judge transport a workflow step's judge reaches its provider through: a loopback fake under test. */
+        readonly judgeTransport?: JudgeTransport | undefined;
       }
     | undefined;
   readonly laya?:
@@ -1551,6 +1555,26 @@ async function startOwnerWithLock(
     },
   });
   // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  // A workflow step's judge reads its hosted key at the request boundary, as the gate's does (plan B3).
+  const flowJudgeKeyFor = async ({
+    judgeId,
+    judgeVersion,
+  }: {
+    readonly judgeId: string;
+    readonly judgeVersion: number;
+  }) => {
+    const row = database.database
+      .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+      .get(judgeId, judgeVersion) as { digest: string } | undefined;
+    if (row === undefined) return null;
+    const generations = await eventSecrets.readLiveGenerations({
+      owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+      purpose: 'judge-key',
+      cipher,
+    });
+    const current = generations.find((generation) => generation.lifecycle === 'current');
+    return current === undefined ? null : { generation: current.generation, material: current.material };
+  };
   const workflows = composeWorkflows(
     {
       store: database,
@@ -1563,6 +1587,14 @@ async function startOwnerWithLock(
       failpoint: options.workflows?.failpoint,
       // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
       standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
+      judgeFor: (attempt) =>
+        flowJudge({
+          store: database,
+          attempt,
+          hostedApiKeyFor: flowJudgeKeyFor,
+          now,
+          ...(options.workflows?.judgeTransport === undefined ? {} : { transport: options.workflows.judgeTransport }),
+        }),
     },
     [
       // Track C: route, find and start a session, a worktree, and the route candidates' activation check.

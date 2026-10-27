@@ -15,12 +15,13 @@ import {
 import { type FlowDeliveries, type JudgedAttempt, WorkflowEngine, type WorkflowFailpoint } from './engine.ts';
 import { createStepExecutors } from './executors.ts';
 import { conditionExecutor } from './steps/condition.ts';
+import { judgeExecutor } from './steps/judge.ts';
 import { notifyExecutor } from './steps/notify.ts';
 import { splitExecutor } from './steps/split.ts';
 
 /*
- * The one place the owner makes its workflow engine (workflows plan B2): Track B's own executors — condition, split
- * and notify here; judge, deliver and wait as B3 and B4 add them — then each track's composition: its executors, its
+ * The one place the owner makes its workflow engine (workflows plan B2): Track B's own executors — condition, judge,
+ * split and notify; deliver and wait as B4 adds them — then each track's composition: its executors, its
  * event sink, its hook for a run's end and its activation checks. A kind is registered once, so one composition can
  * never replace another's executor.
  */
@@ -72,6 +73,7 @@ export function composeWorkflows(deps: WorkflowOwnerDeps, parts: readonly Workfl
     if (!stoodIn.has(executor.kind)) executors.register(executor);
   };
   register(conditionExecutor);
+  register(judgeExecutor);
   register(splitExecutor);
   register(notifyExecutor(deps.notifier));
   for (const part of parts) for (const executor of part.executors) register(executor);

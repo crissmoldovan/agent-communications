@@ -83,6 +83,8 @@ export interface JudgedAttempt {
   readonly stepId: StepId;
   readonly attemptId: string;
   readonly switchGeneration: number;
+  /** The run's source: its judge work is the source's, as the gate's is. */
+  readonly source: CanonicalFullRuleDocument['source']['channel'];
 }
 
 /** B4's seam: a deliver step's delivery row, sealed before the settle and inserted inside it. */
@@ -426,6 +428,7 @@ export class WorkflowEngine {
         stepId,
         attemptId: claim.attemptId,
         switchGeneration: row.switch_generation,
+        source: rule.source.channel,
       }),
       fence,
     });

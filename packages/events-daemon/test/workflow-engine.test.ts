@@ -291,7 +291,12 @@ test('B2: split runs every branch; the run is done when all are', { skip: WINDOW
 
 /** The owner example (spec §4.4) on the fake mailbox: its targets and flow, its other kinds stood in for. */
 function ownerExample(): Record<string, unknown> {
-  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown>;
+  const example = structuredClone(OWNER_EXAMPLE) as unknown as Record<string, unknown> & {
+    flow: { steps: Record<string, Record<string, unknown>> };
+  };
+  // The route step is stood in for; it chooses by hints alone here, so its judge version need not be stored.
+  const { judge: _judge, ...route } = example.flow.steps.route as Record<string, unknown>;
+  example.flow.steps.route = { ...route, by: ['hints'] };
   return {
     ...rule(1, example.targets as Record<string, unknown>[]),
     // The session target can leave a match in the Queue, whose item names its sender (action queue Q4).

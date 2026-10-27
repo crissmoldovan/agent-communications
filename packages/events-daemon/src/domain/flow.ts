@@ -11,7 +11,7 @@ import {
   type StepId,
 } from '@agentcomms/events';
 import type { CanonicalFullRuleDocument, TargetDocument } from './activation-documents.ts';
-import { canonicalJudge } from './judges.ts';
+import { type CanonicalJudgeDocument, canonicalJudge } from './judges.ts';
 import { EventDomainError, type EventDomainErrorCode } from './lifecycle.ts';
 import { linearChangeSlots } from './linear-change-target.ts';
 import { linearTemplateSlots } from './linear-target.ts';
@@ -431,6 +431,42 @@ function withCanonicalJudges(flow: FlowDocumentV1): FlowDocumentV1 {
     Object.defineProperty(steps, id, { value: canonical, enumerable: true, writable: true, configurable: true });
   }
   return JSON.parse(canonicalJson({ ...flow, steps })) as FlowDocumentV1;
+}
+
+/**
+ * Every judge a workflow's flow embeds (workflows design W3, plan B3): each judge step's and each route's, in the
+ * printer's order, every copy — so each is checked against its stored version — beside the gate's own `agentic` one.
+ */
+export function flowJudgeDocuments(rule: Pick<CanonicalFullRuleDocument, 'flow'>): readonly CanonicalJudgeDocument[] {
+  const flow = rule.flow;
+  if (flow === undefined) return [];
+  const judges: CanonicalJudgeDocument[] = [];
+  for (const id of Object.keys(flow.steps).sort()) {
+    const step = flow.steps[id] as FlowStep;
+    if (step.kind === 'judge') judges.push(step.ask.judge as unknown as CanonicalJudgeDocument);
+    if (step.kind === 'route' && step.judge !== undefined)
+      judges.push(step.judge.judge as unknown as CanonicalJudgeDocument);
+  }
+  return judges;
+}
+
+/**
+ * The judge versions a workflow's flow binds into its approval, each once and none the gate's judge already binds:
+ * what a disclosure binding derives beside the rule's own.
+ */
+export function boundFlowJudges(
+  rule: Pick<CanonicalFullRuleDocument, 'flow' | 'agentic'>,
+): readonly CanonicalJudgeDocument[] {
+  const seen = new Set<string>();
+  if (rule.agentic !== undefined) seen.add(`${rule.agentic.judge.judgeId}@${rule.agentic.judge.version}`);
+  const bound: CanonicalJudgeDocument[] = [];
+  for (const judge of flowJudgeDocuments(rule)) {
+    const key = `${judge.judgeId}@${judge.version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bound.push(judge);
+  }
+  return bound;
 }
 
 /** Refuses a workflow document with a flow that is over 48 KiB as canonical JSON (§4.1). */
