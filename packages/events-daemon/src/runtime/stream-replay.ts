@@ -440,16 +440,21 @@ export class StreamReplay {
 
   /**
    * The live writer for a workflow SSE target's frame, once the dispatcher has put it in `stream_log`: the same gate as
-   * its replay, and the stream's own current-generation check.
+   * its replay, and the stream's own current-generation check. Only a row of the listener's own subscriber version is
+   * written (security review of 0.36.0, L8): the routing that chose this listener is not trusted to be right.
    */
   async writeRule(input: {
     readonly streamLogId: string;
+    /** The listener's subscriber version: a row of any other is refused. */
+    readonly subscriberId: string;
+    readonly subscriberVersion: number;
     readonly transport?: 'sse' | 'websocket' | undefined;
     readonly isStreamCurrent: () => boolean;
     readonly writeFrame: (frame: string) => void;
   }): Promise<boolean> {
     const row = this.#row(input.streamLogId);
     if (row === undefined) return false;
+    if (row.subscriber_id !== input.subscriberId || row.subscriber_version !== input.subscriberVersion) return false;
     let wrote = false;
     await this.#replayRuleRow(row, input.transport ?? 'sse', (frame) => {
       if (!input.isStreamCurrent()) return;
@@ -459,15 +464,22 @@ export class StreamReplay {
     return wrote;
   }
 
-  /** The live writer for an event frame: the same gate as replay, and the stream's own current-generation check. */
+  /**
+   * The live writer for an event frame: the same gate as replay, and the stream's own current-generation check. Only a
+   * row of the listener's own subscriber version is written (security review of 0.36.0, L8).
+   */
   async writeEvent(input: {
     readonly eventStreamLogId: string;
+    /** The listener's subscriber version: a row of any other is refused. */
+    readonly subscriberId: string;
+    readonly subscriberVersion: number;
     readonly transport?: 'sse' | 'websocket' | undefined;
     readonly isStreamCurrent: () => boolean;
     readonly writeFrame: (frame: string) => void;
   }): Promise<boolean> {
     const row = this.#eventRow(input.eventStreamLogId);
     if (row === undefined) return false;
+    if (row.subscriber_id !== input.subscriberId || row.subscriber_version !== input.subscriberVersion) return false;
     return this.#replayEventRow(row, input.transport ?? 'sse', input.isStreamCurrent, input.writeFrame);
   }
 

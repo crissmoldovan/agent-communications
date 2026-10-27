@@ -52,6 +52,68 @@ export interface ExpirySweepResult {
   readonly queueContent: number;
   /** Content-free queue rows that reached their own end in this sweep. */
   readonly queueRows: number;
+  /** Ended workflow runs whose history went with their decision's metadata in this sweep. */
+  readonly runHistory: number;
+}
+
+/** How many ended runs' history one sweep purges at most; the next sweep takes the rest. */
+const RUN_HISTORY_BATCH = 500;
+
+/**
+ * A run's history is content-free, and it is kept as long as its decision's metadata (workflows design W7): once that
+ * metadata's deadline has passed, an ended run goes — its steps and waits, its events, their deliveries and replay
+ * frames — in the transaction that purges the metadata (security review of 0.36.0, L4). Nothing still needed goes:
+ * - never a live run (held, running or waiting), nor one another run or a chain request still names as its parent;
+ * - never a run with an event still open, with a delivery still queued, retrying or being sent, with a dead letter
+ *   still kept, or that a chain may still start from; nor one with a target delivery still to make.
+ * A worktree's row goes only once nothing is left to clean up — it was removed, or never made — and its run has gone;
+ * a row of a worktree that may still be on disk (being made, made or kept) stays, for its cleanup and its sessions.
+ * Returns how many runs went.
+ */
+function purgeRunHistoryInTransaction(database: EventDatabase['database'], now: number): number {
+  const due = database
+    .prepare(
+      `SELECT run.id FROM workflow_runs AS run
+         JOIN decisions AS decision ON decision.id = run.decision_id
+        WHERE run.state IN ('done', 'failed', 'cancelled', 'expired')
+          AND decision.metadata_expires_at <= ?
+          AND NOT EXISTS (SELECT 1 FROM workflow_runs AS child WHERE child.parent_run_id = run.id)
+          AND NOT EXISTS (SELECT 1 FROM workflow_chain_requests AS chain WHERE chain.parent_run_id = run.id)
+          AND NOT EXISTS (
+            SELECT 1 FROM deliveries AS delivery
+             WHERE delivery.run_id = run.id AND delivery.state IN ('queued', 'retryable', 'disclosing'))
+          AND NOT EXISTS (
+            SELECT 1 FROM workflow_events AS event
+             WHERE event.run_id = run.id
+               AND (event.state = 'open'
+                    OR EXISTS (SELECT 1 FROM workflow_chain_requests AS chain WHERE chain.workflow_event_id = event.id)
+                    OR EXISTS (
+                      SELECT 1 FROM event_deliveries AS delivery
+                       WHERE delivery.event_id = event.id
+                         AND (delivery.state IN ('queued', 'retryable', 'disclosing')
+                              OR (delivery.state = 'dead-lettered'
+                                  AND (delivery.dead_letter_expires_at IS NULL
+                                       OR delivery.dead_letter_expires_at > ?))))))
+        ORDER BY decision.metadata_expires_at
+        LIMIT ?`,
+    )
+    .all(now, now, RUN_HISTORY_BATCH) as Array<{ id: string }>;
+  const ofRun = 'SELECT id FROM workflow_events WHERE run_id = ?';
+  for (const { id } of due) {
+    database.prepare(`DELETE FROM event_stream_log WHERE event_id IN (${ofRun})`).run(id);
+    database.prepare(`DELETE FROM event_deliveries WHERE event_id IN (${ofRun})`).run(id);
+    database.prepare('DELETE FROM workflow_events WHERE run_id = ?').run(id);
+    // Its steps go with it, and their waits with them (ON DELETE CASCADE).
+    database.prepare('DELETE FROM workflow_runs WHERE id = ?').run(id);
+  }
+  database
+    .prepare(
+      `DELETE FROM workflow_worktrees
+        WHERE state IN ('refused', 'removed')
+          AND NOT EXISTS (SELECT 1 FROM workflow_runs AS run WHERE run.id = workflow_worktrees.run_id)`,
+    )
+    .run();
+  return due.length;
 }
 
 /** Source-specific expiry that needs to decrypt a staged record before it can derive content-free terminal keys. */
@@ -261,6 +323,8 @@ export class EventExpiry {
           )
           .run(now, now).changes,
       );
+      // A workflow run's history goes with its decision's metadata (W7).
+      const runHistory = purgeRunHistoryInTransaction(database, now);
       // Analyse's sending domains end with the projection's deadline (security review of 0.33.0, finding 9).
       database.prepare('DELETE FROM decision_sender_domains WHERE expires_at <= ?').run(now);
       const sourceStages = this.#expireSourceStages(database, now);
@@ -273,6 +337,7 @@ export class EventExpiry {
         sourceStages,
         queueContent: queue.content,
         queueRows: queue.rows,
+        runHistory,
       };
     });
   }

@@ -448,6 +448,11 @@ It is `runs`, not `run`: `agent-events run` starts the event service.
   output, last error code, delivery and wait, how many events it did not raise over its limit, and each event it raised
   with who it was delivered to. A step's output is ids and closed words, and a worktree's folder: `runs show` is the
   one place a run's folders are shown, to you. No event carries one.
+- **How long a run is kept.** A run's history — its steps, its waits, the events it raised and their deliveries — is
+  kept as long as its decision's metadata (`retention.decisionMetadataMs`, `decisions <duration>` in the text; 90 days
+  by default), then purged with it. A run still going, or one with an event still being delivered or a dead letter
+  still kept, stays until those end. A worktree's row goes once the worktree was removed or never made; the row of one
+  that may still be on disk stays, and the sweep never touches the worktree itself.
 - **How a run ends** (`endCode`). Done carries none. Otherwise:
   - `RUN_EXPIRED`: it reached its deadline (`flow.limits.runMs`);
   - `CANCELLED_BY_PERSON`: you cancelled it;
@@ -577,7 +582,10 @@ agent-events workflow-events show <schema> --json
   with `delivery retry|drop <event-id>:<subscriber-id>`.
 - **A live connection** sends `Authorization: Bearer <token>`, or from a browser the WebSocket subprotocols
   `agentcomms.events.v1, agentcomms.bearer.<token>`; it replays from `Last-Event-ID` (or `agentcomms.after.<event id>`).
-  The server only pushes: a client may send ping, pong and close. A rotated or removed token closes the stream (4401).
+  The server only pushes: a client may send ping, pong and close. A rotated or removed token closes the stream (4401),
+  and so does the end of the previous token's five-minute overlap, for a stream opened with it. A reader that leaves
+  more than 1 MiB unread is closed (on a WebSocket, 1008) and replays what it missed when it reconnects. A listener
+  takes at most 64 connections, and cuts a request whose headers take more than 10 seconds.
 - **A workflow can start on another's event.** A chained workflow's flow begins with `on raised <pattern>, within 1
   day`: it waits, for that long, for a run about the same message to raise a matching event, then reads the message
   through its own approved mapping. No sender content passes between workflows, a chain stops at depth 3, and a

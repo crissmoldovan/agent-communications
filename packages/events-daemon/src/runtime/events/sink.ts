@@ -5,6 +5,7 @@ import {
   eventForOutcome,
   FAILURE_OUTCOMES,
   type FlowDocumentV1,
+  type FlowLimits,
   type FlowStep,
   type JsonValue,
   STANDARD_STEP_EVENTS,
@@ -28,6 +29,7 @@ import type {
   WorkflowEventSink,
 } from '../workflow/contracts.ts';
 import { newEventId } from '../workflow/ids.ts';
+import { chargeInTransaction } from '../workflow/limits.ts';
 import { expireSubscriberBacklogInTransaction } from './event-ledger.ts';
 import { activeSubscriptions } from './subscriptions.ts';
 
@@ -73,13 +75,13 @@ export interface PreparedWorkflowEvent {
   readonly schema: WorkflowEventSchema;
   readonly raisedAt: number;
   readonly expiresAt: number;
-  readonly eventsPerHour: number;
+  /** The workflow's own limits: an event is charged to its `eventsPerHour`. */
+  readonly limits: FlowLimits;
   /** The event's closed `data`, for D6's `/trigger`: never `data.fields`. */
   readonly data: Omit<WorkflowEventDataV1, 'fields'>;
   readonly sealed: Buffer;
 }
 
-const HOUR_MS = 3_600_000;
 /** A raised event's id (§4.3): `wfe_` and 26 lowercase Crockford characters. */
 const EVENT_ID = /^wfe_[0-9a-hjkmnp-tv-z]{26}$/u;
 const OUTCOME_LESS: readonly string[] = ['started', 'waiting', 'retrying', 'skipped'];
@@ -280,7 +282,7 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
             schema,
             raisedAt: transition.at,
             expiresAt: transition.at + transition.rule.retention.deliveryMs,
-            eventsPerHour: flow.limits.eventsPerHour,
+            limits: flow.limits,
             data,
             sealed,
           });
@@ -293,19 +295,11 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
       const rows = prepared.rows as readonly PreparedWorkflowEvent[];
       if (rows.length === 0) return;
       const subscriptions = activeSubscriptions(database);
-      const settings = database
-        .prepare('SELECT events_per_hour_max FROM workflow_settings WHERE singleton = 1')
-        .get() as { events_per_hour_max: number } | undefined;
-      const ceiling = settings?.events_per_hour_max ?? 1_000;
       for (const row of rows) {
-        const since = row.raisedAt - HOUR_MS;
-        const { mine } = database
-          .prepare("SELECT COUNT(*) AS mine FROM workflow_effects WHERE kind = 'event' AND rule_id = ? AND at > ?")
-          .get(row.run.ruleId, since) as { mine: number };
-        const { total } = database
-          .prepare("SELECT COUNT(*) AS total FROM workflow_effects WHERE kind = 'event' AND at > ?")
-          .get(since) as { total: number };
-        if (mine >= row.eventsPerHour || total >= ceiling) {
+        // Charged as every other effect is (§7.5): the workflow's own `eventsPerHour` and `workflow_settings`' ceiling,
+        // in its hour window, which the charge prunes as it goes (security review of 0.36.0, L4) — so the count here
+        // reads at most an hour of charges, not every event ever raised.
+        if (!chargeInTransaction(database, row.run.ruleId, 'event', row.limits, row.raisedAt).ok) {
           // Over a limit: not raised, counted in the run (EVENT_LIMIT), and never in the run's way (W33).
           database
             .prepare('UPDATE workflow_runs SET events_not_raised = events_not_raised + 1 WHERE id = ?')
@@ -341,9 +335,6 @@ export function createWorkflowEventSink(deps: WorkflowEventSinkDeps): WorkflowEv
             kept ? 'open' : 'done',
             kept ? row.sealed : null,
           );
-        database
-          .prepare("INSERT INTO workflow_effects (rule_id, kind, at) VALUES (?, 'event', ?)")
-          .run(row.run.ruleId, row.raisedAt);
         for (const subscription of matching) {
           const { ordering } = database
             .prepare(
