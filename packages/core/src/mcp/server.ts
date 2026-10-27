@@ -1364,7 +1364,7 @@ export async function createCoreMcpServer(options: CoreMcpOptions = {}): Promise
           connectionChangeChange(
             core,
             env,
-            { id: args.id, parts: args.parts },
+            { id: args.id, parts: args.parts, approvalId: args.approvalId },
             'mcp',
             installVerification(updateDeps, npmRegistry(env)),
           ),

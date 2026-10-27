@@ -754,11 +754,19 @@ export interface ConnectionChangeRequest {
   readonly id: string;
   /** Every part it should have from now on. */
   readonly parts: readonly PartRequest[];
+  /**
+   * The approval this call claims, when it claims one — `--approval`, `--app-approval`, a tool's `approvalId`: what its
+   * preparation narrowed at once is read from it, so a claim planned from a record narrowed already binds the same.
+   */
+  readonly approvalId?: string | undefined;
 }
 
 export interface ConnectionChangeResult {
   readonly connection: ConnectionView;
-  /** What was applied at once, before anything waited: the narrowings. */
+  /**
+   * What was applied at once, before anything waited: the narrowings — this call's, and, on a claim, those its
+   * preparation made, which the approval it claims records.
+   */
   readonly appliedAtOnce: readonly string[];
   readonly next: string;
 }
@@ -777,10 +785,63 @@ function narrowing(from: readonly ConnectionPart[], to: readonly ConnectionPart[
   return kept;
 }
 
+/** What the change approval `approvalId` says its preparation did at once: none for anything but a valid change. */
+async function approvalDoneAtOnce(core: Core, approvalId: string | undefined): Promise<readonly string[]> {
+  if (approvalId === undefined) return [];
+  const stored = await core.approvals.get(approvalId).catch(() => null);
+  return stored?.form === 'v2' && stored.record.kind === 'change' ? (stored.record.change?.doneAtOnce ?? []) : [];
+}
+
+/**
+ * Of the narrowings an approval says its preparation made, those the record still shows made, in the approval's order
+ * — a part taken out that is not there, one kept to the account the line names, one read-only — so a claim says only
+ * what is true of the record it plans from. A line the record does not bear out is left out: the claim then binds
+ * otherwise than the approval, and is refused — prepare it again.
+ */
+function stillNarrowed(config: Config, lines: readonly string[], parts: readonly ConnectionPart[]): string[] {
+  return lines.filter((line) =>
+    PART_FACTS.some((facts) => {
+      const part = parts.find((each) => each.server === facts.server);
+      if (line === `${facts.label} taken out`) return part === undefined;
+      if (line === `${facts.label} read-only`) return part?.readOnly === true;
+      if (!line.startsWith(`${facts.label} kept to `) || part?.pin === undefined) return false;
+      const alias =
+        facts.accounts === 'inboxes'
+          ? (findById(config, 'inbox', part.pin.id)?.alias ?? part.pin.alias)
+          : (findById(config, 'account', part.pin.id)?.alias ?? part.pin.alias);
+      return line === `${facts.label} kept to ${alias}`;
+    }),
+  );
+}
+
+/**
+ * A refusal raised after this call narrowed at once, saying so: its "nothing was changed" made true, and what was done
+ * in `details.appliedAtOnce`, as `org update` says a narrowing done before a refusal. Its own code, hint and details.
+ */
+function saidNarrowed(error: unknown, done: readonly string[]): unknown {
+  if (!(error instanceof CommsError) || done.length === 0) return error;
+  return new CommsError(
+    error.code,
+    error.message.replace('nothing was changed', `${done.join('; ')} at once; nothing else was changed`),
+    {
+      ...(error.hint === undefined ? {} : { hint: error.hint }),
+      details: { ...(error.details ?? {}), appliedAtOnce: [...done] },
+      cause: error,
+    },
+  );
+}
+
 /**
  * Changing a connection's parts (§6.2): every narrowing applies at once — a part taken out, a pin added, read-only on —
  * even beside a change that waits, as `comms_org_update` narrows; what reaches more — a part added, a pin taken away or
  * moved, read-only off — is prepared, shown and approved. A part added on a managed connection installs its runtime.
+ *
+ * What narrowed at once while the rest waits is the waiting preview's to say (the lead's call for 0.35.0, as `org
+ * update` marks a tightening done): bound into the approval as `doneAtOnce`, so the preview lists it apart, done
+ * already, and its header says the rest is what waits. A claim plans from a record narrowed already, and learns what
+ * was done from this change's own earlier call at a terminal, or — from a chat, where each call builds the change
+ * afresh — from the approval it claims, each line held to the record it says it left (`stillNarrowed`). The result and
+ * the audit say it again.
  */
 export function connectionChangeChange(
   core: Core,
@@ -789,42 +850,57 @@ export function connectionChangeChange(
   surface: ChangeSurface,
   deps: ServerInstallDeps = {},
 ): GatedChange<ConnectionChangeResult> {
-  const appliedAtOnce: string[] = [];
+  /** What this change narrowed at once on an earlier call of its own: a terminal's prepare, before its claim. */
+  let doneEarlier: string[] = [];
+  let doneAtOnce: string[] = [];
   let subs: GatedChange<ServerInstallResult>[] = [];
   let target: ConnectionPart[] = [];
   return {
-    plan: async (config): Promise<ChangeRequest> => {
+    plan: async (given): Promise<ChangeRequest> => {
+      let config = given;
       let record = requireReadable(config, request.id);
       target = partsOf(config, request.parts);
-      const narrowed = narrowing(record.parts, target);
-      if (JSON.stringify(narrowed) !== JSON.stringify(record.parts)) {
-        const before = record;
-        await core.config.update((now) => {
-          const read = connectionById(now, before.id);
-          if (read === undefined || !read.readable) return now;
-          return {
-            ...now,
-            connections: withConnection(now, { put: { ...read.record, parts: narrowing(read.record.parts, target) } }),
-          } as Config;
-        });
-        const lines = describeNarrowing(config, before.parts, narrowed);
-        appliedAtOnce.push(...lines);
-        await audit(core, surface, 'connection.update', before.id, `narrowed at once: ${lines.join('; ')}`);
-        config = await core.config.load();
-        record = requireReadable(config, request.id);
+      let doneNow: string[] = [];
+      try {
+        const narrowed = narrowing(record.parts, target);
+        if (JSON.stringify(narrowed) !== JSON.stringify(record.parts)) {
+          const before = record;
+          await core.config.update((now) => {
+            const read = connectionById(now, before.id);
+            if (read === undefined || !read.readable) return now;
+            return {
+              ...now,
+              connections: withConnection(now, {
+                put: { ...read.record, parts: narrowing(read.record.parts, target) },
+              }),
+            } as Config;
+          });
+          doneNow = describeNarrowing(config, before.parts, narrowed);
+          await audit(core, surface, 'connection.update', before.id, `narrowed at once: ${doneNow.join('; ')}`);
+          config = await core.config.load();
+          record = requireReadable(config, request.id);
+        }
+        const doneBefore =
+          doneEarlier.length > 0
+            ? doneEarlier
+            : stillNarrowed(config, await approvalDoneAtOnce(core, request.approvalId), record.parts);
+        doneAtOnce = [...doneBefore, ...doneNow.filter((line) => !doneBefore.includes(line))];
+        doneEarlier = doneAtOnce;
+        const added = target.filter((part) => !record.parts.some((had) => had.server === part.server));
+        subs = record.launcher === 'managed' ? await runtimeInstalls(core, env, added, deps) : [];
+        const effects: string[] = [];
+        for (const sub of subs) effects.push(...((await sub.plan(config)).effects ?? []));
+        return {
+          before: config,
+          after: { ...config, connections: withConnection(config, { put: { ...record, parts: target } }) } as Config,
+          effects,
+          // What narrowed at once is bound beside what waits, and the preview lists it apart, done already.
+          ...(doneAtOnce.length > 0 ? { doneAtOnce } : {}),
+          summary: `Let agents in "${record.name}" reach more${doneAtOnce.length > 0 ? '; what narrows was applied at once' : ''}`,
+        };
+      } catch (error) {
+        throw saidNarrowed(error, doneNow);
       }
-      const added = target.filter((part) => !record.parts.some((had) => had.server === part.server));
-      subs = record.launcher === 'managed' ? await runtimeInstalls(core, env, added, deps) : [];
-      const effects: string[] = [];
-      for (const sub of subs) effects.push(...((await sub.plan(config)).effects ?? []));
-      return {
-        before: config,
-        after: { ...config, connections: withConnection(config, { put: { ...record, parts: target } }) } as Config,
-        effects,
-        // What was narrowed at once is in the result and the audit, not in what the approval binds: a claim plans from
-        // a record already narrowed, and would otherwise bind something else.
-        summary: `Let agents in "${record.name}" reach more`,
-      };
     },
     apply: async (consent): Promise<ConnectionChangeResult> => {
       for (const sub of subs) await sub.apply(undefined, await sub.plan(await core.config.load()));
@@ -846,14 +922,14 @@ export function connectionChangeChange(
           surface,
           'connection.update',
           request.id,
-          `parts: ${target.map((part) => part.server).join(', ')}`,
+          `parts: ${target.map((part) => part.server).join(', ')}${doneAtOnce.length > 0 ? `; narrowed at once as this was prepared: ${doneAtOnce.join('; ')}` : ''}`,
         );
       const config = await core.config.load();
       const read = connectionById(config, request.id) as ConnectionRead;
       const view = await viewOf(core, env, config, read);
       return {
         connection: view,
-        appliedAtOnce,
+        appliedAtOnce: [...doneAtOnce],
         next: 'A running app sees the new parts at once, through tools/list_changed, where it supports it; otherwise restart it.',
       };
     },

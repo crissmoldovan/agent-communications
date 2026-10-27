@@ -146,7 +146,14 @@ export async function connectionCommand(
       const id = rest[0] as string;
       const result = await gatedChangeAtTerminal(
         core,
-        connectionChangeChange(core, env, { id, parts: parsePartsSpec(values.parts) }, 'cli', installDeps),
+        connectionChangeChange(
+          core,
+          env,
+          // The approval it claims, either way it comes: what its preparation narrowed at once is read from it.
+          { id, parts: parsePartsSpec(values.parts), approvalId: approval.approvalId ?? appApproval },
+          'cli',
+          installDeps,
+        ),
         {
           ...approval,
           rerun: ['connection', 'change', id, '--parts', values.parts],

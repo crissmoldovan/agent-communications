@@ -11,6 +11,7 @@ import { CORE_CALLER } from '../src/handoffs.ts';
 import { createCoreMcpServer } from '../src/mcp/server.ts';
 import {
   type ConnectionAddResult,
+  type ConnectionChangeResult,
   connectionAddChange,
   connectionChangeChange,
   connectionKeyReplaceChange,
@@ -440,3 +441,106 @@ test('D11 (§7): an audit line written inside a part of a connection names the c
     ['cn_0123456789ABCDEFGHJKMNPQRS', null],
   );
 });
+
+test(
+  'connection change: what narrows at once is bound into the waiting preview, marked done, and said again by the result and the audit',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const added = await twice<ConnectionAddResult>(m, () =>
+      connectionAddChange(
+        m.core,
+        m.env,
+        { app: 'claude-code', name: 'Work', parts: parsePartsSpec('core,events'), launcher: 'local', noVerify: true },
+        'cli',
+      ),
+    );
+    const id = added.connection.id;
+    // Events out — at once — and Gmail in, which waits: one call, from a chat, where each call builds the change afresh.
+    const { server } = await createCoreMcpServer({ core: m.core, env: m.env, keyring: null, platform: 'darwin' });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'test', version: '0' });
+    await Promise.all([client.connect(clientSide), server.connect(serverSide)]);
+    const call = async (args: Record<string, unknown>) =>
+      (
+        (await client.callTool({ name: 'comms_connection_change', arguments: args })) as {
+          structuredContent: Record<string, unknown>;
+        }
+      ).structuredContent;
+    const asked = await call({ id, parts: [{ server: 'core' }, { server: 'gmail' }] });
+    assert.equal(asked.approvalRequired, true, JSON.stringify(asked));
+    const first = { prepared: asked as unknown as { approvalId: string; preview: string } };
+    assert.deepEqual(
+      (await connectionShow(m.core, m.env, { id })).parts.map((part) => part.server),
+      ['core'],
+      'Events was taken out before anything waited',
+    );
+    const { preview } = first.prepared;
+    assert.match(
+      preview,
+      /what is marked done at once is done already; the rest has not been changed, and approving changes only the rest/,
+    );
+    assert.match(preview, /Let agents in "Work" reach more; what narrows was applied at once/);
+    assert.match(preview, /Done already, at once, as this was prepared:\n {2}- Events taken out/);
+    const stored = await m.core.approvals.get(first.prepared.approvalId);
+    assert.deepEqual(stored?.form === 'v2' ? stored.record.change?.doneAtOnce : null, ['Events taken out'], 'bound');
+    // The person's yes: the same call again, built afresh, with the approval id — the record narrowed already.
+    const claimed = await call({
+      id,
+      parts: [{ server: 'core' }, { server: 'gmail' }],
+      approvalId: first.prepared.approvalId,
+    });
+    await Promise.all([client.close(), server.close()]);
+    assert.equal(claimed.applied, true, JSON.stringify(claimed));
+    const result = claimed.result as ConnectionChangeResult;
+    assert.deepEqual(result.appliedAtOnce, ['Events taken out'], 'the result says what the preparation did at once');
+    assert.deepEqual(
+      result.connection.parts.map((part) => part.server),
+      ['core', 'gmail'],
+    );
+    const lines = auditText(m)
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line) as { operation: string; reason?: string })
+      .filter((line) => line.operation === 'connection.update');
+    assert.deepEqual(
+      lines.map((line) => line.reason),
+      [
+        'narrowed at once: Events taken out',
+        'parts: core, gmail; narrowed at once as this was prepared: Events taken out',
+      ],
+    );
+  },
+);
+
+test(
+  'connection change at a terminal: the narrowing done as the person was asked is in the preview they read, and the claim binds the same',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const added = await twice<ConnectionAddResult>(m, () =>
+      connectionAddChange(
+        m.core,
+        m.env,
+        { app: 'claude-code', name: 'Work', parts: parsePartsSpec('core,events'), launcher: 'local', noVerify: true },
+        'cli',
+      ),
+    );
+    const id = added.connection.id;
+    // Not a terminal: the preview and the approval id, exit 10; the narrowing done already.
+    const words = ['connection', 'change', id, '--parts', 'core,gmail', '--json'];
+    const asked = await runMain(words, m.env, 'darwin');
+    assert.equal(asked.code, 10, asked.stdout);
+    const details = (asked.json().error as { details: { approvalId: string; preview: string } }).details;
+    assert.match(details.preview, /Done already, at once, as this was prepared:\n {2}- Events taken out/);
+    // The approval carried back: the claim, in a process of its own, plans from a record narrowed already.
+    const applied = await runMain([...words, '--approval', details.approvalId], m.env, 'darwin');
+    assert.equal(applied.code, 0, applied.stdout + applied.stderr);
+    const data = (applied.json() as { data: ConnectionChangeResult }).data;
+    assert.deepEqual(data.appliedAtOnce, ['Events taken out']);
+    assert.deepEqual(
+      data.connection.parts.map((part) => part.server),
+      ['core', 'gmail'],
+    );
+  },
+);
