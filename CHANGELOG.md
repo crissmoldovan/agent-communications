@@ -3,6 +3,110 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.36.0
+
+**What.** Workflows that branch, wait, finish the job and tell others, in the command line, the agents' tools and the
+desktop app:
+- **One list of workflows.** What were rules are workflows; a straight line is one shape a workflow can have, not a
+  kind of its own. `agent-events workflow …`, and Events → Workflows in the app.
+- **A workflow can be a graph of steps.** A condition or a judge; **Which project?**; find a session (in a project, a
+  worktree, or the one that took this conversation); start one; make a worktree; hand the message over; wait for a
+  turn's end, a free session or a time; a Linear issue, then a comment, a change or closing it; tell me; split; and
+  raise an event. You draw it in the app's designer, write it as text, or describe it in your own words and have a
+  model draft it (**Describe it**). Each run is shown step by step, and you can cancel it.
+- **Projects.** A GitHub repository, its folders on this Mac, a profile and hints, found by a scan. **Which project?**
+  chooses among them.
+- **Events from workflows.** You tick, step by step, the events a workflow raises, or add a **Raise an event** step.
+  Each is a CloudEvent named `<namespace>.<workflow>.<step>.<event>`. A subscriber you approve receives them live on
+  this Mac (SSE or WebSocket) or by signed webhook, and a raised event can start another workflow about the same
+  message.
+
+**Why.** The owner, 2026-10-27: "a workflow designer based on a node-style thing: 1. An event comes in. 2. Conditions
+are set. 3. If they are met, it continues. 4. It can search for the session and determine which session it is. 5. If
+it's about that session, it goes there. 6. If the session is found, it goes there. 7. If not, search for another one. 8.
+If no session was found, it goes to create a new session. 9. If it has to create a new session, you should check what
+project it is in. 10. It should be creating a separate work tree, optionally or not. 11. On completion, I may also want
+to say add part of this behaviour to this workflow, like create a Linear ticket. 12. … create instructions on what the
+Linear ticket should contain. 13. When it finishes work, it should actually close the Linear ticket, and so on."
+Then, on the prototype: "I may want to raise an event … Third-party things can listen to them"; "I don't think I
+understood the difference between workflows and rules"; and "Emit events for every single node … It should be able to
+raise custom events as well." The prototype is `docs/prototypes/2026-10-27-workflows/`, and the design is
+`docs/superpowers/specs/2026-10-27-workflows-design.md`.
+
+**Impact.** A minor release. Your workflows keep working as they are:
+- **Nothing you have changes its bytes.** Every stored workflow version keeps its document and digest, and a version
+  with no `flow` runs exactly as before. On its first start the event service's database moves to schema 34. That adds
+  the tables for runs, projects, events and subscriptions, and rebuilds the deliveries table, copying every row, to
+  admit the new kinds. An older `agent-events` then refuses to open the database, as after every schema change.
+- **The word is "workflow".** `agent-events workflow …` and `workflows list` are the names, and `agent-events rule …`
+  still works. The MCP tools keep their names (`events_rule_*`). The text's first line is `workflow <id>, version <n>`,
+  and `rule …` still parses. Every message, preview and refusal says "workflow", so a script that matched the word
+  "rule" in the output has to change.
+- **Live streams now listen.** Before 0.36.0 nothing listened for a live-stream target: its frames were kept and never
+  served. Now the event service starts a loopback listener for each subscriber version an active workflow's live-stream
+  target binds, or one with an approved subscription, and closes it when that ends. A port another program holds shows
+  as `PORT_IN_USE` in `subscribers list`. Frames reach an open stream as they are delivered, and replay from
+  `Last-Event-ID`.
+- **Webhook signing secrets made before 0.36.0 never signed.** They were made in base64url, which the signer refuses.
+  So every delivery to a webhook target whose secret was generated failed with `BAD_DATA`. New secrets are standard
+  base64. Rotate each webhook target's secret (`agent-events target secret rotate <target-id> --version <n>`) and give
+  the receiver the new one. The old secret is left out of the overlap, so the new one signs at once.
+- **Approving a workflow while the event service ran could undo it** (since 0.16.0). When the service's tick picked up
+  the activation an approval was completing, the approval could report it cancelled when it was on. Or the workflow
+  stayed on but refused every delivery until it was approved again. Now each tick resumes an activation only under its
+  approval's own serialisation, from a fresh read.
+- **A flow does nothing until you approve its version.** Its limits start low: 10 runs an hour, 2 at a time, 2 sessions
+  started an hour, 5 worktrees a day. A session starts in the mode its step names (`manual`, `acceptEdits` or `plan`),
+  never `bypassPermissions`.
+- **Projects, runs and Describe it are yours alone.** No tool reads or runs them. An agent can check a workflow, read
+  the step event catalogue, and propose a subscriber and prepare its approval, never approve it.
+- **To use it:** update with `agentcomms update` and the app's own update. If you have webhook targets, rotate their
+  secrets as above.
+
+**In the desktop app**
+- **Events → Workflows:** one list of every workflow with its version, approval, runs this week and last run; **New
+  workflow…** from your words, an empty canvas or a copy.
+- **The designer:** the canvas (drag a step from the palette, wire its outcomes), the text and the JSON, three views of
+  one document, with the checks under them. Each step's settings have its events to tick, and the workflow's settings
+  its limits, event names and chain. **Describe it…** drafts the workflow on your Claude subscription, or with the
+  OpenRouter or Anthropic key you keep for Analyse. It marks each step with the words it came from and asks up to five
+  questions.
+- **Approve and try:** the approval lists the workflow's numbered effects. **Try** walks the flow with the outcomes you
+  choose, or runs it on a recent message, as a "would".
+- **The run view:** the version's graph lit along the path the run took, each step's time, outcome and wait ("Needs you
+  in claude-stream"), the events it raised and who received them, and Cancel.
+- **Projects** in the sidebar: the repositories found on this Mac, their folders, the sessions working in each (busy
+  or idle), the profile and hints.
+- **Events → Subscribers:** who receives which events, live or by webhook, its listener or address and backlog;
+  **Add a subscriber…**, **Approve…**, **Remove**. Tokens and secrets are made at the terminal.
+- **Messages:** a message's story follows its workflow: the project, the issue, the session, the turn's end, the events
+  and the close. The lists say each run's story in a few words.
+
+**In detail**
+- **`@agentcomms/events`:** the `flow` document (`checkFlow`, `flowOf`, which draws a straight-line workflow as its
+  graph) and `describeFlow`, the numbered effects an approval lists. The text grammar gains steps, arrows, events,
+  Raise and chains, round-tripped. Appendix W is the step event catalogue v1, with `matchesEventPattern` and the
+  CloudEvent's fixed attributes.
+- **`@agentcomms/events-daemon`:**
+  - **The engine and its steps:** one run per match; steps claimed and settled once, adopted after a crash, never two;
+    splits, skips, limits (64 executed steps), expiry and cancel.
+  - **What a step reaches:** git runs as you, without the repository's hooks, inside the project's worktree root.
+    Linear changes reach only the issue the run made.
+  - **Commands:** `runs list|show|cancel`, `projects list`, `project show|add|update|remove|scan`, `workflow
+    check|describe|test-retained`, `workflow-events list|show`, `subscriber enable|approve|secret|url`, and `workflow
+    show --version`.
+  - **Delivering events:** a sealed event outbox; one dispatcher, at least once and in order per subscriber, apart from
+    the run, bounded per workflow, overall and per subscriber. Live listeners serve SSE and push-only WebSocket (no
+    library, the same token, origin and replay rules), and webhooks go out signed (Standard Webhooks). Chains stop at
+    depth 3. A shadow version's events are dry-run records.
+- **`@agentcomms/core`:** `TakeStore.threadHolder`, the session that took an earlier message in a conversation.
+  Approvals gain the `subscription` activation kind.
+- **Fixed while building it:**
+  - a raised event goes out in the tick that raised it, and a subscriber's queue drains in order at once;
+  - a subscriber that hangs slows no run;
+  - a held message let through into a workflow keeps its thread;
+  - a message whose hold ran out or was cancelled can be read, and its story says so in words.
+
 ## 0.35.0
 
 **What.** Three things, each in the command line, the agents' tools and the desktop app:

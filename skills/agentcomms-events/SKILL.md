@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event workflows with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this workflow', 'why is this workflow not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.35.0"
+compatibility: "@agentcomms/events-daemon@0.36.0"
 metadata:
   group: communications
   lifecycle: release
@@ -132,6 +132,27 @@ or hand it back, as for a lane's item.
   the waiting matches of its own lane, without what they say; nothing else does. Dropping one is the person's.
 - **Where the relay is found** is the person's setting, in Settings → Integrations or at their terminal
   (`integration set agent-sessions`). No tool reads or sets it.
+
+## A workflow's events and subscribers
+
+From 0.36.0 a workflow with a flow can raise events: each step's, ticked in its `emit`, the run's own in
+`flow.events.run`, and a Raise step's. Each is named `<namespace>.<workflow>.<step>.<event>`. `events_workflow_events_list`
+and `events_workflow_events_show` give, content-free, the events each step kind can raise and what each carries; use
+them rather than guessing a name or a field. Ticking an event changes the workflow, so it is a new version the person
+approves again.
+
+- **A subscriber receives them,** live on this Mac or by signed webhook, by the namespaces and patterns it is given.
+  Propose one with `events_subscriber_add` (its `events` part: `namespaces`, `patterns` of four segments where `*` is
+  one segment, and `content`), then `events_subscriber_enable` for that exact version: it prepares the person's
+  approval and approves nothing. Show its preview and hand over as for a workflow. Until they approve it, the
+  subscriber is inert.
+- **Ask before `content: "enveloped"`.** Only then does a Raise step's declared `fields` — what a sender wrote — reach
+  the subscriber, inside the untrusted-content envelope. Propose `none` unless the person asked for the words.
+- **Never a token or secret.** A live subscriber's token, a webhook's signing secret and a secret URL are made at the
+  person's terminal; say so and give the command, never ask for the value.
+- **The person's alone:** their projects (no tool reads or changes them), a workflow's runs (no tool lists, shows or
+  cancels one), and Describe it (`workflow describe`, which spends their subscription or key). Write a workflow
+  yourself with `events_rule_create`, check it with `events_rule_check`, and hand it over.
 
 ## Workflows and deliveries in plain words
 
