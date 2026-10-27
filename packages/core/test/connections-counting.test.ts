@@ -17,6 +17,7 @@ import { type Core, openCore } from '../src/core.ts';
 import { CORE_CALLER } from '../src/handoffs.ts';
 import { launcherPaths } from '../src/launcher.ts';
 import { mcpInstall } from '../src/mcp-install.ts';
+import { connectionPartChoices } from '../src/operations/connections.ts';
 import { doctor } from '../src/operations/maintenance.ts';
 import {
   channelsAvailable,
@@ -130,6 +131,26 @@ async function connected(
   );
   return { record, key, path };
 }
+
+test('channels: each server says what it takes as a connection’s part — the account it can be kept to, and read-only', async () => {
+  // So the app needs no table of its own (single-server design D20): the same facts connectionPartChoices gives.
+  const m = machine();
+  const report = await channelsAvailable(m.core, m.env);
+  const part = (server: string) => report.channels.find((channel) => channel.channel === server)?.part;
+  assert.deepEqual(part('gmail'), { account: { option: 'inbox', noun: 'mailbox' }, readOnly: true });
+  assert.deepEqual(part('slack'), { account: { option: 'workspace', noun: 'workspace' }, readOnly: false });
+  assert.deepEqual(part('core'), { account: null, readOnly: false });
+  for (const choice of connectionPartChoices()) {
+    const said = part(choice.server);
+    if (said === undefined) continue;
+    assert.equal(said?.account?.option ?? null, choice.pin, choice.server);
+    assert.equal(said?.readOnly, choice.readOnly, choice.server);
+  }
+  assert.ok(
+    report.channels.every((channel) => channel.part !== undefined),
+    'every server says, null where none',
+  );
+});
 
 test('channels: a part reached only through a connection is registered there, by the connection, and the key is nowhere', async () => {
   const m = machine();

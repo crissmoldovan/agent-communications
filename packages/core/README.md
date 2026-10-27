@@ -25,7 +25,7 @@ npx @agentcomms/core label name "Jo Example"  # your name, for where a channel h
 npx @agentcomms/core label rule add acme/slack --kinds reaction --as me  # reactions sent as you, unlabelled (you approve it)
 npx @agentcomms/core label icon acme/slack :jo-agent:  # the workspace emoji the app's Slack posts show (you approve it)
 npx @agentcomms/core label style acme/slack labelled  # every agent message there as you, labelled, not as the app (you approve it)
-npx @agentcomms/core channels      # which servers exist, which are installed, and where each is registered
+npx @agentcomms/core channels      # which servers exist, which are installed, where each is registered, and what each takes as a connection's part
 npx @agentcomms/core mcp install --client claude-code   # register the core MCP server
 npx @agentcomms/core mcp install --server events --client claude-code   # register the events MCP server
 npx @agentcomms/core mcp uninstall --client cursor --server gmail   # take one server out of one client, at once
