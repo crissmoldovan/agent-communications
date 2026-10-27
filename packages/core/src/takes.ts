@@ -562,8 +562,11 @@ export function claudeCodeSessionId(env: NodeJS.ProcessEnv): string | null {
 export interface TakerIdentityOptions {
   /** The environment `CLAUDE_CODE_SESSION_ID` is read from; the process's own by default. */
   readonly env?: NodeJS.ProcessEnv | undefined;
-  /** The MCP connection's own session id, where its transport has one (`SessionIdentityOptions.connection`). */
-  readonly connection?: string | undefined;
+  /**
+   * The MCP transport's own session id, where it has one (`SessionIdentityOptions.transportSession`): mixed into the
+   * key, so two transport sessions through one parent are two takers.
+   */
+  readonly transportSession?: string | undefined;
   /** For a test: the activity session, worked out by the test. */
   readonly identity?: (() => Promise<ActivitySession>) | undefined;
   /** For a test: the seams `sessionIdentity` takes. */
@@ -592,7 +595,7 @@ export async function takerIdentity(
       ? await sessionIdentity(surface, clientInfo, {
           ...options.session,
           log: core.activity,
-          ...(options.connection === undefined ? {} : { connection: options.connection }),
+          ...(options.transportSession === undefined ? {} : { transportSession: options.transportSession }),
         })
       : await options.identity();
   if (surface === 'cli' && !session.grouped && sessionId === null) {

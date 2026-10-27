@@ -565,6 +565,34 @@ test('takerIdentity: the person at a terminal is nobody; a window, or a Claude C
   assert.equal(claudeCodeSessionId({ CLAUDE_CODE_SESSION_ID: 'not-a-uuid' }), null);
 });
 
+test('takerIdentity hands an MCP transport’s own session id on, so two connections through one parent are two takers', async () => {
+  // Security review of 0.35.0 (LOW): it passed the option by its old name, `connection`, which the activity session no
+  // longer reads — so two transport sessions through one parent were one taker, each able to act on the other's take.
+  const facts = { 900: { ppid: 1, startedAt: 'Sun Oct 25 09:00:00 2026', name: 'Claude' } };
+  const probe: ProcessProbe = async (pid) => facts[pid as 900] ?? null;
+  const taker = async (pid: number, transportSession?: string) =>
+    (await takerIdentity({ activity: undefined }, 'mcp', undefined, {
+      env: {},
+      ...(transportSession === undefined ? {} : { transportSession }),
+      session: {
+        pid,
+        ppid: 900,
+        cwd: () => '/example/home/jo/work/acme',
+        probe,
+        platform: 'darwin',
+        home: '/example/home/jo',
+      },
+    })) as TakeHolder;
+  const viaA = await taker(105, 'conn-a');
+  const viaB = await taker(106, 'conn-b');
+  const plain = await taker(107);
+  assert.equal(viaA.grouped, true);
+  assert.notEqual(viaA.key, viaB.key, 'two connections are two takers');
+  assert.notEqual(viaA.key, plain.key);
+  assert.equal((await taker(108, 'conn-a')).key, viaA.key, 'the same connection is the same taker');
+  assert.equal(sameSession(viaA, viaB), false);
+});
+
 test('a command that joined no window holds no parent — its shell ends at once — and a renewal keeps what was known', async () => {
   const sid = '11111111-2222-4333-8444-555555555555';
   const shell = { pid: 999, startedAt: 'Mon Oct 26 10:30:00 2026', name: 'zsh' };
