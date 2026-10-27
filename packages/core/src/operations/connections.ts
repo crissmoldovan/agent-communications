@@ -64,7 +64,8 @@ import { type ServerInstallDeps, type ServerInstallResult, serverInstallChange }
  *   would stay in the chat's transcript.
  * - **Changing its parts** tightens at once — a part taken out, a pin added, read-only on — and asks for the rest.
  * - **Renaming it, and replacing its key**, give an agent nothing more, so they apply at once and are audited. A
- *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is.
+ *   Manual connection's new key is a snippet to paste: at the person's terminal only, as adding one is. An agent
+ *   renames, re-keys and removes only its own connection (`refuseAnotherConnection`).
  * - **Removing it** applies at once: its entry is taken out of its app, and its key stops working with the record.
  */
 
@@ -81,6 +82,31 @@ function refuseKeyToAgent(env: NodeJS.ProcessEnv, surface: ChangeSurface): void 
     hint: 'Its snippet carries its key, which would stay in the agent’s transcript. Ask the person to do it in the Agent Comms app, or with the connection command at their own terminal.',
     details: { marker },
   });
+}
+
+/**
+ * Over MCP, from an agent's shell or inside an MCP server's process, renaming a connection, replacing its key and
+ * removing it act only on the caller's own connection: the one whose part this is, as its gateway reports it
+ * (`connectionOfThisProcess`). Another connection is the person's, at their terminal or in the app (0.35.0 security
+ * review, M1: an agent renamed two others so that a later preview named the wrong one, and could cut any app off). A
+ * speed bump against agents, as every person-only act here is: a shell runs as the person.
+ */
+function refuseAnotherConnection(env: NodeJS.ProcessEnv, surface: ChangeSurface, id: unknown, act: string): void {
+  const marker =
+    surface === 'mcp' ? 'MCP' : (agentMarker(env) ?? (mcpServerOf(env) === undefined ? null : 'MCP_SERVER_PROCESS'));
+  if (marker === null) return;
+  const own = connectionOfThisProcess(env);
+  if (own !== undefined && own === id) return;
+  throw new CommsError(
+    'APPROVAL_REQUIRED',
+    own === undefined
+      ? `an agent can ${act} only the connection it is a part of, and this one is a part of no connection: nothing was changed`
+      : `an agent can ${act} only the connection it is a part of, and ${String(id).slice(0, 40)} is another: nothing was changed`,
+    {
+      hint: `Another connection is the person’s to ${act}: at your terminal, or in the app.`,
+      details: { reason: 'NOT_OWN_CONNECTION', marker },
+    },
+  );
 }
 
 /** The app each connection type registers with, as `mcp install` names it; Manual registers with none. */
@@ -1383,6 +1409,7 @@ export function connectionRenameChange(
   let before = '';
   return {
     plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'rename');
       const record = requireReadable(config, request.id);
       const problem = connectionNameProblem(request.name);
       if (problem !== null) throw new CommsError('USAGE', `${problem}: nothing was changed`);
@@ -1436,6 +1463,7 @@ export function connectionKeyReplaceChange(
   let key = '';
   return {
     plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'replace the key of');
       const record = requireReadable(config, request.id);
       if (record.app === 'manual') refuseKeyToAgent(env, surface);
       key = newConnectionKey();
@@ -1519,6 +1547,7 @@ export function connectionRemoveChange(
   let held: ConnectionRead | undefined;
   return {
     plan: (config) => {
+      refuseAnotherConnection(env, surface, request.id, 'remove');
       held = requireConnection(config, request.id);
       return {
         before: config,

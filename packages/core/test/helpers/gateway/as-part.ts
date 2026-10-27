@@ -28,3 +28,16 @@ export async function asPartOf<T>(
     }
   }
 }
+
+/** `env` as a part of the connection `id` has it (see `asPartOf`), or with the id alone (`gateway: false`). */
+export function partEnv(
+  env: Record<string, string>,
+  id: string,
+  options: { gateway?: boolean } = {},
+): Record<string, string> {
+  return {
+    ...env,
+    [CONNECTION_ID_ENV]: id,
+    ...(options.gateway === false ? {} : { [GATEWAY_PID_ENV]: '4242', [MCP_SERVER_MARKER]: 'core' }),
+  };
+}

@@ -470,9 +470,14 @@ does not protect.
 | List or show connections; doctor | yes | yes | yes | yes |
 | Add a connection; add a part; unpin; read-only off; migrate; undo a migration | prepares it. Under `chat`, claims it after the person's yes in chat. Under `confirm`, waits for the code at the terminal | approves at the terminal | approves in the app (`--app-approval`) | refused with `ORIGIN_UNATTESTED`; "Do it in Terminal" |
 | Add or rotate a **Manual** connection (shows the key) | refused: the key would stay in the transcript | yes | yes | yes, through the terminal |
-| Revoke, remove, drop a part, pin, read-only on | at once | at once | at once | at once |
-| Rename; rotate (not Manual) | at once, audited | at once | at once | at once |
+| Revoke, drop a part, pin, read-only on | at once | at once | at once | at once |
+| Remove | its own connection only: at once (note below) | at once | at once | at once |
+| Rename; rotate (not Manual) | its own connection only: at once, audited (note below) | at once | at once | at once |
 
+- **Note, 2026-10-27 (0.35.0 security review, M1):** over MCP, from an agent's shell and inside an MCP server's
+  process, rename, rotate and remove act only on the caller's own connection — the one whose part it is, as its gateway
+  reports it (§7) — and any other is refused with the person's way: at their terminal, or in the app. An agent renamed
+  two others so that a later preview named the wrong one, and could cut any app off at once.
 - **`--app-approval` is extended to** `connection add|update|migrate`, in `takesAppApproval` (`cli.ts:535-547`) and in
   `appliedFromApp`'s list (`change-flow.ts:401-411`).
 - **`AppReach`** (`change-flow.ts:523-556`) also names a connection's `configDir`, so that a test build approves only

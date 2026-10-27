@@ -1,0 +1,143 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { test } from 'node:test';
+import { type GatedChange, type GatedOutcome, gatedChange } from '../src/change-flow.ts';
+import type { ChangeSurface } from '../src/changes.ts';
+import { readConnections } from '../src/connections.ts';
+import { type Core, openCore } from '../src/core.ts';
+import { CORE_CALLER } from '../src/handoffs.ts';
+import {
+  type ConnectionAddRequest,
+  type ConnectionAddResult,
+  connectionAddChange,
+  connectionKeyReplaceChange,
+  connectionRemoveChange,
+  connectionRenameChange,
+  parsePartsSpec,
+} from '../src/operations/connections.ts';
+import { partEnv } from './helpers/gateway/as-part.ts';
+import { fakeClaude } from './helpers/gateway/fake-claude.ts';
+import { tempDir } from './helpers/temp.ts';
+
+/*
+ * The 0.35.0 security review's connection findings, as the reviewer ran them (scratch probes `gw/probe.test.ts`), held
+ * as regression tests. Each machine has a temporary home, a stand-in `claude` keeping its servers in the home's
+ * `.claude.json`, and parts started from this checkout (`--launcher local`): nothing real is read, written or started.
+ */
+
+const NOT_ON_WINDOWS = process.platform === 'win32' ? { skip: 'the stand-in `claude` is a POSIX script' } : {};
+
+interface Machine {
+  home: string;
+  env: Record<string, string>;
+  core: Core;
+  claudeJson: string;
+}
+
+function machine(): Machine {
+  const home = tempDir('comms-connections-review-');
+  const configDir = join(home, 'config');
+  mkdirSync(configDir);
+  mkdirSync(join(home, 'bin'));
+  const env: Record<string, string> = {
+    HOME: home,
+    USERPROFILE: home,
+    PATH: `${join(home, 'bin')}:${process.env.PATH ?? ''}`,
+    AGENT_COMMS_CONFIG_DIR: configDir,
+    AGENT_COMMS_STATE_DIR: join(home, 'state'),
+    AGENT_COMMS_DATA_DIR: join(home, 'data'),
+    AGENT_COMMS_SECRETS_DIR: join(home, 'secrets'),
+    NO_COLOR: '1',
+    AGENT_COMMS_CLIENT_CLI_DIRS: '',
+    AGENT_COMMS_UPDATE_CHECK: 'off',
+  };
+  const claudeJson = join(home, '.claude.json');
+  fakeClaude(join(home, 'bin'), claudeJson, join(home, 'claude-calls.jsonl'));
+  return { home, env, core: openCore({ env, caller: CORE_CALLER }), claudeJson };
+}
+
+/** A connection added as the person adds one: prepared, then approved with its id. */
+async function added(m: Machine, request: Omit<ConnectionAddRequest, 'launcher' | 'noVerify'>) {
+  const build = () => connectionAddChange(m.core, m.env, { ...request, launcher: 'local', noVerify: true }, 'cli');
+  const first = await gatedChange(m.core, build(), { surface: 'cli', channel: 'core' });
+  assert.equal(first.status, 'approval-required');
+  if (first.status !== 'approval-required') throw new Error('unreachable');
+  const second = (await gatedChange(m.core, build(), {
+    surface: 'cli',
+    channel: 'core',
+    approvalId: first.prepared.approvalId,
+  })) as GatedOutcome<ConnectionAddResult>;
+  assert.equal(second.status, 'applied');
+  if (second.status !== 'applied') throw new Error('unreachable');
+  return second.result.connection;
+}
+
+/** "Everywhere", every folder, and "Acme only", one project: the person's two connections in the review. */
+async function twoConnections(m: Machine) {
+  const project = join(m.home, 'work', 'acme');
+  mkdirSync(project, { recursive: true });
+  const everywhere = await added(m, { app: 'claude-code', name: 'Everywhere', parts: parsePartsSpec('core,events') });
+  const acme = await added(m, {
+    app: 'claude-code',
+    name: 'Acme only',
+    parts: parsePartsSpec('core'),
+    folder: project,
+  });
+  return { project, everywhere, acme };
+}
+
+const run = <T>(m: Machine, change: GatedChange<T>, surface: ChangeSurface) =>
+  gatedChange(m.core, change, { surface, channel: 'core' });
+
+const names = async (m: Machine) =>
+  readConnections(await m.core.config.load()).connections.map((read) => (read.readable ? read.record.name : read.id));
+
+test(
+  'M1: over MCP an agent renames, re-keys and removes only the connection it is a part of — another is refused, unchanged',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { everywhere, acme } = await twoConnections(m);
+    // The reviewer's swap: the agent in "Acme only" renames the other connection. Refused, with the person's way to do it.
+    const inAcme = partEnv(m.env, acme.id);
+    for (const change of [
+      connectionRenameChange(m.core, inAcme, { id: everywhere.id, name: 'Untrusted repo' }, 'mcp'),
+      connectionKeyReplaceChange(m.core, inAcme, { id: everywhere.id }, 'mcp'),
+      connectionRemoveChange(m.core, inAcme, { id: everywhere.id }, 'mcp'),
+    ] as GatedChange<unknown>[]) {
+      await assert.rejects(run(m, change, 'mcp'), (error: Error & { code?: string; hint?: string }) => {
+        assert.equal(error.code, 'APPROVAL_REQUIRED', error.message);
+        assert.match(error.message, /only the connection it is a part of/);
+        assert.match(error.hint ?? '', /at your terminal, or in the app/);
+        return true;
+      });
+    }
+    // Its own: at once, as before.
+    const own = await run(m, connectionRenameChange(m.core, inAcme, { id: acme.id, name: 'Acme' }, 'mcp'), 'mcp');
+    assert.equal(own.status, 'applied');
+    assert.deepEqual(await names(m), ['Everywhere', 'Acme']);
+    const servers = JSON.parse(readFileSync(m.claudeJson, 'utf8')).mcpServers;
+    assert.ok(servers.agentcomms, 'the other connection’s entry is still there');
+  },
+);
+
+test(
+  'M1: outside any connection — core’s own server, an agent’s shell, a variable a shell set itself — none of them is the agent’s',
+  NOT_ON_WINDOWS,
+  async () => {
+    const m = machine();
+    const { acme } = await twoConnections(m);
+    const rename = (env: Record<string, string>, surface: ChangeSurface) =>
+      run(m, connectionRenameChange(m.core, env, { id: acme.id, name: 'Elsewhere' }, surface), surface);
+    // Core's own server, started without a gateway: a part of no connection.
+    await assert.rejects(rename(m.env, 'mcp'), /a part of no connection/);
+    // An agent's shell: the CLI, with an agent's marker.
+    await assert.rejects(rename({ ...m.env, CLAUDECODE: '1' }, 'cli'), /a part of no connection/);
+    // The variable alone, as a shell could set it, outside any part a gateway started.
+    await assert.rejects(rename(partEnv(m.env, acme.id, { gateway: false }), 'mcp'), /a part of no connection/);
+    // The person at a terminal: any connection.
+    assert.equal((await rename(m.env, 'cli')).status, 'applied');
+    assert.deepEqual(await names(m), ['Everywhere', 'Elsewhere']);
+  },
+);

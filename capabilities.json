@@ -942,7 +942,7 @@
       "operation": "connectionRenameChange",
       "argv": ["cn_0123456789ABCDEFGHJKMNPQRS", "Parity"],
       "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS", "name": "Parity" },
-      "reason": "A new name gives agents nothing more: applied at once and audited (design §6.2)."
+      "reason": "A new name gives agents nothing more: applied at once and audited (design §6.2). Over MCP and from an agent's shell, only the connection the caller is a part of: another is the person's (0.35.0 security review, M1)."
     },
     {
       "id": "core.connection.key.replace",
@@ -953,7 +953,7 @@
       "operation": "connectionKeyReplaceChange",
       "argv": ["cn_0123456789ABCDEFGHJKMNPQRS"],
       "args": { "id": "cn_0123456789ABCDEFGHJKMNPQRS" },
-      "reason": "A new key, written into the connection's entry and never shown, the old one stopping at once: applied at once and audited (design §6.2). A Manual connection's new key is a snippet shown to the person only, refused over MCP and to an agent's shell."
+      "reason": "A new key, written into the connection's entry and never shown, the old one stopping at once: applied at once and audited (design §6.2). A Manual connection's new key is a snippet shown to the person only, refused over MCP and to an agent's shell. Over MCP and from an agent's shell, only the connection the caller is a part of (0.35.0 security review, M1)."
     },
     {
       "id": "core.connection.remove",
