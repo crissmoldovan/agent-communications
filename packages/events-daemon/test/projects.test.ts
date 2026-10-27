@@ -12,6 +12,7 @@ import { createGitRunner, GIT_FIXED_OPTIONS, type GitExecOptions } from '../src/
 import { startEventOwner } from '../src/runtime/owner.ts';
 import { scanProjects } from '../src/runtime/project-scan.ts';
 import { Projects, projectControl } from '../src/runtime/projects.ts';
+import { RelayError } from '../src/runtime/relay-client.ts';
 import { type EventDatabase, openEventDatabase } from '../src/store/database.ts';
 import { shortTempDir, WINDOWS_SKIP } from './support/short-temp.ts';
 import { standInHome, standInSecrets } from './support/stand-ins.ts';
@@ -414,7 +415,14 @@ test('the owner takes a project only from the person, never from a window or ano
       const deps = {
         store,
         git: runner(box),
-        sessions: { sessionRoots: async () => [box.work], deniedFolders: () => [], homeFolder: () => box.home },
+        sessions: {
+          sessionRoots: async () => [box.work],
+          deniedFolders: () => [],
+          homeFolder: () => box.home,
+          relay: async () => {
+            throw new RelayError('RELAY_NOT_FOUND', 'no relay in a stand-in home');
+          },
+        },
       };
       await assert.rejects(
         projectControl(deps, { operation: 'projects-list', args: {}, origin: 'events-cli' }),

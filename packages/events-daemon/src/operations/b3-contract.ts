@@ -1316,7 +1316,13 @@ const PROJECT_RESULT_FIELDS: readonly string[] = Object.freeze([
 
 /** One project (0.36.0 §8.1), as `project show` gives it: closed, its folders absolute. */
 function assertProject(value: unknown): void {
-  assertClosedRecord(value, PROJECT_RESULT_FIELDS, 'a project');
+  const withSessions = isRecord(value) && (Object.hasOwn(value, 'sessions') || Object.hasOwn(value, 'sessionsReason'));
+  assertClosedRecord(
+    value,
+    withSessions ? [...PROJECT_RESULT_FIELDS, 'sessions', 'sessionsReason'] : PROJECT_RESULT_FIELDS,
+    'a project',
+  );
+  if (withSessions) assertProjectSessions(value.sessions, value.sessionsReason);
   for (const field of ['projectId', 'name', 'repo']) assertText(value[field], `a project's ${field}`);
   if (typeof value.profile !== 'string') throw new TypeError("a project's profile is text");
   if (value.profileBy !== null && value.profileBy !== 'person')
@@ -1337,6 +1343,28 @@ function assertProject(value: unknown): void {
     assertNullable(folder.worktreeRoot, assertText, "a checkout's worktree root");
   }
   for (const field of ['createdAt', 'updatedAt']) assertNonNegativeInteger(value[field], `a project's ${field}`);
+}
+
+/** The relay sessions working in a project: closed, with no title; or null, with the relay's closed reason. */
+function assertProjectSessions(sessions: unknown, reason: unknown): void {
+  if (sessions === null) {
+    if (typeof reason !== 'string' || !/^[A-Z][A-Z0-9_]{0,39}$/u.test(reason))
+      throw new TypeError("a project's unread sessions say why, in a closed word");
+    return;
+  }
+  if (reason !== null) throw new TypeError("a project's sessions, read, have no reason");
+  if (!Array.isArray(sessions)) throw new TypeError("a project's sessions are a list");
+  for (const session of sessions) {
+    assertClosedRecord(session, ['session', 'provider', 'state', 'lastActiveAt', 'folder'], "a project's session");
+    if (typeof session.session !== 'string' || !/^sess_[0-9a-f-]{36}$/u.test(session.session))
+      throw new TypeError("a project's session is a relay session id");
+    assertText(session.provider, "a project's session's provider");
+    if (!['idle', 'busy', 'watched'].includes(session.state as string))
+      throw new TypeError("a project's session is idle, busy or watched");
+    assertNullable(session.lastActiveAt, assertNonNegativeInteger, "when a project's session was last active");
+    if (typeof session.folder !== 'string' || !session.folder.startsWith('/'))
+      throw new TypeError("a project's session's folder is absolute");
+  }
 }
 
 /** `project scan`'s result: the roots, the repositories found by origin, and the folders passed over. */
@@ -1814,6 +1842,11 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     assertB3OrdinaryControlResultV1(operation, version);
     return;
   }
+  // A project shown or listed carries the sessions working in it, which add and update do not: its own closed check.
+  if (operation === 'project-show' || operation === 'project-add' || operation === 'project-update') {
+    assertProject(value);
+    return;
+  }
   if (operation === 'integration-show' && isRecord(value)) {
     if (value.integration === 'agent-sessions') assertAgentSessionsIntegration(value);
     else assertIntegrationShow(value);
@@ -2059,11 +2092,6 @@ function assertB3OrdinaryControlResultV1(operation: B3DesktopControlOperation, v
     case 'projects-list':
       if (!Array.isArray(value.projects)) throw new TypeError('a project list needs its projects');
       for (const project of value.projects) assertProject(project);
-      return;
-    case 'project-show':
-    case 'project-add':
-    case 'project-update':
-      assertProject(value);
       return;
     case 'project-remove':
       assertText(value.projectId, 'a removed project');
