@@ -111,6 +111,7 @@ import { EventDispatcher, type EventDispatcherOptions } from './events/event-dis
 import { SubscriberListeners } from './events/listeners.ts';
 import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
+import { createGitRunner } from './git.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
@@ -167,6 +168,7 @@ import { flowJudge } from './workflow/judge-call.ts';
 import { RelayWaits } from './workflow/relay-waits.ts';
 import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
 import { WorkflowDescribeService } from './workflow-describe.ts';
+import { WorktreeRecordSweep } from './worktree-records.ts';
 import { WriterQuiescer, withEventWriterLease, withOwnEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -1242,7 +1244,9 @@ async function startOwnerWithLock(
       now,
     }),
   ]);
-  const expiry = new EventExpiry(database, now, sourceStageExpiry);
+  // The worktree rows of purged runs (0.37.0 §2): looked at on disk and by git, apart from the history sweep's tick.
+  const worktreeRecords = new WorktreeRecordSweep({ store: database, git: createGitRunner(), now });
+  const expiry = new EventExpiry(database, now, sourceStageExpiry, worktreeRecords);
   const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
@@ -2001,6 +2005,8 @@ async function startOwnerWithLock(
         unregisterLayaPurge();
         // A sweep in flight finishes while the database is still open; this never throws.
         await takeOffers.stop();
+        // So does a look at the worktree rows of purged runs, and none starts after.
+        await worktreeRecords.stop();
         // The last work's outcomes are recorded while the database is still open; this never throws.
         await deliveryActivity.stop();
         database.close();
