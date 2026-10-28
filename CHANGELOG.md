@@ -33,6 +33,18 @@ together under one version.
 - **`runs cancel --interrupt` interrupts the session's turn at once (§4).** It no longer waits for the step the engine
   is running to finish before it asks the relay, so its answer comes at once and says whether the turn was
   interrupted. Only the cleanup — removing a worktree that is still clean — waits for that step.
+- **The worktrees of purged runs (§2):** once a run's history is purged, the event service looks at each worktree it
+  made or kept, every 10 minutes and at most 100 at a time. One whose folder is gone, or is no longer a worktree of its
+  checkout (`git worktree list --porcelain`, through the same git runner), loses its record, so Projects stops showing
+  it. A worktree still on disk keeps its record, for you to remove, and one whose checkout can't be read is looked at
+  again next time. The worktree itself is never touched.
+- **Describe it's questions say your own values (§5):** a question or a choice the model writes about your draft shows
+  your folder, address or template, never `/redacted/folder-1`. When you answer, your answers go back through the same
+  placeholders as that round's draft, so a choice that names your folder reaches the model as its placeholder.
+- **An approval names the limits (§6):** a workflow's approval ends with one numbered line of its limits, every one,
+  defaults included, in the app's Approve view and the terminal preview alike: "At most 6 runs an hour, 2 at a time; at
+  most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day; a run ends after 3
+  days."
 
 ## 0.36.0
 

@@ -68,7 +68,8 @@ const RUN_HISTORY_BATCH = 500;
  *   still kept, or that a chain may still start from; nor one with a target delivery still to make.
  * A worktree's row goes only once nothing is left to clean up — it was removed, or never made — and its run has gone;
  * a row of a worktree that may still be on disk (being made, made or kept) stays, for its cleanup and its sessions.
- * Returns how many runs went.
+ * Once its run has gone, a `made` or `kept` row is looked at on disk and by git, apart from this transaction
+ * (`WorktreeRecordSweep`, 0.37.0 §2). Returns how many runs went.
  */
 function purgeRunHistoryInTransaction(database: EventDatabase['database'], now: number): number {
   const due = database
@@ -160,25 +161,38 @@ export class SourceStageExpiryGroup implements AsyncSourceStageExpiry {
   }
 }
 
+/**
+ * What the history sweep starts for the worktree rows of purged runs (0.37.0 §2): `WorktreeRecordSweep`, which reads
+ * the disk and git apart from the sweep, and returns at once.
+ */
+export interface WorktreeRecordsPump {
+  pump(): void;
+}
+
 /** Deletes B1 content at its durable deadline without waiting for a later delivery or read. */
 export class EventExpiry {
   readonly #store: EventDatabase;
   readonly #now: () => number;
   readonly #asyncSourceStages: AsyncSourceStageExpiry | undefined;
+  readonly #worktreeRecords: WorktreeRecordsPump | undefined;
 
   constructor(
     store: EventDatabase,
     now: () => number = Date.now,
     asyncSourceStages?: AsyncSourceStageExpiry | undefined,
+    worktreeRecords?: WorktreeRecordsPump | undefined,
   ) {
     this.#store = store;
     this.#now = now;
     this.#asyncSourceStages = asyncSourceStages;
+    this.#worktreeRecords = worktreeRecords;
   }
 
   /** Runs synchronous and decrypted source-stage expiry before the owner starts source, control, or replay work. */
   async sweepAll(): Promise<ExpirySweepResult> {
     const swept = this.sweep();
+    // The worktree rows of the runs this sweep, or an earlier one, purged: looked at apart from it, never waited for.
+    this.#worktreeRecords?.pump();
     const sourceStages = (await this.#asyncSourceStages?.sweep()) ?? 0;
     return { ...swept, sourceStages: swept.sourceStages + sourceStages };
   }
