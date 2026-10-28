@@ -48,7 +48,7 @@ export const DESCRIBE_COPY = {
   } satisfies Record<DescribeProvider, string>,
   sent: 'What is sent',
   sentLine:
-    'Your words and your answers; a fixed brief and the workflow text’s words; the names a draft may use — your accounts, lanes, judges, targets, projects and namespaces, the step event words, and the Linear teams, labels and states your workflows name; and, when you ask again, the current draft, its folders, addresses and templates replaced by placeholders that are put back in what comes back. A draft that does not read as a workflow goes as you wrote it, for the model to fix.',
+    'Your words and your answers; a fixed brief and the workflow text’s words; the names a draft may use — your accounts, lanes, judges, targets, projects and namespaces, the step event words, and the Linear teams, labels and states your workflows name; and, when you ask again, the current draft, its folders, addresses and templates — in your answers too — replaced by placeholders that are put back in what comes back, the model’s questions and choices included. A draft that does not read as a workflow goes as you wrote it, for the model to fix.',
   neverLine:
     'Never a message, unless you paste one above, and then marked as an example. Never a project’s profile or folders, a count, an address, a template, a subscriber or a key.',
   draft: 'Draft it',

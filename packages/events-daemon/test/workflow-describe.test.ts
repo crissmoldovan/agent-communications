@@ -24,6 +24,7 @@ import {
   parseDescribeRequest,
   rawLines,
   readDescribeAnswer,
+  redactDraft,
   type WorkflowDescribeResultV1,
 } from '../src/domain/describe-brief.ts';
 import { DESCRIBE_GRAMMAR } from '../src/domain/describe-grammar.ts';
@@ -436,6 +437,159 @@ test('M5: an answer that does not read gets the person’s values back as writte
   assert.equal(parseRuleText(unreadable).ok, false);
   const asIs = describePrompt({ request: { words: WORDS, draft: unreadable }, names: NO_NAMES, boundary: 'b4' });
   assert.equal(draftIn(asIs.user), unreadable);
+});
+
+/** The person's own value each placeholder of a draft's redaction stands for, and back. */
+function placeholdersOf(draft: string): {
+  readonly value: (placeholder: string) => string;
+  readonly of: (value: string) => string;
+} {
+  const values = redactDraft(draft).values;
+  const back = new Map([...values].map(([placeholder, value]) => [value, placeholder]));
+  return {
+    value: (placeholder) => {
+      const found = values.get(placeholder);
+      assert.ok(found !== undefined, `${placeholder} stands for one of the person's values`);
+      return found;
+    },
+    of: (value) => {
+      const found = back.get(value);
+      assert.ok(found !== undefined, `${value} has a placeholder`);
+      return found;
+    },
+  };
+}
+
+/** The answers a prompt carries, as the model reads them. */
+function answersIn(user: string): string {
+  const head = 'Their answers to the questions you asked before:\n';
+  const at = user.indexOf(head);
+  return at === -1 ? '' : user.slice(at + head.length, user.indexOf('\n\n', at + head.length));
+}
+
+test('§5: a model question naming /redacted/folder-1 reads the person’s folder; choosing it sends the placeholder', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const stateDir = await shortTempDir('aev-describe-questions-');
+  const fake = await startFakeModelProvider();
+  const store = await openEventDatabase({ stateDir });
+  try {
+    const service = new WorkflowDescribeService({
+      database: store.database,
+      accounts: async () => [],
+      keyPresence: () => [{ provider: 'openrouter', hasKey: true }],
+      keyFor: async () => 'fake-or-describe',
+      transport: fake.transport(),
+    });
+    const draft = printRuleText(personsDraft());
+    const first = placeholdersOf(draft);
+    const acme = first.value('/redacted/folder-1');
+    const billing = first.value('/redacted/folder-2');
+    const instruction = first.value('template 3');
+    assert.deepEqual([acme, billing], ['/example/home/work/acme-site', '/example/home/work/billing']);
+    // Round one: the model keeps the draft and asks where, naming the placeholders it was given.
+    fake.respond((request) => {
+      const messages = request.body.messages as { content: string }[];
+      return httpResponse(
+        200,
+        openRouterAnswer(
+          answer(
+            draftIn(messages[1]?.content ?? ''),
+            [],
+            [
+              {
+                step: 'route',
+                question: 'Should a change to the site work in /redacted/folder-1, or in /redacted/folder-2?',
+                choices: ['/redacted/folder-1', 'In /redacted/folder-2, on template 3', 'Neither'],
+              },
+              { step: null, question: 'Is template 12 a placeholder?', choices: [] },
+            ],
+          ),
+        ),
+      );
+    });
+    const round = await service.describe({ request: { words: WORDS, draft }, provider: 'openrouter' });
+    assert.deepEqual(round.questions, [
+      {
+        step: 'route',
+        question: `Should a change to the site work in ${acme}, or in ${billing}?`,
+        choices: [acme, `In ${billing}, on ${instruction}`, 'Neither'],
+      },
+      // Only whole placeholders are the person's values: `template 12` is not `template 1`.
+      { step: null, question: 'Is template 12 a placeholder?', choices: [] },
+    ]);
+    assert.doesNotMatch(JSON.stringify(round.questions[0]), /redacted|template \d/u);
+
+    // Round two: the person picks their folder, and types an answer that names another of their values.
+    const asked = round.questions[0] as WorkflowDescribeResultV1['questions'][number];
+    fake.respond((request) => {
+      const messages = request.body.messages as { content: string }[];
+      return httpResponse(200, openRouterAnswer(answer(draftIn(messages[1]?.content ?? ''))));
+    });
+    await service.describe({
+      request: {
+        words: WORDS,
+        draft: round.text,
+        answers: [
+          { question: asked.question, answer: asked.choices[0] as string },
+          { question: '', answer: `Keep the trees in ${first.value('/redacted/folder-3')}, please` },
+        ],
+      },
+      provider: 'openrouter',
+    });
+    assert.equal(fake.requests.length, 2);
+    // The person's turn: the system part is the fixed brief and the grammar, whose own examples name such values.
+    const body = fake.requests[1]?.body as { messages: { role: string; content: string }[] };
+    assert.equal(body.messages[0]?.content.startsWith(DESCRIBE_BRIEF), true);
+    const sent = body.messages[1]?.content ?? '';
+    for (const value of PERSONS_VALUES) assert.equal(sent.includes(value), false, `${value} is never sent`);
+    // The same placeholders as that round's draft stand for them.
+    const second = placeholdersOf(round.text);
+    assert.equal(
+      answersIn(sent),
+      [
+        `- Should a change to the site work in ${second.of(acme)}, or in ${second.of(billing)}? ${second.of(acme)}`,
+        `- Keep the trees in ${second.of('/example/home/work/billing-trees')}, please`,
+      ].join('\n'),
+    );
+  } finally {
+    store.close();
+    await fake.close();
+    await rm(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('§5: an answer passes through the redaction of its own round’s draft, and only of its values', () => {
+  const draft = printRuleText(personsDraft());
+  const placeholders = placeholdersOf(draft);
+  const request = {
+    words: WORDS,
+    draft,
+    answers: [
+      // A value inside a longer folder is that value's placeholder, and the rest stays.
+      { question: '', answer: '/example/home/work/acme-site/docs and /example/home/work/acme-site-old' },
+      { question: `Notify with ${placeholders.value('template 2')}?`, answer: 'yes, at 54.86.0.10' },
+      // A folder the draft does not hold is the person's own words, sent as typed.
+      { question: '', answer: 'or /example/home/work/elsewhere' },
+    ],
+  };
+  const prompt = describePrompt({ request, names: NO_NAMES, boundary: 'b5' });
+  assert.equal(
+    answersIn(prompt.user),
+    [
+      `- ${placeholders.of('/example/home/work/acme-site')}/docs and ${placeholders.of('/example/home/work/acme-site')}-old`,
+      `- Notify with template 2? yes, at ${placeholders.of('54.86.0.10')}`,
+      '- or /example/home/work/elsewhere',
+    ].join('\n'),
+  );
+  for (const value of PERSONS_VALUES) assert.equal(prompt.user.includes(value), false, `${value} is never sent`);
+  // With no draft there is nothing to redact: the answers go as they are.
+  const plain = describePrompt({
+    request: { words: WORDS, answers: request.answers },
+    names: NO_NAMES,
+    boundary: 'b6',
+  });
+  assert.ok(answersIn(plain.user).includes('/example/home/work/acme-site/docs'));
 });
 
 test('a note quoting words not in the description is dropped; a step with none is listed in unnoted', async () => {
