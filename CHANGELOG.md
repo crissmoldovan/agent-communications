@@ -5,6 +5,37 @@ together under one version.
 
 ## 0.37.0
 
+**Security fix.** On 0.36.0, a coding-agent session that a workflow started in a worktree could make the event service
+run a program as you, outside the session. The worktree shares its repository's git config, and git runs a program
+that config names (`core.fsmonitor`, or a filter beside a `.gitattributes`) the next time the event service makes a
+worktree of that repository or cleans one up. Anyone who approved a workflow that makes a worktree and starts a session
+in it, on 0.36.0, should update. Nobody else was exposed: no workflow made a worktree before 0.36.0.
+
+**What.** The fix, and the five other items 0.36.0's security review left:
+- git runs with every fixed-name program setting switched off, never reads the system's git config, and refuses a
+  repository whose own config names a filter, diff or merge program, or pulls in another file, saying which key;
+- a slow workflow step no longer holds up the event service: steps run beside it, four runs at a time;
+- `runs cancel --interrupt` interrupts the session's turn at once;
+- the record of a worktree an old run made is cleaned up once its folder is gone;
+- Describe it's questions show your own values, and your answers go back to the model hidden;
+- an approval ends with one line naming the workflow's limits.
+
+**Why.** An independent review of the git surface (2026-10-28), which 0.36.0's own security review had left open,
+confirmed the flaw against the real code. The owner, the same day: "let's make progress on all". The design is
+`docs/superpowers/specs/2026-10-28-0370-design.md`.
+
+**Impact.** A minor release, and a security fix: the background update installs it after 24 hours rather than 72, and
+announces it at once.
+- **A repository can now be refused.** If its own git config names a filter, diff or merge program, or an include, a
+  run's worktree step is `refused` with `REPO_CONFIG_UNSAFE`, naming the key. `project scan` shows the folder as
+  `unsafe-config`, and `project add` refuses it. If the key is yours (Git LFS set up with `git lfs install --local`,
+  say), move it to your global config (`git lfs install`) or remove it. LFS in your global config keeps working.
+- **Steps of different runs now overlap,** up to four at once. A run's own steps keep their order. A delivery or chain a
+  step asks for goes out at the event service's next cycle, a few seconds later.
+- **Approvals gain a line,** and the app's "This workflow does N things" counts it.
+- No stored data migrates, and nothing is removed.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients.
+
 **In detail**
 - **Security fix: git in a folder a session can write to** (an independent review, 2026-10-28). On 0.36.0, anyone who
   approved a workflow that makes a worktree and starts a session in it was exposed. The worktree shares its checkout's

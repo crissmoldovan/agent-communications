@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "version": "0.36.0",
+  "version": "0.37.0",
   "productName": "Agent Comms",
   "identifier": "com.cueplusplus.agentcomms",
   "build": {
