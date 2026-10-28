@@ -62,8 +62,10 @@ export type IssueCode =
   | 'CLOUD_EVENT_TYPE_INVALID'
   /** An untrusted extension pointer is not present in data as a string. */
   | 'UNTRUSTED_POINTER_INVALID'
-  /** A target's context (0.33.0 design §3.6) is not a list of its four part shapes, within their limits. */
-  | 'CONTEXT_INVALID';
+  /** A target's context (0.33.0 design §3.6) is not a list of its part shapes, within their limits. */
+  | 'CONTEXT_INVALID'
+  /** A step event's name, schema or envelope is not the workflows design's Appendix W. */
+  | 'WORKFLOW_EVENT_INVALID';
 
 /** One thing wrong, where it is (an RFC 6901 pointer into the value checked), and any detail a caller can show. */
 export interface Issue {

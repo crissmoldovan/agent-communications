@@ -19,6 +19,8 @@ const LABELS: Record<Screen, string | RegExp> = {
   // People (0.35.0), with its "New" tag, whose space is a screen reader's; Search has no row of its own: it is
   // Messages' second part.
   people: /^People ?New$/,
+  // Projects (0.36.0), with its "New" tag.
+  projects: /^Projects ?New$/,
   search: /^Messages ?New$/,
   accounts: 'Accounts',
   // Its button's name, with its "New" tag (0.32.0).
@@ -28,6 +30,8 @@ const LABELS: Record<Screen, string | RegExp> = {
   agent: 'Your agents',
   updates: 'Updates',
   events: 'Events',
+  // Workflows (0.36.0): Events at its Workflows tab, with its "New" tag.
+  workflows: /^Workflows ?New$/,
   doctor: 'Doctor',
   settings: 'Settings',
 };
@@ -62,6 +66,7 @@ describe('what each CLI version supports', () => {
       taking: '0.35.0',
       search: '0.35.0',
       connections: '0.35.0',
+      workflows: '0.36.0',
     });
     // Taking messages is core's from 0.35.0, a pull request's build of it included.
     expect(supports('0.34.0', 'taking')).toBe(false);
@@ -71,6 +76,12 @@ describe('what each CLI version supports', () => {
     expect(supports('0.34.0', 'search')).toBe(false);
     expect(supports('0.35.0', 'search')).toBe(true);
     expect(supports('0.35.0-feat-0.35-search-app', 'search')).toBe(true);
+    // Workflows — their checks and tries, runs, projects, Describe it and subscribers given events — are the event
+    // service's from 0.36.0, a pull request's build of it included.
+    expect(supports('0.35.0', 'workflows')).toBe(false);
+    expect(supports('0.35.9', 'workflows')).toBe(false);
+    expect(supports('0.36.0', 'workflows')).toBe(true);
+    expect(supports('0.36.0-feat-0.36-workflows', 'workflows')).toBe(true);
     // Events → Service's Switch on… approved in the app, and Switch off, are the event service's from 0.34.0.
     expect(supports('0.33.0', 'collectionSwitch')).toBe(false);
     expect(supports('0.34.0', 'collectionSwitch')).toBe(true);

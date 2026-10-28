@@ -3,9 +3,11 @@ import { CommsError, type ConfigStore } from '@agentcomms/core';
 import { ACTIVATION_FAILURE } from '../domain/activation-failure-codes.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeQueueItemsForAccount } from './queue-retention.ts';
 import { purgeRevokedRuleWork } from './replacements.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export interface EventAccountScope {
   readonly source: SourceOptions['channel'];
@@ -112,6 +114,8 @@ export function purgeRemovedAccountWork(
   const scope: EventAccountScope = typeof account === 'string' ? { source: 'gmail', accountId: account } : account;
   const { accountId, source } = scope;
   new JudgePurgeParticipant({ database, now: () => now }).account({ source, accountId });
+  // The account's raised workflow events (0.36.0) are cancelled with the rest of its work.
+  cancelEventDeliveriesInTransaction(database, { accountId, source }, now, 'ACCOUNT_REMOVED');
   // A used approval names the planned stable ids, not aliases. Cancel every unfinished intent that includes this
   // source/account before removing its durable source state: a later re-add of the same id must require a new
   // approval and a fresh point. Version-one plans omitted `source` for Gmail, so preserve that canonical default.
@@ -163,6 +167,8 @@ export function purgeRemovedAccountWork(
   database.prepare('DELETE FROM replacement_drains WHERE source = ? AND account_id = ?').run(source, accountId);
   database.prepare(`DELETE FROM ingest_rules WHERE event_id IN (${sourceEventIds})`).run(accountId, eventTypePattern);
   database.prepare(`DELETE FROM dryrun_log WHERE ${ownedBy('dryrun_log')}`).run(...owned);
+  // The account's workflow runs end with it (workflows design W10): cancelled, each record purged.
+  cancelRunsInTransaction(database, { accountId, source }, 'ACCOUNT_REMOVED', now);
   purgeQueueItemsForAccount(database, { source, accountId });
   database.prepare(`DELETE FROM stream_log WHERE ${ownedBy('stream_log')}`).run(...owned);
   database

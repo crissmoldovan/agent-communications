@@ -42,6 +42,36 @@ export async function subscriberTokenCreate(
   });
 }
 
+/** A webhook subscriber version's signing secret (0.36.0, W29), generated at the terminal and shown once. */
+export async function subscriberSecretCreate(
+  subscriberId: string,
+  version: number,
+  options: Options = {},
+): Promise<unknown> {
+  return terminalClient(options).request('subscriberSecretCreate', { subscriberId, version });
+}
+
+/** Rotates a webhook subscriber version's signing secret; the previous one keeps signing through its overlap. */
+export async function subscriberSecretRotate(
+  subscriberId: string,
+  version: number,
+  options: Options = {},
+): Promise<unknown> {
+  return terminalClient(options).request('subscriberSecretRotate', { subscriberId, version });
+}
+
+/**
+ * A webhook subscriber's secret URL (0.36.0, W29): a new immutable version, the newest before it with the URL's public
+ * descriptor in place of its URL, its complete URL kept only in the secret store. The URL is hidden input.
+ */
+export async function subscriberUrlSet(
+  subscriberId: string,
+  version: number,
+  options: HiddenOptions,
+): Promise<unknown> {
+  return terminalClient(options).request('subscriberUrlSet', { subscriberId, version, hidden: options.hidden });
+}
+
 export async function subscriberTokenRotate(
   subscriberId: string,
   version: number,

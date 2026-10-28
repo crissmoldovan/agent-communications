@@ -106,8 +106,9 @@ test('PERSON-SHELL: rule analyse is taken only from the app, attested on macOS, 
       assert.equal(ran.code, APPROVAL_EXIT, `${reason}: ${ran.stderr}`);
       assert.match(
         ran.stderr,
-        /only a person can analyse a rule: in the Agent Comms app, or at an interactive terminal/u,
+        /only a person can analyse a workflow: in the Agent Comms app, or at an interactive terminal/u,
       );
+      assert.match(ran.stderr, /Do it in the app: Events → Workflows, Analyse; or run this at your own terminal\./u);
     }
     const marked = await cli(stateDir, args, { env: { CLAUDECODE: '1' } });
     assert.equal(marked.code, APPROVAL_EXIT, marked.stderr);

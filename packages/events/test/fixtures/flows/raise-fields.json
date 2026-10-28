@@ -1,0 +1,76 @@
+{
+  "condition": {
+    "op": "exists",
+    "path": "/text"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "slack.message.posted",
+    "version": 1
+  },
+  "flow": {
+    "events": {
+      "namespace": "acme",
+      "workflow": "client-asked"
+    },
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 2,
+      "eventsPerHour": 240,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 10,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "start": "asked",
+    "steps": {
+      "asked": {
+        "fields": ["/text", "/author/name"],
+        "kind": "raise",
+        "label": "Tell the dashboard",
+        "name": "client-asked",
+        "next": {
+          "otherwise": "tell"
+        }
+      },
+      "tell": {
+        "kind": "notify",
+        "next": {},
+        "text": "A client asked something in acme/slack"
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "author": {
+      "name": {
+        "$path": "/author/name"
+      }
+    },
+    "text": {
+      "$path": "/text"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "client-asked",
+  "source": {
+    "accountIds": ["acme/slack"],
+    "channel": "slack",
+    "options": {
+      "channel": "slack",
+      "conversations": ["C0123"]
+    }
+  },
+  "subscribers": [],
+  "targets": [],
+  "version": 3
+}

@@ -1,0 +1,80 @@
+{
+  "condition": {
+    "caseSensitive": false,
+    "op": "contains",
+    "path": "/subject",
+    "value": "invoice"
+  },
+  "deliveryRateCap": 60,
+  "event": {
+    "type": "gmail.message.received",
+    "version": 1
+  },
+  "flow": {
+    "flowVersion": 1,
+    "limits": {
+      "concurrentRuns": 2,
+      "eventsPerHour": 120,
+      "linearWritesPerHour": 30,
+      "runMs": 259200000,
+      "runsPerHour": 10,
+      "sessionsPerHour": 2,
+      "worktreesPerDay": 5
+    },
+    "start": "both",
+    "steps": {
+      "both": {
+        "branches": ["log", "tell"],
+        "kind": "split"
+      },
+      "log": {
+        "kind": "deliver",
+        "next": {},
+        "target": {
+          "targetId": "invoices-log",
+          "version": 1
+        }
+      },
+      "tell": {
+        "kind": "notify",
+        "next": {},
+        "text": "An invoice arrived in cue/gmail"
+      }
+    }
+  },
+  "judges": [],
+  "mapping": {
+    "subject": {
+      "$path": "/subject"
+    }
+  },
+  "retention": {
+    "deadLetterMs": 604800000,
+    "decisionMetadataMs": 7776000000,
+    "deliveryMs": 604800000,
+    "dryrunMs": 86400000,
+    "holdMs": 604800000,
+    "ingestMs": 604800000,
+    "sseReplayMs": 604800000
+  },
+  "ruleId": "invoices-split",
+  "source": {
+    "accountIds": ["cue/gmail"],
+    "channel": "gmail",
+    "options": {
+      "channel": "gmail",
+      "includeSpamTrash": false,
+      "labels": "inbox"
+    }
+  },
+  "subscribers": [],
+  "targets": [
+    {
+      "kind": "dry-run",
+      "retentionMs": 86400000,
+      "targetId": "invoices-log",
+      "version": 1
+    }
+  ],
+  "version": 1
+}

@@ -125,7 +125,7 @@ export function renderDryRunRecord(record: DryRunRecord): string {
   const body = wrapUntrusted(record.record.cloudEventBytes, { field: 'event', id: record.deliveryId }, boundary);
   return [
     `Local dry-run delivery ${record.deliveryId}`,
-    `Rule ${record.ruleId}@${record.ruleVersion}; target ${record.targetId}@${record.targetVersion}`,
+    `Workflow ${record.ruleId}@${record.ruleVersion}; target ${record.targetId}@${record.targetVersion}`,
     `Retained until ${new Date(record.expiresAt).toISOString()}`,
     renderFencedBody(body),
   ].join('\n');

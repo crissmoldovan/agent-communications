@@ -8,6 +8,9 @@
 //! `eventsCollectionApprove` (`collection approve`) answers only the one Events → Service prepared with
 //! `eventsEnableAll`, for its digest. Since 0.34.0 the label's changes are too (`label`): a `labelWord`, `labelName`,
 //! `labelRuleAdd` or `labelRuleRemove` with `appApproval` answers only the approval the app prepared for the same call
+//! without it. Since 0.36.0 a subscription is too: `eventsSubscriberApprove` (`subscriber approve`) answers only the one
+//! `eventsSubscriberEnable` prepared, for its digest. Workflows' calls (0.36.0, plan 2026-10-27-workflows-0360 I7) take
+//! a checked run, project, step or subscriber id, a closed word, or a document on stdin, and nothing else.
 //! without it. Since 0.35.0 so are Search's three loosenings (`search`): a `searchOn`, `searchAccountsAdd` or
 //! `searchModelSet` with `appApproval` answers only the approval the app prepared for the same call without it; and an
 //! MCP connection's four (`mcp_connections`): a `connectionAdd`, `connectionChange`, `connectionMigrate` or
@@ -27,7 +30,10 @@ use crate::mcp_connections::{
     ConnectionApp, ConnectionFolder, ConnectionId, ConnectionName, ConnectionParts,
     CONNECTIONS_VERSION,
 };
-use crate::rule_editor::{AnalyseProvider, Integration, RuleDocument, RuleVersion, TargetDocument};
+use crate::rule_editor::{
+    AnalyseProvider, DescribeProvider, DescribeRequest, Integration, ProjectDocument, RuleDocument,
+    RuleVersion, SubscriberDocument, TargetDocument,
+};
 use crate::search::{
     IndexBudget, ModelAddress, PersonId, PersonLabel, PersonLimit, QueryLimit, SearchAccounts,
     SearchChannel, SearchDirection, SearchHandle, SearchModel, SearchText, SEARCH_VERSION,
@@ -35,6 +41,7 @@ use crate::search::{
 use crate::taking::{self, TakingSetting, TAKING_VERSION};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -264,6 +271,183 @@ checked_word!(
     crate::rule_editor::digest,
     "a digest"
 );
+checked_word!(
+    /// A workflow run's id (0.36.0, plan I7): `wfr_` and 26 lowercase letters of Crockford's base 32.
+    RunId,
+    grammar::run_id,
+    "a run id"
+);
+checked_word!(
+    /// A project's id (0.36.0): 1 to 64 lowercase letters, digits and `-`.
+    ProjectId,
+    grammar::project_id,
+    "a project id"
+);
+checked_word!(
+    /// A subscriber's id (0.36.0): a rule id's grammar.
+    SubscriberId,
+    grammar::subscriber_id,
+    "a subscriber id"
+);
+checked_word!(
+    /// The catalogue example a workflow is tried on (0.36.0): `type@version:index`.
+    CatalogueExample,
+    grammar::catalogue_example,
+    "a catalogue example: type@version:index"
+);
+
+/// A workflow run's state, as `runs list --state` takes it (0.36.0, spec §4.3). Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunState {
+    Held,
+    Running,
+    Waiting,
+    Done,
+    Failed,
+    Cancelled,
+    Expired,
+}
+
+impl RunState {
+    pub const ALL: [RunState; 7] = [
+        RunState::Held,
+        RunState::Running,
+        RunState::Waiting,
+        RunState::Done,
+        RunState::Failed,
+        RunState::Cancelled,
+        RunState::Expired,
+    ];
+
+    /// The state as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            RunState::Held => "held",
+            RunState::Running => "running",
+            RunState::Waiting => "waiting",
+            RunState::Done => "done",
+            RunState::Failed => "failed",
+            RunState::Cancelled => "cancelled",
+            RunState::Expired => "expired",
+        }
+    }
+}
+
+/// Whether a subscriber's terminal-only secret is made for the first time or made again (0.36.0): `subscriber token
+/// create|rotate` and `subscriber secret create|rotate`. Closed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SecretAction {
+    Create,
+    Rotate,
+}
+
+impl SecretAction {
+    pub const ALL: [SecretAction; 2] = [SecretAction::Create, SecretAction::Rotate];
+
+    /// The action as the events CLI names it.
+    pub fn word(self) -> &'static str {
+        match self {
+            SecretAction::Create => "create",
+            SecretAction::Rotate => "rotate",
+        }
+    }
+}
+
+/// The most steps a flow has (spec §4.1, `FLOW_BOUNDS.steps`), and so the most outcomes a try names.
+pub const STEP_OUTCOMES_MAX: usize = 32;
+
+/// The outcome each step answers with when a workflow is tried (0.36.0, `workflow test --outcome <step>=<word>`): a step
+/// id to its outcome's word, each of its grammar, at most `STEP_OUTCOMES_MAX` of them, in the order of their ids.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(
+    try_from = "BTreeMap<String, String>",
+    into = "BTreeMap<String, String>"
+)]
+pub struct StepOutcomes(BTreeMap<String, String>);
+
+impl TryFrom<BTreeMap<String, String>> for StepOutcomes {
+    type Error = AppError;
+
+    fn try_from(outcomes: BTreeMap<String, String>) -> Result<Self, Self::Error> {
+        if outcomes.len() > STEP_OUTCOMES_MAX {
+            return Err(AppError::refused("a try names at most 32 steps' outcomes"));
+        }
+        if !outcomes
+            .iter()
+            .all(|(step, outcome)| grammar::step_id(step) && grammar::outcome_word(outcome))
+        {
+            return Err(AppError::refused(
+                "a try names each step by its id and its outcome by its word",
+            ));
+        }
+        Ok(StepOutcomes(outcomes))
+    }
+}
+
+impl From<StepOutcomes> for BTreeMap<String, String> {
+    fn from(outcomes: StepOutcomes) -> BTreeMap<String, String> {
+        outcomes.0
+    }
+}
+
+impl StepOutcomes {
+    /// `--outcome <step>=<word>` for each, in the order of their ids.
+    fn words(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .flat_map(|(step, outcome)| ["--outcome".to_string(), format!("{step}={outcome}")])
+            .collect()
+    }
+}
+
+/// The most folders one scan starts from (0.36.0, plan I7).
+pub const SCAN_ROOTS_MAX: usize = 8;
+
+/// The folders `project scan --root <folder>…` starts from (0.36.0): none, for the event service's own roots, or up to
+/// `SCAN_ROOTS_MAX`, each a folder written whole (`rule_editor::whole_folder`) and named once.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "Vec<String>", into = "Vec<String>")]
+pub struct ScanRoots(Vec<String>);
+
+impl TryFrom<Vec<String>> for ScanRoots {
+    type Error = AppError;
+
+    fn try_from(roots: Vec<String>) -> Result<Self, Self::Error> {
+        if roots.len() > SCAN_ROOTS_MAX {
+            return Err(AppError::refused("a scan starts from at most 8 folders"));
+        }
+        if !roots
+            .iter()
+            .all(|root| grammar::plain(root) && crate::rule_editor::whole_folder(root))
+        {
+            return Err(AppError::refused(
+                "a scan starts from folders written whole: absolute, with no . or .. step",
+            ));
+        }
+        if roots.iter().collect::<BTreeSet<_>>().len() != roots.len() {
+            return Err(AppError::refused("a scan names each folder once"));
+        }
+        Ok(ScanRoots(roots))
+    }
+}
+
+impl From<ScanRoots> for Vec<String> {
+    fn from(roots: ScanRoots) -> Vec<String> {
+        roots.0
+    }
+}
+
+impl ScanRoots {
+    /// `--root <folder>` for each, in the order given.
+    fn words(&self) -> Vec<String> {
+        self.0
+            .iter()
+            .flat_map(|root| ["--root".to_string(), root.clone()])
+            .collect()
+    }
+}
 
 /// How long `update --pause` holds update notices: the three lengths the CLI offers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1109,6 +1293,86 @@ pub enum Call {
         approval_id: ApprovalId,
         digest: Digest,
     },
+    /// The events service's `workflow check -` (0.36.0, plan I7): a workflow's problems — its graph, its steps, its
+    /// events — for the document on stdin, checked and written nowhere.
+    EventsRuleCheck { document: RuleDocument },
+    /// The events service's `workflow show <workflow> --version <n>` (0.36.0): that one version, as a run of it draws
+    /// its graph. Content-free and read-only.
+    EventsRuleShowVersion {
+        rule_id: RuleId,
+        version: RuleVersion,
+    },
+    /// The events service's `workflow test - <example> [--outcome <step>=<word>]…` (0.36.0, spec §7.7): the workflow on
+    /// stdin tried against a catalogue example, each step answering with the outcome named for it, or its first. It
+    /// does no I/O, and every effect is "would".
+    EventsRuleTestFlow {
+        document: RuleDocument,
+        example: CatalogueExample,
+        outcomes: StepOutcomes,
+    },
+    /// The events service's `runs list [--workflow <workflow>] [--state <state>]` (0.36.0): the runs, newest first,
+    /// content-free. The person's read, refused inside an MCP server and to an agent's shell.
+    EventsRunsList {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rule_id: Option<RuleId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        state: Option<RunState>,
+    },
+    /// The events service's `runs show <run>` (0.36.0): one run, its path, its steps and the events it raised.
+    EventsRunShow { run_id: RunId },
+    /// The events service's `runs cancel <run> [--interrupt]` (0.36.0, spec §7.6): ends a run at once, a tightening the
+    /// app applies itself (DA10), once the person confirms; a session's turn is interrupted only with `interrupt`.
+    EventsRunCancel { run_id: RunId, interrupt: bool },
+    /// The events service's `projects list` (0.36.0, spec §8.1): the person's projects, their folders, profiles and
+    /// hints. The person's read. It takes no argument.
+    EventsProjectsList {},
+    /// The events service's `project show <project>` (0.36.0).
+    EventsProjectShow { project_id: ProjectId },
+    /// The events service's `project add -` (0.36.0): a project the person added, its document on stdin.
+    EventsProjectAdd { document: ProjectDocument },
+    /// The events service's `project update -` (0.36.0): a project's folders, profile or hints, its document on stdin.
+    EventsProjectUpdate { document: ProjectDocument },
+    /// The events service's `project remove <project>` (0.36.0): the screen asks first.
+    EventsProjectRemove { project_id: ProjectId },
+    /// The events service's `project scan [--root <folder>]…` (0.36.0, spec §8.1): the checkouts found on this Mac,
+    /// grouped by repository. It reads folders and runs git, so it has as long as a doctor's.
+    EventsProjectScan { roots: ScanRoots },
+    /// The events service's `workflow describe --provider <provider>` (0.36.0, spec §11.4): a draft of the workflow the
+    /// person's words describe, from what is on stdin, written nowhere. The person's, refused inside an MCP server and to
+    /// an agent's shell.
+    EventsWorkflowDescribe {
+        request: DescribeRequest,
+        provider: DescribeProvider,
+    },
+    /// The events service's `workflow-events list` (0.36.0, spec W25): the step event catalogue. Content-free; it takes
+    /// no argument.
+    EventsWorkflowEventsList {},
+    /// The events service's `subscribers list`: each subscriber version, and since 0.36.0 its kind, what it receives,
+    /// its state, its listener or address and its backlog. It takes no argument.
+    EventsSubscribersList {},
+    /// The events service's `subscriber add -` (0.36.0): a new subscriber, its document on stdin. A version with events
+    /// is inert until the person approves it.
+    EventsSubscriberAdd { document: SubscriberDocument },
+    /// The events service's `subscriber update -` (0.36.0): a subscriber's next version, its document on stdin.
+    EventsSubscriberUpdate { document: SubscriberDocument },
+    /// The events service's `subscriber remove <subscriber>`: revokes every version at once, a tightening the app applies
+    /// itself (DA10); the screen asks first.
+    EventsSubscriberRemove { subscriber_id: SubscriberId },
+    /// The events service's `subscriber enable <subscriber> <version>` (0.36.0, spec W29): prepares that version's
+    /// subscription, which the person approves in the app. Rust records the approval it comes back with, and its digest,
+    /// as the app's own (`terminal::Prepared`): only that one `eventsSubscriberApprove` answers it.
+    EventsSubscriberEnable {
+        subscriber_id: SubscriberId,
+        version: RuleVersion,
+    },
+    /// The events service's `subscriber approve <approval> --digest <digest>` (0.36.0): the person pressed Approve in the
+    /// app, after the preview of exactly this digest. Only an approval `eventsSubscriberEnable` recorded for this digest
+    /// is answered (`connections::run_app_approval`), once; the CLI refuses an agent and, on macOS, a process the app did
+    /// not start.
+    EventsSubscriberApprove {
+        approval_id: ApprovalId,
+        digest: Digest,
+    },
     /// The events service's `enable-all` (0.34.0 design B4, Events → Service → Switch on…): prepares the standing
     /// approval that starts collection, and approves nothing. Rust records the approval it comes back with, and its
     /// digest, as the app's own (`terminal::Prepared`): only that one `eventsCollectionApprove` answers it, `approve
@@ -1455,6 +1719,11 @@ pub const MESSAGES_VERSION: &str = "0.32.0";
 /// spec 2026-10-26-desktop-0340 §B2): an older one keeps Approve in Terminal for each loosening.
 pub const ACCOUNT_APP_APPROVAL_VERSION: &str = "0.34.0";
 
+/// The first release of the events service with workflows (plan 2026-10-27-workflows-0360 I7): `workflow check`,
+/// `workflow show --version`, `workflow test --outcome`, runs, projects, Describe it, the step event catalogue, and
+/// subscribers that are given events. An older one says "Needs 0.36.0 or later" (DA12).
+pub const WORKFLOWS_VERSION: &str = "0.36.0";
+
 /// How a call's output is read (`runner::parse_output`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -1488,6 +1757,8 @@ const UPDATE_TIMEOUT: Duration = Duration::from_secs(600);
 const DOCTOR_TIMEOUT: Duration = Duration::from_secs(90);
 /// Judge setup prepares, approves and claims up to two enablements, so it has longer than a read.
 const SETUP_TIMEOUT: Duration = Duration::from_secs(60);
+/// Describe it (0.36.0, spec §11.4): the person's Claude has 120 seconds to answer, and the checks run after it.
+const DESCRIBE_TIMEOUT: Duration = Duration::from_secs(150);
 
 fn core(words: &[&str]) -> Words {
     Words {
@@ -1923,6 +2194,79 @@ impl Call {
                     digest.as_str(),
                 ])
             },
+            Call::EventsRuleCheck { .. } => events(&["workflow", "check", "-"]),
+            Call::EventsRuleShowVersion { rule_id, version } => with(
+                events(&["workflow", "show", rule_id.as_str(), "--version"]),
+                [u64::from(*version).to_string()],
+            ),
+            Call::EventsRuleTestFlow {
+                example, outcomes, ..
+            } => with(
+                events(&["workflow", "test", "-", example.as_str()]),
+                outcomes.words(),
+            ),
+            Call::EventsRunsList { rule_id, state } => with(
+                events(&["runs", "list"]),
+                rule_id
+                    .iter()
+                    .flat_map(|id| ["--workflow".to_string(), id.as_str().to_string()])
+                    .chain(
+                        state
+                            .iter()
+                            .flat_map(|state| ["--state".to_string(), state.word().to_string()]),
+                    ),
+            ),
+            Call::EventsRunShow { run_id } => events(&["runs", "show", run_id.as_str()]),
+            Call::EventsRunCancel { run_id, interrupt } => with(
+                events(&["runs", "cancel", run_id.as_str()]),
+                interrupt.then(|| "--interrupt".to_string()),
+            ),
+            Call::EventsProjectsList {} => events(&["projects", "list"]),
+            Call::EventsProjectShow { project_id } => {
+                events(&["project", "show", project_id.as_str()])
+            }
+            Call::EventsProjectAdd { .. } => events(&["project", "add", "-"]),
+            Call::EventsProjectUpdate { .. } => events(&["project", "update", "-"]),
+            Call::EventsProjectRemove { project_id } => {
+                events(&["project", "remove", project_id.as_str()])
+            }
+            // It walks folders and runs git in each checkout: as long as a doctor's.
+            Call::EventsProjectScan { roots } => Words {
+                timeout: DOCTOR_TIMEOUT,
+                ..with(events(&["project", "scan"]), roots.words())
+            },
+            Call::EventsWorkflowDescribe { provider, .. } => Words {
+                timeout: DESCRIBE_TIMEOUT,
+                ..events(&["workflow", "describe", "--provider", provider.word()])
+            },
+            Call::EventsWorkflowEventsList {} => events(&["workflow-events", "list"]),
+            Call::EventsSubscribersList {} => events(&["subscribers", "list"]),
+            Call::EventsSubscriberAdd { .. } => events(&["subscriber", "add", "-"]),
+            Call::EventsSubscriberUpdate { .. } => events(&["subscriber", "update", "-"]),
+            Call::EventsSubscriberRemove { subscriber_id } => {
+                events(&["subscriber", "remove", subscriber_id.as_str()])
+            }
+            Call::EventsSubscriberEnable {
+                subscriber_id,
+                version,
+            } => with(
+                events(&["subscriber", "enable", subscriber_id.as_str()]),
+                [u64::from(*version).to_string()],
+            ),
+            // It approves, and completes the subscription: as long as a rule's approval.
+            Call::EventsSubscriberApprove {
+                approval_id,
+                digest,
+            } => Words {
+                timeout: SETUP_TIMEOUT,
+                ..events(&[
+                    "subscriber",
+                    "approve",
+                    approval_id.as_str(),
+                    "--digest",
+                    digest.as_str(),
+                ])
+            },
             Call::EventsEnableAll {} => events(&["enable-all"]),
             // It approves, and completes switching on: as long as a rule's approval.
             Call::EventsCollectionApprove {
@@ -2087,7 +2431,8 @@ impl Call {
     }
 
     /// The document the call hands the CLI on stdin (0.33.0), compact JSON: a target or a rule the editor wrote, or the
-    /// draft Analyse reads. None for every other call, whose stdin stays closed.
+    /// draft Analyse reads; and since 0.36.0 a workflow to check or try, a project, a subscriber, or what Describe it is
+    /// asked. None for every other call, whose stdin stays closed.
     pub fn input(&self) -> Option<Vec<u8>> {
         match self {
             Call::EventsTargetAdd { document } | Call::EventsTargetUpdate { document } => {
@@ -2099,6 +2444,17 @@ impl Call {
             Call::EventsRuleAnalyse {
                 draft: Some(draft), ..
             } => Some(draft.bytes()),
+            // Workflows (0.36.0): each document rides on stdin, never in argv.
+            Call::EventsRuleCheck { document } | Call::EventsRuleTestFlow { document, .. } => {
+                Some(document.bytes())
+            }
+            Call::EventsProjectAdd { document } | Call::EventsProjectUpdate { document } => {
+                Some(document.bytes())
+            }
+            Call::EventsSubscriberAdd { document } | Call::EventsSubscriberUpdate { document } => {
+                Some(document.bytes())
+            }
+            Call::EventsWorkflowDescribe { request, .. } => Some(request.bytes()),
             _ => None,
         }
     }
@@ -2218,6 +2574,26 @@ impl Call {
             Call::EventsCollectionApprove { .. } | Call::EventsDisableAll {} => {
                 Some(COLLECTION_SWITCH_VERSION)
             }
+            Call::EventsRuleCheck { .. }
+            | Call::EventsRuleShowVersion { .. }
+            | Call::EventsRuleTestFlow { .. }
+            | Call::EventsRunsList { .. }
+            | Call::EventsRunShow { .. }
+            | Call::EventsRunCancel { .. }
+            | Call::EventsProjectsList {}
+            | Call::EventsProjectShow { .. }
+            | Call::EventsProjectAdd { .. }
+            | Call::EventsProjectUpdate { .. }
+            | Call::EventsProjectRemove { .. }
+            | Call::EventsProjectScan { .. }
+            | Call::EventsWorkflowDescribe { .. }
+            | Call::EventsWorkflowEventsList {}
+            | Call::EventsSubscribersList {}
+            | Call::EventsSubscriberAdd { .. }
+            | Call::EventsSubscriberUpdate { .. }
+            | Call::EventsSubscriberRemove { .. }
+            | Call::EventsSubscriberEnable { .. }
+            | Call::EventsSubscriberApprove { .. } => Some(WORKFLOWS_VERSION),
             Call::LabelWord { .. }
             | Call::LabelName { .. }
             | Call::LabelRuleAdd { .. }
@@ -2421,6 +2797,31 @@ pub(crate) fn samples() -> Vec<(Call, serde_json::Value)> {
         json!({ "kind": "eventsEnableAll" }),
         json!({ "kind": "eventsCollectionApprove", "approvalId": ID, "digest": DIGEST }),
         json!({ "kind": "eventsDisableAll" }),
+        json!({ "kind": "eventsRuleCheck", "document": RULE_DOCUMENT.clone() }),
+        json!({ "kind": "eventsRuleShowVersion", "ruleId": "client-asks", "version": 4 }),
+        json!({ "kind": "eventsRuleTestFlow", "document": RULE_DOCUMENT.clone(), "example": "gmail.message.received@1:0", "outcomes": {} }),
+        json!({ "kind": "eventsRuleTestFlow", "document": RULE_DOCUMENT.clone(), "example": "slack.message.posted@1:2", "outcomes": { "route": "chosen", "find": "busy" } }),
+        json!({ "kind": "eventsRunsList" }),
+        json!({ "kind": "eventsRunsList", "ruleId": "client-asks", "state": "waiting" }),
+        json!({ "kind": "eventsRunShow", "runId": RUN }),
+        json!({ "kind": "eventsRunCancel", "runId": RUN, "interrupt": false }),
+        json!({ "kind": "eventsRunCancel", "runId": RUN, "interrupt": true }),
+        json!({ "kind": "eventsProjectsList" }),
+        json!({ "kind": "eventsProjectShow", "projectId": "acme-site" }),
+        json!({ "kind": "eventsProjectAdd", "document": PROJECT_DOCUMENT.clone() }),
+        json!({ "kind": "eventsProjectUpdate", "document": PROJECT_DOCUMENT.clone() }),
+        json!({ "kind": "eventsProjectRemove", "projectId": "acme-site" }),
+        json!({ "kind": "eventsProjectScan", "roots": [] }),
+        json!({ "kind": "eventsProjectScan", "roots": ["/example/home/work", "/example/home/code"] }),
+        json!({ "kind": "eventsWorkflowDescribe", "request": DESCRIBE_REQUEST.clone(), "provider": "claude-cli" }),
+        json!({ "kind": "eventsWorkflowDescribe", "request": DESCRIBE_REQUEST.clone(), "provider": "anthropic" }),
+        json!({ "kind": "eventsWorkflowEventsList" }),
+        json!({ "kind": "eventsSubscribersList" }),
+        json!({ "kind": "eventsSubscriberAdd", "document": SUBSCRIBER_DOCUMENT.clone() }),
+        json!({ "kind": "eventsSubscriberUpdate", "document": SUBSCRIBER_DOCUMENT.clone() }),
+        json!({ "kind": "eventsSubscriberRemove", "subscriberId": "events-dashboard" }),
+        json!({ "kind": "eventsSubscriberEnable", "subscriberId": "events-dashboard", "version": 2 }),
+        json!({ "kind": "eventsSubscriberApprove", "approvalId": ID, "digest": DIGEST }),
         json!({ "kind": "takesList", "since": "30d" }),
         json!({ "kind": "takesRelease", "account": "example/slack", "message": "C0123ABCD/1792886400.000100" }),
         json!({ "kind": "takesGive", "account": "example/gmail", "message": "18c2f0a1b2c3d4e5", "window": SESSION }),
@@ -2598,6 +2999,47 @@ pub(crate) static TARGET_DOCUMENT: LazyLock<serde_json::Value> = LazyLock::new(
 #[cfg(test)]
 pub(crate) const SESSION: &str = "3f9a1c2e7b4d5a60";
 
+/// A well-formed workflow run's id, for the tests: `wfr_` and 26 lowercase letters of Crockford's base 32.
+#[cfg(test)]
+pub(crate) const RUN: &str = "wfr_0123456789abcdefghjkmnpqrs";
+
+/// A project document as the Projects screen makes one, for the tests: made up, nobody's.
+#[cfg(test)]
+pub(crate) static PROJECT_DOCUMENT: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::json!({
+        "projectId": "acme-site",
+        "name": "acme-site",
+        "repo": "github.com/example/acme-site",
+        "profile": "The Acme site: its pages and its booking form.",
+        "hints": { "senderDomains": ["acme.example"], "slackConversations": [], "people": [] },
+        "folders": [{ "folder": "/example/home/work/acme-site", "kind": "checkout", "defaultBranch": "main", "worktreeRoot": null }]
+    })
+});
+
+/// A subscriber document as Events → Subscribers makes one, for the tests: live on this Mac, given one namespace.
+#[cfg(test)]
+pub(crate) static SUBSCRIBER_DOCUMENT: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::json!({
+        "subscriberId": "events-dashboard",
+        "version": 2,
+        "kind": "sse",
+        "authority": { "host": "127.0.0.1", "port": 4801 },
+        "origins": ["http://localhost:3000"],
+        "retentionMs": 86400000,
+        "events": { "namespaces": ["acme"], "patterns": ["*.*.*.failed", "acme.client-asks.*.*"], "content": "none" }
+    })
+});
+
+/// What Describe it is asked, for the tests: words that are made up, an answer, and the draft's text.
+#[cfg(test)]
+pub(crate) static DESCRIBE_REQUEST: LazyLock<serde_json::Value> = LazyLock::new(|| {
+    serde_json::json!({
+        "words": "When a client asks for a change, find their project and open an issue.",
+        "answers": [{ "question": "Which Linear team?", "answer": "CUE" }],
+        "draft": "workflow client-asks"
+    })
+});
+
 /// A well-formed queue item id, for the tests: `qi_` and 26 of Crockford's letters.
 #[cfg(test)]
 pub(crate) const QUEUE_ITEM: &str = "qi_01J9Z8QF0000000000000000AB";
@@ -2655,7 +3097,9 @@ mod tests {
         use Product::*;
         use Shape::*;
         let thirty = Duration::from_secs(30);
+        let sixty = Duration::from_secs(60);
         let ninety = Duration::from_secs(90);
+        let describe = Duration::from_secs(150);
         let rows: Vec<Row> = vec![
             (
                 json!({"kind":"version","product":"core"}),
@@ -3099,6 +3543,210 @@ mod tests {
                 true,
                 thirty,
             ),
+            // Workflows' calls (0.36.0, plan I7): the events launcher, its words, `--json` and the pins.
+            (
+                json!({"kind":"eventsRuleCheck","document":RULE_DOCUMENT.clone()}),
+                EventsDaemon,
+                &["workflow", "check", "-"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsRuleShowVersion","ruleId":"client-asks","version":4}),
+                EventsDaemon,
+                &["workflow", "show", "client-asks", "--version", "4"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsRuleTestFlow","document":RULE_DOCUMENT.clone(),"example":"slack.message.posted@1:2","outcomes":{"route":"chosen","find":"busy"}}),
+                EventsDaemon,
+                &[
+                    "workflow",
+                    "test",
+                    "-",
+                    "slack.message.posted@1:2",
+                    "--outcome",
+                    "find=busy",
+                    "--outcome",
+                    "route=chosen",
+                ],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsRunsList","ruleId":"client-asks","state":"waiting"}),
+                EventsDaemon,
+                &[
+                    "runs",
+                    "list",
+                    "--workflow",
+                    "client-asks",
+                    "--state",
+                    "waiting",
+                ],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsRunShow","runId":RUN}),
+                EventsDaemon,
+                &["runs", "show", RUN],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsRunCancel","runId":RUN,"interrupt":true}),
+                EventsDaemon,
+                &["runs", "cancel", RUN, "--interrupt"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectsList"}),
+                EventsDaemon,
+                &["projects", "list"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectShow","projectId":"acme-site"}),
+                EventsDaemon,
+                &["project", "show", "acme-site"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectAdd","document":PROJECT_DOCUMENT.clone()}),
+                EventsDaemon,
+                &["project", "add", "-"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectUpdate","document":PROJECT_DOCUMENT.clone()}),
+                EventsDaemon,
+                &["project", "update", "-"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectRemove","projectId":"acme-site"}),
+                EventsDaemon,
+                &["project", "remove", "acme-site"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsProjectScan","roots":["/example/home/work","/example/home/code"]}),
+                EventsDaemon,
+                &[
+                    "project",
+                    "scan",
+                    "--root",
+                    "/example/home/work",
+                    "--root",
+                    "/example/home/code",
+                ],
+                Bare,
+                true,
+                true,
+                ninety,
+            ),
+            (
+                json!({"kind":"eventsWorkflowDescribe","request":DESCRIBE_REQUEST.clone(),"provider":"claude-cli"}),
+                EventsDaemon,
+                &["workflow", "describe", "--provider", "claude-cli"],
+                Bare,
+                true,
+                true,
+                describe,
+            ),
+            (
+                json!({"kind":"eventsWorkflowEventsList"}),
+                EventsDaemon,
+                &["workflow-events", "list"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscribersList"}),
+                EventsDaemon,
+                &["subscribers", "list"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscriberAdd","document":SUBSCRIBER_DOCUMENT.clone()}),
+                EventsDaemon,
+                &["subscriber", "add", "-"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscriberUpdate","document":SUBSCRIBER_DOCUMENT.clone()}),
+                EventsDaemon,
+                &["subscriber", "update", "-"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscriberRemove","subscriberId":"events-dashboard"}),
+                EventsDaemon,
+                &["subscriber", "remove", "events-dashboard"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscriberEnable","subscriberId":"events-dashboard","version":2}),
+                EventsDaemon,
+                &["subscriber", "enable", "events-dashboard", "2"],
+                Bare,
+                true,
+                true,
+                thirty,
+            ),
+            (
+                json!({"kind":"eventsSubscriberApprove","approvalId":ID,"digest":DIGEST}),
+                EventsDaemon,
+                &["subscriber", "approve", ID, "--digest", DIGEST],
+                Bare,
+                true,
+                true,
+                sixty,
+            ),
         ];
         for (value, product, expected, shape, pins, quiet, timeout) in rows {
             let words = call(value.clone())
@@ -3138,9 +3786,17 @@ mod tests {
                 let collection_approve = matches!(call, Call::EventsCollectionApprove { .. })
                     && index == 1
                     && words.words[0] == "collection";
+                // `subscriber approve` (0.36.0) is the same press, for a subscription: it answers only the one the app
+                // prepared with `subscriber enable`, for its digest.
+                let subscriber_approve = matches!(call, Call::EventsSubscriberApprove { .. })
+                    && index == 1
+                    && words.words[0] == "subscriber";
                 assert!(
                     !word.starts_with("--approval")
-                        && (word != "approve" || rule_approve || collection_approve)
+                        && (word != "approve"
+                            || rule_approve
+                            || collection_approve
+                            || subscriber_approve)
                         && word != "--yes",
                     "{value} carries {word}"
                 );
@@ -4855,6 +5511,10 @@ mod tests {
         let mut seen = 0;
         for (sample, value) in samples() {
             let kind = value["kind"].as_str().unwrap_or("");
+            // Workflows' documents (0.36.0) ride on stdin too: `workflow_documents_ride_on_stdin` names them.
+            if WORKFLOW_DOCUMENT_KINDS.contains(&kind) {
+                continue;
+            }
             if !editor.contains(&kind) {
                 assert!(sample.input().is_none(), "{value} reads no stdin");
                 continue;
@@ -5475,5 +6135,390 @@ mod tests {
                 (year + 1, 1, 1)
             };
         }
+    }
+
+    /// Workflows' calls whose document rides on stdin (0.36.0): a workflow to check or try, a project, a subscriber, and
+    /// what Describe it is asked.
+    const WORKFLOW_DOCUMENT_KINDS: [&str; 7] = [
+        "eventsRuleCheck",
+        "eventsRuleTestFlow",
+        "eventsProjectAdd",
+        "eventsProjectUpdate",
+        "eventsSubscriberAdd",
+        "eventsSubscriberUpdate",
+        "eventsWorkflowDescribe",
+    ];
+
+    /// Every workflow call's kind (0.36.0, plan I7), as the UI names it.
+    const WORKFLOW_KINDS: [&str; 20] = [
+        "eventsRuleCheck",
+        "eventsRuleShowVersion",
+        "eventsRuleTestFlow",
+        "eventsRunsList",
+        "eventsRunShow",
+        "eventsRunCancel",
+        "eventsProjectsList",
+        "eventsProjectShow",
+        "eventsProjectAdd",
+        "eventsProjectUpdate",
+        "eventsProjectRemove",
+        "eventsProjectScan",
+        "eventsWorkflowDescribe",
+        "eventsWorkflowEventsList",
+        "eventsSubscribersList",
+        "eventsSubscriberAdd",
+        "eventsSubscriberUpdate",
+        "eventsSubscriberRemove",
+        "eventsSubscriberEnable",
+        "eventsSubscriberApprove",
+    ];
+
+    /// Nothing the window sends reaches a workflow call's words unchecked (0.36.0, plan I7): a run id is `wfr_` and 26
+    /// lowercase letters of Crockford's, a project's id has no `/`, a step is lowercase, an outcome a word, a scan's
+    /// roots whole folders, a state and a provider closed words; and no call takes a field it does not name.
+    #[test]
+    fn workflow_calls_refuse_bad_ids() {
+        for run in [
+            json!("wfr_0123456789abcdefghjkmnpqr"),
+            json!("WFR_0123456789abcdefghjkmnpqrs"),
+            json!("wfr_0123456789ABCDEFGHJKMNPQRS"),
+            json!("wfr_0123456789abcdefghijkmnpqr"),
+            json!("run_0123456789abcdefghjkmnpqrs"),
+            json!("wfr_0123456789abcdefghjkmnpqrs --interrupt"),
+            json!("-wfr_0123456789abcdefghjkmnpq"),
+            json!(""),
+            json!(7),
+            json!(null),
+        ] {
+            refused(json!({ "kind": "eventsRunShow", "runId": run }));
+            refused(json!({ "kind": "eventsRunCancel", "runId": run, "interrupt": false }));
+        }
+        refused(json!({ "kind": "eventsRunCancel", "runId": RUN }));
+        refused(json!({ "kind": "eventsRunCancel", "runId": RUN, "interrupt": "yes" }));
+        for project in [
+            "acme/site",
+            "../acme",
+            "Acme",
+            "acme_site",
+            "--json",
+            "-acme",
+            "",
+            "acme site",
+        ] {
+            refused(json!({ "kind": "eventsProjectShow", "projectId": project }));
+            refused(json!({ "kind": "eventsProjectRemove", "projectId": project }));
+            refused(
+                json!({ "kind": "eventsProjectAdd", "document": { "projectId": project, "name": "acme" } }),
+            );
+        }
+        refused(json!({ "kind": "eventsProjectShow", "projectId": "p".repeat(65) }));
+        for (step, outcome) in [
+            ("Run", "busy"),
+            ("2find", "busy"),
+            ("find_1", "busy"),
+            ("find=busy", "busy"),
+            ("find", "Busy"),
+            ("find", "busy2"),
+            ("find", "busy idle"),
+            ("find", "--json"),
+            ("find", ""),
+            ("", "busy"),
+        ] {
+            refused(json!({
+                "kind": "eventsRuleTestFlow",
+                "document": RULE_DOCUMENT.clone(),
+                "example": "gmail.message.received@1:0",
+                "outcomes": { step: outcome }
+            }));
+        }
+        let too_many: serde_json::Map<String, serde_json::Value> = (0..=STEP_OUTCOMES_MAX)
+            .map(|n| (format!("s{n}"), json!("yes")))
+            .collect();
+        refused(json!({
+            "kind": "eventsRuleTestFlow",
+            "document": RULE_DOCUMENT.clone(),
+            "example": "gmail.message.received@1:0",
+            "outcomes": too_many
+        }));
+        for example in [
+            "gmail.message.received",
+            "gmail@1:0",
+            "gmail.message.received@0:0",
+            "gmail.message.received@1:0 --json",
+            "-gmail.message.received@1:0",
+        ] {
+            refused(json!({
+                "kind": "eventsRuleTestFlow",
+                "document": RULE_DOCUMENT.clone(),
+                "example": example,
+                "outcomes": {}
+            }));
+        }
+        refused(
+            json!({ "kind": "eventsRuleTestFlow", "document": RULE_DOCUMENT.clone(), "example": "gmail.message.received@1:0" }),
+        );
+        for state in ["paused", "Running", "all", "", "--json"] {
+            refused(json!({ "kind": "eventsRunsList", "state": state }));
+        }
+        for rule in ["-rule", "rule 1", "rule/1", ""] {
+            refused(json!({ "kind": "eventsRunsList", "ruleId": rule }));
+        }
+        refused(json!({ "kind": "eventsRunsList", "workflow": "client-asks" }));
+        for roots in [
+            json!(["~/work"]),
+            json!(["work"]),
+            json!(["/example/home/work/"]),
+            json!(["/example/home/../work"]),
+            json!(["/"]),
+            json!(["--json"]),
+            json!(["/example/home/work", "/example/home/work"]),
+            json!("/example/home/work"),
+            json!((0..=SCAN_ROOTS_MAX)
+                .map(|n| format!("/example/home/{n}"))
+                .collect::<Vec<_>>()),
+        ] {
+            refused(json!({ "kind": "eventsProjectScan", "roots": roots }));
+        }
+        refused(json!({ "kind": "eventsProjectScan" }));
+        for provider in ["claude", "typesafe", "OpenRouter", "", "--json"] {
+            refused(json!({
+                "kind": "eventsWorkflowDescribe",
+                "request": DESCRIBE_REQUEST.clone(),
+                "provider": provider
+            }));
+        }
+        refused(json!({ "kind": "eventsWorkflowDescribe", "request": DESCRIBE_REQUEST.clone() }));
+        refused(json!({
+            "kind": "eventsWorkflowDescribe",
+            "request": { "words": "x".repeat(4001) },
+            "provider": "claude-cli"
+        }));
+        for subscriber in ["-sub", "sub 1", "sub/1", "", "--json"] {
+            refused(json!({ "kind": "eventsSubscriberRemove", "subscriberId": subscriber }));
+            refused(
+                json!({ "kind": "eventsSubscriberEnable", "subscriberId": subscriber, "version": 1 }),
+            );
+        }
+        for version in [
+            json!(0),
+            json!(-1),
+            json!(1.5),
+            json!("2"),
+            json!(1_000_001),
+        ] {
+            refused(json!({
+                "kind": "eventsSubscriberEnable",
+                "subscriberId": "events-dashboard",
+                "version": version.clone()
+            }));
+            refused(
+                json!({ "kind": "eventsRuleShowVersion", "ruleId": "client-asks", "version": version }),
+            );
+        }
+        refused(json!({ "kind": "eventsRuleShowVersion", "ruleId": "client-asks" }));
+        refused(json!({ "kind": "eventsSubscriberApprove", "approvalId": ID }));
+        refused(
+            json!({ "kind": "eventsSubscriberApprove", "approvalId": ID, "digest": DIGEST.to_uppercase() }),
+        );
+        refused(json!({
+            "kind": "eventsSubscriberApprove",
+            "approvalId": ID,
+            "digest": DIGEST,
+            "challenge": "fake-challenge"
+        }));
+        for kind in ["eventsSubscriberAdd", "eventsSubscriberUpdate"] {
+            refused(
+                json!({ "kind": kind, "document": { "subscriberId": "events-dashboard", "version": 1, "kind": "websocket" } }),
+            );
+            refused(
+                json!({ "kind": kind, "document": SUBSCRIBER_DOCUMENT.clone(), "token": "fake-token" }),
+            );
+            refused(
+                json!({ "kind": kind, "document": SUBSCRIBER_DOCUMENT.clone(), "secret": "fake-secret" }),
+            );
+        }
+        // Each takes exactly its fields: an extra one, an option or an approval beside them is refused.
+        for (_, value) in samples() {
+            let kind = value["kind"].as_str().unwrap_or("");
+            if !WORKFLOW_KINDS.contains(&kind) {
+                continue;
+            }
+            for (field, extra) in [
+                ("args", json!(["--force"])),
+                ("json", json!(false)),
+                ("approval", json!(ID)),
+                ("words", json!(["--all"])),
+            ] {
+                let mut given = value.clone();
+                given[field] = extra;
+                refused(given);
+            }
+        }
+        // A token, a signing secret or a secret URL is never a call's: each is made at the terminal.
+        for kind in [
+            "eventsSubscriberTokenCreate",
+            "eventsSubscriberTokenRotate",
+            "eventsSubscriberSecretCreate",
+            "eventsSubscriberUrlSet",
+            "eventsRuleTestRetained",
+            "eventsRunsCancelAll",
+        ] {
+            refused(json!({ "kind": kind }));
+            refused(json!({ "kind": kind, "subscriberId": "events-dashboard", "version": 1 }));
+        }
+    }
+
+    /// Workflows' documents (0.36.0, plan I7) ride on stdin, as compact JSON, and never in argv: no word of a workflow,
+    /// a project, a subscriber or a description is a word of the command.
+    #[test]
+    fn workflow_documents_ride_on_stdin() {
+        for (value, document) in [
+            (
+                json!({ "kind": "eventsRuleCheck", "document": RULE_DOCUMENT.clone() }),
+                RULE_DOCUMENT.clone(),
+            ),
+            (
+                json!({
+                    "kind": "eventsRuleTestFlow",
+                    "document": RULE_DOCUMENT.clone(),
+                    "example": "gmail.message.received@1:0",
+                    "outcomes": { "find": "busy" }
+                }),
+                RULE_DOCUMENT.clone(),
+            ),
+            (
+                json!({ "kind": "eventsProjectAdd", "document": PROJECT_DOCUMENT.clone() }),
+                PROJECT_DOCUMENT.clone(),
+            ),
+            (
+                json!({ "kind": "eventsProjectUpdate", "document": PROJECT_DOCUMENT.clone() }),
+                PROJECT_DOCUMENT.clone(),
+            ),
+            (
+                json!({ "kind": "eventsSubscriberAdd", "document": SUBSCRIBER_DOCUMENT.clone() }),
+                SUBSCRIBER_DOCUMENT.clone(),
+            ),
+            (
+                json!({ "kind": "eventsSubscriberUpdate", "document": SUBSCRIBER_DOCUMENT.clone() }),
+                SUBSCRIBER_DOCUMENT.clone(),
+            ),
+            (
+                json!({
+                    "kind": "eventsWorkflowDescribe",
+                    "request": DESCRIBE_REQUEST.clone(),
+                    "provider": "openrouter"
+                }),
+                DESCRIBE_REQUEST.clone(),
+            ),
+        ] {
+            let sample = call(value.clone());
+            let input = sample.input().expect("a document on stdin");
+            assert_eq!(
+                serde_json::from_slice::<serde_json::Value>(&input).expect("json"),
+                document,
+                "{value}"
+            );
+            assert!(!input.contains(&b'\n'), "{value}: compact JSON, one line");
+            let words = sample.words().expect("words").words;
+            // `-` reads the document from stdin; Describe it reads its request there with no `-`.
+            assert_eq!(
+                words.iter().any(|word| word == "-"),
+                value["kind"] != "eventsWorkflowDescribe",
+                "{value}"
+            );
+            for word in &words {
+                for marker in [
+                    "invoice",
+                    "acme.example",
+                    "Acme site",
+                    "/example/home/work/acme-site",
+                    "localhost",
+                    "client asks",
+                    "Linear team",
+                ] {
+                    assert!(!word.contains(marker), "{value}: {word} names {marker}");
+                }
+            }
+        }
+        // The rest read no stdin: an id, a closed word or a version is their whole argument.
+        let mut readers = 0;
+        for (sample, value) in samples() {
+            let kind = value["kind"].as_str().unwrap_or("");
+            if !WORKFLOW_KINDS.contains(&kind) {
+                continue;
+            }
+            if sample.input().is_some() {
+                readers += 1;
+                assert!(WORKFLOW_DOCUMENT_KINDS.contains(&kind), "{value}");
+            }
+        }
+        assert_eq!(readers, 9);
+        assert!(call(json!({ "kind": "eventsSubscribersList" }))
+            .input()
+            .is_none());
+    }
+
+    /// No workflow call prepares a change the terminal opens (0.36.0): none is in `prepares_change`. A subscription is
+    /// prepared by the event service and answered by the person's press, as a rule's activation is; a run's cancel, a
+    /// project's or a subscriber's removal is a tightening the app applies itself.
+    #[test]
+    fn no_workflow_call_prepares_a_change() {
+        let mut seen = std::collections::BTreeSet::new();
+        for (sample, value) in samples() {
+            let kind = value["kind"].as_str().unwrap_or("").to_string();
+            if !WORKFLOW_KINDS.contains(&kind.as_str()) {
+                continue;
+            }
+            assert!(!sample.prepares_change(), "{value}");
+            seen.insert(kind);
+        }
+        assert_eq!(
+            seen.len(),
+            WORKFLOW_KINDS.len(),
+            "every workflow kind has a sample"
+        );
+    }
+
+    /// Every workflow call needs the release that ships workflows (0.36.0), a pull request's build of it included.
+    #[test]
+    fn workflow_calls_need_the_release_that_ships_workflows() {
+        for (sample, value) in samples() {
+            let kind = value["kind"].as_str().unwrap_or("");
+            if WORKFLOW_KINDS.contains(&kind) {
+                assert_eq!(sample.needs(), Some(WORKFLOWS_VERSION), "{value}");
+            }
+        }
+        assert_eq!(WORKFLOWS_VERSION, "0.36.0");
+        assert!(!crate::version::at_least("0.35.0", WORKFLOWS_VERSION));
+        assert!(!crate::version::at_least("0.35.9", WORKFLOWS_VERSION));
+        assert!(crate::version::at_least("0.36.0", WORKFLOWS_VERSION));
+        assert!(crate::version::at_least(
+            "0.36.0-feat-0.36-workflows",
+            WORKFLOWS_VERSION
+        ));
+        let states: Vec<&str> = RunState::ALL.iter().map(|state| state.word()).collect();
+        assert_eq!(
+            states,
+            [
+                "held",
+                "running",
+                "waiting",
+                "done",
+                "failed",
+                "cancelled",
+                "expired"
+            ]
+        );
+        for state in RunState::ALL {
+            assert_eq!(
+                serde_json::to_value(state).expect("json"),
+                json!(state.word())
+            );
+        }
+        let actions: Vec<&str> = SecretAction::ALL
+            .iter()
+            .map(|action| action.word())
+            .collect();
+        assert_eq!(actions, ["create", "rotate"]);
     }
 }

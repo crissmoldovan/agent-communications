@@ -39,8 +39,11 @@ export interface SessionTargetDocument {
   readonly targetId: string;
   readonly version: number;
   readonly kind: 'session';
-  /** By the realpath of its working folder, or by the Claude Code session of the window bound to a lane (B5). */
-  readonly find: { readonly folder: string } | { readonly lane: string };
+  /**
+   * By the realpath of its working folder, by the Claude Code session of the window bound to a lane (B5), or — inside a
+   * workflow's flow only — the session the flow chose: the one a find or start step settled with (workflows design W5).
+   */
+  readonly find: { readonly folder: string } | { readonly lane: string } | { readonly flow: true };
   readonly ifNone: (typeof SESSION_IF_NONE)[number];
   readonly provider: SessionProvider;
   readonly mode: SessionMode;
@@ -91,6 +94,10 @@ export function isSessionFolder(value: unknown): value is string {
 function canonicalFind(value: unknown): SessionTargetDocument['find'] {
   if (!isRecord(value) || Object.keys(value).length !== 1)
     return fail('a session target is found by { folder } or by { lane }, one of them');
+  if (Object.hasOwn(value, 'flow')) {
+    if (value.flow !== true) return fail('a session the flow chose is found by { flow: true }');
+    return { flow: true };
+  }
   if (Object.hasOwn(value, 'folder')) {
     if (!isSessionFolder(value.folder))
       return fail("a session target's folder is an absolute path, written without . or .. steps or a trailing /");
@@ -138,6 +145,10 @@ export function canonicalSessionTarget(target: Record<string, unknown>): Session
     return fail(
       "a session found by a lane is the bound window's, and is never started: its ifNone is queue-only, leaving the item in the lane",
     );
+  if ('flow' in find && ifNone === 'start')
+    return fail(
+      "a session the flow chose is found or started by the flow's own steps, never by the target: its ifNone is queue-only",
+    );
   if (target.provider === undefined) return fail('a session target names its provider: claude or codex');
   const provider = oneOf(target.provider, SESSION_PROVIDERS, 'claude', "a session target's provider");
   const mode = oneOf(target.mode, SESSION_MODES, 'manual', "a session target's mode");
@@ -168,7 +179,27 @@ export function canonicalSessionTarget(target: Record<string, unknown>): Session
 export function assertSessionMapping(target: SessionTargetDocument, mapping: JsonValue): void {
   const unmapped = unmappedContextFields(target.context, mapping);
   if (unmapped.length > 0)
-    fail(`the session target ${target.targetId} reads ${unmapped.join(', ')}, which the rule's mapping does not keep`);
+    fail(
+      `the session target ${target.targetId} reads ${unmapped.join(', ')}, which the workflow's mapping does not keep`,
+    );
+}
+
+/**
+ * Refuses a session target whose context names a step's output (`{ step, field }`) in a workflow without a flow: only
+ * a flow has steps whose closed outputs a part can read (workflows design §6.4).
+ */
+export function assertSessionStepParts(target: SessionTargetDocument, inFlow: boolean): void {
+  if (inFlow) return;
+  const part = target.context.find((entry) => 'step' in entry);
+  if (part !== undefined && 'step' in part)
+    fail(
+      `the session target ${target.targetId} gives the step ${part.step}'s ${part.field}, and only a workflow's flow has steps`,
+    );
+}
+
+/** Whether a session target delivers to the session its flow chose (`find: { flow: true }`), valid only in a flow. */
+export function isFlowSessionTarget(target: SessionTargetDocument): boolean {
+  return 'flow' in target.find;
 }
 
 /** The files a session target reads, for the activation check that each is under a folder it may be read from. */

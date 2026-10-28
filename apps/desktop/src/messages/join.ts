@@ -24,6 +24,14 @@
  * only a take names — no event saw it, and no activity line read it — is included too. With taking required for its
  * account (`taking`), a message a rule delivered to a lane, a session or the Queue that nobody took within the
  * account's window counts as not taken, as the event service's sweep counts it (§8).
+ *
+ * **Workflow runs (0.36.0, workflows design §11.2):** each run about the message — read from `runs list`, joined by
+ * event id — is steps of its own, by what each step settled with: Which project? choosing one is `routed`, with its
+ * closed reason; a Linear issue made is `issue-made`; a session found idle or busy, or started, `session-found` and
+ * `session-started`; a worktree made, `worktree-made`; the message given to a session, `given`; the session's turn
+ * ending, `turn-ended`; a closing Linear change, `issue-closed`; each event raised, `event-raised`; and the run's end,
+ * `run-ended`. A run only listed, not shown, says its end alone. Every one is a closed word or the person's own (a
+ * project's name): never what the message says.
  */
 import type {
   ActivityItems,
@@ -31,6 +39,7 @@ import type {
   HistoryLine,
   ItemLine,
   MessageEvent,
+  MessageRun,
   Millis,
   QueueItemView,
   SenderView,
@@ -41,7 +50,7 @@ import type {
   TakingSettingView,
   WindowRef,
 } from './read.ts';
-import { slackParts } from './read.ts';
+import { isShownRun, slackParts } from './read.ts';
 
 /** What happened to a message, one step at a time. */
 export type TouchKind =
@@ -64,7 +73,52 @@ export type TouchKind =
   | 'ended'
   | 'released'
   | 'given'
-  | 'kept';
+  | 'kept'
+  // A workflow run's steps (0.36.0): the project chosen, the issue made, the session found, started or given the
+  // message (`given`, as a person's Give to… is), the worktree made, the turn ended, the issue closed, each event
+  // raised, and the run's end.
+  | 'routed'
+  | 'issue-made'
+  | 'session-found'
+  | 'session-started'
+  | 'worktree-made'
+  | 'turn-ended'
+  | 'issue-closed'
+  | 'event-raised'
+  | 'run-ended';
+
+/** What a workflow run's step says beyond when (0.36.0): each a closed word, an id, or the person's own words. */
+export interface RunStep {
+  runId: string;
+  ruleId: string;
+  ruleVersion: number;
+  /** The step's id, or null for the run's own end. */
+  stepId: string | null;
+  /** The word the step settled with (`chosen`, `busy`, `done`…), or the run's state for its end. */
+  outcome: string | null;
+  /** Which project? only: the project's name, the person's words, and why it was chosen, in the service's closed word. */
+  project?: string | null;
+  reason?: string | null;
+  score?: number | null;
+  /** A Linear issue's identifier, as Linear names it (`ACME-123`). */
+  issue?: string | null;
+  /** A session's provider: `claude` or `codex`. */
+  provider?: string | null;
+  /** A worktree's branch, and its folder: the person's own view, never an event's. */
+  branch?: string | null;
+  folder?: string | null;
+  /** A raised event's name: `<namespace>.<workflow>.<step>.<event>`, closed segments. */
+  eventType?: string | null;
+  /** The run's end code, for its end. */
+  endCode?: string | null;
+  /** The delivery a deliver step made, by its id. */
+  deliveryId?: string | null;
+  /**
+   * Told by a listed run's summary (B6), not by its steps: the card says it, without a time of its own; the story reads
+   * the run in full.
+   */
+  fromSummary?: boolean;
+}
 
 /** What a take's step says beyond who and when (0.35.0). */
 export interface TakeStep {
@@ -90,8 +144,11 @@ export interface Touch {
   window: WindowRef | null;
   /** The window's activity session key, for a window's step. */
   windowKey: string | null;
-  /** Where the step was recorded: core's activity log, the queue's history, or the message's take (0.35.0). */
-  via: 'activity' | 'queue' | 'take';
+  /**
+   * Where the step was recorded: core's activity log, the queue's history, the message's take (0.35.0), or a workflow's
+   * run about it (0.36.0).
+   */
+  via: 'activity' | 'queue' | 'take' | 'run';
   /** The activity operation, for an activity step. */
   operation: string | null;
   /** The draft a reply step concerns. */
@@ -102,6 +159,8 @@ export interface Touch {
   replied: boolean;
   /** For a take's step: what its line says (0.35.0). */
   take?: TakeStep | undefined;
+  /** For a workflow run's step: what it settled with (0.36.0). */
+  run?: RunStep | undefined;
 }
 
 /** The furthest step a message reached (§3.6's order). */
@@ -414,6 +473,131 @@ function takeTouches(record: TakeView | null, index: ActivityIndex | null): Touc
   return touches;
 }
 
+// ── A message's workflow runs (0.36.0) ────────────────────────────────────────────────────────────────────────
+
+const RUN_ENDS: ReadonlySet<string> = new Set(['done', 'failed', 'cancelled', 'expired']);
+
+type Fields = Readonly<Record<string, unknown>>;
+
+const fieldText = (output: Fields | null, key: string): string | null => {
+  const value = output?.[key];
+  return typeof value === 'string' && value !== '' ? value : null;
+};
+
+/** An issue's identifier from a step's output: `{ issue: { identifier } }`. */
+function issueOf(output: Fields | null): string | null {
+  const issue = output?.issue;
+  return typeof issue === 'object' && issue !== null ? fieldText(issue as Fields, 'identifier') : null;
+}
+
+/** Whether a Linear change's output closed its issue: its state a completed or a cancelled one. */
+function closesIssue(output: Fields | null): boolean {
+  const state = output?.state;
+  const type = typeof state === 'object' && state !== null ? (state as Fields).type : state;
+  return type === 'completed' || type === 'canceled' || type === 'cancelled';
+}
+
+/**
+ * Each step of a workflow run about the message, as touches of its own (§11.2), oldest first. A run that is only
+ * listed says its end alone; a shown one says each step it settled and each event it raised.
+ */
+export function runTouches(run: MessageRun): Touch[] {
+  const base = { runId: run.runId, ruleId: run.ruleId, ruleVersion: run.ruleVersion };
+  const touch = (kind: TouchKind, at: Millis, step: Omit<RunStep, 'runId' | 'ruleId' | 'ruleVersion'>): Touch => ({
+    kind,
+    at,
+    actor: 'service',
+    window: null,
+    windowKey: null,
+    via: 'run',
+    operation: null,
+    draftId: null,
+    channel: null,
+    replied: false,
+    run: { ...base, ...step },
+  });
+  const touches: Touch[] = [];
+  if (isShownRun(run)) {
+    const worktree = run.steps.find(
+      (step) => step.kind === 'worktree' && step.state === 'done' && step.outcome === 'made',
+    );
+    for (const step of run.steps) {
+      if (step.state !== 'done' || step.outcome === null) continue;
+      const at = step.settledAt ?? step.startedAt ?? run.startedAt;
+      const output = step.output as Fields | null;
+      const said = { stepId: step.stepId, outcome: step.outcome, deliveryId: step.deliveryId };
+      switch (step.kind) {
+        case 'route':
+          if (step.outcome === 'chosen')
+            touches.push(
+              touch('routed', at, {
+                ...said,
+                project: fieldText(output, 'projectName') ?? fieldText(output, 'project'),
+                reason: fieldText(output, 'reason'),
+                score: typeof output?.score === 'number' && Number.isFinite(output.score) ? output.score : null,
+              }),
+            );
+          break;
+        case 'find-session':
+          if (step.outcome === 'idle' || step.outcome === 'busy')
+            touches.push(touch('session-found', at, { ...said, provider: fieldText(output, 'provider') }));
+          break;
+        case 'start-session':
+          if (step.outcome === 'started')
+            touches.push(
+              touch('session-started', at, {
+                ...said,
+                provider: fieldText(output, 'provider'),
+                folder: fieldText(worktree?.output as Fields | null, 'path'),
+              }),
+            );
+          break;
+        case 'worktree':
+          if (step.outcome === 'made')
+            touches.push(
+              touch('worktree-made', at, {
+                ...said,
+                branch: fieldText(output, 'branch'),
+                folder: fieldText(output, 'path'),
+              }),
+            );
+          break;
+        case 'deliver': {
+          if (step.outcome !== 'done') break;
+          const issue = issueOf(output);
+          if (output !== null && ('changed' in output || 'state' in output)) {
+            if (closesIssue(output)) touches.push(touch('issue-closed', at, { ...said, issue }));
+          } else if (issue !== null) touches.push(touch('issue-made', at, { ...said, issue }));
+          else if (output !== null && 'session' in output)
+            touches.push(touch('given', at, { ...said, provider: fieldText(output, 'provider') }));
+          break;
+        }
+        case 'wait':
+          if (fieldText(output, 'for') === 'turn-end') touches.push(touch('turn-ended', at, said));
+          break;
+        default:
+          break;
+      }
+    }
+    for (const event of run.events)
+      touches.push(touch('event-raised', event.raisedAt, { stepId: null, outcome: null, eventType: event.type }));
+  } else if (run.summary !== undefined) {
+    // A listed run says its story in a few closed words (B6's summary): the project, the issue, the session, the turn.
+    const said = { stepId: null, fromSummary: true } as const;
+    const { project, issue, session, turn } = run.summary;
+    if (project !== null) touches.push(touch('routed', run.startedAt, { ...said, outcome: 'chosen', project }));
+    if (issue !== null) touches.push(touch('issue-made', run.startedAt, { ...said, outcome: 'done', issue }));
+    if (session !== null)
+      touches.push(
+        touch(session === 'started' ? 'session-started' : 'session-found', run.startedAt, { ...said, outcome: null }),
+      );
+    if (turn !== null) touches.push(touch('turn-ended', run.startedAt, { ...said, outcome: turn }));
+  }
+  if (RUN_ENDS.has(run.state))
+    touches.push(touch('run-ended', run.updatedAt, { stepId: null, outcome: run.state, endCode: run.endCode }));
+  return touches.sort((a, b) => a.at - b.at);
+}
+
 /** The lines after which nobody has the message: a hand-back, the person's Take back, a lease or an offer run out. */
 const REOPENING: ReadonlySet<TakeLineKind> = new Set(['handed-back', 'released', 'expired', 'ended']);
 
@@ -653,11 +837,16 @@ function eventMessage(
   index: ActivityIndex,
   aliases: ReadonlyMap<string, string>,
   takes: TakeContext | undefined,
+  runs: readonly MessageRun[] = [],
 ): JoinedMessage {
   const lines = event.sourceId === null ? [] : (index.byItem.get(event.sourceId) ?? []);
   const takeId = takeIdOf(event);
   const record = recordOf(takes, event.channel, event.accountId, takeId);
-  const touches = [...touchesOf(event.sourceId, event.queueItem, index), ...takeTouches(record, index)].sort(byTime);
+  const touches = [
+    ...touchesOf(event.sourceId, event.queueItem, index),
+    ...takeTouches(record, index),
+    ...runs.flatMap(runTouches),
+  ].sort(byTime);
   const lineAlias = lines.find((line) => line.account?.id === event.accountId && line.account.alias !== null)?.account
     ?.alias;
   const accountAlias = event.accountAlias ?? aliases.get(event.accountId) ?? lineAlias ?? record?.account ?? null;
@@ -770,6 +959,8 @@ export interface JoinOptions {
   cutoff?: Millis | null | undefined;
   /** Core's takes and each account's taking settings (0.35.0); none before it. */
   takes?: TakeContext | undefined;
+  /** Each workflow run about a message (0.36.0), by the event it is about: listed, or shown with its steps. */
+  runs?: ReadonlyMap<string, readonly MessageRun[]> | undefined;
 }
 
 /**
@@ -789,7 +980,7 @@ export function join(
   for (const event of events) {
     if (messages.some((each) => each.key === `event:${event.eventId}`)) continue;
     if (event.sourceId !== null) seen.add(event.sourceId);
-    messages.push(eventMessage(event, index, aliases, takes));
+    messages.push(eventMessage(event, index, aliases, takes, options.runs?.get(event.eventId)));
   }
   const cutoff = options.cutoff ?? null;
   for (const [id, lines] of activity) {

@@ -30,9 +30,10 @@ impl Call {
     /// The approval this call answers in the app, and the change it was prepared for: `mcpInstallApproved` answers the
     /// `mcpInstall` of the same app and the same servers in the same order, `updateApproved` the `update` the app
     /// prepared (0.34.0), `eventsRuleApprove` the rule activation `eventsRuleEnable` came back with, for the same digest
-    /// (0.33.0), and `eventsCollectionApprove` the switching on `eventsEnableAll` came back with (0.34.0); and a label
-    /// change with `appApproval` the same change without it (0.34.0, `label`), as a taking change's is (0.35.0,
-    /// `taking`). None for every other call.
+    /// (0.33.0), `eventsCollectionApprove` the switching on `eventsEnableAll` came back with (0.34.0), and
+    /// `eventsSubscriberApprove` the subscription `eventsSubscriberEnable` came back with (0.36.0); and a label change
+    /// with `appApproval` the same change without it (0.34.0, `label`), as a taking change's is (0.35.0, `taking`).
+    /// None for every other call.
     pub fn answers_app_approval(&self) -> Option<(&ApprovalId, Call)> {
         match self {
             Call::McpInstallApproved {
@@ -53,6 +54,9 @@ impl Call {
             // Switching the event service on that Events → Service prepared with `eventsEnableAll`, for this very digest
             // (0.34.0): kept the same way.
             Call::EventsCollectionApprove { approval_id, .. } => Some((approval_id, self.clone())),
+            // A subscription Events → Subscribers prepared with `eventsSubscriberEnable`, for this very digest (0.36.0):
+            // kept the same way.
+            Call::EventsSubscriberApprove { approval_id, .. } => Some((approval_id, self.clone())),
             // An account page's loosenings (0.34.0): each the very change the app prepared, word for word.
             Call::BehaviourAllowApproved {
                 account,
@@ -1379,5 +1383,77 @@ mod tests {
             ok
         )
         .is_err());
+    }
+
+    /// A subscription Events → Subscribers prepared (0.36.0, spec W29): `subscriber enable`'s answer is recorded, with
+    /// its digest, as the one `eventsSubscriberApprove` that may answer it; another digest, one an agent prepared, a
+    /// rule's activation, or the same press twice is refused before anything runs.
+    #[test]
+    fn the_app_approves_only_the_subscription_it_prepared_for_that_digest() {
+        use crate::allowlist::{DIGEST, ID};
+        use std::cell::Cell;
+        let ran = Cell::new(0);
+        let ok = || {
+            ran.set(ran.get() + 1);
+            crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approved": true }),
+            }
+        };
+        let enable = call(
+            json!({ "kind": "eventsSubscriberEnable", "subscriberId": "events-dashboard", "version": 2 }),
+        );
+        let prepared_subscription = || {
+            let prepared = crate::terminal::Prepared::default();
+            prepared.record(
+                &enable,
+                &crate::ipc::CliResult::Ok {
+                    exit: 0,
+                    data: json!({
+                        "approvalId": ID,
+                        "binding": { "digest": DIGEST, "activationKind": "subscription" },
+                        "kind": "subscription",
+                        "status": "pending"
+                    }),
+                },
+            );
+            prepared
+        };
+        let approve = |digest: &str| {
+            call(json!({ "kind": "eventsSubscriberApprove", "approvalId": ID, "digest": digest }))
+        };
+        // Nothing prepared: a subscription an agent prepared is one the app never recorded.
+        assert_eq!(
+            run_app_approval(&crate::terminal::Prepared::default(), &approve(DIGEST), ok)
+                .expect_err("not prepared")
+                .code,
+            "APP_REFUSED"
+        );
+        assert!(run_app_approval(&prepared_subscription(), &approve(&"a".repeat(64)), ok).is_err());
+        // A rule's activation is not a subscription, and a subscription is not a rule's activation.
+        let rule = crate::terminal::Prepared::default();
+        rule.record(
+            &call(json!({ "kind": "eventsRuleEnable", "ruleId": "invoices", "version": 3 })),
+            &crate::ipc::CliResult::Ok {
+                exit: 0,
+                data: json!({ "approvalId": ID, "binding": { "digest": DIGEST } }),
+            },
+        );
+        assert!(run_app_approval(&rule, &approve(DIGEST), ok).is_err());
+        let rule_approve =
+            call(json!({ "kind": "eventsRuleApprove", "approvalId": ID, "digest": DIGEST }));
+        assert!(run_app_approval(&prepared_subscription(), &rule_approve, ok).is_err());
+        assert_eq!(ran.get(), 0);
+        // The one it prepared: it runs once.
+        let prepared = prepared_subscription();
+        assert!(matches!(
+            run_app_approval(&prepared, &approve(DIGEST), ok).expect("it runs"),
+            crate::ipc::CliResult::Ok { exit: 0, .. }
+        ));
+        assert_eq!(ran.get(), 1);
+        assert!(run_app_approval(&prepared, &approve(DIGEST), ok).is_err());
+        assert_eq!(ran.get(), 1, "never twice");
+        // A subscription is never opened in the terminal as a change.
+        assert!(!enable.prepares_change());
     }
 }

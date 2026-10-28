@@ -39,7 +39,7 @@ test('B3 provided CLI/MCP surfaces keep secrets, retained reads, resume, held-de
   const registries = await deriveRegistries({ env: scratchEnv(), packages: ['events-daemon'] });
   const commands = new Set(registries['events-daemon'].commands);
   for (const required of [
-    'rule test-retained',
+    'workflow test-retained',
     'target resume',
     'held decide',
     'target secret create',

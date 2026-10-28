@@ -10,6 +10,8 @@
  * its log; a Dry-run log filter beside the state filters lists what the log holds, from the same `deliveries list`; a
  * dry run whose entry is gone keeps its row, folded under "<n> removed after 24 hours"; and a note, Something reached
  * your agent?, says where a match can reach an agent — the Queue, a session — and that the dry-run log is the person's.
+ *
+ * From 0.36.0 a delivery a workflow run made carries Its run beside its row, which opens that run's page.
  */
 import { Button, Chip, EmptyState, InfoTip, Link, Panel, Row, SegmentedControl, Spinner } from '@cueplusplus/ui';
 import { Bot, ChevronRight, FileText, Inbox, Link2, ListTodo, Radio } from 'lucide-react';
@@ -24,6 +26,7 @@ import {
   deliveryGroup,
   dryRunRemoved,
   nextTry,
+  runOfDelivery,
   stateWords,
   waitingForSession,
 } from '../../events-deliveries.ts';
@@ -38,7 +41,7 @@ import { inWords } from './Watching.tsx';
 /** The tab's words (the approved prototype, row 3), in sentence case. */
 export const DELIVERIES_COPY = {
   intro:
-    'A delivery is one match a rule passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log. Open one to see the message, why it was passed on, and each try.',
+    'A delivery is one match a workflow passed on: to the Queue, an agent session, Linear, a webhook, or the dry-run log. Open one to see the message, why it was passed on, and each try.',
   show: 'Show',
   filters: {
     all: 'All',
@@ -55,19 +58,19 @@ export const DELIVERIES_COPY = {
   removed: 'Removed',
   reach: {
     title: 'Something reached your agent?',
-    intro: "A rule's match goes to one of these. Two are meant for an agent; the dry-run log is meant for you.",
+    intro: "A workflow's match goes to one of these. Two are meant for an agent; the dry-run log is meant for you.",
     forAgent: 'An agent sees it',
     forYou: 'For you',
     queue: 'The Queue',
     queueWhat: 'Items an agent works through, one at a time.',
     queueLink: 'Open the Queue ›',
     session: 'A session',
-    sessionWhat: 'A rule that hands the message to an agent session claude-stream runs on this Mac.',
+    sessionWhat: 'A workflow that hands the message to an agent session claude-stream runs on this Mac.',
     sessionLink: 'Settings → Integrations ›',
     log: 'The dry-run log',
     logWhat:
-      "For trying a rule out. Nothing is sent. An agent with a terminal can read it as you can; its tools can't.",
-    others: 'A rule can also add a Linear issue or call a webhook. Neither reaches an agent here.',
+      "For trying a workflow out. Nothing is sent. An agent with a terminal can read it as you can; its tools can't.",
+    others: 'A workflow can also add a Linear issue or call a webhook. Neither reaches an agent here.',
   },
   empty: 'No deliveries yet.',
   noneHere: 'No deliveries here.',
@@ -76,6 +79,8 @@ export const DELIVERIES_COPY = {
   everyOne: 'The events CLI and MCP list every one.',
   everyOneLabel: 'Where every one is listed',
   untilFree: "passed on when the session's run ends",
+  itsRun: 'Its run',
+  itsRunLabel: 'Open the run that made this delivery',
 } as const;
 
 /** `The <n> most recent of <all>.` */
@@ -185,12 +190,15 @@ function DeliveryLine({
   lists,
   removed = false,
   onOpen,
+  onRun,
 }: {
   row: DeliveryRow;
   lists: EventsLists;
   /** A dry run whose entry has left the log: its row stays, and says so. */
   removed?: boolean;
   onOpen: () => void;
+  /** Opens the run that made it (0.36.0), when one did. */
+  onRun?: ((runId: string) => void) | undefined;
 }) {
   const kind = kindOf(lists, row) ?? '';
   const Icon = ICONS[kind] ?? FileText;
@@ -226,14 +234,32 @@ function DeliveryLine({
     </>
   );
   const layout = 'items-center gap-(--cue-space-4) text-left';
-  return row.openable ? (
-    <Row interactive data-delivery={row.id} onClick={onOpen} className={layout}>
+  const line = row.openable ? (
+    <Row interactive data-delivery={row.id} onClick={onOpen} className={`${layout} min-w-0 flex-1`}>
       {body}
     </Row>
   ) : (
-    <Row data-delivery={row.id} className={layout}>
+    <Row data-delivery={row.id} className={`${layout} min-w-0 flex-1`}>
       {body}
     </Row>
+  );
+  const run = lists.runs === 'off' || lists.runs.state !== 'ready' ? null : runOfDelivery(row, lists.runs.value);
+  if (run === null || onRun === undefined) return line;
+  // Its run sits beside the row, never inside it: the row is a button of its own.
+  return (
+    <div className="flex items-center gap-(--cue-space-2)">
+      {line}
+      <Button
+        size="sm"
+        variant="ghost"
+        data-run-of={row.id}
+        aria-label={DELIVERIES_COPY.itsRunLabel}
+        onClick={() => onRun(run)}
+        className="shrink-0"
+      >
+        {DELIVERIES_COPY.itsRun}
+      </Button>
+    </div>
   );
 }
 
@@ -448,7 +474,13 @@ function DeliveryLines({
       ) : (
         <Panel>
           {shown.map((row) => (
-            <DeliveryLine key={row.id} row={row} lists={lists} onOpen={() => nav.openDelivery(row.id)} />
+            <DeliveryLine
+              key={row.id}
+              row={row}
+              lists={lists}
+              onOpen={() => nav.openDelivery(row.id)}
+              onRun={(run) => nav.openRun(run, 'deliveries')}
+            />
           ))}
           {removed.length === 0 ? null : (
             <>

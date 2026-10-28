@@ -149,6 +149,10 @@ export class AgentSessionService {
     this.#homeFound ??= this.#home();
     return this.#homeFound;
   }
+  /** The person's home folder, found once: where `project scan` looks by default, `~/work` and `~/code` (0.36). */
+  homeFolder(): string {
+    return this.#homeFolder();
+  }
 
   settings(): AgentSessionSettingsV1 {
     const row = this.#store.database

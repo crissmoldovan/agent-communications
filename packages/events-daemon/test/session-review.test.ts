@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { closeSync, constants, openSync, readSync } from 'node:fs';
 import { mkdir, realpath, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { test } from 'node:test';
+import { promisify } from 'node:util';
 import { targetQueues } from '@agentcomms/events';
 import { EventControlClient } from '../src/control/client.ts';
 import { eventPaths } from '../src/runtime/paths.ts';
@@ -12,6 +14,7 @@ import type { ContextGenerator } from '../src/runtime/session-context.ts';
 import { SESSION_RETRY_LIMIT } from '../src/runtime/session-dispatcher.ts';
 import { busyBackoffMs } from '../src/runtime/session-queue.ts';
 import { FakeRelay, type FakeRelayOptions } from './support/fake-relay.ts';
+import { releaseFifoReader } from './support/fifo.ts';
 import {
   ACCOUNT,
   DAY,
@@ -177,6 +180,21 @@ test('REVIEW-5: a rule whose session target finds by a lane shows an unbound win
   });
 });
 
+/** What `work` settles to, or `late` once `ms` pass; its timer is cleared either way, so it never holds the run open. */
+async function within<T>(work: Promise<T>, ms: number): Promise<T | 'late'> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<'late'>((resolve) => {
+        timer = setTimeout(() => resolve('late'), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 test('REVIEW-4: a FIFO swapped in for a file part never stalls the service, and the part is left out', {
   skip: WINDOWS_SKIP,
 }, async () => {
@@ -199,18 +217,62 @@ test('REVIEW-4: a FIFO swapped in for a file part never stalls the service, and 
     await unlink(brief);
     execFileSync('/usr/bin/mkfifo', [brief]);
     harness.mailbox.send('trigger');
-    const ticked = await Promise.race([
-      (async () => {
-        for (let index = 0; index < 5; index += 1) await harness.tick();
-        return 'returned';
-      })(),
-      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 4_000)),
-    ]);
-    if (ticked === 'hung') execFileSync('/bin/sh', ['-c', `printf x > '${brief}'`]);
+    const ticks = (async () => {
+      for (let index = 0; index < 5; index += 1) await harness.tick();
+      return 'returned' as const;
+    })();
+    const ticked = await within(ticks, 4_000);
+    if (ticked === 'late') {
+      // Never a blocking write: with nothing reading the FIFO it would hold this whole process forever. A tick stuck
+      // reading it is let go, so the run ends either way, with what was seen.
+      const stuck = releaseFifoReader(brief);
+      await within(ticks, 30_000);
+      assert.fail(
+        stuck
+          ? 'the owner stalled reading the FIFO: its five ticks did not return within 4 s until the FIFO was written to'
+          : 'the owner’s five ticks took over 4 s and nothing was reading the FIFO: this machine was too busy to tell — rerun the test alone',
+      );
+    }
     assert.equal(ticked, 'returned', 'the owner’s ticks go on');
     await until(harness, () => relay.runs.length === 1, 'the run');
     assert.match(relay.runs[0]?.prompt ?? '', /brief\.md: left out, because it is not a file\./u);
   });
+});
+
+test('REVIEW-4: letting go of a FIFO’s reader never waits, whether something reads it or not', {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const root = await shortTempDir('aev-fifo-');
+  try {
+    const fifo = join(root, 'part.md');
+    execFileSync('/usr/bin/mkfifo', [fifo]);
+    // In a child, bounded: a write that waited for a reader would hold the child, never this test.
+    const { stdout } = await promisify(execFile)(
+      process.execPath,
+      [
+        '--experimental-strip-types',
+        '--disable-warning=ExperimentalWarning',
+        '--input-type=module',
+        '-e',
+        `import { releaseFifoReader } from ${JSON.stringify(new URL('./support/fifo.ts', import.meta.url).href)};
+process.stdout.write(String(releaseFifoReader(process.argv[1])));`,
+        fifo,
+      ],
+      { timeout: 15_000 },
+    );
+    assert.equal(stdout, 'false', 'with nothing reading it, it says so at once');
+    const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK);
+    try {
+      assert.equal(releaseFifoReader(fifo), true, 'with a reader, it writes');
+      const read = Buffer.alloc(4);
+      assert.equal(readSync(reader, read, 0, 4, null), 1);
+      assert.equal(read.subarray(0, 1).toString(), 'x', 'and the reader has its byte');
+    } finally {
+      closeSync(reader);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
 
 test('REVIEW-4: a relay that says `/` confines nothing, so only the folders the person added are roots', {

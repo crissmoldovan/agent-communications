@@ -2694,7 +2694,7 @@
     {
       "id": "events-daemon.rules.list",
       "package": "events-daemon",
-      "cli": "rules list",
+      "cli": "workflows list",
       "mcp": "events_rules_list",
       "status": "both",
       "operation": "rulesList"
@@ -2702,7 +2702,7 @@
     {
       "id": "events-daemon.rule.show",
       "package": "events-daemon",
-      "cli": "rule show",
+      "cli": "workflow show",
       "mcp": "events_rule_show",
       "status": "both",
       "operation": "ruleShow",
@@ -2712,7 +2712,7 @@
     {
       "id": "events-daemon.rule.create",
       "package": "events-daemon",
-      "cli": "rule create",
+      "cli": "workflow create",
       "mcp": "events_rule_create",
       "status": "both",
       "operation": "createRule",
@@ -2722,7 +2722,7 @@
     {
       "id": "events-daemon.rule.update",
       "package": "events-daemon",
-      "cli": "rule update",
+      "cli": "workflow update",
       "mcp": "events_rule_update",
       "status": "both",
       "operation": "updateRule",
@@ -2732,7 +2732,7 @@
     {
       "id": "events-daemon.rule.enable",
       "package": "events-daemon",
-      "cli": "rule enable",
+      "cli": "workflow enable",
       "mcp": "events_rule_enable",
       "status": "both",
       "operation": "enableRule",
@@ -2742,7 +2742,7 @@
     {
       "id": "events-daemon.rule.disable",
       "package": "events-daemon",
-      "cli": "rule disable",
+      "cli": "workflow disable",
       "mcp": "events_rule_disable",
       "status": "both",
       "operation": "disableRule",
@@ -2752,7 +2752,7 @@
     {
       "id": "events-daemon.rule.remove",
       "package": "events-daemon",
-      "cli": "rule remove",
+      "cli": "workflow remove",
       "mcp": "events_rule_remove",
       "status": "both",
       "operation": "removeRule",
@@ -2820,7 +2820,7 @@
     {
       "id": "events-daemon.rule.test",
       "package": "events-daemon",
-      "cli": "rule test",
+      "cli": "workflow test",
       "mcp": "events_rule_test",
       "status": "both",
       "operation": "ruleTest",
@@ -2829,13 +2829,56 @@
       "expect": { "catalogue.type": "gmail.message.received", "catalogue.version": 1, "catalogue.exampleIndex": 0 }
     },
     {
+      "id": "events-daemon.rule.check",
+      "package": "events-daemon",
+      "cli": "workflow check",
+      "mcp": "events_rule_check",
+      "status": "both",
+      "operation": "ruleCheck",
+      "argv": ["{}"],
+      "args": { "document": {} }
+    },
+    {
+      "id": "events-daemon.runs.list",
+      "package": "events-daemon",
+      "cli": "runs list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runsList",
+      "argv": ["--workflow", "client-asks"],
+      "expect": { "options.ruleId": "client-asks" },
+      "reason": "A workflow's runs are the person's view of what each workflow did: its steps and their outcomes, what it waits on, the events it raised and the folders a session worked in, so listing and showing runs is the person's, in the app's Events → Workflows or at their terminal (0.36.0 workflows design §7.6, §10.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.runs.show",
+      "package": "events-daemon",
+      "cli": "runs show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runShow",
+      "argv": ["wfr_0123456789abcdefghjkmnpqrs"],
+      "expect": { "runId": "wfr_0123456789abcdefghjkmnpqrs" },
+      "reason": "A workflow's runs are the person's view of what each workflow did: its steps and their outcomes, what it waits on, the events it raised and the folders a session worked in, so listing and showing runs is the person's, in the app's Events → Workflows or at their terminal (0.36.0 workflows design §7.6, §10.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.runs.cancel",
+      "package": "events-daemon",
+      "cli": "runs cancel",
+      "mcp": null,
+      "status": "exception",
+      "operation": "runCancel",
+      "argv": ["wfr_0123456789abcdefghjkmnpqrs", "--interrupt"],
+      "expect": { "runId": "wfr_0123456789abcdefghjkmnpqrs", "input.interrupt": true },
+      "reason": "Cancelling a run is the person's, in the app or at their terminal: it stops at once what a workflow they approved is doing — its waiting deliveries and undelivered events cancelled, its waits dropped and what it kept purged — and with --interrupt it interrupts the turn it gave a session (0.36.0 workflows design §7.6, §10.1). No tool cancels a run, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
       "id": "events-daemon.rule.test-retained",
       "package": "events-daemon",
-      "cli": "rule test-retained",
+      "cli": "workflow test-retained",
       "mcp": null,
       "status": "exception",
       "operation": "ruleTestRetained",
-      "argv": ["event-1", "--rule", "rule-1", "--version", "1"],
+      "argv": ["event-1", "--workflow", "rule-1", "--version", "1"],
       "expect": { "eventId": "event-1", "ruleId": "rule-1", "ruleVersion": 1 },
       "reason": "Retained sender content may be selected only by a person outside model context."
     },
@@ -3163,6 +3206,84 @@
       "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
     },
     {
+      "id": "events-daemon.subscriber-secret.create",
+      "package": "events-daemon",
+      "cli": "subscriber secret create",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberSecretCreate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-secret.rotate",
+      "package": "events-daemon",
+      "cli": "subscriber secret rotate",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberSecretRotate",
+      "argv": ["subscriber-1", "--version", "1"],
+      "expect": { "subscriberId": "subscriber-1", "version": 1 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber-url.set",
+      "package": "events-daemon",
+      "cli": "subscriber url set",
+      "mcp": null,
+      "status": "exception",
+      "operation": "subscriberUrlSet",
+      "argv": ["subscriber-1", "--version", "2"],
+      "expect": { "subscriberId": "subscriber-1", "version": 2 },
+      "reason": "secret material must never enter model input or output; the person completes this operation at the terminal or app."
+    },
+    {
+      "id": "events-daemon.subscriber.enable",
+      "package": "events-daemon",
+      "cli": "subscriber enable",
+      "mcp": "events_subscriber_enable",
+      "status": "both",
+      "operation": "enableSubscriber",
+      "argv": ["subscriber-1", "1"],
+      "args": { "subscriberId": "subscriber-1", "version": 1 },
+      "expect": { "subscriberId": "subscriber-1", "version": 1 }
+    },
+    {
+      "id": "events-daemon.subscriber.approve",
+      "package": "events-daemon",
+      "cli": "subscriber approve",
+      "mcp": null,
+      "status": "exception",
+      "operation": "approveSubscriberFromApp",
+      "argv": [
+        "ap_00000000000000000000000000",
+        "--digest",
+        "0000000000000000000000000000000000000000000000000000000000000000"
+      ],
+      "expect": { "approvalId": "ap_00000000000000000000000000" },
+      "reason": "A subscriber's events are a standing disclosure the person approves: what it receives, in which namespaces, where it goes and whether it gets what senders wrote, in the Agent Comms app after its preview, as a workflow's activation is (0.36.0 design W29; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+    },
+    {
+      "id": "events-daemon.workflow-events.list",
+      "package": "events-daemon",
+      "cli": "workflow-events list",
+      "mcp": "events_workflow_events_list",
+      "status": "both",
+      "operation": "workflowEventsList"
+    },
+    {
+      "id": "events-daemon.workflow-events.show",
+      "package": "events-daemon",
+      "cli": "workflow-events show",
+      "mcp": "events_workflow_events_show",
+      "status": "both",
+      "operation": "workflowEventsShow",
+      "argv": ["step.wait"],
+      "args": { "schema": "step.wait" },
+      "expect": { "schema": "step.wait" }
+    },
+    {
       "id": "events-daemon.judge-key.set",
       "package": "events-daemon",
       "cli": "judge key set",
@@ -3428,7 +3549,7 @@
     {
       "id": "events-daemon.rule.approve",
       "package": "events-daemon",
-      "cli": "rule approve",
+      "cli": "workflow approve",
       "mcp": null,
       "status": "exception",
       "operation": "approveRuleFromApp",
@@ -3438,7 +3559,7 @@
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
-      "reason": "A rule's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+      "reason": "A workflow's activation is a standing disclosure the person approves: in the Agent Comms app, after its preview, as judge setup's are (0.33.0 design §3.1; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.collection.approve",
@@ -3453,18 +3574,28 @@
         "0000000000000000000000000000000000000000000000000000000000000000"
       ],
       "expect": { "approvalId": "ap_00000000000000000000000000" },
-      "reason": "Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a rule's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
+      "reason": "Switching the event service on is a standing disclosure the person approves: in the Agent Comms app, after the preview of what enable-all prepared, as a workflow's activation is (0.34.0 design B4; events design D2). So it is the person's, from the attested app only: it refuses an agent's shell, the event service's MCP server and, on macOS, a process the app did not start; on Windows and Linux, which attest nothing, it sends the person to their terminal, where they type the challenge with approve, and no tool performs either."
     },
     {
       "id": "events-daemon.rule.analyse",
       "package": "events-daemon",
-      "cli": "rule analyse",
+      "cli": "workflow analyse",
       "mcp": null,
       "status": "exception",
       "operation": "ruleAnalyse",
       "argv": ["parity"],
       "expect": { "ruleId": "parity" },
-      "reason": "Analyse is the person's view of one rule and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
+      "reason": "Analyse is the person's view of one workflow and what it did on this Mac in the last 30 days — its counts, the judge's answers per sending domain — run when they press it, in the app or at an interactive terminal, on the model provider they picked with their own key. No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never reads those counts and never spends the person's key without getting past that speed bump, and only the person applies a suggestion (0.33.0 design §3.3, §3.7)."
+    },
+    {
+      "id": "events-daemon.rule.describe",
+      "package": "events-daemon",
+      "cli": "workflow describe",
+      "mcp": null,
+      "status": "exception",
+      "operation": "workflowDescribe",
+      "expect": { "request.words": "parity" },
+      "reason": "Describe it drafts a workflow from the person's own words, on their own Claude subscription in the process of the terminal they started, or with an OpenRouter or Anthropic key they keep for Analyse, and saves nothing: the draft becomes a version only when the person saves it in the designer, and runs only once they approve it (0.36.0 workflows design §11.4, W21). No tool runs it, and the command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start: an agent never spends the person's subscription or key without getting past that speed bump. An agent writes a workflow itself with workflow create, which the person approves as any other."
     },
     {
       "id": "events-daemon.integration.show",
@@ -3497,7 +3628,71 @@
       "operation": "integrationSet",
       "argv": ["agent-sessions", "--relay-port", "4318"],
       "expect": { "integration": "agent-sessions" },
-      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a rule can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
+      "reason": "Pointing Agent Comms at a relay decides which coding-agent sessions a workflow can prompt, with that relay's control token, so it is the person's, from the attested app or an interactive terminal, as an AI provider's key is, and an agent cannot provide it: the command refuses an agent's shell and the event service's MCP server, sends the person to their terminal on Windows and Linux, which attest nothing, the owner takes it only from the person's origin, and no tool sets it (0.33.0 design §3.5)."
+    },
+    {
+      "id": "events-daemon.projects.list",
+      "package": "events-daemon",
+      "cli": "projects list",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectsList",
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.show",
+      "package": "events-daemon",
+      "cli": "project show",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectShow",
+      "argv": ["acme-site"],
+      "expect": { "projectId": "acme-site" },
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.add",
+      "package": "events-daemon",
+      "cli": "project add",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectAdd",
+      "argv": ["{\"projectId\":\"parity\"}"],
+      "expect": { "document.projectId": "parity" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.update",
+      "package": "events-daemon",
+      "cli": "project update",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectUpdate",
+      "argv": ["{\"projectId\":\"parity\"}"],
+      "expect": { "document.projectId": "parity" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.remove",
+      "package": "events-daemon",
+      "cli": "project remove",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectRemove",
+      "argv": ["acme-site"],
+      "expect": { "projectId": "acme-site" },
+      "reason": "Adding, changing or removing a project is the person's alone, in the app's Events → Projects or at their terminal: its folders are what a workflow may be approved to route to, and its profile and hints choose among a workflow's approved projects at once (0.36.0 workflows design §8.1, W12). No tool changes a project, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes it only from the person's origin."
+    },
+    {
+      "id": "events-daemon.project.scan",
+      "package": "events-daemon",
+      "cli": "project scan",
+      "mcp": null,
+      "status": "exception",
+      "operation": "projectScan",
+      "argv": ["--root", "/example/home/work"],
+      "expect": { "roots": ["/example/home/work"] },
+      "reason": "A project is a GitHub repository, its folders on this Mac, and the profile and hints the person wrote; its folders name the person's clients, so listing, showing and finding projects is the person's, in the app's Events → Projects or at their terminal (0.36.0 workflows design §8.1). No tool reads them, and each command refuses the event service's MCP server, an agent's shell and, on macOS, a process the app did not start; the owner takes them only from the person's origin."
     },
     {
       "id": "events-daemon.session-queue.list",

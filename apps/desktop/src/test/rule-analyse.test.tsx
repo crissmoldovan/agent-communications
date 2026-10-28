@@ -11,7 +11,7 @@ import { renderApp } from './render.tsx';
 import { ANALYSE, editorBridge } from './rule-editor-bridge.ts';
 
 async function editInvoices(): Promise<HTMLElement> {
-  const tab = await screen.findByRole('tab', { name: /^Rules\b/ });
+  const tab = await screen.findByRole('tab', { name: /^Workflows\b/ });
   fireEvent.click(tab);
   const card = await waitFor(() => {
     const found = document.querySelector<HTMLElement>('[data-rule="invoices"]');
@@ -19,7 +19,7 @@ async function editInvoices(): Promise<HTMLElement> {
     return found;
   });
   fireEvent.click(card);
-  const page = await screen.findByRole('region', { name: 'Rule invoices' });
+  const page = await screen.findByRole('region', { name: 'Workflow invoices' });
   fireEvent.click(await within(page).findByRole('button', { name: 'Edit…' }));
   return screen.findByRole('region', { name: 'Edit invoices' });
 }
@@ -32,7 +32,7 @@ describe('Analyse', () => {
     renderApp(service.bridge, { screen: 'events' });
     const editor = await editInvoices();
     expect(service.calls('eventsRuleAnalyse')).toEqual([]);
-    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this rule' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this workflow' }));
     const view = await screen.findByRole('region', { name: 'Analyse invoices' });
     await within(view).findByText('3 suggestions');
     // The rule is the version that runs, unchanged: nothing is sent but its id.
@@ -42,7 +42,7 @@ describe('Analyse', () => {
     );
     // What was sent, in the event service's own words.
     expect(view.querySelector('[data-slot="sent"]')?.textContent).toBe(
-      "The rule's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
+      "The workflow's own text — its question, a session's text and a Linear title as you wrote them, and its condition with each address and domain replaced by <address> or <domain> — and content-free counts of its last 30 days. Never a message or anything from one: no sender, subject, body or address.",
     );
     // Only OpenRouter has a key: there is no other provider to run it on.
     expect(within(view).queryByRole('group', { name: 'Run on' })).toBeNull();
@@ -70,7 +70,7 @@ describe('Analyse', () => {
       'not from.address has domain "bank.example"',
     );
     // A note is only to read: no Apply or Skip.
-    const note = suggestion(view, 'About this rule');
+    const note = suggestion(view, 'About this workflow');
     expect(within(note).queryByRole('group', { name: 'Keep this change' })).toBeNull();
     expect(view.textContent).toContain('3 of 3 will be applied. Nothing changes until you approve the new version.');
   });
@@ -109,7 +109,7 @@ describe('Analyse', () => {
     fireEvent.click(
       within(within(editor).getByRole('group', { name: 'Edit as' })).getByRole('button', { name: 'Text' }),
     );
-    const text = (await within(editor).findByRole('textbox', { name: 'The rule as text' })) as HTMLTextAreaElement;
+    const text = (await within(editor).findByRole('textbox', { name: 'The workflow as text' })) as HTMLTextAreaElement;
     expect(text.value).toContain('not from.address has domain "bank.example"');
     expect(text.value).toContain('at most 50 an hour');
     for (const kind of ['eventsRuleUpdate', 'eventsRuleEnable', 'eventsRuleApprove'] as const)
@@ -149,7 +149,7 @@ describe('Analyse', () => {
     });
     renderApp(service.bridge, { screen: 'events' });
     let editor = await editInvoices();
-    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this rule' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this workflow' }));
     let view = await screen.findByRole('region', { name: 'Analyse invoices' });
     await within(view).findByText('1 suggestion');
     // Both have keys: the person picks where it runs, and it runs again there.
@@ -191,7 +191,7 @@ describe('Analyse', () => {
     });
     renderApp(service.bridge, { screen: 'events' });
     const editor = await editInvoices();
-    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this rule' }));
+    fireEvent.click(within(editor).getByRole('button', { name: 'Analyse this workflow' }));
     const view = await screen.findByRole('region', { name: 'Analyse invoices' });
     await within(view).findByText('2 suggestions');
     expect(view.querySelector('[data-slot="ran-on"]')?.textContent).toContain(

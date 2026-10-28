@@ -134,6 +134,39 @@ export type McpServers = McpServer | McpServer[];
 /** How an agent's messages look in a Slack workspace (`allowlist.rs`, `SlackStyle`): as the app, or as you, tagged. */
 export type SlackStyle = 'app' | 'labelled';
 
+/** A workflow run's state (0.36.0, `allowlist.rs`, `RunState`), as `runs list --state` takes it. Closed. */
+export const RUN_STATES = ['held', 'running', 'waiting', 'done', 'failed', 'cancelled', 'expired'] as const;
+export type RunState = (typeof RUN_STATES)[number];
+
+/**
+ * Who drafts a workflow for Describe it (0.36.0, `rule_editor.rs`, `DescribeProvider`): the person's own Claude on this
+ * Mac, or OpenRouter or Anthropic on the key kept for Analyse. Closed.
+ */
+export const DESCRIBE_PROVIDERS = ['claude-cli', 'openrouter', 'anthropic'] as const;
+export type DescribeProvider = (typeof DESCRIBE_PROVIDERS)[number];
+
+/** An answer to one of Describe it's questions, given back in the next round (0.36.0). */
+export interface DescribeAnswer {
+  question: string;
+  answer: string;
+}
+
+/**
+ * What Describe it is asked (0.36.0, `rule_editor.rs`, `DescribeRequest`), on stdin: the person's words, 1 to 4,000
+ * characters; a message they pasted, as an example; up to five answers; and the current draft sent along, its text or
+ * its document, at most 48 KiB.
+ */
+export interface DescribeRequest {
+  words: string;
+  /** A message the person pasted, at most 4,000 characters: sent inside the untrusted envelope, as an example. */
+  example?: string;
+  answers?: DescribeAnswer[];
+  draft?: string | JsonDocument;
+}
+
+/** Whether a subscriber's terminal-only secret is made for the first time or again (0.36.0, `SecretAction`). */
+export type SecretAction = 'create' | 'rotate';
+
 /** `activity show` (0.29.0): one session's timeline, each filter a closed word or a checked name. */
 export type ActivityShowCall = {
   kind: 'activityShow';
@@ -423,6 +456,31 @@ export type Call =
   | { kind: 'connectionRemove'; connectionId: string; appApproval?: string }
   | { kind: 'connectionMigrate'; client?: McpClient; appApproval?: string }
   | { kind: 'connectionMigrateUndo'; connectionId: string; appApproval?: string }
+  // Workflows (0.36.0, plan 2026-10-27-workflows-0360 I7): check, one version, and a try with chosen outcomes, each
+  // document on stdin. Runs listed, shown and cancelled. Projects, listed, shown, added, changed, removed and found on
+  // this Mac. Describe it, written nowhere. The step event catalogue. Subscribers, added and changed on stdin, removed
+  // at once, and a subscription prepared, then approved by the person's press in the app, only for the one the app
+  // prepared, for that digest. A run is wfr_ and 26 of Crockford's lowercase letters, a project 1 to 64 of [a-z0-9-].
+  | { kind: 'eventsRuleCheck'; document: JsonDocument }
+  | { kind: 'eventsRuleShowVersion'; ruleId: string; version: number }
+  | { kind: 'eventsRuleTestFlow'; document: JsonDocument; example: string; outcomes: Record<string, string> }
+  | { kind: 'eventsRunsList'; ruleId?: string; state?: RunState }
+  | { kind: 'eventsRunShow'; runId: string }
+  | { kind: 'eventsRunCancel'; runId: string; interrupt: boolean }
+  | { kind: 'eventsProjectsList' }
+  | { kind: 'eventsProjectShow'; projectId: string }
+  | { kind: 'eventsProjectAdd'; document: JsonDocument }
+  | { kind: 'eventsProjectUpdate'; document: JsonDocument }
+  | { kind: 'eventsProjectRemove'; projectId: string }
+  | { kind: 'eventsProjectScan'; roots: string[] }
+  | { kind: 'eventsWorkflowDescribe'; request: DescribeRequest; provider: DescribeProvider }
+  | { kind: 'eventsWorkflowEventsList' }
+  | { kind: 'eventsSubscribersList' }
+  | { kind: 'eventsSubscriberAdd'; document: JsonDocument }
+  | { kind: 'eventsSubscriberUpdate'; document: JsonDocument }
+  | { kind: 'eventsSubscriberRemove'; subscriberId: string }
+  | { kind: 'eventsSubscriberEnable'; subscriberId: string; version: number }
+  | { kind: 'eventsSubscriberApprove'; approvalId: string; digest: string }
   // Laya's two calls stay last: E2's frozen static boundary reads the list as ending with its disable.
   | { kind: 'eventsJudgeModelStatus' }
   | { kind: 'eventsJudgeKindDisable' };
@@ -492,7 +550,15 @@ export type TerminalCommand =
       kind: 'atTerminal';
       call: Extract<Call, { kind: 'judgeSetup' | 'providerKeyRemove' | 'integrationSetAgentSessions' }>;
     }
-  | { kind: 'providerKeySet'; provider: KeyProvider };
+  | { kind: 'providerKeySet'; provider: KeyProvider }
+  /**
+   * A subscriber's secrets, made at a terminal only (0.36.0): a live subscriber's token, `subscriber token
+   * create|rotate`, a webhook's signing secret, `subscriber secret create|rotate`, and its secret URL, `subscriber url
+   * set`, each for one subscriber version. The terminal shows or asks for each; the app never has one.
+   */
+  | { kind: 'subscriberToken'; subscriberId: string; version: number; action: SecretAction }
+  | { kind: 'subscriberSecret'; subscriberId: string; version: number; action: SecretAction }
+  | { kind: 'subscriberUrl'; subscriberId: string; version: number };
 
 export type CopyReason = 'noTerminal' | 'noSafeLine';
 
@@ -587,7 +653,10 @@ export interface AppEvents {
   'quit-requested': null;
 }
 
-/** The twenty-three commands, one method each, named in camelCase, and a way to hear the app's events. */
+/** A workflow's kept box positions, by box id (0.36.0, `positions.rs`): a step's id, or the gate's (`gate:keep` …). */
+export type WorkflowPositions = Record<string, { x: number; y: number }>;
+
+/** The twenty-five commands, one method each, named in camelCase, and a way to hear the app's events. */
 export interface Bridge {
   installation(): Promise<Installation>;
   cli(call: Call): Promise<CliResult>;
@@ -630,6 +699,13 @@ export interface Bridge {
   providerKeySet(provider: KeyProvider, key: string): Promise<CliResult>;
   /** Which build this is: a release, or the local test build (0.32.0). */
   appBuild(): Promise<AppBuild>;
+  /**
+   * Where the designer kept a workflow's boxes (0.36.0, workflows design W20): the app's own, in its settings folder,
+   * never part of what is approved and never sent to the event service. None kept is `{}`.
+   */
+  workflowPositions(ruleId: string): Promise<WorkflowPositions>;
+  /** Keeps where a workflow's boxes are; `{}` forgets them. A box's place changes no workflow's bytes. */
+  setWorkflowPositions(ruleId: string, positions: WorkflowPositions): Promise<void>;
   /** Calls `handler` with each `event`'s payload until the returned function is called. */
   on<E extends keyof AppEvents>(event: E, handler: (payload: AppEvents[E]) => void): Promise<() => void>;
 }
@@ -660,6 +736,8 @@ export const tauriBridge: Bridge = {
   answerQuit: (keep, remember) => invoke('answer_quit', { keep, remember }),
   providerKeySet: (provider, key) => invoke('provider_key_set', { provider, key }),
   appBuild: () => invoke('app_build'),
+  workflowPositions: (ruleId) => invoke('workflow_positions', { ruleId }),
+  setWorkflowPositions: (ruleId, positions) => invoke('set_workflow_positions', { ruleId, positions }),
   on: (event, handler) => listen(event, (message) => handler(message.payload as never)),
 };
 

@@ -215,16 +215,25 @@ export function slotOrigin(
   return undefined;
 }
 
-/** At activation: every slot of a Linear target names one of the rule's mapped fields, or the rule is refused. */
-export function assertLinearSlotsMapped(target: LinearTargetDocument, mapping: CompiledMapping): void {
+/**
+ * At activation: every slot of a Linear target names one of the rule's mapped fields, or the rule is refused. In a
+ * workflow's flow a slot may instead name the run's own values (`isClosed`), which the flow's checks hold.
+ */
+export function assertLinearSlotsMapped(
+  target: Pick<LinearTargetDocument, 'targetId'> & Partial<Pick<LinearTargetDocument, 'title' | 'description'>>,
+  mapping: CompiledMapping,
+  isClosed?: (slot: string) => boolean,
+): void {
   const fields = mappedFields(mapping);
   for (const part of ['title', 'description'] as const) {
-    for (const slot of linearTemplateSlots(target[part])) {
-      if (slotOrigin(fields, slot) !== undefined) continue;
+    const template = target[part];
+    if (template === undefined) continue;
+    for (const slot of linearTemplateSlots(template)) {
+      if (slotOrigin(fields, slot) !== undefined || isClosed?.(slot) === true) continue;
       const known = [...fields.keys()];
       fail(
-        `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the rule does not keep; ${
-          known.length === 0 ? 'the rule keeps no field' : `it keeps ${known.join(', ')}`
+        `Linear target ${target.targetId}'s ${part} names {{${slot}}}, which the workflow does not keep; ${
+          known.length === 0 ? 'the workflow keeps no field' : `it keeps ${known.join(', ')}`
         }`,
         'TEMPLATE_FIELD_NOT_MAPPED',
       );
@@ -255,13 +264,18 @@ export function escapeMarkdown(text: string): string {
   return text.replace(/[\\`*_{}[\]()#+\-.!|<>~:@&=]/gu, '\\$&');
 }
 
-/** Who wrote a slot's value: the message's sender, or the rule's mapping, as a constant. */
-export type SlotAuthor = 'sender' | 'rule';
+/**
+ * Who wrote a slot's value: the message's sender; the workflow's mapping, as a constant; Agent Comms, for a workflow
+ * run's own closed values (a step's output, the run's id); or an agent, for a session's summary (workflows §6.7).
+ */
+export type SlotAuthor = 'sender' | 'rule' | 'agent-comms' | 'agent';
 
 /** Each block's label, as the issue says it. */
 const BLOCK_LABELS: Readonly<Record<SlotAuthor, string>> = Object.freeze({
   sender: 'From outside: written by the sender, not checked',
-  rule: "From the rule's mapping: a fixed value, shown as text",
+  rule: "From the workflow's mapping: a fixed value, shown as text",
+  'agent-comms': "From Agent Comms: this workflow run's own value",
+  agent: 'Written by an agent, not checked',
 });
 
 /**
@@ -312,8 +326,15 @@ export function renderLinearIssue(input: {
   readonly deliveryId: string;
   readonly data: JsonValue;
   readonly fields: ReadonlyMap<string, MappedFieldOrigin>;
+  /**
+   * In a workflow's flow, a slot that names the run's own values (`{{steps.route.project}}`, `{{run}}`): its text, from
+   * the one slot resolver, shown as Agent Comms' own; undefined for every other slot (workflows §4.1).
+   */
+  readonly closed?: ((slot: string) => string | undefined) | undefined;
 }): RenderedLinearIssue {
   const lookup = (name: string): { readonly text: string; readonly author: SlotAuthor } => {
+    const closed = input.closed?.(name);
+    if (closed !== undefined) return { text: closed, author: 'agent-comms' };
     const found = getPointer(input.data, slotPointer(name));
     return {
       text: valueText(found.found ? found.value : undefined),
@@ -324,12 +345,12 @@ export function renderLinearIssue(input: {
   const filledTitle = input.target.title.text.replace(SLOT, (_slot, name: string) => titleText(lookup(name).text));
   let title = titleText(filledTitle).trim();
   if (title.length > LINEAR_TITLE_MAX) title = `${title.slice(0, LINEAR_TITLE_MAX - 1).trimEnd()}…`;
-  if (title.length === 0) title = `Agent Comms: rule ${input.ruleId}`.slice(0, LINEAR_TITLE_MAX);
+  if (title.length === 0) title = `Agent Comms: workflow ${input.ruleId}`.slice(0, LINEAR_TITLE_MAX);
   const body = input.target.description.text.replace(SLOT, (_slot, name: string) => {
     const { text, author } = lookup(name);
     return `\n\n${outsideBlock(name, text, author)}\n\n`;
   });
-  const footer = `_Added by Agent Comms: rule ${escapeMarkdown(input.ruleId)}, version ${input.ruleVersion}; delivery ${escapeMarkdown(input.deliveryId)}._`;
+  const footer = `_Added by Agent Comms: workflow ${escapeMarkdown(input.ruleId)}, version ${input.ruleVersion}; delivery ${escapeMarkdown(input.deliveryId)}._`;
   const description = `${body.replace(/\n{3,}/gu, '\n\n').trim()}${body.trim().length === 0 ? '' : '\n\n'}${footer}`;
   return { title, description };
 }

@@ -49,8 +49,11 @@ export const TARGETS = [
  * lack, which come from inside the bundler's native binary. Matched by their exact shape, nothing looser.
  */
 const BUNDLER_MODULES = [/^\0rolldown\/runtime\.js$/, /^\0@oxc-project\+runtime@[\w.-]+\/helpers\/(?:esm\/)?\w+\.js$/];
-/** Vite's module-preload polyfill, which Vite copies into the bundle: its code, so its notice. */
-const VITE_POLYFILL = '\0vite/modulepreload-polyfill.js';
+/**
+ * Vite's own code that it copies into the bundle, so Vite's notice: its module-preload polyfill, and the helper that
+ * loads a lazy chunk with its stylesheet (0.36.0: the workflow designer is one).
+ */
+const VITE_MODULES = new Set(['\0vite/modulepreload-polyfill.js', '\0vite/preload-helper.js']);
 
 /** A licence, notice or copyright file a crate ships. `LICENSES/` folders are read file by file. */
 const CRATE_LICENCE_FILE = /^(?:licen[cs]e|copying|notice|copyright|unlicense)(?:[-._][\w.-]*)?$/i;
@@ -189,7 +192,7 @@ export function packagesOf(ids, problems, { app = APP, root = ROOT, vite = () =>
   };
   for (const id of ids) {
     if (BUNDLER_MODULES.some((pattern) => pattern.test(id))) continue;
-    if (id === VITE_POLYFILL) {
+    if (VITE_MODULES.has(id)) {
       add(vite());
       continue;
     }
@@ -197,6 +200,16 @@ export function packagesOf(ids, problems, { app = APP, root = ROOT, vite = () =>
     const owner = file === null ? { kind: 'unknown' } : ownerOf(file, { root, self: '' });
     if (owner.kind === 'third-party') {
       add(owner.directory);
+      continue;
+    }
+    // Data a package vendors under its own licence — the Unicode tables `@agentcomms/events` checks domains with,
+    // which the designer's flow check imports (0.36.0) — is its vendor's, named by the directory's `NOTICE.json`.
+    if (owner.kind === 'vendored') {
+      const notice = vendoredNotice(owner.directory, problems);
+      if (notice !== null) {
+        const key = `${notice.name}@${notice.version}`;
+        if (!found.has(key)) found.set(key, { directory: owner.directory, manifest: notice });
+      }
       continue;
     }
     if (file !== null && comparable(file).startsWith(own) && !comparable(file).includes('/node_modules/')) continue;
@@ -209,6 +222,28 @@ export function packagesOf(ids, problems, { app = APP, root = ROOT, vite = () =>
     );
   }
   return found;
+}
+
+/**
+ * A vendor directory's `NOTICE.json` (`{ name, version, license, homepage? }`), as the repository's own notices read
+ * it; null, with a problem pushed, when it cannot be read or names no licence.
+ */
+function vendoredNotice(directory, problems) {
+  const shown = directory.replaceAll('\\', '/');
+  try {
+    const notice = JSON.parse(readFileSync(join(directory, 'NOTICE.json'), 'utf8'));
+    for (const field of ['name', 'version', 'license'])
+      if (typeof notice?.[field] !== 'string' || notice[field] === '') {
+        problems.push(`${shown}/NOTICE.json names no ${field}`);
+        return null;
+      }
+    return notice;
+  } catch (error) {
+    problems.push(
+      `${shown}: the app's bundle includes data vendored from here, and its NOTICE.json cannot be read (${error?.code ?? error?.message ?? error}), so there is no licence to name for it`,
+    );
+    return null;
+  }
 }
 
 /**

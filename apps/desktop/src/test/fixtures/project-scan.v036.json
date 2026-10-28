@@ -1,0 +1,26 @@
+{
+  "roots": ["/example/home/work", "/example/home/code"],
+  "repos": [
+    {
+      "repo": "github.com/example/acme-site",
+      "known": "acme-site",
+      "folders": [{ "folder": "/example/home/work/acme-site", "kind": "checkout", "defaultBranch": "main" }]
+    },
+    {
+      "repo": "github.com/example/billing-tool",
+      "known": null,
+      "folders": [
+        { "folder": "/example/home/code/billing-tool", "kind": "checkout", "defaultBranch": "main" },
+        {
+          "folder": "/example/home/code/billing-tool/.claude/worktrees/fix-1",
+          "kind": "worktree",
+          "defaultBranch": null
+        }
+      ]
+    }
+  ],
+  "skipped": [
+    { "folder": "/example/home/work/linked", "reason": "symlink" },
+    { "folder": "/example/home/work/.cache", "reason": "hidden" }
+  ]
+}

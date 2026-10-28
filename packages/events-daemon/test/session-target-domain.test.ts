@@ -104,7 +104,7 @@ test('SESSION-D3: a rule maps every field its session target reads, or is refuse
   });
   assert.throws(
     () => canonicalFullRuleDocument(rule([reads])),
-    /the session target acme reads \/body, which the rule's mapping does not keep/u,
+    /the session target acme reads \/body, which the workflow's mapping does not keep/u,
   );
   const mapped = canonicalFullRuleDocument(
     rule([reads], { mapping: { from: { $path: '/from' }, subject: { $path: '/subject' }, body: { $path: '/body' } } }),
@@ -115,7 +115,7 @@ test('SESSION-D3: a rule maps every field its session target reads, or is refuse
 test('SESSION-D4: a session target that can leave an item in the Queue gives its rule a queue retention', () => {
   assert.throws(
     () => canonicalFullRuleDocument(rule([session({ ifBusy: 'queue-only' })])),
-    /a rule with a queue target sets retention.queueMs/u,
+    /a workflow with a queue target sets retention.queueMs/u,
   );
   const queued = canonicalFullRuleDocument(
     rule([session({ ifBusy: 'queue-only' })], { retention: { ...RETENTION, queueMs: 7 * DAY } }),
@@ -135,7 +135,7 @@ test('SESSION-D4: a session target that can leave an item in the Queue gives its
           retention: { ...RETENTION, queueMs: 7 * DAY },
         }),
       ),
-    /needs the rule's mapping to include from.address/u,
+    /needs the workflow's mapping to include from.address/u,
   );
 });
 
@@ -158,7 +158,7 @@ test('SESSION-D5: one target carries a lane, a session target and a queue target
           { retention: { ...RETENTION, queueMs: 7 * DAY } },
         ),
       ),
-    /lane david is carried by two targets of this rule/u,
+    /lane david is carried by two targets of this workflow/u,
   );
 });
 
@@ -185,5 +185,16 @@ test('REVIEW: the approval preview says claude-stream keeps each prompt in its o
       .includes(
         "Session acme@1: claude-stream keeps each prompt it is sent, the sender's words included, in its own journal, for as long as claude-stream keeps its journal; Agent Comms' retention does not reach it.",
       ),
+  );
+});
+
+test('SESSION-D6: a step output part is a session target’s, but no workflow without a flow may give it (0.36 §6.4)', () => {
+  const stepPart = session({ context: [{ step: 'issue', field: 'identifier' }] });
+  assert.deepEqual((canonicalTarget(stepPart) as { context: unknown }).context, [
+    { step: 'issue', field: 'identifier' },
+  ]);
+  assert.throws(
+    () => canonicalFullRuleDocument(rule([stepPart])),
+    /gives the step issue's identifier, and only a workflow's flow has steps/u,
   );
 });

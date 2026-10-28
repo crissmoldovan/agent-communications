@@ -99,7 +99,7 @@ CATALOGUE.length; // 7
 ### Conditions
 
 Canonicalise a condition against the selected definition before persisting it. The omitted case-sensitivity flag
-becomes explicit `false`, so canonical JSON and rule digests are stable.
+becomes explicit `false`, so canonical JSON and workflow digests are stable.
 
 ```ts
 import { CATALOGUE, canonicaliseCondition, evaluateCondition } from '@agentcomms/events';
@@ -159,21 +159,22 @@ cloudEventBytes(envelope);
 `TEST_CLOUD_EVENT`, `TEST_CLOUD_EVENT_BYTES` and `JUDGE_TEST_INPUT` are fixed test-only contract values, not source
 events and not caller-configurable templates.
 
-### Rule text
+### Workflow text
 
-`printRuleText` writes a rule document as a short text a person can read and edit, and `parseRuleText` reads it back
-to exactly the same document. Printing the same document always gives the same text. Anything the readable form has
-no words for is written as `raw` JSON in its place, so nothing is dropped. The parser checks the text only: the event
-service still checks the rule when the document is submitted, and the canonical JSON is still what is approved. The
-grammar is in [src/rule-text/GRAMMAR.md](src/rule-text/GRAMMAR.md). From 0.33.0 a target may be a Linear issue:
-`linear issue billing-issues, version 1, in team CUE, label Billing, assigned to me`, with its ids, title and
-description on the lines below.
+`printRuleText` writes a workflow (its document, a rule document in the code's names) as a short text a person can
+read and edit, and `parseRuleText` reads it back to exactly the same document. Printing the same document always gives
+the same text. Anything the readable form has no words for is written as `raw` JSON in its place, so nothing is
+dropped. The parser checks the text only: the event service still checks the workflow when the document is submitted,
+and the canonical JSON is still what is approved. The grammar is in
+[src/rule-text/GRAMMAR.md](src/rule-text/GRAMMAR.md); from 0.36.0 the printer starts a document with `workflow`, and
+the parser still reads the older `rule`. From 0.33.0 a target may be a Linear issue: `linear issue billing-issues,
+version 1, in team CUE, label Billing, assigned to me`, with its ids, title and description on the lines below.
 
 ```ts
 import { parseRuleText, printRuleText } from '@agentcomms/events';
 
 const text = printRuleText(ruleDocument);
-// rule invoices, version 4
+// workflow invoices, version 4
 //
 // when a new message arrives in cue/gmail, in the inbox
 // match any

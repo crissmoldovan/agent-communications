@@ -10,6 +10,8 @@ import type { Page } from '@playwright/test';
  * the state it asks for — and `cliResults` maps a kind to a whole `CliResult`, for a failure or a pending approval.
  * Core's taking reads (0.35.0), which the shared reads make once core takes messages, answer as a machine where no
  * account requires a take, unless the scenario says otherwise: `taking` with no accounts, and `takesList` with no takes.
+ * `cliAfter` maps a call's kind to answers that hold once the app has made that call — `cli`'s shape, by kind — so a
+ * list can name what the app just made: `{ eventsRuleApprove: { eventsRules: [...] } }`.
  */
 export async function installMockIpc(page: Page, scenario: Record<string, unknown>): Promise<void> {
   await page.route('**/*', (route) => {
@@ -28,6 +30,15 @@ export async function installMockIpc(page: Page, scenario: Record<string, unknow
       ...((given.cli ?? {}) as Record<string, unknown>),
     } as Record<string, unknown>;
     const cliResults = (given.cliResults ?? {}) as Record<string, unknown>;
+    const cliAfter = (given.cliAfter ?? {}) as Record<string, Record<string, unknown>>;
+    const made = new Set<string>();
+    /** What `kind` answers now: what a call already made holds for it (the later in `cliAfter` wins), else `cli`'s. */
+    const answerOf = (kind: string): { found: boolean; value: unknown } => {
+      let found: { found: boolean; value: unknown } = { found: kind in cli, value: cli[kind] };
+      for (const [after, answers] of Object.entries(cliAfter))
+        if (made.has(after) && kind in answers) found = { found: true, value: answers[kind] };
+      return found;
+    };
     const scoped = (value: unknown, product: unknown) =>
       typeof value === 'object' &&
       value !== null &&
@@ -58,10 +69,12 @@ export async function installMockIpc(page: Page, scenario: Record<string, unknow
         if (cmd === 'plugin:event|unlisten') return null;
         if (cmd === 'cli') {
           const call = args.call as { kind: string; product?: string; state?: string };
+          const answer = answerOf(call.kind);
+          made.add(call.kind);
           if (call.kind in cliResults) return cliResults[call.kind];
           if (call.kind === 'version') return { status: 'version', version: '0.24.0' };
-          if (call.kind in cli) {
-            return { status: 'ok', exit: 0, data: scoped(cli[call.kind], call.product ?? call.state) };
+          if (answer.found) {
+            return { status: 'ok', exit: 0, data: scoped(answer.value, call.product ?? call.state) };
           }
           return {
             status: 'failed',

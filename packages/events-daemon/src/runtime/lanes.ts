@@ -21,7 +21,7 @@ import type { QueueChannel } from '../domain/queue-target.ts';
 import type { EventDatabase } from '../store/database.ts';
 import type { LaneWakeMark, QueueItemV1, QueueScope, QueueStore } from './queue.ts';
 import { recordQueueHistory } from './queue-history.ts';
-import type { RuleShowEntryV1 } from './rule-show.ts';
+import { type RuleShowEntryV1, withRouteFoldersHidden } from './rule-show.ts';
 import type { LaneOfferPort } from './take-offers.ts';
 
 /**
@@ -396,8 +396,8 @@ export class LaneService {
     const lane = requireLaneName(laneValue);
     requireLaneWindowId(windowId);
     if (!this.#carried().has(lane))
-      throw new CommsError('NOT_FOUND', `no active rule's queue target carries lane ${lane}`, {
-        hint: 'A lane is a queue target with lane: { name }, sent to by a rule you approve.',
+      throw new CommsError('NOT_FOUND', `no active workflow's queue target carries lane ${lane}`, {
+        hint: 'A lane is a queue target with lane: { name }, sent to by a workflow you approve.',
       });
     const window = this.#reportedWindow(windowId as string);
     if (window === undefined)
@@ -471,7 +471,7 @@ export class LaneService {
     } else if (binding === undefined && !this.#carried().has(lane)) {
       throw new CommsError(
         'NOT_FOUND',
-        `no active rule's queue target carries lane ${lane}, and nothing is bound to it`,
+        `no active workflow's queue target carries lane ${lane}, and nothing is bound to it`,
       );
     }
     if (binding !== undefined) {
@@ -542,12 +542,14 @@ export class LaneService {
 
   /**
    * `rule show` for an agent window (review of 0.32.0, finding 8): a version's `counts7d` says how much reached its
-   * lane, so a version with a lane target other than the window's own is shown without it. Everything else — the
-   * document, its times and its summary — is the window's to read, as before.
+   * lane, so a version with a lane target other than the window's own is shown without it. A route step's candidates
+   * keep their ids and names, and their folders and worktree roots are hidden (security review of 0.36.0, M3).
+   * Everything else — the rest of the document, its times and its summary — is the window's to read, as before.
    */
   ruleVersionsForWindow(entries: readonly RuleShowEntryV1[], caller: LaneWindowIdentity): readonly unknown[] {
     const mine = this.#bindingFor(caller)?.lane ?? null;
-    return entries.map((entry) => {
+    return entries.map((stored) => {
+      const entry = { ...stored, document: withRouteFoldersHidden(stored.document) };
       const targets = (entry.document as { readonly targets?: unknown }).targets;
       const foreign =
         Array.isArray(targets) &&

@@ -78,8 +78,15 @@ test('QUEUE-A: v24 rebuilds deliveries to admit the queue kind, keeping every ro
       String(EVENT_MIGRATIONS.at(-1)?.version),
     );
     assert.equal(EVENT_MIGRATIONS.find((migration) => migration.name === 'event-action-queue-v1')?.version, 24);
-    // Migration 31 (0.33.0, the Linear target) rebuilds the table again and appends a Linear delivery's issue columns.
-    const LINEAR_COLUMNS = { linear_issue_id: null, linear_identifier: null, linear_url: null };
+    // Migration 31 (0.33.0, the Linear target) rebuilds the table again and appends a Linear delivery's issue columns,
+    // and migration 34 (0.36.0, workflows) once more, appending a flow delivery's run and step.
+    const LINEAR_COLUMNS = {
+      linear_issue_id: null,
+      linear_identifier: null,
+      linear_url: null,
+      run_id: null,
+      step_id: null,
+    };
     assert.deepEqual(
       columns(database, 'deliveries'),
       [...beforeColumns, ...Object.keys(LINEAR_COLUMNS)],

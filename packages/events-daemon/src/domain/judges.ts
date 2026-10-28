@@ -339,7 +339,7 @@ export function assertLayaRuleJudgeOffered(inputs: LayaEnablementInputs = {}): v
     if (error instanceof EventDomainError)
       throw new EventDomainError(
         error.code,
-        `this rule's Laya judge cannot evaluate here: Laya is not offered (${error.code})`,
+        `this workflow's Laya judge cannot evaluate here: Laya is not offered (${error.code})`,
       );
     throw error;
   }

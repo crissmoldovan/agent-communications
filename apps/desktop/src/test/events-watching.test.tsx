@@ -30,7 +30,7 @@ const DIGEST = '0f'.repeat(32);
 const WATCH = 'Watching your accounts';
 const ASK = 'Switch on watching? Approve it';
 const SAID =
-  "Switched off: the event service is still running but no longer watches your accounts, so no rule does anything. Your rules are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
+  "Switched off: the event service is still running but no longer watches your accounts, so no workflow does anything. Your workflows are kept. Cleared: deliveries not yet sent and what failed ones kept, the Queue's items, the dry-run log and approvals not yet given; each lane's window is unbound. Switching on again needs your approval.";
 
 /** `enable-all --json`: the approval, and the digest its preview binds. */
 const PREPARED = {
@@ -137,7 +137,7 @@ describe('Events → Service: whether the event service watches your accounts', 
       renderApp(bridge, { screen: 'events' });
       const section = await shown('Switched off');
       expect(section.textContent).toContain(
-        "The event service is running, but it isn't watching your accounts, so no rule does anything.",
+        "The event service is running, but it isn't watching your accounts, so no workflow does anything.",
       );
       // Neither Pause nor Resume does anything here, so neither is offered.
       expect(within(section).queryByRole('button', { name: 'Pause' })).toBeNull();
@@ -150,7 +150,7 @@ describe('Events → Service: whether the event service watches your accounts', 
       expect(cliKinds(bridge)).not.toContain('eventsCollectionApprove');
       await waitFor(() =>
         expect(ask.textContent).toContain(
-          'Switching on lets your rules watch in_01EXAMPLE0000000000000099 and example/slack for new messages.',
+          'Switching on lets your workflows watch in_01EXAMPLE0000000000000099 and example/slack for new messages.',
         ),
       );
       const lines = [...ask.querySelectorAll('[data-rule-start]')].map((line) => line.textContent);
@@ -161,7 +161,7 @@ describe('Events → Service: whether the event service watches your accounts', 
       fireEvent.click(within(ask).getByRole('button', { name: 'Approve' }));
       expect(
         await within(section).findByText(
-          'Approved. Your rules are watching in_01EXAMPLE0000000000000099 and example/slack.',
+          'Approved. Your workflows are watching in_01EXAMPLE0000000000000099 and example/slack.',
         ),
       ).toBeTruthy();
       expect(calls(bridge).filter((call) => call.kind === 'eventsCollectionApprove')).toEqual([
@@ -170,7 +170,7 @@ describe('Events → Service: whether the event service watches your accounts', 
       // The status is read again: on, watching the accounts its rules name, with Pause and Switch off.
       await shown('On');
       expect(section.textContent).toContain(
-        'Watching example/gmail, example/slack and in_01EXAMPLE0000000000000099. 4 rules active.',
+        'Watching example/gmail, example/slack and in_01EXAMPLE0000000000000099. 4 workflows active.',
       );
       expect(within(section).getByRole('button', { name: 'Pause' })).toBeTruthy();
       expect(within(section).getByRole('button', { name: 'Switch off' })).toBeTruthy();
@@ -262,7 +262,7 @@ describe('Events → Service: whether the event service watches your accounts', 
     // Asked first: Cancel runs nothing.
     fireEvent.click(within(section).getByRole('button', { name: 'Switch off' }));
     let dialog = await screen.findByRole('alertdialog', { name: 'Switch off watching?' });
-    expect(dialog.textContent).toContain('Your rules are kept');
+    expect(dialog.textContent).toContain('Your workflows are kept');
     fireEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(cliKinds(bridge)).not.toContain('eventsDisableAll');

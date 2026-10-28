@@ -13,7 +13,9 @@
  *     instruction "Reply to the sender with what you found."
  * ```
  *
- * The printer and the parser for it live here, beside `parse.ts` and `print.ts`, which call them.
+ * On a workflow's step (workflows design §6.4), `from step <step> <output>` gives the session a closed output of an
+ * earlier step, `{ step, field }`, which the frame labels as Agent Comms'. The printer and the parser for it live
+ * here, beside `parse.ts` and `print.ts`, which call them.
  */
 import { canonicalJson, type JsonValue } from '../json.ts';
 import { Cursor, type TextLine } from './lines.ts';
@@ -22,7 +24,7 @@ import { formatField, formatName, hasKeys, isFieldText, isRecord, isStringArray 
 type Record_ = Record<string, JsonValue>;
 
 /** A provider's word in the text, and back: the prototype's `claude-code` is the relay's `claude`. */
-const PROVIDER_WORDS: Readonly<Record<string, string>> = { claude: 'claude-code', codex: 'codex' };
+export const PROVIDER_WORDS: Readonly<Record<string, string>> = { claude: 'claude-code', codex: 'codex' };
 const PROVIDERS_BY_WORD: Readonly<Record<string, string>> = { 'claude-code': 'claude', codex: 'codex' };
 
 const TARGET_FIELDS = ['targetId', 'version', 'kind', 'find', 'ifNone', 'provider', 'mode', 'ifBusy', 'context'];
@@ -40,6 +42,8 @@ function partLine(part: JsonValue): string {
   if (hasKeys(part, ['fields']) && isStringArray(part.fields) && part.fields.every(isFieldText))
     return `      fields ${fields(part.fields)}`;
   if (hasKeys(part, ['file']) && typeof part.file === 'string') return `      file ${formatName(part.file)}`;
+  if (hasKeys(part, ['step', 'field']) && typeof part.step === 'string' && typeof part.field === 'string')
+    return `      from step ${formatName(part.step)} ${formatName(part.field)}`;
   if (hasKeys(part, ['generate']) && isRecord(part.generate)) {
     const generate = part.generate;
     if (!hasKeys(generate, ['provider', 'model', 'instruction', 'from'])) return raw;
@@ -51,8 +55,12 @@ function partLine(part: JsonValue): string {
   return raw;
 }
 
-/** A session target's lines at levels 1 to 3, or undefined when its shape is one the readable form cannot say. */
-export function sessionTargetLines(target: Readonly<Record<string, JsonValue>>): string[] | undefined {
+/**
+ * A session target's lines at levels 1 to 3, or undefined when its shape is one the readable form cannot say. On a
+ * workflow's step (`inStep`) it may also be the session the flow chose (`find: { flow: true }`, workflows design W5),
+ * which says no folder or lane, and leaves out `if busy wait`, which the parser fills there.
+ */
+export function sessionTargetLines(target: Readonly<Record<string, JsonValue>>, inStep = false): string[] | undefined {
   if (!hasKeys(target, TARGET_FIELDS, ['instruction'])) return undefined;
   const { find, ifNone, provider, mode, ifBusy, context, instruction } = target;
   if (typeof provider !== 'string' || !Object.hasOwn(PROVIDER_WORDS, provider)) return undefined;
@@ -61,8 +69,11 @@ export function sessionTargetLines(target: Readonly<Record<string, JsonValue>>):
   if (instruction !== undefined && typeof instruction !== 'string') return undefined;
   if (!isRecord(find)) return undefined;
   let where: string;
-  if (hasKeys(find, ['folder']) && typeof find.folder === 'string') where = `working in ${formatName(find.folder)}`;
-  else if (hasKeys(find, ['lane']) && typeof find.lane === 'string') where = `in lane ${formatName(find.lane)}`;
+  const chosen = inStep && hasKeys(find, ['flow']) && find.flow === true;
+  if (chosen) where = '';
+  else if (hasKeys(find, ['folder']) && typeof find.folder === 'string')
+    where = `, working in ${formatName(find.folder)}`;
+  else if (hasKeys(find, ['lane']) && typeof find.lane === 'string') where = `, in lane ${formatName(find.lane)}`;
   else return undefined;
   if (!['start', 'queue-only'].includes(ifNone) || !['queue', 'queue-only'].includes(ifBusy)) return undefined;
   const word = PROVIDER_WORDS[provider] as string;
@@ -73,10 +84,14 @@ export function sessionTargetLines(target: Readonly<Record<string, JsonValue>>):
     : Object.hasOwn(find, 'folder')
       ? ['    if none leave it in the queue']
       : [];
+  const busy =
+    chosen && ifBusy === DEFAULTS.ifBusy
+      ? []
+      : [`    if busy ${ifBusy === 'queue' ? 'wait' : 'leave it in the queue'}`];
   return [
-    `  session ${formatName(target.targetId as string)}, version ${target.version}, ${where}${starts ? '' : `, with ${word}`}`,
+    `  session ${formatName(target.targetId as string)}, version ${target.version}${where}${starts ? '' : `, with ${word}`}`,
     ...none,
-    `    if busy ${ifBusy === 'queue' ? 'wait' : 'leave it in the queue'}`,
+    ...busy,
     ...(mode === DEFAULTS.mode ? [] : [`    mode ${formatName(mode)}`]),
     ...(context.length === 0 ? [] : ['    give', ...context.map(partLine)]),
     ...(instruction === undefined ? [] : [`    instruction ${JSON.stringify(instruction)}`]),
@@ -104,7 +119,8 @@ export interface SessionParseHelpers {
   readonly noChildren: (line: TextLine, what: string) => void;
 }
 
-function providerWord(cursor: Cursor): string {
+/** A provider's word, `claude-code` or `codex`, as the relay's name for it. */
+export function providerWord(cursor: Cursor): string {
   const at = cursor.mark();
   const word = cursor.name('the provider');
   const provider = PROVIDERS_BY_WORD[word];
@@ -123,7 +139,7 @@ function fieldList(cursor: Cursor, helpers: SessionParseHelpers, what: string): 
 function contextPart(child: TextLine, cursor: Cursor, helpers: SessionParseHelpers): JsonValue {
   const at = cursor.mark();
   helpers.noChildren(child, 'a context part');
-  if (cursor.take('raw')) {
+  if (cursor.takeRaw()) {
     const value = cursor.json('the raw context part');
     cursor.expectEnd('the raw context part');
     return value;
@@ -143,6 +159,12 @@ function contextPart(child: TextLine, cursor: Cursor, helpers: SessionParseHelpe
     cursor.expectEnd('the file');
     return { file };
   }
+  if (cursor.take('from', 'step')) {
+    const step = cursor.name('the step');
+    const output = cursor.name("the step's output");
+    cursor.expectEnd("the step's output");
+    return { step, field: output };
+  }
   if (cursor.take('written', 'by')) {
     const model = cursor.name('the model');
     cursor.expect(['via'], '"via <provider>" after the model');
@@ -154,14 +176,27 @@ function contextPart(child: TextLine, cursor: Cursor, helpers: SessionParseHelpe
     cursor.expectEnd('the fields the model reads');
     return { generate: { provider, model, instruction, from } };
   }
-  return cursor.fail(`a context part is fields, text, written by, file or raw; found ${cursor.describeNext()}`, at);
+  return cursor.fail(
+    `a context part is fields, text, written by, file, from step or raw; found ${cursor.describeNext()}`,
+    at,
+  );
 }
 
-/** The session target after its keyword, with the lines indented under it. */
-export function parseSessionTarget(cursor: Cursor, line: TextLine, helpers: SessionParseHelpers): Record_ {
+/**
+ * The session target after its keyword, with the lines indented under it. On a workflow's step, `step` adds the step's
+ * own clauses (`to <steps>`), and a session that says no folder or lane is the one the flow chose (`find: { flow: true
+ * }`, workflows design W5).
+ */
+export function parseSessionTarget(
+  cursor: Cursor,
+  line: TextLine,
+  helpers: SessionParseHelpers,
+  step?: Readonly<Record<string, readonly [phrase: string, read: () => void]>>,
+): Record_ {
   const target: Record_ = { ...helpers.targetHead(cursor), kind: 'session' };
   let provider: string | undefined;
   helpers.clauses(cursor, 'a session', {
+    ...step,
     working: [
       'working in <folder>',
       () => {
@@ -190,8 +225,11 @@ export function parseSessionTarget(cursor: Cursor, line: TextLine, helpers: Sess
       },
     ],
   });
-  if (!Object.hasOwn(target, 'find'))
-    cursor.fail('a session says where it is found: working in <folder>, or in lane <name>', cursor.mark());
+  if (!Object.hasOwn(target, 'find')) {
+    if (step === undefined)
+      cursor.fail('a session says where it is found: working in <folder>, or in lane <name>', cursor.mark());
+    target.find = { flow: true };
+  }
   let context: JsonValue[] = [];
   helpers.block(line, 'a session', [
     [

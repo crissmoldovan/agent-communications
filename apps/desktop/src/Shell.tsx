@@ -3,6 +3,7 @@ import {
   Activity,
   Bot,
   CheckCheck,
+  FolderGit2,
   History,
   Inbox,
   LayoutDashboard,
@@ -14,6 +15,7 @@ import {
   Stethoscope,
   UserRound,
   Users,
+  Workflow,
 } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 import { TEST_BUILD_COPY, useAppBuild } from './app-build.ts';
@@ -30,6 +32,7 @@ const ICONS: Record<Screen, ComponentType> = {
   queue: Inbox,
   messages: MessagesSquare,
   people: UserRound,
+  projects: FolderGit2,
   search: Search,
   accounts: Users,
   connections: Plug,
@@ -38,6 +41,7 @@ const ICONS: Record<Screen, ComponentType> = {
   agent: Bot,
   updates: RefreshCw,
   events: Activity,
+  workflows: Workflow,
   doctor: Stethoscope,
   settings: Settings,
 };

@@ -78,6 +78,46 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
     desktopCallable: true,
     family: 'b3',
   },
+  // Workflow events (0.36.0, W29–W33): a webhook subscriber's signing secret and secret URL are the person's, made at
+  // the terminal as a webhook target's are; a subscription is prepared by anyone and approved by the person only; the
+  // step event catalogue is content-free, for the person and an agent alike.
+  {
+    capabilityOperation: 'subscriberSecretCreate',
+    wireOperation: 'subscriberSecretCreate',
+    desktopCallable: true,
+    family: 'b3',
+  },
+  {
+    capabilityOperation: 'subscriberSecretRotate',
+    wireOperation: 'subscriberSecretRotate',
+    desktopCallable: true,
+    family: 'b3',
+  },
+  { capabilityOperation: 'subscriberUrlSet', wireOperation: 'subscriberUrlSet', desktopCallable: true, family: 'b3' },
+  {
+    capabilityOperation: 'enableSubscriber',
+    wireOperation: 'subscriber-enable',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'approveSubscriberFromApp',
+    wireOperation: 'subscriber-approve',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowEventsList',
+    wireOperation: 'workflow-events-list',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowEventsShow',
+    wireOperation: 'workflow-events-show',
+    desktopCallable: true,
+    family: 'owner',
+  },
   { capabilityOperation: 'judgeKeySet', wireOperation: 'judgeKeySet', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'judgeKeyRotate', wireOperation: 'judgeKeyRotate', desktopCallable: true, family: 'b3' },
   { capabilityOperation: 'migrateSecrets', wireOperation: 'migrateSecrets', desktopCallable: true, family: 'b3' },
@@ -115,6 +155,12 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   { capabilityOperation: 'messageShow', wireOperation: 'message-show', desktopCallable: true, family: 'owner' },
   // Analyse (0.33.0 design §3.3): the person's view of one rule and its last 30 days, CLI and app only; it writes nothing.
   { capabilityOperation: 'ruleAnalyse', wireOperation: 'rule-analyse', desktopCallable: true, family: 'owner' },
+  // A workflow's runs (0.36.0 workflows design §7.6): the person's to list, show and cancel, CLI and app only.
+  { capabilityOperation: 'runsList', wireOperation: 'runs-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'runShow', wireOperation: 'run-show', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'runCancel', wireOperation: 'run-cancel', desktopCallable: true, family: 'owner' },
+  // `workflow check` (0.36.0 §7.7): a document checked as the event service reads it, writing nothing; CLI and MCP.
+  { capabilityOperation: 'ruleCheck', wireOperation: 'rule-check', desktopCallable: true, family: 'owner' },
   // The person's own setup (owner decision 2026-10-26): Jev or a local model server set up and turned on in one step, and
   // the AI provider keys Jev uses. Setup and the two key operations are the app's and the CLI's, from the person's
   // origin only; the provider list says only whether each has a key.
@@ -140,6 +186,14 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   },
   // Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see. The person's read, CLI and app.
   { capabilityOperation: 'integrationShow', wireOperation: 'integration-show', desktopCallable: true, family: 'owner' },
+  // Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints —
+  // the person's alone, from the app or their terminal, and no tool reads or changes them.
+  { capabilityOperation: 'projectsList', wireOperation: 'projects-list', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectShow', wireOperation: 'project-show', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectAdd', wireOperation: 'project-add', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectUpdate', wireOperation: 'project-update', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectRemove', wireOperation: 'project-remove', desktopCallable: true, family: 'owner' },
+  { capabilityOperation: 'projectScan', wireOperation: 'project-scan', desktopCallable: true, family: 'owner' },
   // Agent sessions through claude-stream (0.33.0 §3.5): where the person's relay is — theirs to set, from the app or
   // their terminal (its show is `integration-show` above) — and the busy queue, the person's to read and drop from; a
   // bound window sees its own lane's.
@@ -159,6 +213,21 @@ export const OWNER_CONTROL_WIRE_OPERATIONS = [
   // One judge version's exact canonical document (0.33.0), for the app's rule editor to embed; content-free, as
   // `judges list` is, so CLI and MCP alike.
   { capabilityOperation: 'judgeShow', wireOperation: 'judge-show', desktopCallable: true, family: 'owner' },
+  // Describe it (0.36.0 workflows design §11.4): the person's words drafted into a workflow, written nowhere — the
+  // person's, from the app or their terminal. Its brief is the CLI's own step before it runs the person's `claude` in
+  // the CLI's process: no capability of its own, never the app's or a tool's.
+  {
+    capabilityOperation: 'workflowDescribe',
+    wireOperation: 'workflow-describe',
+    desktopCallable: true,
+    family: 'owner',
+  },
+  {
+    capabilityOperation: 'workflowDescribeBrief',
+    wireOperation: 'workflow-describe-brief',
+    desktopCallable: false,
+    family: 'owner',
+  },
   {
     capabilityOperation: 'approveChallenge',
     wireOperation: 'approve-challenge',

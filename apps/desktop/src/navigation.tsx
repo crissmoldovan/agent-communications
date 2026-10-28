@@ -18,7 +18,8 @@ import type { Screen } from './copy.ts';
  */
 export type Destination =
   | { readonly screen: 'settings'; readonly section: 'ai-providers' | 'integrations' | 'search' }
-  | { readonly screen: 'events'; readonly tab: 'judges' }
+  // Events at its Judges, from Settings; at its Workflows (0.36.0), from the sidebar's Workflows.
+  | { readonly screen: 'events'; readonly tab: 'judges' | 'rules' }
   | { readonly screen: 'messages'; readonly eventId: string }
   // Accounts at one account's page (0.34.0), from Your agents' line for it; with no account, the list.
   | { readonly screen: 'accounts'; readonly account?: string }
@@ -51,6 +52,33 @@ export function NavigationProvider({
     [onScreen],
   );
   return <NavigateContext.Provider value={navigate}>{children}</NavigateContext.Provider>;
+}
+
+/**
+ * Asks for `to` without changing the screen: for a screen that shows another at one of its places, as the sidebar's
+ * Workflows shows Events at its Workflows tab (0.36.0).
+ */
+export function askFor(to: Destination): void {
+  pending = to;
+}
+
+/** A run's id another screen asked Events → Workflows to open (0.36.0), until Events reads it. */
+let pendingRun: string | null = null;
+
+/**
+ * Opens one run's view (0.36.0, workflows design §11.2) from another screen — a message's story — through `navigate`:
+ * Events opens on its Workflows tab, and its tab reads the run once, as it mounts.
+ */
+export function openRunVia(navigate: (to: Destination) => void, runId: string): void {
+  pendingRun = runId;
+  navigate({ screen: 'events', tab: 'rules' });
+}
+
+/** The run another screen asked for, once: a second read finds none. */
+export function runToOpen(): string | null {
+  const run = pendingRun;
+  pendingRun = null;
+  return run;
 }
 
 /** Opens a destination; `null` where the screen was shown without the shell (Settings before an install). */

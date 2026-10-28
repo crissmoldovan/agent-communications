@@ -6,6 +6,7 @@ import {
   canonicalJson,
   type DisclosureBinding,
   hashChallenge,
+  sha256Hex,
 } from '@agentcomms/core';
 import type { GmailEventSource } from '@agentcomms/gmail';
 import {
@@ -15,6 +16,7 @@ import {
   disclosureBindingFor,
 } from '../domain/activation-documents.ts';
 import { ACTIVATION_FAILURE, type ActivationFailureCode } from '../domain/activation-failure-codes.ts';
+import { assertFlowChainAvailable } from '../domain/flow.ts';
 import { JUDGE_BUDGET_ID, type LayaEnablementInputs } from '../domain/judges.ts';
 import { assertJudgeKindEnabled, JUDGE_KIND_TYPESAFE } from '../domain/lifecycle.ts';
 import type { SourceOptions } from '../domain/source-options.ts';
@@ -32,6 +34,7 @@ import {
 import { gmailBaseline, persistSourceBaseline } from './baseline.ts';
 import type { CutoverFailpoint } from './cutover-failpoint.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import { activateSubscriptionInTransaction } from './events/subscriptions.ts';
 import type { AsyncSourceStageExpiry } from './expiry.ts';
 import {
   applyDerivedTightening,
@@ -42,6 +45,7 @@ import {
 } from './replacements.ts';
 import type { DSourceRetentionTighteningDispatcher } from './retained-content-hooks.ts';
 import { addActiveRuleTargetReferences, removeActiveRuleTargetReferences } from './target-version-references.ts';
+import type { FlowActivationCheck } from './workflow/contracts.ts';
 
 type IntentKind = ActivationDocumentV1['kind'];
 
@@ -201,6 +205,12 @@ export interface ActivationRuntimeOptions {
   readonly assertLinearTargets?:
     | ((rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule']) => Promise<unknown>)
     | undefined;
+  /**
+   * A workflow's activation checks beyond its own (workflows plan I4): each track's composition hands its own — the
+   * route step's candidates against the projects as they are now, among them — and `assertFlowActivation` runs them
+   * after the flow's.
+   */
+  readonly flowActivationChecks?: readonly FlowActivationCheck[] | undefined;
   /** Tests may inject strict reviewed fixture bytes; production always reads the daemon's shipped asset bytes. */
   readonly layaAssetSource?: LayaEnablementInputs['layaAssetSource'];
   /** Test seam only: the probe still uses the exact production sandbox-exec invocation. */
@@ -215,6 +225,21 @@ export interface ActivationRuntimeOptions {
 export type ActivationDeadlineFailpoint = (
   edge: 'before-claim-deadline' | 'before-baseline-deadline' | 'before-finalise-deadline',
 ) => void;
+
+/**
+ * The activation-time checks of a workflow's flow (workflows design §4.1, W34; plan B1): those that need the event
+ * service — a chained start while chains are not available — then each `FlowActivationCheck` a composition handed in,
+ * in order. Each throws `EventDomainError` to refuse; a workflow without a flow has none.
+ */
+export async function assertFlowActivation(
+  rule: Extract<ActivationDocumentV1, { kind: 'rule' }>['rule'],
+  database: EventDatabase['database'],
+  checks: readonly FlowActivationCheck[] = [],
+): Promise<void> {
+  if (rule.flow === undefined) return;
+  assertFlowChainAvailable(rule);
+  for (const check of checks) await check(rule, database);
+}
 
 /** D2/D12 recoverable standing-authority activation for Gmail first activations, exact replacements and enable-all. */
 export class ActivationRuntime {
@@ -238,6 +263,7 @@ export class ActivationRuntime {
   readonly #assertObjectSecretReady: ActivationRuntimeOptions['assertObjectSecretReady'];
   readonly #assertSessionTargets: ActivationRuntimeOptions['assertSessionTargets'];
   readonly #assertLinearTargets: ActivationRuntimeOptions['assertLinearTargets'];
+  readonly #flowActivationChecks: readonly FlowActivationCheck[];
   readonly #layaInputs: LayaEnablementInputs;
   readonly #onJudgeKindEnabled: ActivationRuntimeOptions['onJudgeKindEnabled'];
   /** One owner process writes this state directory, so this in-memory queue is enough to serialise one approval. */
@@ -271,6 +297,7 @@ export class ActivationRuntime {
     this.#assertObjectSecretReady = options.assertObjectSecretReady;
     this.#assertSessionTargets = options.assertSessionTargets;
     this.#assertLinearTargets = options.assertLinearTargets;
+    this.#flowActivationChecks = options.flowActivationChecks ?? [];
     this.#layaInputs = {
       ...(options.layaAssetSource === undefined ? {} : { layaAssetSource: options.layaAssetSource }),
       ...(options.layaPlatformProbe === undefined ? {} : { layaPlatformProbe: options.layaPlatformProbe }),
@@ -287,13 +314,16 @@ export class ActivationRuntime {
     await this.#assertDocumentSecretsReady(document.rule);
     await this.#assertSessionTargets?.(document.rule);
     await this.#assertLinearTargets?.(document.rule);
+    // A workflow's flow, where lanes and its event names were checked (`versions.prepareRule`): what needs this
+    // service's state, then every composition's own check.
+    await assertFlowActivation(document.rule, this.#store.database, this.#flowActivationChecks);
     this.#sourceRegistry.require(document.rule.source.channel);
     const active = versions.activeVersion('rule', input.ruleId);
     if (active !== null) {
       const parentRow = this.#store.database
         .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
         .get(input.ruleId, active.version) as { document: string } | undefined;
-      if (!parentRow) throw new CommsError('BAD_DATA', 'the active rule version is missing its immutable document');
+      if (!parentRow) throw new CommsError('BAD_DATA', 'the active workflow version is missing its immutable document');
       const parent = canonicalFullRuleDocument(JSON.parse(parentRow.document));
       if (tighteningKind(parent, document.rule) !== null) {
         const derived = await applyDerivedTightening({
@@ -358,7 +388,7 @@ export class ActivationRuntime {
         )
         .get(oldId) as { present: number } | undefined;
       if (pending !== undefined) {
-        throw new CommsError('TRANSIENT', 'this rule already has a replacement completing', {
+        throw new CommsError('TRANSIENT', 'this workflow already has a replacement completing', {
           details: { reason: 'REPLACEMENT_PENDING' },
         });
       }
@@ -456,6 +486,37 @@ export class ActivationRuntime {
         disableGeneration,
       },
     });
+  }
+
+  /**
+   * Prepares one subscriber version's events for the person's approval (0.36.0, workflows design W29): the exact inert
+   * version, bound by its stored digest. Completion makes it the subscriber's one active version and the previous one
+   * superseded. Nothing here starts a listener or sends: delivery waits for the completed activation.
+   */
+  async prepareSubscription(input: {
+    readonly subscriberId: string;
+    readonly version: number;
+  }): Promise<PreparedActivation> {
+    const row = this.#store.database
+      .prepare(
+        'SELECT document, digest, state, revoked_at FROM subscriber_versions WHERE subscriber_id = ? AND version = ?',
+      )
+      .get(input.subscriberId, input.version) as
+      | { document: string; digest: string; state: string | null; revoked_at: number | null }
+      | undefined;
+    if (row === undefined || row.revoked_at !== null)
+      throw new CommsError('NOT_FOUND', 'the subscriber has no live version with that number');
+    if (row.state === 'active') throw new CommsError('CONFIG', 'that subscriber version is already active');
+    if (row.state !== 'inert')
+      throw new CommsError('CONFIG', 'only an inert subscriber version that is given events can be enabled', {
+        details: { reason: row.state === null ? 'NO_EVENTS' : 'SUPERSEDED' },
+      });
+    const document: Extract<ActivationDocumentV1, { kind: 'subscription' }> = {
+      documentVersion: 1,
+      kind: 'subscription',
+      subscription: { subscriberId: input.subscriberId, version: input.version, digest: row.digest },
+    };
+    return this.#prepare(document, [], { switchGeneration: this.#switch().generation });
   }
 
   async approve(input: {
@@ -719,44 +780,62 @@ export class ActivationRuntime {
    * A live owner retries only work that core has already marked used. Unlike startup recovery this never claims an
    * approved disclosure and it always carries the immutable usedAt back through the ordinary completion path. After
    * that claimed work, it settles every unclaimed intent whose approval lapsed unused, as startup recovery does.
+   *
+   * The tick calls this while the person may be approving: an intent an approval is completing is that approval's
+   * (0.36.0's end to end). Each is resumed under its approval's serialisation, from its row as it is then, and one an
+   * approval is answering now is left to the next tick — never completed a second time beside the approval, nor
+   * settled from a row read before the approval's completion committed (its own new pointer would read as drift).
    */
   async resumeClaimedCompletions(): Promise<void> {
-    const rows = this.#store.database
-      .prepare(
-        "SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE status = 'pending-completion' ORDER BY id",
-      )
-      .all() as unknown as IntentRow[];
-    for (const intent of rows) {
-      if (!intent.approval_id) {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+    const listed = this.#store.database
+      .prepare("SELECT id, approval_id FROM activation_intents WHERE status = 'pending-completion' ORDER BY id")
+      .all() as Array<{ id: string; approval_id: string | null }>;
+    for (const { id, approval_id: approvalId } of listed) {
+      if (!approvalId) {
+        this.#cancel(id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
         continue;
       }
-      const record = await this.#approvals.get(intent.approval_id);
-      if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
-        continue;
-      }
-      const binding = this.#settleOnDrift(intent);
-      if (binding === null) continue;
-      if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
-        this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
-        continue;
-      }
-      const completion = this.#usedApprovalCompletion(intent.approval_id, record.record.usedAt);
-      if (completion === undefined) continue;
-      try {
-        await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
-      } catch (error) {
-        // One intent still draining, or settled as void, never holds back the others in this pass.
-        if (
-          error instanceof CommsError &&
-          (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
-        )
-          continue;
-        throw error;
-      }
+      // Not waited for: a tick never holds the owner's other work behind a person's approval.
+      if (this.#approvalOperations.has(approvalId)) continue;
+      await this.#withApprovalOperation(approvalId, () => this.#resumeClaimedCompletion(id, approvalId));
     }
     await this.#settleLapsedApprovals();
+  }
+
+  /** One claimed intent, resumed under its approval's serialisation. */
+  async #resumeClaimedCompletion(id: string, approvalId: string): Promise<void> {
+    // The list was read before earlier intents' awaits, in which an approval may have completed or settled this one:
+    // only the row as it is now, still claimed under the same approval, is resumed.
+    const intent = this.#store.database
+      .prepare(
+        'SELECT id, kind, document, digest, effect, replacement_of_version, status, approval_id, claimed_at, completion_deadline FROM activation_intents WHERE id = ?',
+      )
+      .get(id) as IntentRow | undefined;
+    if (intent?.status !== 'pending-completion' || intent.approval_id !== approvalId) return;
+    const record = await this.#approvals.get(approvalId);
+    if (record?.form !== 'v2' || record.record.kind !== 'disclosure' || record.record.state !== 'used') {
+      this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_ABSENT);
+      return;
+    }
+    const binding = this.#settleOnDrift(intent);
+    if (binding === null) return;
+    if (record.record.usedAt === undefined || canonicalJson(record.record.disclosure) !== canonicalJson(binding)) {
+      this.#cancel(intent.id, ACTIVATION_FAILURE.APPROVAL_BINDING_DRIFT);
+      return;
+    }
+    const completion = this.#usedApprovalCompletion(approvalId, record.record.usedAt);
+    if (completion === undefined) return;
+    try {
+      await this.#claimAndComplete(intent, record.record.usedAt, completion.issuingResidue);
+    } catch (error) {
+      // One intent still draining, or settled as void, never holds back the others in this pass.
+      if (
+        error instanceof CommsError &&
+        (error.code === 'APPROVAL_VOID' || error.details?.reason === 'REPLACEMENT_DRAINING')
+      )
+        return;
+      throw error;
+    }
   }
 
   /** Settles the unclaimed pending intents — of one replacement slot, or every one — whose approval lapsed unused. */
@@ -1237,7 +1316,7 @@ export class ActivationRuntime {
           this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
           settled = new CommsError(
             'APPROVAL_VOID',
-            'an enabled rule pointer changed before global activation completed',
+            'an enabled workflow pointer changed before global activation completed',
           );
           return;
         }
@@ -1245,7 +1324,7 @@ export class ActivationRuntime {
       if (document.kind === 'rule') {
         const active = this.#versions().activeVersion('rule', document.rule.ruleId);
         if (latest.replacement_of_version === null && active !== null)
-          throw new CommsError('TRANSIENT', 'the active rule pointer changed during activation', {
+          throw new CommsError('TRANSIENT', 'the active workflow pointer changed during activation', {
             details: { reason: 'ACTIVATION_COMPLETING' },
           });
         if (
@@ -1253,7 +1332,7 @@ export class ActivationRuntime {
           (active === null || `${document.rule.ruleId}@${active.version}` !== latest.replacement_of_version)
         ) {
           this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
-          settled = new CommsError('APPROVAL_VOID', 'the old rule pointer changed before replacement finalisation');
+          settled = new CommsError('APPROVAL_VOID', 'the old workflow pointer changed before replacement finalisation');
           return;
         }
       } else if (document.kind === 'enable-all') {
@@ -1268,6 +1347,14 @@ export class ActivationRuntime {
             'APPROVAL_VOID',
             'the judge pointer or immutable document changed before finalisation',
           );
+          return;
+        }
+      } else if (document.kind === 'subscription') {
+        try {
+          this.#assertSubscriptionLive(document);
+        } catch (_error) {
+          this.#cancel(intent.id, ACTIVATION_FAILURE.STALE_POINTER);
+          settled = new CommsError('APPROVAL_VOID', 'the subscriber version changed before its subscription completed');
           return;
         }
       } else {
@@ -1346,6 +1433,14 @@ export class ActivationRuntime {
         this.#store.database
           .prepare('UPDATE event_settings SET enabled = 1, activation_id = ?, changed_at = ? WHERE singleton = 1')
           .run(intent.id, this.#now());
+      } else if (document.kind === 'subscription') {
+        activateSubscriptionInTransaction(this.#store.database, {
+          subscriberId: document.subscription.subscriberId,
+          version: document.subscription.version,
+          approvalId: intent.approval_id,
+          at: Date.parse(usedAt),
+          now: this.#now(),
+        });
       } else {
         const pointer = effect.judgePointer;
         if (pointer === undefined) throw new CommsError('APPROVAL_VOID', 'the judge pointer expectation is missing');
@@ -1435,7 +1530,7 @@ export class ActivationRuntime {
         (intent.replacement_of_version === null ||
           `${document.rule.ruleId}@${active.version}` !== intent.replacement_of_version)
       )
-        throw new CommsError('APPROVAL_VOID', 'the rule gained an active pointer after preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow gained an active pointer after preparation');
     } else if (document.kind === 'enable-all') {
       const current = this.#switch();
       const live = this.#store.database
@@ -1457,8 +1552,29 @@ export class ActivationRuntime {
       }
     } else if (document.kind === 'judge-budget' || document.kind === 'judge-kind') {
       this.#assertJudgeActivationLive(document, JSON.parse(intent.effect) as ActivationEffect);
+    } else if (document.kind === 'subscription') {
+      this.#assertSubscriptionLive(document);
     }
     return binding;
+  }
+
+  /** The exact subscriber version a subscription names is still live, inert and the document its digest binds. */
+  #assertSubscriptionLive(document: Extract<ActivationDocumentV1, { kind: 'subscription' }>): void {
+    const row = this.#store.database
+      .prepare(
+        'SELECT document, digest, state, revoked_at FROM subscriber_versions WHERE subscriber_id = ? AND version = ?',
+      )
+      .get(document.subscription.subscriberId, document.subscription.version) as
+      | { document: string; digest: string; state: string | null; revoked_at: number | null }
+      | undefined;
+    if (
+      row === undefined ||
+      row.revoked_at !== null ||
+      row.state !== 'inert' ||
+      row.digest !== document.subscription.digest ||
+      sha256Hex(row.document) !== row.digest
+    )
+      throw new CommsError('APPROVAL_VOID', 'the subscriber version changed after its subscription was prepared');
   }
 
   /** The prepare, claim and final-pointer transactions all call this exact immutable-pointer fence. */
@@ -1509,7 +1625,7 @@ export class ActivationRuntime {
     if (document.kind === 'rule') {
       const live = versions.prepareRule(document.rule.ruleId, document.rule.version);
       if (canonicalJson(live) !== canonicalJson(document))
-        throw new CommsError('APPROVAL_VOID', 'the rule changed after preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow changed after preparation');
       return;
     }
     for (const entry of document.ruleVersions) versions.prepareRule(entry.ruleId, entry.ruleVersion);
@@ -1525,7 +1641,11 @@ export class ActivationRuntime {
       const active = this.#versions().activeVersion('rule', document.rule.ruleId);
       const current = active === null ? null : `${document.rule.ruleId}@${active.version}`;
       if (current !== (replacementOfVersion ?? null) || this.#switch().generation !== effect.switchGeneration)
-        throw new CommsError('APPROVAL_VOID', 'the rule activation pointer plan changed during preparation');
+        throw new CommsError('APPROVAL_VOID', 'the workflow activation pointer plan changed during preparation');
+      return;
+    }
+    if (document.kind === 'subscription') {
+      this.#assertSubscriptionLive(document);
       return;
     }
     if (document.kind !== 'enable-all') return;
@@ -1598,7 +1718,7 @@ export class ActivationRuntime {
     const live = await liveEventAccountIds(this.#config, source);
     const missing = accountIds.find((accountId) => !live.has(accountId));
     if (missing !== undefined) {
-      throw new CommsError('NOT_FOUND', 'the rule names an account that is not connected for its source', {
+      throw new CommsError('NOT_FOUND', 'the workflow names an account that is not connected for its source', {
         details: { reason: 'ACCOUNT_REMOVED', accountId: missing },
       });
     }

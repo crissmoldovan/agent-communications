@@ -1162,6 +1162,10 @@ describe('the licence notices', () => {
     cratesOf: (metadata: unknown) => { name: string; version: string }[];
     rustSection: (crates: object[], textsOf: (crate: { name: string }) => { file: string; text: string }[]) => string;
     resolveStylesheet: (specifier: string, from: string) => string | null;
+    packagesOf: (
+      ids: Set<string>,
+      problems: string[],
+    ) => Map<string, { directory: string; manifest: { name: string; license?: string } }>;
   };
   const load = async (): Promise<Script> =>
     (await import(pathToFileURL(join(APP, 'scripts', 'third-party-licenses.mjs')).href)) as Script;
@@ -1177,6 +1181,27 @@ describe('the licence notices', () => {
     expect(firstPartySource(join(ROOT, 'packages', 'events', 'dist', 'index.mjs'))).toBe(false);
     expect(firstPartySource(join(ROOT, 'packages', 'no-such-package', 'src', 'index.ts'))).toBe(false);
     expect(firstPartySource(join(ROOT, 'node_modules', 'zod', 'index.js'))).toBe(false);
+  });
+
+  it("notice data a package vendors under its vendor's licence, and Vite's own helpers as Vite's (0.36.0)", async () => {
+    const { packagesOf } = await load();
+    const problems: string[] = [];
+    // The designer's flow check imports `@agentcomms/events`' domain check, and with it the Unicode tables it vendors;
+    // the designer is a lazy chunk, which Vite loads with its preload helper.
+    const found = packagesOf(
+      new Set([
+        join(ROOT, 'packages', 'events', 'vendor', 'unicode-15.1.0', 'generated', 'marks.ts'),
+        '\0vite/preload-helper.js',
+      ]),
+      problems,
+    );
+    expect(problems).toEqual([]);
+    expect(found.get('unicode-character-database@15.1.0')?.manifest.license).toBe('Unicode-3.0');
+    expect([...found.keys()].some((key) => key.startsWith('vite@'))).toBe(true);
+    // A vendor directory with no NOTICE.json names no licence, and says so.
+    const missing: string[] = [];
+    packagesOf(new Set([join(ROOT, 'packages', 'events', 'vendor', 'no-such-data', 'x.ts')]), missing);
+    expect(missing).toHaveLength(1);
   });
 
   it("follow the app's normal and build dependencies, and leave out what only builds its tests", async () => {

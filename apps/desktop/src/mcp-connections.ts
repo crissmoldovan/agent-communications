@@ -101,7 +101,7 @@ export const PART_WORDS: Readonly<
     purpose: 'Read your WhatsApp chats on this Mac, and draft replies. It never sends.',
     more: 'can draft replies, for you to send',
   },
-  events: { name: 'Events', purpose: 'Work through the Queue, and see your rules and what they passed on.' },
+  events: { name: 'Events', purpose: 'Work through the Queue, and see your workflows and what they passed on.' },
 };
 
 /** A part that can be chosen, from `channels --json` (D20): its word, its name, and whether it is a channel. */
@@ -287,7 +287,7 @@ export function grantsFor(
       case 'events':
         return [
           'read the Queue, and mark items done',
-          'see your rules and what they passed on, and propose a rule, which waits for your approval',
+          'see your workflows and what they passed on, and propose a workflow, which waits for your approval',
         ];
       default:
         return [`use ${names(part.server)}’s tools${where}`];

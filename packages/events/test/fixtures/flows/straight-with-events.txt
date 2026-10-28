@@ -1,0 +1,18 @@
+workflow invoices, version 5
+
+when a new message arrives in cue/gmail, in the inbox
+match subject contains "invoice"
+
+flow
+  events in cue as invoices, run emits failed
+  step issue: linear issue billing-issues, version 2, in team CUE, labels Billing and Urgent, assigned to me
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    label ids 1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d and 3e1f8a52-7c1d-4a8e-9f00-2b6c1d4e5f60
+    title "Invoice from {{from.address}}"
+    description "Check it against Stripe.\n\n{{subject}}"
+    emits created and failed
+  step log: dry run invoices-log, version 1, keep 1 day
+    emits delivered
+
+keep from.address, subject
+at most 60 an hour

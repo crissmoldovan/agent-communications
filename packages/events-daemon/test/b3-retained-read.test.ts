@@ -153,7 +153,12 @@ test('B3 retained rule test rechecks exact saved authority after projection decr
       now: () => 1_000,
     });
     assert.equal(
-      (await control.test({ eventId: 'event-retained', ruleId: 'rule-retained', ruleVersion: 1 })).agentic,
+      // A workflow without a flow is tested as before; one with a flow is walked (0.36.0), and this one has none.
+      (
+        (await control.test({ eventId: 'event-retained', ruleId: 'rule-retained', ruleVersion: 1 })) as {
+          agentic?: string;
+        }
+      ).agentic,
       'not-evaluated',
       'a saved superseded but unrevoked exact version remains testable without any active-pointer inference',
     );

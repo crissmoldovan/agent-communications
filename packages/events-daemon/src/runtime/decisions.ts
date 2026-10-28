@@ -3,9 +3,11 @@ import type { EventDatabase } from '../store/database.ts';
 import type { PreparedDelivery } from './deliveries.ts';
 import { allocateDeliveryOrderSequence } from './delivery-claim.ts';
 import { assertStoredRuleAuthority } from './disclosure-fence.ts';
+import { AWAITING_CHAIN, consumeChainRequestInTransaction } from './events/chains.ts';
 import { expireHeldDecisionsInTransaction, type HoldDeadline, holdDeadline, sqliteTransactionNow } from './holds.ts';
 import { assertJudgeReservationInFlightInTransaction, settleReservationInTransaction } from './judge-budget.ts';
 import { addRetainedDeliveryTargetReference } from './target-version-references.ts';
+import { createRunInTransaction, type PreparedFlowRun } from './workflow/runs.ts';
 
 export interface DecisionCommitInput {
   readonly id: string;
@@ -13,7 +15,14 @@ export interface DecisionCommitInput {
   readonly accountId: string;
   readonly ruleId: string;
   readonly ruleVersion: number;
-  readonly outcome: 'matched' | 'no-match' | 'mapping-rejected' | 'retention-expired' | 'hold';
+  readonly outcome:
+    | 'matched'
+    | 'no-match'
+    | 'mapping-rejected'
+    | 'retention-expired'
+    | 'hold'
+    | 'awaiting-chain'
+    | 'not-chained';
   readonly metadataExpiresAt: number;
   readonly switchGeneration: number;
   readonly whatsapp?: Readonly<{ messageId: string; visibilityVersion: number }> | undefined;
@@ -28,6 +37,17 @@ export interface DecisionCommitInput {
   readonly retainProjection?: boolean | undefined;
   /** A held decision captures its creation instant in SQLite and never recalculates it from evaluator time. */
   readonly hold?: Readonly<{ holdMs: number; ingestMs: number }> | undefined;
+  /**
+   * A match of a workflow with a flow (workflows design §5): the run it makes, its record sealed before this
+   * transaction, written in it in place of any delivery. Ignored for every outcome but a match.
+   */
+  readonly run?: PreparedFlowRun | undefined;
+  /**
+   * A chained workflow's decision (workflows design W34, §9.3). `awaiting-chain` keeps its projection, content-free,
+   * until `until`; any other outcome replaces the waiting decision, if there is one, and ends the chain request it
+   * answers. `at` is when it was decided, on the evaluator's clock.
+   */
+  readonly chain?: Readonly<{ at: number; until?: number }> | undefined;
 }
 
 export type DecisionFailpoint =
@@ -51,6 +71,8 @@ export interface HeldDecisionResolutionCommitInput {
   readonly disclosure?: Readonly<{ approvalId: string; authorizationActivationId: string }> | undefined;
   /** The one shared live-list fence applies its journal while it holds the lock; this confirms that exact live head. */
   readonly whatsappVisibilityVersion?: number | undefined;
+  /** A released match of a workflow with a flow: the run it makes, as `commitDecisionOutbox`'s. */
+  readonly run?: PreparedFlowRun | undefined;
 }
 
 /** Why a decision did not commit: the work it would complete was purged, or the switch moved, after the fence. */
@@ -77,6 +99,10 @@ export function commitDecisionOutbox(
       .prepare('SELECT 1 AS present FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
       .get(input.eventId, input.ruleId, input.ruleVersion);
     if (projection === undefined) throw new StaleDecisionError('PROJECTION_GONE');
+    // Neither a timeout nor a wait ending needs the switch: stopping retention needs no authority (W34's not-chained).
+    const contentFree = input.outcome === 'retention-expired' || input.outcome === 'not-chained';
+    if (input.outcome === AWAITING_CHAIN && (input.chain?.until === undefined || input.retainProjection !== true))
+      throw new Error('a chained workflow waits with its deadline and its retained projection');
     let hold: (HoldDeadline & { readonly holdCreatedAt: number }) | undefined;
     if (input.outcome === 'hold') {
       if (input.hold === undefined || input.retainProjection !== true)
@@ -97,6 +123,7 @@ export function commitDecisionOutbox(
       if (deadline.holdExpiresAt <= holdCreatedAt) outcome = 'retention-expired';
       else hold = { holdCreatedAt, ...deadline };
     }
+    const settlesContentFree = contentFree || outcome === 'retention-expired';
     // A removal revokes work authorised before (or in the same tick as) it. The revocation row deliberately remains
     // after a stable account id is re-added, so compare it to this exact version's activation rather than treating
     // historical removal as a permanent account ban. Activation gives a post-re-add approval a strictly later
@@ -116,7 +143,7 @@ export function commitDecisionOutbox(
       )
       .get(input.ruleId, input.ruleVersion, input.accountId);
     if (accountRevoked !== undefined) throw new StaleDecisionError('PROJECTION_GONE');
-    if (outcome !== 'retention-expired') {
+    if (!settlesContentFree) {
       const settings = store.database
         .prepare('SELECT enabled, paused, switch_generation FROM event_settings WHERE singleton = 1')
         .get() as { enabled: number; paused: number; switch_generation: number } | undefined;
@@ -155,6 +182,13 @@ export function commitDecisionOutbox(
       if (!settled) throw new StaleDecisionError('PROJECTION_GONE');
       failpoint?.('after-settlement');
     }
+    // A chained workflow's decision for the message replaces the waiting one: one decision per message and version.
+    if (input.chain !== undefined && outcome !== AWAITING_CHAIN)
+      store.database
+        .prepare(
+          `DELETE FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ? AND outcome = '${AWAITING_CHAIN}'`,
+        )
+        .run(input.eventId, input.ruleId, input.ruleVersion);
     store.database
       .prepare(
         `INSERT INTO decisions
@@ -173,11 +207,36 @@ export function commitDecisionOutbox(
         hold?.holdExpiresAt ?? null,
         hold?.holdBoundBy ?? null,
         input.metadataExpiresAt,
-        outcome === 'retention-expired' ? null : (input.encryptedMetadata ?? null),
+        settlesContentFree || outcome === AWAITING_CHAIN ? null : (input.encryptedMetadata ?? null),
         input.whatsapp?.messageId ?? null,
       );
     failpoint?.('after-decision');
-    for (const delivery of outcome === 'retention-expired' ? [] : input.deliveries) {
+    if (outcome === AWAITING_CHAIN && input.chain?.until !== undefined)
+      store.database
+        .prepare(
+          `UPDATE ingest_rules SET decision_deadline = MIN(decision_deadline, ?)
+            WHERE event_id = ? AND rule_id = ? AND rule_version = ?`,
+        )
+        .run(input.chain.until, input.eventId, input.ruleId, input.ruleVersion);
+    else if (input.chain !== undefined && outcome !== 'hold')
+      consumeChainRequestInTransaction(
+        store.database,
+        { eventId: input.eventId, ruleId: input.ruleId, ruleVersion: input.ruleVersion },
+        input.chain.at,
+      );
+    if (outcome === 'matched' && input.run !== undefined)
+      createRunInTransaction(store.database, {
+        runId: input.run.runId,
+        decisionId: input.id,
+        rule: input.run.rule,
+        accountId: input.accountId,
+        eventId: input.eventId,
+        sealedRecord: input.run.sealedRecord,
+        parentRunId: input.run.parentRunId,
+        depth: input.run.depth,
+        now: input.run.createdAt,
+      });
+    for (const delivery of settlesContentFree || outcome === AWAITING_CHAIN ? [] : input.deliveries) {
       // B2-D: rule and target version replacements do not create another ordering stream. The counter's stable
       // identity intentionally excludes both immutable version numbers.
       const orderingSequence = allocateDeliveryOrderSequence(store.database, {
@@ -224,7 +283,7 @@ export function commitDecisionOutbox(
       });
       failpoint?.('after-delivery');
     }
-    if (!input.retainProjection || outcome !== 'hold') {
+    if (!input.retainProjection || (outcome !== 'hold' && outcome !== AWAITING_CHAIN)) {
       store.database
         .prepare('DELETE FROM ingest_rules WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
         .run(input.eventId, input.ruleId, input.ruleVersion);
@@ -328,6 +387,18 @@ export function commitHeldDecisionOutbox(
       .run(input.outcome, input.id);
     if (updated.changes !== 1) throw new StaleDecisionError('PROJECTION_GONE');
     failpoint?.('after-decision');
+    if (input.outcome === 'matched' && input.run !== undefined)
+      createRunInTransaction(database, {
+        runId: input.run.runId,
+        decisionId: input.id,
+        rule: input.run.rule,
+        accountId: input.accountId,
+        eventId: input.eventId,
+        sealedRecord: input.run.sealedRecord,
+        parentRunId: input.run.parentRunId,
+        depth: input.run.depth,
+        now: input.run.createdAt,
+      });
     for (const delivery of input.deliveries) {
       const orderingSequence = allocateDeliveryOrderSequence(database, {
         ruleId: input.ruleId,

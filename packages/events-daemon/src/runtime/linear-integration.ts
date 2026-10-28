@@ -38,6 +38,8 @@ export interface IntegrationShowResultV1 {
 
 const WORKSPACE_QUERY =
   'query AgentCommsLinearWorkspace { viewer { organization { name } } teams(first: 100) { nodes { id key name } } }';
+const STATES_QUERY =
+  'query AgentCommsLinearStates($team: String!) { team(id: $team) { states(first: 100) { nodes { id name type } } } }';
 const LABELS_QUERY =
   'query AgentCommsLinearLabels($team: String!) { team(id: $team) { labels(first: 250) { nodes { id name } } } issueLabels(first: 250, filter: { team: { null: true } }) { nodes { id name } } }';
 
@@ -125,6 +127,20 @@ export class LinearIntegration {
     );
   }
 
+  /** A team's workflow states, by id, as Linear gives them: the ones a Linear change may move an issue to. */
+  async #states(
+    key: string,
+    teamId: string,
+  ): Promise<ReadonlyMap<string, { readonly name: string | null; readonly type: string | null }>> {
+    const states = await this.#client.request({ key, query: STATES_QUERY, variables: { team: teamId } });
+    if (states.kind !== 'data') failed(states);
+    const found = new Map<string, { readonly name: string | null; readonly type: string | null }>();
+    for (const entry of nodes((states.data.team as { states?: unknown } | null)?.states))
+      if (isLinearId(entry.id))
+        found.set(entry.id, { name: shown(entry.name), type: typeof entry.type === 'string' ? entry.type : null });
+    return found;
+  }
+
   async show(args: Readonly<Record<string, unknown>>): Promise<IntegrationShowResultV1> {
     if (args.integration !== 'linear') throw new CommsError('USAGE', 'the integration is linear');
     const team = args.team;
@@ -150,7 +166,10 @@ export class LinearIntegration {
    * does, rather than skip the check.
    */
   async assertActivation(rule: CanonicalFullRuleDocument): Promise<'none' | 'checked' | 'skipped'> {
-    const targets = rule.targets.flatMap((target) => (target.kind === 'linear' ? [target] : []));
+    // A Linear change (workflows design §4.2) is checked as a Linear target is, and its state against the team's.
+    const targets = rule.targets.flatMap((target) =>
+      target.kind === 'linear' || target.kind === 'linear-change' ? [target] : [],
+    );
     if (targets.length === 0) return 'none';
     const key = await this.key();
     if (key === null) return 'skipped';
@@ -168,13 +187,28 @@ export class LinearIntegration {
           'LINEAR_TEAM_MISMATCH',
           `Linear target ${target.targetId} names team ${target.team.key}, but its team id is Linear's team ${team.key}`,
         );
-      if (target.labels.length === 0) continue;
+      if (target.kind === 'linear-change' && target.state !== undefined) {
+        const state = (await this.#states(key, team.id)).get(target.state.id);
+        if (state === undefined)
+          throw new EventDomainError(
+            'LINEAR_STATE_MISMATCH',
+            `Linear change ${target.targetId} names state ${JSON.stringify(target.state.name)} by an id team ${team.key} has no state for`,
+          );
+        if (state.name !== target.state.name || state.type !== target.state.type)
+          throw new EventDomainError(
+            'LINEAR_STATE_MISMATCH',
+            `Linear change ${target.targetId} names state ${JSON.stringify(target.state.name)} (${target.state.type}), but its id is Linear's state ${JSON.stringify(state.name)} (${state.type ?? 'of no type'})`,
+          );
+      }
+      const named =
+        target.kind === 'linear' ? target.labels : [...(target.labels?.add ?? []), ...(target.labels?.remove ?? [])];
+      if (named.length === 0) continue;
       let labels = labelsByTeam.get(team.id);
       if (labels === undefined) {
         labels = await this.#labels(key, team.id);
         labelsByTeam.set(team.id, labels);
       }
-      for (const label of target.labels) {
+      for (const label of named) {
         const found = labels.find((entry) => entry.id === label.id);
         if (found === undefined)
           throw new EventDomainError(

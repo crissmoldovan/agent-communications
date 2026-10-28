@@ -41,9 +41,11 @@ interface Capability {
 }
 
 /** An interactive terminal; `typed` is the line the person types when asked (lane bind asks for the lane's name). */
-function tty(typed?: string): EventsCliStreams {
+function tty(typed?: string, end = false): EventsCliStreams {
   const stdin = new PassThrough();
   if (typed !== undefined) stdin.write(`${typed}\n`);
+  // A command that reads its input to the end (Describe it's words) gets an input that ends.
+  if (end) stdin.end();
   return {
     stdin: Object.assign(stdin, { isTTY: true }),
     stdout: Object.assign(new PassThrough(), { isTTY: true }),
@@ -57,13 +59,14 @@ async function cli(
   options: {
     readonly human?: boolean;
     readonly typed?: string | undefined;
+    readonly endInput?: boolean | undefined;
     readonly readSecret?: () => Promise<string>;
     readonly owner?: B3OwnerService;
   } = {},
 ): Promise<{ readonly code: number; readonly stdout: string; readonly stderr: string }> {
   const streams =
     options.human === true
-      ? tty(options.typed)
+      ? tty(options.typed, options.endInput === true)
       : {
           stdin: new PassThrough(),
           stdout: new PassThrough(),
@@ -104,6 +107,9 @@ function forbiddenToolName(row: { readonly cli: string }): string {
 function exceptionArguments(row: Capability): readonly string[] {
   if (row.id === 'events-daemon.approve') return ['ap_00000000000000000000000000'];
   if (row.id === 'events-daemon.dryrun.show') return ['delivery-1'];
+  // Describe it by a key provider, of which this owner keeps none: it refuses before anything is sent, so the proof
+  // never reaches a model, nor this Mac's own `claude`.
+  if (row.id === 'events-daemon.rule.describe') return ['--provider', 'openrouter'];
   return row.argv ?? [];
 }
 
@@ -830,7 +836,13 @@ test('B3 e2e keeps every terminal exception out of MCP and refuses forged secret
         const result = await cli([...commandWords(row), ...exceptionArguments(row)], stateDir, {
           human: true,
           // lane bind asks the person to type the lane's name, its first argument.
-          typed: row.id === 'events-daemon.lane.bind' ? exceptionArguments(row)[0] : undefined,
+          typed:
+            row.id === 'events-daemon.lane.bind'
+              ? exceptionArguments(row)[0]
+              : row.id === 'events-daemon.rule.describe'
+                ? 'When acme writes, tell me'
+                : undefined,
+          endInput: row.id === 'events-daemon.rule.describe',
           readSecret: async () => 'https://receiver.invalid/synthetic-hidden-value',
         });
         assertProductionResponse(result, row);

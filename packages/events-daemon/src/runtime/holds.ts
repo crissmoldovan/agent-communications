@@ -7,10 +7,13 @@ import { isRemovedAccountError, purgeRemovedAccountWork } from './account-fence.
 import { commitHeldDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from './decisions.ts';
 import { prepareDeliveries } from './deliveries.ts';
 import type { DisclosureSnapshot } from './disclosure-fence.ts';
+import { chainStartForMessage } from './events/chains.ts';
 import { evaluateRuleProjection } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher, type ProjectionReference } from './projections.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
 import type { FencedWhatsAppEventVisibility, WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import { runMessageOf } from './workflow/run-message.ts';
+import { prepareFlowRun } from './workflow/runs.ts';
 
 export type HoldBoundBy = 'hold-window' | 'ingest-retention';
 
@@ -482,7 +485,18 @@ export class HoldResolver {
       beforeAuthorisation.authorizationActivationId !== authorisation.authorizationActivationId
     )
       return { kind: 'stale' };
-    const evaluated = input.decision === 'accept' ? evaluateRuleProjection(after.rule, projection.event) : null;
+    // A chained workflow's held message starts from the chain that was waiting for it (W34): with its trigger gone,
+    // there is nothing to start, and the release makes no run.
+    const chained =
+      after.rule.flow?.on === undefined
+        ? undefined
+        : await chainStartForMessage(this.#store.database, this.#cipher, {
+            eventId: after.reference.eventId,
+            ruleId: after.reference.ruleId,
+            ruleVersion: after.reference.ruleVersion,
+          });
+    const evaluated =
+      input.decision === 'accept' && chained !== null ? evaluateRuleProjection(after.rule, projection.event) : null;
     const outcome =
       input.decision === 'reject'
         ? 'no-match'
@@ -508,6 +522,24 @@ export class HoldResolver {
             // A person let this held decision through: its queue item says so, not what the judge answered (Q3).
             released: true,
           });
+    // A released match of a workflow with a flow is a run, as an evaluated one is (workflows design §5).
+    const run =
+      evaluated === null || 'rejected' in evaluated
+        ? undefined
+        : await prepareFlowRun({
+            cipher: this.#cipher,
+            rule: after.rule,
+            data: evaluated.mapped.data,
+            createdAt,
+            matched: {
+              definition: evaluated.definition,
+              event: projection.event,
+              classification: evaluated.classification,
+            },
+            // The message and its thread, for a flow that finds the session that took the conversation (W36).
+            message: runMessageOf(after.rule, projection.event),
+            ...(chained ?? {}),
+          });
     if (evaluated !== null && !('rejected' in evaluated))
       await this.#taint.record({
         eventId: after.reference.eventId,
@@ -530,6 +562,7 @@ export class HoldResolver {
         outcome,
         switchGeneration: after.switchGeneration,
         deliveries,
+        ...(run === undefined ? {} : { run }),
         disclosure: {
           approvalId: authorisation.approvalId,
           authorizationActivationId: authorisation.authorizationActivationId,

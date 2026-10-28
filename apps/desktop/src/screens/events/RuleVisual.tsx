@@ -135,7 +135,7 @@ function Section({
 }
 
 /** A part with no control here: it stays as it is, and the person changes it in Text. */
-function AsText({ onEditAsText }: { onEditAsText: () => void }) {
+export function AsText({ onEditAsText }: { onEditAsText: () => void }) {
   return (
     <div data-slot="edited-as-text" className="flex flex-wrap items-center gap-(--cue-space-2)">
       <Chip tone="neutral" variant="tag">
@@ -150,7 +150,7 @@ function AsText({ onEditAsText }: { onEditAsText: () => void }) {
 }
 
 /** A label and its control, in the prototype's two columns. */
-function Line({ label, children }: { label: string; children: ReactNode }) {
+export function Line({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="grid grid-cols-1 items-center gap-(--cue-space-2) sm:grid-cols-[8.5rem_minmax(0,1fr)]">
       <span className="text-(length:--cue-text-label) text-fg-muted">{label}</span>
@@ -159,7 +159,7 @@ function Line({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-function When({
+export function When({
   document,
   onChange,
   context,
@@ -267,7 +267,7 @@ function ConditionRow({
   );
 }
 
-function Which({
+export function Which({
   document,
   onChange,
   context,
@@ -348,7 +348,7 @@ function judgeLabel(choice: JudgeChoice): string {
   return `${name}${through}, version ${choice.version}`;
 }
 
-function Judge({
+export function Judge({
   document,
   onChange,
   context,
@@ -535,7 +535,7 @@ function ActionCard({
 const QUEUE_KEEPS = [7 * DAY_MS, 30 * DAY_MS] as const;
 const DRY_RUN_KEEPS = [HOUR_MS, 12 * HOUR_MS, DAY_MS] as const;
 
-function QueueAction({ target, onTarget }: { target: JsonObject; onTarget: (next: JsonObject) => void }) {
+export function QueueAction({ target, onTarget }: { target: JsonObject; onTarget: (next: JsonObject) => void }) {
   const lane = isObject(target.lane) && typeof target.lane.name === 'string' ? target.lane.name : '';
   const retention = typeof target.retentionMs === 'number' ? target.retentionMs : 7 * DAY_MS;
   return (
@@ -568,7 +568,7 @@ function QueueAction({ target, onTarget }: { target: JsonObject; onTarget: (next
   );
 }
 
-function DryRunAction({ target, onTarget }: { target: JsonObject; onTarget: (next: JsonObject) => void }) {
+export function DryRunAction({ target, onTarget }: { target: JsonObject; onTarget: (next: JsonObject) => void }) {
   const retention = typeof target.retentionMs === 'number' ? target.retentionMs : DAY_MS;
   return (
     <Line label={COPY.keepFor}>
@@ -867,7 +867,7 @@ function LinearLabels({
   );
 }
 
-function LinearAction({
+export function LinearAction({
   target,
   linear,
   onTarget,
@@ -1096,7 +1096,7 @@ function Then({
   );
 }
 
-function Kept({
+export function Kept({
   document,
   onChange,
   context,

@@ -1736,6 +1736,43 @@ export class TakeStore {
     return listed;
   }
 
+  /**
+   * Who took this conversation (workflows 0.36 W36): the newest take in `accountId` on `channel` whose thread is
+   * `thread` — or that is the thread's first message, whose id is the thread's (a Slack conversation is
+   * `<channel>/<parent ts>`), and which a take records in no thread while nobody has replied to it — other than
+   * `except` (the message a workflow is about), that is `taken` or `done` and held by an agent window's own session
+   * with a Claude Code session id. Null when there is none, the person holds it, or its holder had no session id. A
+   * take by a command that joined no agent window does not count (security review of 0.36.0, M2): such a command
+   * states its session id itself, so it could name any session. It reads the account's records once, as `list` does,
+   * and writes nothing; it never reads another account. The session id and the window's folder leave it, so the
+   * event service finds that session only where the window worked; never the holder's client or key.
+   */
+  async threadHolder(input: {
+    readonly channel: TakeChannel;
+    readonly accountId: string;
+    readonly thread: string;
+    readonly except: TakeMessageRef;
+  }): Promise<{ sessionId: string; state: 'taken' | 'done'; at: string; folder: string | null } | null> {
+    if (typeof input.thread !== 'string' || input.thread.length === 0) return null;
+    const except = takeMessageKey(input.except);
+    let newest: { sessionId: string; state: 'taken' | 'done'; at: string; folder: string | null } | null = null;
+    for (const listed of await this.list({ accountId: input.accountId })) {
+      if (!('record' in listed)) continue;
+      const { record } = listed;
+      const message = record.message;
+      if (message.channel !== input.channel || message.accountId !== input.accountId) continue;
+      if (message.thread !== input.thread && message.id !== input.thread) continue;
+      if (takeMessageKey(message) === except) continue;
+      if (record.state !== 'taken' && record.state !== 'done') continue;
+      const held = record.holder;
+      if (held === null || isPerson(held) || !held.grouped || !isClaudeCodeSessionId(held.sessionId)) continue;
+      const at = record.takenAt ?? record.updatedAt;
+      if (newest === null || Date.parse(at) > Date.parse(newest.at))
+        newest = { sessionId: held.sessionId, state: record.state, at, folder: held.folder };
+    }
+    return newest;
+  }
+
   // ── Retention ───────────────────────────────────────────────────────────────────────────────────────────────
 
   /** Once a day per process, after a write: never awaited by the act, and never failing it. */

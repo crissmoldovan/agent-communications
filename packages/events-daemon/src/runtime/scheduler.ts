@@ -25,6 +25,7 @@ import type { ActivationRuntime } from './activations.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import type { DeliveryDispatcher } from './dispatcher.ts';
 import { EventEvaluator } from './evaluate.ts';
+import { readyChains, sweepChainsInTransaction } from './events/chains.ts';
 import type { EventExpiry } from './expiry.ts';
 import type { HostedJudgeCredential } from './judge-transport.ts';
 import type { EventLifecycle } from './lifecycle.ts';
@@ -72,6 +73,22 @@ export interface EventSchedulerOptions {
   readonly whatsappVisibilityFence?: WhatsAppVisibilityFence | undefined;
   /** The same owner-wide lease held by every timer and explicit scheduler tick. */
   readonly writerQuiescer: WriterQuiescer;
+  /**
+   * Workflow work that runs every tick, paused or not (0.36.0, §7.6: pause stops claims, and events already raised keep
+   * going out): the owner's subscriber listeners and the event dispatcher. Its own fences refuse what a disabled switch
+   * no longer authorises.
+   */
+  readonly workflowWork?: (() => Promise<void>) | undefined;
+  /**
+   * The workflow engine (workflows design §5): each tick it ends expired runs, whatever the switch, and — collection on
+   * and not paused — starts held runs and runs every step whose time has come, before deliveries go out.
+   */
+  readonly workflows?: { tick(): Promise<number> } | undefined;
+  /**
+   * The event dispatcher's second pump of the tick (0.36.0, W33), right after the engine's turn: an event a step raised
+   * in that turn starts out at once, apart, rather than waiting a whole tick for the next pass's `workflowWork`.
+   */
+  readonly afterWorkflows?: (() => void) | undefined;
   readonly tickMs?: number | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly deliveryBatchSize?: number | undefined;
@@ -96,6 +113,9 @@ export class EventScheduler {
   readonly #sourceRegistry: LocalEventSourceRegistry;
   readonly #whatsappVisibilityFence: WhatsAppVisibilityFence | undefined;
   readonly #writerQuiescer: WriterQuiescer;
+  readonly #workflowWork: (() => Promise<void>) | undefined;
+  readonly #workflows: EventSchedulerOptions['workflows'];
+  readonly #afterWorkflows: (() => void) | undefined;
   readonly #tickMs: number;
   readonly #pollIntervalMs: number;
   readonly #deliveryBatchSize: number;
@@ -125,6 +145,9 @@ export class EventScheduler {
       visibilityFence: options.whatsappVisibilityFence,
     });
     this.#writerQuiescer = options.writerQuiescer;
+    this.#workflowWork = options.workflowWork;
+    this.#workflows = options.workflows;
+    this.#afterWorkflows = options.afterWorkflows;
     if ('writerQuiescer' in options.cipher && this.#writerQuiescer !== options.cipher.writerQuiescer)
       throw new Error('the scheduler and record cipher must use the same owner writer quiescer');
     this.#tickMs = positiveInterval(options.tickMs ?? DEFAULT_TICK_MS, 'tick interval');
@@ -170,7 +193,20 @@ export class EventScheduler {
       if (!(error instanceof CommsError && error.details?.reason === 'REPLACEMENT_DRAINING'))
         this.#recordFailure('activation', 'owner');
     }
+    try {
+      await this.#workflowWork?.();
+    } catch {
+      this.#recordFailure('dispatch', 'workflow-events');
+    }
 
+    await this.#workflows?.tick().catch(() => this.#recordFailure('workflow', 'owner'));
+    // Before the chains, whose gate may wait on a judge: what the engine just raised is not held behind it.
+    try {
+      this.#afterWorkflows?.();
+    } catch {
+      this.#recordFailure('dispatch', 'workflow-events');
+    }
+    await this.#chains().catch(() => this.#recordFailure('workflow', 'chains'));
     const status = this.#lifecycle.status();
     if (!status.enabled || status.paused) return;
 
@@ -194,6 +230,59 @@ export class EventScheduler {
     } catch (error) {
       this.#recordFailure('dispatch', error instanceof CommsError ? error.code : 'owner');
     }
+  }
+
+  /**
+   * Chains (workflows design W34, §9.3), after the engine's turn so a run that raised this tick is answered in it: a wait
+   * whose time has passed ends `not-chained` whatever the switch; then — collection on and not paused — each waiting
+   * message whose chain request has come is gated and mapped through its chained workflow's own approval, as an
+   * evaluation is. A WhatsApp message is read only under its live-list fence, as a held one is.
+   */
+  async #chains(): Promise<void> {
+    this.#store.immediate(() => sweepChainsInTransaction(this.#store.database, this.#now()));
+    const status = this.#lifecycle.status();
+    if (!status.enabled || status.paused) return;
+    const ready = readyChains(this.#store.database);
+    if (ready.length === 0) return;
+    const evaluator = this.#evaluator();
+    for (const message of ready) {
+      const work = () =>
+        evaluator.evaluate({ eventId: message.eventId, ruleId: message.ruleId, ruleVersion: message.ruleVersion });
+      try {
+        if (message.whatsappMessageId === null) await work();
+        else if (this.#whatsappVisibilityFence !== undefined)
+          await this.#whatsappVisibilityFence.withCurrentVisibleRead(
+            { accountId: message.accountId, whatsappMessageId: message.whatsappMessageId },
+            work,
+          );
+      } catch (error) {
+        if (isRemovedAccountError(error)) continue;
+        this.#recordFailure('workflow', 'chain');
+      }
+    }
+  }
+
+  /** An evaluator for owner work outside a source's turn: the account's own addresses mark what it sent itself. */
+  #evaluator(): EventEvaluator {
+    return new EventEvaluator({
+      store: this.#store,
+      cipher: this.#cipher,
+      approvals: this.#approvals,
+      config: this.#config,
+      taint: {
+        record: async (input) => {
+          const config = await this.#config.load();
+          const inbox = Object.values(config.inboxes).find((candidate) => candidate.id === input.accountId);
+          await recordEventTaint(
+            this.#taint,
+            { ownAddresses: inbox?.email ? [inbox.email] : [], internalDomains: inbox?.internalDomains ?? [] },
+            input,
+          );
+        },
+      },
+      ...(this.#hostedJudgeKeyFor === undefined ? {} : { hostedJudgeKeyFor: this.#hostedJudgeKeyFor }),
+      now: this.#now,
+    });
   }
 
   /** One fair ready-source turn per owner tick; Gmail and every Phase-D source share the same bounded rotation. */
@@ -514,7 +603,7 @@ export class EventScheduler {
           const rule = rules().find(
             (candidate) => candidate.ruleId === request.ruleId && candidate.ruleVersion === request.ruleVersion,
           );
-          if (!rule) throw new CommsError('APPROVAL_VOID', 'a lazy Gmail projection no longer has its exact rule');
+          if (!rule) throw new CommsError('APPROVAL_VOID', 'a lazy Gmail projection no longer has its exact workflow');
           await fence(rule);
         }
         return materialiser.materialiseAll(requests);

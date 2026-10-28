@@ -42,6 +42,15 @@ test('E9 operator control creates immutable subscriber and judge versions while 
           version: 1,
           digest: '590c35f84a86811a1e1fbd2b7856d27e84a5a758d430c9c2b7f51f7be4d74ec9',
           revokedAt: null,
+          // 0.36.0's additive SubscriberEntryV2 fields (plan I6): a subscriber given no events, with no listener.
+          kind: 'sse',
+          events: null,
+          state: null,
+          listening: null,
+          listenError: null,
+          address: null,
+          backlog: 0,
+          lastDeliveredAt: null,
         },
       ]);
 

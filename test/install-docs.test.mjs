@@ -70,7 +70,7 @@ test('the local event service README states its boundaries for the person using 
   assert.match(prose, /Node 22\.16(?:\.0)? or newer/i);
   assert.match(
     prose,
-    /Nothing is collected and nothing leaves this machine until you approve the rule yourself, at your terminal/i,
+    /Nothing is collected and nothing leaves this machine until you approve the workflow yourself, at your terminal/i,
   );
   assert.match(prose, /dry-run log you read at your terminal or in the desktop app/i);
   // 0.32.0 (owner feedback §3.5, events design D7): the log is the person's at a terminal or in the app, never an agent's

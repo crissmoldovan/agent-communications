@@ -13,6 +13,7 @@ import type {
   Folders,
   Installation,
   Product,
+  WorkflowPositions,
 } from '../ipc.ts';
 import { PRODUCTS } from '../ipc.ts';
 import accountsGmail from './fixtures/accounts-gmail.populated.json';
@@ -32,15 +33,25 @@ import doctorResend from './fixtures/doctor-resend.json';
 import doctorSlack from './fixtures/doctor-slack.json';
 import doctorWhatsapp from './fixtures/doctor-whatsapp.json';
 import layaDisabled from './fixtures/events-judge-model-status.disabled.json';
+import ruleShowV032 from './fixtures/events-rule-show.v032.json';
 import eventsStatus from './fixtures/events-status.running.json';
 import label from './fixtures/label.populated.json';
 import laneList from './fixtures/lane-list.json';
+import projectScan from './fixtures/project-scan.v036.json';
+import projectsList from './fixtures/projects-list.v036.json';
 import queueCounts from './fixtures/queue-counts.json';
 import queueDismissed from './fixtures/queue-list-dismissed.json';
 import queueDone from './fixtures/queue-list-done.json';
 import queueOpen from './fixtures/queue-list-open.json';
+import runShow from './fixtures/run-show.v036.json';
+import runsList from './fixtures/runs-list.v036.json';
 import standingList from './fixtures/standing-list.json';
+import subscribersList from './fixtures/subscribers-list.v036.json';
 import updateStatus from './fixtures/update-status.json';
+import workflowCheck from './fixtures/workflow-check.v036.json';
+import workflowDescribe from './fixtures/workflow-describe.v036.json';
+import workflowEventsList from './fixtures/workflow-events-list.v036.json';
+import workflowTestFlow from './fixtures/workflow-test-flow.v036.json';
 
 /** The folders of an example machine: nobody's. */
 export const EXAMPLE_FOLDERS: Folders = {
@@ -145,6 +156,22 @@ const JUDGES_FRESH = (
   judgesContract as { vectors: { name: string; kinds: unknown[]; judges: unknown[] }[] }
 ).vectors.find((vector) => vector.name === 'fresh');
 
+/** A `workflow check` that finds a cycle, for a test that wants problems: the default answer finds none. */
+export const WORKFLOW_CHECK_PROBLEMS = workflowCheck;
+
+/** What a subscription `subscriber enable` prepared answers: the approval and the digest it binds, as `rule enable`'s. */
+export const SUBSCRIPTION_PREPARED = {
+  intentId: 'act_0f1e2d3c4b5a69788796a5b4c3d2e1f0',
+  approvalId: 'ap_0123456789ABCDEFGHJKMNPQRS',
+  binding: {
+    digest: '0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0',
+    activationKind: 'subscription',
+    versions: [{ kind: 'subscriber', id: 'events-dashboard', version: 2 }],
+  },
+  kind: 'subscription',
+  status: 'pending',
+};
+
 /** What each call kind answers by default: the populated fixtures, a doctor and an account list per product. */
 export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   approvalsPending,
@@ -198,7 +225,76 @@ export const FIXTURES: Partial<Record<Call['kind'], Fixture>> = {
   // event service's own output replaces them. Their calls run only where its version is 0.31.0 or later.
   laneList,
   laneUnbind: (call: Call) => ({ lane: (call as Extract<Call, { kind: 'laneUnbind' }>).lane, unbound: true }),
+  // Workflows (0.36.0, plan I6), from fixtures written by hand to the contract until the event service's own output
+  // replaces them. Their calls run only where its version is 0.36.0 or later, which no test has unless it says so.
+  ...workflowAnswers(),
 };
+
+/**
+ * Each workflow call's answer (0.36.0): runs, one run, a cancel, a check, a try, one version, projects, a scan, Describe
+ * it, the catalogue, and subscribers, each answered as the contract's shapes are.
+ */
+export function workflowAnswers(): Partial<Record<Call['kind'], Fixture>> {
+  type Of<K extends Call['kind']> = Extract<Call, { kind: K }>;
+  const project = projectsList.projects[0];
+  return {
+    eventsRuleCheck: { ok: true, problems: [] },
+    eventsRuleShowVersion: (call: Call) => {
+      const { ruleId, version } = call as Of<'eventsRuleShowVersion'>;
+      const versions = (ruleShowV032 as Record<string, { document: { version: number } }[]>)[ruleId] ?? [];
+      return versions.filter((entry) => entry.document.version === version);
+    },
+    eventsRuleTestFlow: workflowTestFlow,
+    eventsRunsList: (call: Call) => {
+      const { ruleId, state } = call as Of<'eventsRunsList'>;
+      return {
+        runs: runsList.runs.filter(
+          (run) => (ruleId === undefined || run.ruleId === ruleId) && (state === undefined || run.state === state),
+        ),
+      };
+    },
+    eventsRunShow: (call: Call) => ({ ...runShow, runId: (call as Of<'eventsRunShow'>).runId }),
+    eventsRunCancel: (call: Call) => {
+      const { runId, interrupt } = call as Of<'eventsRunCancel'>;
+      return { runId, state: 'cancelled', cancelledDeliveries: 1, cancelledEvents: 0, interrupted: interrupt };
+    },
+    eventsProjectsList: projectsList,
+    eventsProjectShow: (call: Call) =>
+      projectsList.projects.find((each) => each.projectId === (call as Of<'eventsProjectShow'>).projectId) ?? project,
+    eventsProjectAdd: (call: Call) => ({ ...project, ...(call as Of<'eventsProjectAdd'>).document }),
+    eventsProjectUpdate: (call: Call) => ({ ...project, ...(call as Of<'eventsProjectUpdate'>).document }),
+    eventsProjectRemove: (call: Call) => ({ projectId: (call as Of<'eventsProjectRemove'>).projectId, removed: true }),
+    eventsProjectScan: projectScan,
+    eventsWorkflowDescribe: workflowDescribe,
+    eventsWorkflowEventsList: workflowEventsList,
+    eventsSubscribersList: subscribersList,
+    eventsSubscriberAdd: (call: Call) => subscriberStored((call as Of<'eventsSubscriberAdd'>).document),
+    eventsSubscriberUpdate: (call: Call) => subscriberStored((call as Of<'eventsSubscriberUpdate'>).document),
+    eventsSubscriberRemove: (call: Call) => ({
+      subscriberId: (call as Of<'eventsSubscriberRemove'>).subscriberId,
+      removed: true,
+    }),
+    eventsSubscriberEnable: SUBSCRIPTION_PREPARED,
+    eventsSubscriberApprove: (call: Call) => ({
+      approvalId: (call as Of<'eventsSubscriberApprove'>).approvalId,
+      status: 'approved',
+      activated: true,
+    }),
+  };
+}
+
+/** What `subscriber add|update` answers: the version it stored, inert until a subscription is approved. */
+function subscriberStored(document: Record<string, unknown>) {
+  return {
+    id: `subscriber:${String(document.subscriberId)}@${String(document.version)}`,
+    kind: 'subscriber',
+    objectId: document.subscriberId,
+    version: document.version,
+    document,
+    digest: 'a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1',
+    state: null,
+  };
+}
 
 /** An installation with every product at 0.29.0, the first core with the activity log. */
 export const ACTIVITY_INSTALLATION: Installation = { ...EXAMPLE_INSTALLATION, version: '0.29.0' };
@@ -342,6 +438,8 @@ export function createFakeBridge(
   const calls: FakeBridge['calls'] = [];
   const listeners = new Map<string, Set<(payload: unknown) => void>>();
   const answers = { ...FIXTURES, ...fixtures };
+  // Where the designer kept each workflow's boxes, as Rust's `positions.rs` would: in memory, for this bridge only.
+  const kept = new Map<string, WorkflowPositions>();
   const record = (command: keyof Bridge, args: unknown) => calls.push({ command, args });
 
   const defaults: Omit<Bridge, 'on'> = {
@@ -423,6 +521,13 @@ export function createFakeBridge(
     },
     async appBuild() {
       return RELEASE_BUILD;
+    },
+    async workflowPositions(ruleId) {
+      return JSON.parse(JSON.stringify(kept.get(ruleId) ?? {}));
+    },
+    async setWorkflowPositions(ruleId, positions) {
+      if (Object.keys(positions).length === 0) kept.delete(ruleId);
+      else kept.set(ruleId, JSON.parse(JSON.stringify(positions)));
     },
   };
 

@@ -29,6 +29,8 @@
  * `connections` is core's (`CONNECTIONS_VERSION`, 0.35.0, `mcp_connections.rs`): MCP connections — each place an app
  * uses Agent Comms, added, changed and moved into one entry in the app; an older core keeps Connections' table of apps
  * by server.
+ * `workflows` is the events service's (`WORKFLOWS_VERSION`, 0.36.0): workflows checked, tried and drawn, their runs,
+ * projects, Describe it, the step event catalogue, and subscribers given events and approved in the app.
  */
 export const GATES = {
   behaviour: '0.22.0',
@@ -51,6 +53,7 @@ export const GATES = {
   taking: '0.35.0',
   search: '0.35.0',
   connections: '0.35.0',
+  workflows: '0.36.0',
 } as const;
 
 /** The first core that takes messages (`taking.rs`, `TAKING_VERSION`). */

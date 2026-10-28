@@ -1,11 +1,12 @@
-# The rule text
+# The workflow text
 
-A rule document written as a short text a person reads and edits (0.33.0 design §3.2). `printRuleText(doc)` writes it,
-and `parseRuleText(text)` reads it back to exactly the same document. The canonical JSON stays what is approved: the
-text is a view of it.
+A workflow (stored as a rule document) written as a short text a person reads and edits (0.33.0 design §3.2;
+workflows design §4.4, W17). `printRuleText(doc)` writes it, and `parseRuleText(text)` reads it back to exactly the same
+document. The canonical JSON stays what is approved: the text is a view of it, so a version's text never changes its
+JSON or its digest.
 
 ```
-rule invoices, version 4
+workflow invoices, version 4
 
 when a new message arrives in cue/gmail, in the inbox
 match any
@@ -37,9 +38,10 @@ at most 60 an hour
 - **Round trip:** `parseRuleText(printRuleText(doc))` deep-equals `doc`, for any JSON object.
 - **Stable:** the same document always prints the same text, whatever order its keys are in.
 - **Nothing dropped:** a field or shape the readable form has no words for is written as `raw` JSON in its place (see
-  [The escape form](#the-escape-form)). A canonical rule never needs it.
-- **Grammar only:** the parser checks the text, not the rule. Whether the accounts, lanes, judges and targets exist,
-  and whether the event service accepts the rule, is for the event service to say when the document is submitted.
+  [The escape form](#the-escape-form)). A canonical workflow never needs it.
+- **Grammar only:** the parser checks the text, not the workflow. Whether the accounts, lanes, judges and targets
+  exist, and whether the event service accepts the workflow, is for the event service to say when the document is
+  submitted.
 - **No I/O and no knowledge of accounts:** an account is written as the alias or id the document holds.
 
 ## Lines and words
@@ -61,14 +63,16 @@ at most 60 an hour
 
 ## Sections
 
-Each section is given once, in any order; `subscriber` and `raw` may repeat. The printer writes them in the order
-below.
+Each section is given once, in any order; `subscriber` and `raw` may repeat. A workflow has a `then` section or a
+`flow` section, never both. The printer writes them in the order below.
 
-### `rule` — `ruleId`, `version`
+### `workflow` — `ruleId`, `version`
 
 ```
-rule <id>, version <n>
+workflow <id>, version <n>
 ```
+
+`rule <id>, version <n>`, the word before 0.36, still parses to the same document; the printer writes `workflow`.
 
 ### `when` — `source`, `event`
 
@@ -147,7 +151,7 @@ ask <judge id>, version <n>[, via <provider>]
 ```
 
 `if unsure drop` is `onUncertain: "no-match"`, and `if unsure hold` is `"hold"`; `if unsure …` may also stand alone.
-The judge's document is embedded in the rule, so every field of it is written. Each line is optional and sets only its
+The judge's document is embedded in the workflow, so every field of it is written. Each line is optional and sets only its
 own fields: the prototype's short `ask` parses, and the event service refuses what it leaves out.
 
 The app fills a short `ask`'s judge document and limits from the judge's stored version, by its id; the parser does not.
@@ -191,7 +195,7 @@ below it the ids Linear knows them by, and its title and description:
 - `team id <id>` is `team.id`; `label id <id>` (or `label ids <id> and <id>…`) pairs each id, in order, with a name on
   the target's line, so there are as many of each.
 - `title "<text>"` and `description "<text>"` are the templates `{ "text": … }`: quoted text, whose `{{field}}` slots
-  name the rule's mapped fields (the event service checks them when the rule is activated). A model-written part
+  name the workflow's mapped fields (the event service checks them when the workflow is activated). A model-written part
   (`title written by …`) is refused for now: it arrives with the session target's context.
 - `assigned to me` is `"me"`, `assigned to user <id>` is `{ "id": … }`, and `assigned to nobody`, or nothing, is `null`.
   No labels is `[]`. The parser fills both, and the printer leaves out each only when the document holds exactly that.
@@ -232,8 +236,131 @@ window's, so the printer writes `if none` for a lane only when it is not `leave 
 `ifNone: "queue-only"`, `ifBusy: "queue"`, `mode: "manual"` and `context: []` when the text says nothing of them, and
 the printer leaves out exactly those (`if busy` is always written, as the prototype draws it). A part the readable
 form has no words for is `raw <JSON>` in its place; a target it cannot say at all is `raw` whole. A session target
-that leaves an item in the Queue — found by a lane, or with either `leave it in the queue` — gives its rule a queue
+that leaves an item in the Queue — found by a lane, or with either `leave it in the queue` — gives its workflow a queue
 retention, as a queue target does (`targetQueues`, exported by this package).
+
+### `flow` — `flow`, and `targets` (workflows design §4.4)
+
+A workflow whose steps branch, wait, find or start a session, or raise events has a `flow` section in place of `then`
+(spec §4.1). Its steps say what happens, and the targets they deliver to are written on them.
+
+```
+flow, at most 6 runs an hour
+  events in acme as client-asks, run emits failed and finished
+  step route: choose a project among acme-site and billing, by hints then by jev version 2 via typesafe
+    looking at text
+    project acme-site, in /example/home/work/acme-site
+    project billing, in /example/home/work/billing
+    emits matched and none
+    none → tell
+  step found: raise project-found
+  step find: find a session in route's project, with claude-code
+    idle → give
+    none → tell
+  step give: session client-prompt, version 2, with claude-code, to find
+    give
+      fields text
+      from step route project
+    report done and needs-the-person
+    then → end
+  step tell: tell me "A message for {{steps.route.project}} needs you"
+```
+
+`test/fixtures/flows/owner-example.txt` is the whole of the spec's example, and its JSON beside it.
+
+**The flow line** says the limits that differ from the defaults (`FLOW_LIMIT_DEFAULTS`, which the parser fills):
+
+| Text | Limit |
+|---|---|
+| `at most <n> runs an hour` | `runsPerHour` (10) |
+| `<n> at a time` | `concurrentRuns` (2) |
+| `<n> sessions an hour` | `sessionsPerHour` (2) |
+| `<n> worktrees a day` | `worktreesPerDay` (5) |
+| `<n> Linear writes an hour` | `linearWritesPerHour` (30) |
+| `<n> events an hour` | `eventsPerHour` (120) |
+| `each run up to <duration>` | `runMs` (3 days) |
+| `in shadow` | `shadow: true` (§7.7) |
+
+The limits after `at most` are joined by commas (`at most 6 runs an hour, 3 at a time`), each said once, and `1 run`,
+`1 session`, `1 worktree`, `1 Linear write` and `1 event` take the singular.
+
+**Its lines**, indented under it:
+
+| Text | Flow |
+|---|---|
+| `events in <namespace> as <workflow>[, run emits <event> and <event>]` | `events` (W24): where its events are named, and the run's own it raises |
+| `on raised <pattern> and <pattern>[, within <duration>]` | `on` (W34): a chained workflow; `withinMs` is 1 day when not said |
+| `step <id>: <what it does>`, its lines indented under it | one step; the first written is `start` |
+
+A pattern is bare when it is made of letters, digits, `_`, `-`, `.` and `*` (`acme.client-asks.*.failed`), and quoted
+otherwise.
+
+**Steps.** One phrase per kind of step (spec §4.4):
+
+| Text | Step |
+|---|---|
+| `if <condition>` (members of `any`/`all` indented under it) | `condition`, `when` |
+| `ask <judge id>, version <n>[, via <provider>]`, the `ask` section's lines under it | `judge`, `ask` |
+| `choose a project among <name> and <name>[, by hints][ then by <judge> version <n>[ via <provider>]]` | `route`, `candidates`, `by`, `judge` |
+| `find a session <place>` · `find an idle session <place>` | `find-session`, `in`, `only: "idle"` |
+| `find the session that took this conversation` · `find the idle session that took this conversation` | `find-session`, `in: { thread: true }` (W36) |
+| `start a session <place>[, with <provider>][, mode <mode>]` | `start-session` |
+| `make a worktree of <route step>'s project[, branch "<template>"][, from <branch>][, removed if clean]` | `worktree`; `base` is `default` and `cleanup` `keep` when not said |
+| a target, as under `then`, `[, to <step>, <step> or <step>]` after a session, `[, on <step>]` after a Linear change | `deliver`, `target`, `to` |
+| `deliver <target id>, version <n>[, to …][, on …]` | `deliver`, naming its target by id (see below) |
+| `wait for <step>'s turn to end` · `wait for <step>'s session to be free` · `wait for <duration>`, `[, up to <duration>]` | `wait`, `for`, `timeoutMs` |
+| `tell me "<text>"` | `notify`, `text` |
+| `split into <step> and <step>` | `split`, `branches` |
+| `raise <name>`, with `fields <field>, <field>` under it | `raise`, `name`, `fields` |
+| `raw <JSON>` | the step as given |
+
+A `<place>` is `in <route step>'s project`, `in <worktree step>`, `working in <folder>` or `in lane <name>`; a find's or a
+start's provider is `, with claude-code` or `, with codex`. A route's lines: `looking at <field>, <field>` (its
+`inputs`; `looking at nothing` for none), `project <name>[, id <project id>][, in <folder> and <folder>][, worktrees in
+<folder>]` for each project named on its line whose id is not its name, or which has folders or a worktree folder,
+and `asking`, with the judge's `ask` lines under it. A delivery's `report <word> and <word>` asks its session to
+report (§6.4), and a session's `give` may name a closed output of an earlier step: `from step <step> <output>`, which
+is `{ "step": …, "field": … }`.
+
+A session target on a step that says no folder or lane is the session the flow chose (`find: { "flow": true }`, W5),
+and there `if busy wait` is filled and not written. A Linear change target (§4.2) is written as a Linear issue is:
+
+```
+  step note: linear change client-done, version 1, in team ACME, on issue
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    comment "{{steps.wait.summary}}"
+    state Done, a completed state
+    state id 5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f
+    add label Shipped
+    add label id 1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d
+```
+
+with `remove label …` and `remove label id …` for the labels it removes, and `, assigned to me|nobody|user <id>` on
+its line.
+
+**Each step's own lines**, after its kind's:
+
+| Text | Step |
+|---|---|
+| `label "<text>"` | `label` |
+| `emits <event> and <event>` | `emit` (W23) |
+| `<outcome> → <step or end>` | an arrow in `next`; `->` may be typed for `→` |
+| `otherwise → <step or end>` · `then → <step or end>` | `next.otherwise` |
+| `otherwise stop` · `then stop` | no `otherwise` |
+
+**Arrows by default.** A step that writes no `otherwise` of its own goes on to the next step written:
+`{ "otherwise": "<that step>" }`, whether or not it writes other arrows. The last step written, and a step that writes
+`then stop`, have no `otherwise`. So a straight line needs no arrows, and the printer leaves out exactly the `otherwise`
+the parser fills. It writes `then` when the step has no other arrow and `otherwise` when it has, and the arrows in each
+kind's outcome order (`STEP_OUTCOMES`). Steps are written in `stepOrder`: from `start`, depth first, a step that several
+arrows reach once every step before it is. Nothing is read from a canvas position.
+
+**Targets.** The targets a flow's steps write in full are the workflow's `targets`, in the order written, each once by
+id and version; a target written on two steps is written the same way on both. When the steps cannot write the
+targets — a target they do not deliver to, or one the words cannot say on a step — every deliver step names its target
+by id (`deliver <id>, version <n>`) and `raw /targets = …` gives them; one step written in full and another by id is
+refused. A step the words cannot say is `step <id>: raw <JSON>`, which keeps its arrows as they are; a flow they cannot
+say at all is `raw /flow = …`, with its targets under `then`.
 
 ### `subscriber` — `subscribers`
 
@@ -288,9 +415,9 @@ keep for
 ```
 
 Only what differs from the defaults is written, and the parser fills the rest: 7 days each, except dry runs (1 day)
-and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a rule with a
-queue target or a session target that leaves items in the Queue, queue items 7 days (action queue design, Q2). With
-no `keep for`, the rule has the defaults. They are `RULE_RETENTION_DEFAULTS`, exported by this package, the one copy
+and decisions (90 days), the owner's defaults of 2026-10-06 (local-event-emission design, D2); and, for a workflow with
+a queue target or a session target that leaves items in the Queue, queue items 7 days (action queue design, Q2). With
+no `keep for`, the workflow has the defaults. They are `RULE_RETENTION_DEFAULTS`, exported by this package, the one copy
 the event service uses too.
 
 ## What the parser fills
@@ -298,9 +425,10 @@ the event service uses too.
 When the text says nothing of them: `judges` is `[]`, `subscribers` is `[]`, `retention` is the defaults above, a
 queue's `show` is `summary`, a session's `ifNone`, `ifBusy`, `mode` and `context` are `queue-only`, `queue`, `manual`
 and `[]`, a webhook's `signing` and `ordering` are `standard-webhooks` and `strict`, a Linear issue's `labels` are `[]`
-and its `assignee` is `null`, Gmail's `includeSpamTrash` is `false`, and a condition's `caseSensitive` is `false`. The
-printer leaves each out only when the
-document holds exactly that value.
+and its `assignee` is `null`, Gmail's `includeSpamTrash` is `false`, and a condition's `caseSensitive` is `false`. In
+a flow: the limits are `FLOW_LIMIT_DEFAULTS`, a chain's `withinMs` is 1 day, a worktree's `base` and `cleanup` are
+`default` and `keep`, a session the flow chose waits when busy, and a step's `otherwise` is the next step written. The
+printer leaves each out only when the document holds exactly that value.
 
 ## The escape form
 
@@ -308,10 +436,10 @@ Whatever the readable form cannot say is written as JSON, never dropped:
 
 - `raw <JSON>` in place of a condition or a target;
 - `raw /<field> = <JSON>` for a top-level field: one the grammar has no section for, or one whose shape a section
-  cannot say (a retention without `queueMs` on a queue rule, `targets: []`);
+  cannot say (a retention without `queueMs` on a workflow with a queue target, `targets: []`);
 - `raw /<field> absent` for a field the document lacks where the parser would otherwise expect or fill it.
 
-A field given by a section and by `raw` is refused. Of the repository's rule fixtures, only ones the event service
+A field given by a section and by `raw` is refused. Of the repository's workflow fixtures, only ones the event service
 would refuse need the escape form: partial documents, an authoring condition without `caseSensitive`, no targets.
 
 ## Errors
@@ -319,9 +447,11 @@ would refuse need the escape form: partial documents, an authoring condition wit
 `parseRuleText` returns `{ ok: false, errors }`, each with a 1-based `line` and `column`, sorted, and keeps reading
 after a mistake:
 
-- an unknown keyword, target or line names the phrase it is closest to: `unknown keyword "thne"; did you mean "then"?`;
+- an unknown keyword, target, step phrase, outcome or line names the phrase it is closest to: `unknown keyword "thne";
+  did you mean "then"?`, `… found "fnd"; did you mean "find a session"?`;
 - a wrongly indented line is reported and still placed, so it does not also cost the lines under it;
-- a missing `then`, `when` or `match` is reported after the last line, and a missing `rule` line at line 1;
-- a section given twice, an option given twice, and quoted text without its closing quote are refused where they
-  stand.
+- a missing `then` (or `flow`), `when` or `match` is reported after the last line, and a missing `workflow` line at
+  line 1;
+- a section given twice, an option given twice, `then` and `flow` together, and quoted text without its closing quote
+  are refused where they stand.
 

@@ -1,5 +1,6 @@
 import { canonicalJson } from '@agentcomms/core';
 import type { DeliveryTarget } from '../runtime/target-delivery.ts';
+import { canonicalEventSubscription, type EventSubscriptionV1 } from './event-subscription.ts';
 import { EventDomainError } from './lifecycle.ts';
 
 export interface SseSubscriberDocument {
@@ -7,8 +8,14 @@ export interface SseSubscriberDocument {
   readonly version: number;
   readonly kind: 'sse';
   readonly authority: { readonly host: '127.0.0.1' | '::1'; readonly port: number };
+  /** Exact browser origins; empty only beside `events`, meaning no browser page may connect (W29). */
   readonly origins: readonly string[];
   readonly retentionMs: number;
+  /**
+   * The workflow events it is given (0.36.0, W29). Absent: today's subscriber, whose bytes and digest are unchanged,
+   * which receives only what a workflow's SSE target delivers to it.
+   */
+  readonly events?: EventSubscriptionV1;
 }
 
 export interface SseTargetDocument {
@@ -67,8 +74,9 @@ export function canonicalSseSubscriber(value: unknown): SseSubscriberDocument {
   const origins = Array.isArray(subscriber.origins)
     ? subscriber.origins.map(canonicalOrigin)
     : fail('SSE allowed Origins are an array');
+  const events = subscriber.events === undefined ? undefined : canonicalEventSubscription(subscriber.events);
   if (
-    origins.length === 0 ||
+    (origins.length === 0 && events === undefined) ||
     new Set(origins).size !== origins.length ||
     [...origins].sort().some((origin, index) => origin !== origins[index])
   ) {
@@ -85,6 +93,7 @@ export function canonicalSseSubscriber(value: unknown): SseSubscriberDocument {
     authority: { host, port },
     origins,
     retentionMs,
+    ...(events === undefined ? {} : { events }),
   };
 }
 

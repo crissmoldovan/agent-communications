@@ -13,6 +13,7 @@ import { evaluateRuleProjection } from './mapping.ts';
 import type { EventProjectionStore, ProjectionReference, StoredProjection } from './projections.ts';
 import { sanitiseSenderFields } from './untrusted.ts';
 import type { WhatsAppVisibilityFence } from './whatsapp-visibility.ts';
+import type { FlowTestResultV1 } from './workflow/flow-test.ts';
 
 type HumanTerminal = {
   readonly env: NodeJS.ProcessEnv;
@@ -73,9 +74,10 @@ function rejectRuleTestInput(message: string): never {
   throw new EventDomainError('VERSION_DOCUMENT_INVALID', message);
 }
 
-function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocument): Record<string, unknown> {
+/** The catalogue example a test selects, for the rule's own event, its sender's fields neutralised as a live event's are. */
+export function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocument): Record<string, unknown> {
   if (typeof selector !== 'object' || selector === null || Array.isArray(selector))
-    return rejectRuleTestInput('a rule test selects one catalogue example');
+    return rejectRuleTestInput('a workflow test selects one catalogue example');
   const record = selector as Record<string, unknown>;
   // A retained record and an account are identity selectors, never a local example selector.  Reject their presence
   // rather than silently ignoring it so an MCP/CLI adapter cannot accidentally smuggle a retained-read form here.
@@ -93,7 +95,7 @@ function exactCatalogueExample(selector: unknown, rule: CanonicalFullRuleDocumen
   const entry = catalogueEntry(record.type as string, record.version as number);
   if (!entry.ok) return rejectRuleTestInput(entry.issues[0]?.message ?? 'the catalogue event is not selectable');
   if ((record.type as string) !== rule.event.type || (record.version as number) !== rule.event.version)
-    return rejectRuleTestInput('the catalogue example must have the rule event type and version');
+    return rejectRuleTestInput('the catalogue example must have the workflow event type and version');
   const example = entry.value.examples[record.exampleIndex as number];
   if (example === undefined) return rejectRuleTestInput('the catalogue example index is unavailable');
   // Every catalogue-declared untrusted field is neutralised before mapping, exactly as a live event's projection is.
@@ -128,6 +130,16 @@ export function runCatalogueRuleTest(input: {
   return { agentic: 'not-evaluated', outcome, rendered: renderFencedBody(enveloped) };
 }
 
+/**
+ * A workflow with a flow, tried on a retained message (0.36.0 §7.7): judges, route and find answer for real; every
+ * effect and event is a "would". The engine's, composed by the owner.
+ */
+export type RetainedFlowTry = (input: {
+  readonly rule: CanonicalFullRuleDocument;
+  readonly event: Record<string, unknown>;
+  readonly eventId: string;
+}) => Promise<FlowTestResultV1>;
+
 export interface ExactRetainedRuleSelector {
   readonly eventId: string;
   readonly ruleId: string;
@@ -142,9 +154,10 @@ interface RetainedRuleSnapshot {
 
 function exactRetainedSelector(input: unknown): ExactRetainedRuleSelector {
   if (typeof input !== 'object' || input === null || Array.isArray(input))
-    return rejectRuleTestInput('a retained rule test needs an exact event and rule version');
+    return rejectRuleTestInput('a retained workflow test needs an exact event and workflow version');
   const record = input as Record<string, unknown>;
-  if (Object.hasOwn(record, 'accountId')) return rejectRuleTestInput('a retained rule test has no account selector');
+  if (Object.hasOwn(record, 'accountId'))
+    return rejectRuleTestInput('a retained workflow test has no account selector');
   if (
     Object.keys(record).some((key) => !['eventId', 'ruleId', 'ruleVersion'].includes(key)) ||
     typeof record.eventId !== 'string' ||
@@ -152,7 +165,7 @@ function exactRetainedSelector(input: unknown): ExactRetainedRuleSelector {
     !Number.isSafeInteger(record.ruleVersion) ||
     (record.ruleVersion as number) < 1
   )
-    return rejectRuleTestInput('a retained rule test needs eventId, ruleId, and ruleVersion');
+    return rejectRuleTestInput('a retained workflow test needs eventId, ruleId, and ruleVersion');
   return { eventId: record.eventId, ruleId: record.ruleId, ruleVersion: record.ruleVersion as number };
 }
 
@@ -168,6 +181,7 @@ export class RetainedRuleTestControl {
     readonly accountId: string;
   }) => Promise<void>;
   readonly #whatsappVisibilityFence: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+  readonly #flow: RetainedFlowTry | undefined;
 
   constructor(options: {
     readonly projections: Pick<EventProjectionStore, 'row' | 'read'>;
@@ -177,17 +191,20 @@ export class RetainedRuleTestControl {
       readonly accountId: string;
     }) => Promise<void>;
     readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+    /** A workflow with a flow is walked on the message (0.36.0 §7.7): the engine's try, every effect a "would". */
+    readonly flow?: RetainedFlowTry | undefined;
   }) {
     this.#projections = options.projections;
     this.#snapshot = options.snapshot;
     this.#accountLive = options.accountLive;
     this.#whatsappVisibilityFence = options.whatsappVisibilityFence;
+    this.#flow = options.flow;
   }
 
-  async test(input: unknown): Promise<CatalogueRuleTestResult> {
+  async test(input: unknown): Promise<CatalogueRuleTestResult | FlowTestResultV1> {
     const selector = exactRetainedSelector(input);
     const before = this.#snapshot(selector);
-    if (before === null) throw new CommsError('NOT_FOUND', 'the exact retained rule projection is not available');
+    if (before === null) throw new CommsError('NOT_FOUND', 'the exact retained workflow projection is not available');
     await this.#accountLive({ source: before.rule.source.channel, accountId: before.accountId });
     const projection = await this.#projections.read(before.reference);
     // B3_RETAINED_POST_DECRYPT_FENCE: both identity and authority are read again after the decrypt await.
@@ -195,12 +212,16 @@ export class RetainedRuleTestControl {
     if (after === null)
       throw new CommsError('APPROVAL_VOID', 'the retained projection changed while it was being read');
     await this.#accountLive({ source: after.rule.source.channel, accountId: after.accountId });
-    const render = () => renderRetainedRuleResult(after.rule, projection);
+    const flow = this.#flow;
+    const render = () =>
+      flow !== undefined && after.rule.flow !== undefined
+        ? flow({ rule: after.rule, event: projection.event, eventId: selector.eventId })
+        : renderRetainedRuleResult(after.rule, projection);
     if (before.reference.whatsappMessageId === null) return render();
     if (this.#whatsappVisibilityFence === undefined)
       throw new CommsError(
         'WHATSAPP_VISIBILITY_SEAM_REQUIRED',
-        'a WhatsApp retained rule test requires the live-list fence',
+        'a WhatsApp retained workflow test requires the live-list fence',
       );
     const visible = await this.#whatsappVisibilityFence.withCurrentDryRunVisibility(
       { accountId: after.accountId, whatsappMessageId: before.reference.whatsappMessageId },
@@ -232,9 +253,11 @@ export function createRetainedRuleTestControl(input: {
   }) => Promise<void>;
   readonly now?: (() => number) | undefined;
   readonly whatsappVisibilityFence?: Pick<WhatsAppVisibilityFence, 'withCurrentDryRunVisibility'> | undefined;
+  readonly flow?: RetainedFlowTry | undefined;
 }): RetainedRuleTestControl {
   const now = input.now ?? Date.now;
   return new RetainedRuleTestControl({
+    flow: input.flow,
     projections: input.projections,
     snapshot: (selector) => {
       const row = input.store.database

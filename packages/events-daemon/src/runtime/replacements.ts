@@ -5,6 +5,7 @@ import type { SourceOptions } from '../domain/source-options.ts';
 import type { SourceScope } from '../sources/contracts.ts';
 import { fixedDeadline } from '../store/retention.ts';
 import { isWhitelistedTightening } from './disclosure-fence.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import type { PreparedSourceStageTerminalisation } from './expiry.ts';
 import { expireHeldDecisionsInTransaction } from './holds.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
@@ -21,6 +22,7 @@ import {
   removeRuleVersionTargetReferences,
 } from './target-version-references.ts';
 import { purgeWhatsAppStagedPayload } from './whatsapp-staged-payload.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export type TighteningKind =
   | 'remove-target'
@@ -429,10 +431,15 @@ export function purgeRevokedRuleWork(
   // A judge-kind disable purges a rule's work but keeps the rule able to resume once the kind is re-enabled (D11):
   // its activation points, target references, WhatsApp admissions and replacement drains are authority, not work.
   const keepAuthority = options.keepAuthority === true;
+  // A revoked workflow's raised events stop at once (0.36.0, W35): their undelivered deliveries are cancelled.
+  if (!keepAuthority)
+    cancelEventDeliveriesInTransaction(database, { ruleId, ruleVersions: versions }, now, 'WORKFLOW_REVOKED');
   new JudgePurgeParticipant({ database, now: () => now }).rule({ ruleId, versions });
   purgeB2RetainedContentForRuleVersions(database, { ruleId, ruleVersions: versions });
   // The action queue (Q6): a revoked version's items go with its dry-run rows, in this same transaction.
   purgeQueueItemsForRuleVersions(database, { ruleId, ruleVersions: versions });
+  // A revoked version's workflow runs end with its authority (workflows design W10), before its deliveries go below.
+  cancelRunsInTransaction(database, { ruleId, versions }, 'AUTHORIZATION_REVOKED', now);
   for (const version of versions) {
     const versionId = ruleVersionId(ruleId, version);
     database.prepare('DELETE FROM dryrun_log WHERE rule_id = ? AND rule_version = ?').run(ruleId, version);
@@ -496,17 +503,23 @@ export function purgeRevokedRuleWork(
   }
 }
 
-/** Kind disable keeps immutable rule authority but applies the same content/work closure as revoking each bound rule. */
+/**
+ * Kind disable keeps immutable rule authority but applies the same content/work closure as revoking each bound rule —
+ * one whose gate judges with the kind, or whose workflow's flow asks a judge of it (0.36 plan B3).
+ */
 export function purgeJudgeKindRuleWork(database: DatabaseSync, judgeKind: string, now: number = Date.now()): void {
   const rows = database
     .prepare(
       `SELECT rule_id, version
          FROM rule_versions
         WHERE state IN ('active', 'superseded')
-          AND json_extract(document, '$.agentic.judge.kind') = ?
+          AND (json_extract(document, '$.agentic.judge.kind') = ?
+               OR EXISTS (SELECT 1 FROM json_each(document, '$.flow.steps') AS step
+                           WHERE json_extract(step.value, '$.ask.judge.kind') = ?
+                              OR json_extract(step.value, '$.judge.judge.kind') = ?))
         ORDER BY rule_id, version`,
     )
-    .all(judgeKind) as Array<{ rule_id: string; version: number }>;
+    .all(judgeKind, judgeKind, judgeKind) as Array<{ rule_id: string; version: number }>;
   for (const row of rows) purgeRevokedRuleWork(database, row.rule_id, [row.version], now, { keepAuthority: true });
 }
 
@@ -862,7 +875,8 @@ export async function applyDerivedTightening(input: {
   readonly accountLive?: ((accountId: string) => Promise<void>) | undefined;
 }): Promise<{ readonly editKind: TighteningKind; readonly versionId: string }> {
   const editKind = tighteningKind(input.parent, input.child);
-  if (editKind === null) throw new CommsError('APPROVAL_VOID', 'the requested rule edit is not an allowed tightening');
+  if (editKind === null)
+    throw new CommsError('APPROVAL_VOID', 'the requested workflow edit is not an allowed tightening');
   const database = input.database;
   const parentId = ruleVersionId(input.parent.ruleId, input.parent.version);
   const childId = ruleVersionId(input.child.ruleId, input.child.version);
@@ -953,11 +967,11 @@ export async function applyDerivedTightening(input: {
     if (parent?.state !== 'active' || !parent.approval_id || !child || child.state !== null || !pointer) {
       throw new CommsError(
         'APPROVAL_VOID',
-        'the parent and child rule versions are not eligible for a derived tightening',
+        'the parent and child workflow versions are not eligible for a derived tightening',
       );
     }
     if (pointer.version !== input.parent.version || pointer.current_cutover_id === null) {
-      throw new CommsError('APPROVAL_VOID', 'the active rule pointer no longer names the tightening parent');
+      throw new CommsError('APPROVAL_VOID', 'the active workflow pointer no longer names the tightening parent');
     }
     database
       .prepare(

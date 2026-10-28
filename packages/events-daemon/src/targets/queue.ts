@@ -35,7 +35,11 @@ export function assertNotMcpServer(
     | 'integration'
     | 'relay'
     | 'sessions'
-    | 'approve' = 'read',
+    | 'projects'
+    | 'runs'
+    | 'describe'
+    | 'approve'
+    | 'secret' = 'read',
 ): void {
   const marker = env[MCP_SERVER_MARKER];
   if (marker === undefined || marker === '') return;
@@ -90,8 +94,8 @@ export function assertNotMcpServer(
     // Analyse (0.33.0 §3.3): what a rule did and the suggestions for it are the person's, when they ask for them.
     analyse: {
       message:
-        "analysing a rule is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
-      hint: 'An agent can ask the person to press Analyse on the rule in the app: Events → Rules.',
+        "analysing a workflow is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can ask the person to press Analyse on the workflow in the app: Events → Workflows.',
     },
     // Agent sessions (0.33.0 §3.5): where the person's claude-stream relay is, and its token's home, are the person's.
     relay: {
@@ -104,11 +108,35 @@ export function assertNotMcpServer(
       message: "approving is for a person, in the app or at a terminal — the event service's MCP server cannot do it",
       hint: 'An agent gives the person the approval id and its preview; they approve it in the Agent Comms app, or with approve <approval-id> at their terminal.',
     },
+    // A webhook subscriber's signing secret and secret URL (0.36.0, W29): made and seen at the person's terminal only.
+    secret: {
+      message:
+        "a subscriber's signing secret or secret URL is for a person at their terminal — the event service's MCP server cannot make or see one",
+      hint: 'An agent asks the person to run the subscriber secret or subscriber url command at their own terminal.',
+    },
     // The busy queue (0.33.0 §3.5): the person's to read and drop from; a bound window sees its own lane's over MCP.
     sessions: {
       message:
         "the items waiting for a busy session are for a person to manage, at a terminal or in the app — the event service's MCP server cannot drop one",
       hint: 'events_session_queue_list shows a bound window the items of its own lane.',
+    },
+    // Projects (0.36.0 §8.1): the repositories on this Mac, their folders, profile and hints, are the person's alone.
+    projects: {
+      message:
+        "projects are for a person, at a terminal or in the app — the event service's MCP server cannot read or change them",
+      hint: 'An agent can ask the person to add or change a project in the app: Events → Projects.',
+    },
+    // A workflow's runs (0.36.0 §7.6): the person's to list, show and cancel; an agent has no tool for any of them.
+    runs: {
+      message:
+        "a workflow's runs are for a person, at a terminal or in the app — the event service's MCP server cannot read or cancel them",
+      hint: "An agent can ask the person to look at a workflow's runs in the app: Events → Workflows, its Runs.",
+    },
+    // Describe it (0.36.0 §11.4): the person's words drafted on their own Claude or key; an agent has no tool for it.
+    describe: {
+      message:
+        "describing a workflow is for a person, at a terminal or in the app — the event service's MCP server cannot do it",
+      hint: 'An agent can write a workflow itself, with workflow create, and the person approves it; or ask the person to use Describe it in the designer.',
     },
   } as const;
   throw new CommsError('APPROVAL_REQUIRED', refusals[action].message, {
@@ -120,7 +148,7 @@ export function assertNotMcpServer(
 function judgeLine(judge: QueueJudgeV1): string {
   switch (judge.state) {
     case 'none':
-      return 'Judge: none — the rule matched without one';
+      return 'Judge: none — the workflow matched without one';
     case 'released':
       return `Judge: you let it through (${judge.kind ?? 'judge'} ${judge.id ?? ''})`.trimEnd();
     case 'expired':
@@ -136,7 +164,7 @@ function judgeLine(judge: QueueJudgeV1): string {
 export function renderQueueItem(item: QueueItemV1): string {
   const lines = [
     `Queue item ${item.id} — ${item.state} since ${item.stateAt}`,
-    `Rule ${item.rule.id}@${item.rule.version} · ${item.channel} · ${item.account.alias ?? item.account.id} · arrived ${item.arrivedAt} · content kept until ${item.expiresAt}`,
+    `Workflow ${item.rule.id}@${item.rule.version} · ${item.channel} · ${item.account.alias ?? item.account.id} · arrived ${item.arrivedAt} · content kept until ${item.expiresAt}`,
   ];
   if (item.lane !== null) lines.push(`Lane: ${item.lane}`);
   if (item.from.name !== undefined) lines.push(`From (name): ${item.from.name}`);
@@ -154,6 +182,6 @@ export function renderQueueItem(item: QueueItemV1): string {
 export function renderQueueList(result: QueueListResultV1): string {
   if (result.items.length === 0) return 'No queue items.';
   const blocks = result.items.map(renderQueueItem);
-  if (result.more) blocks.push('More items are kept: narrow the list with --state, --rule, --channel or --since.');
+  if (result.more) blocks.push('More items are kept: narrow the list with --state, --workflow, --channel or --since.');
   return blocks.join('\n\n');
 }

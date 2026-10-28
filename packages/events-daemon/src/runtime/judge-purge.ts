@@ -91,7 +91,7 @@ export class JudgePurgeParticipant {
     readonly ruleVersion?: number | undefined;
   }): JudgeRecoveryResult {
     if ((input.ruleId === undefined) !== (input.ruleVersion === undefined))
-      throw new Error('a rule-bound judge event purge needs both rule id and version');
+      throw new Error('a workflow-bound judge event purge needs both workflow id and version');
     const result = recoverJudgeWork({
       database: this.#database,
       now: this.#now(),

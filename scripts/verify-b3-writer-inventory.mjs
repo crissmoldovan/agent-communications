@@ -37,6 +37,13 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   // back into that record (so a busy session's next try sends the same words), and seals the queue item a match
   // becomes, through the same centrally leased cipher.
   'packages/events-daemon/src/runtime/session-dispatcher.ts',
+  // Workflows (0.36): a run's sealed record — its mapped values — is sealed when the match commits and opened for the
+  // step that reads it, both through the centrally leased cipher.
+  'packages/events-daemon/src/runtime/workflow/runs.ts',
+  'packages/events-daemon/src/runtime/workflow/context.ts',
+  // A shadow version (0.36.0 §7.7): each effect it does not run is a dry-run record of the run's own values, sealed
+  // through the same centrally leased cipher.
+  'packages/events-daemon/src/runtime/workflow/shadow.ts',
   'packages/events-daemon/src/runtime/system-reset-outbox.ts',
   'packages/events-daemon/src/runtime/expiry.ts',
   'packages/events-daemon/src/runtime/revocations.ts',
@@ -46,6 +53,13 @@ const REQUIRED_WRITER_INVENTORY = Object.freeze([
   'packages/events-daemon/src/runtime/b3-secret-control.ts',
   'packages/events-daemon/src/runtime/sse-server.ts',
   'packages/events-daemon/src/runtime/stream-replay.ts',
+  // Workflow events (0.36.0, §9.1): the sink seals each raised event through the centrally leased cipher.
+  'packages/events-daemon/src/runtime/events/sink.ts',
+  // The event dispatcher opens a raised event, and seals each live subscriber's frame of it, through the same cipher.
+  'packages/events-daemon/src/runtime/events/event-dispatcher.ts',
+  // Chains (0.36.0, W34): a chained run's `/trigger` is opened from the raised event's record through the same
+  // centrally leased cipher.
+  'packages/events-daemon/src/runtime/events/chains.ts',
   'packages/events-daemon/src/sources/source-worker.ts',
   'packages/events-daemon/src/sources/gmail.ts',
   'packages/events-daemon/src/sources/materialise.ts',
@@ -154,8 +168,16 @@ export async function verifyB3WriterInventory({ root = ROOT, inventory = undefin
     const schedulerText = await readFile(join(root, scheduler), 'utf8').catch(() => '');
     const starts = [
       [
+        // 0.36.0 (W33): the manual tick then waits, outside its lease, for the event deliveries it started apart.
         'manual owner tick',
-        owner.includes('tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),'),
+        owner.includes(
+          'tick: async () => {\n      await withEventWriterLease(writerQuiescer, () => scheduler.tick());',
+        ),
+      ],
+      [
+        // 0.36.0 (W33): a raised event's delivery runs apart from the tick that started it, under a lease of its own.
+        'event delivery attempt apart from the tick',
+        owner.includes('apart: (work) => withOwnEventWriterLease(writerQuiescer, work),'),
       ],
       [
         'startup expiry recovery',

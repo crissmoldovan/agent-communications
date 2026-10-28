@@ -1,7 +1,10 @@
 /**
- * Events → Rules (owner feedback 0.32.0, §3.4): one card per rule, not per version — its id as its name, where it
- * stands, its sentence in plain words, and a line of facts — filtered by All, On, Not switched on and Off. A card opens
- * the rule's page (`RuleDetail`). Everything shown is read: nothing here changes a rule.
+ * Events → Workflows (owner feedback 0.32.0, §3.4; workflows design §11.2, W22): one card per workflow, not per version
+ * — its id as its name, where it stands, its sentence in plain words, and a line of facts — filtered by All, On, Not
+ * switched on and Off. Every rule there is is a workflow here, a straight line, unchanged. A card opens the workflow's
+ * page (`RuleDetail`), and its Edit… the designer once the event service has workflows (0.36.0), or the rule editor on
+ * an older one. From 0.36.0 a card also says its runs this week and when its last run started, and a run's page opens
+ * here (`RunView`). Everything shown is read: nothing here changes a workflow.
  */
 import {
   Button,
@@ -19,7 +22,7 @@ import {
   Spinner,
 } from '@cueplusplus/ui';
 import { ChevronRight, Plus } from 'lucide-react';
-import { type ReactNode, useState } from 'react';
+import { lazy, type ReactNode, Suspense, useState } from 'react';
 import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { COPY, type Screen } from '../../copy.ts';
 import { madeAt } from '../../events-deliveries.ts';
@@ -38,6 +41,8 @@ import { isRuleId } from '../../grammar.ts';
 import { useCall } from '../../hooks/use-call.ts';
 import type { Call } from '../../ipc.ts';
 import { EDITOR_COPY } from '../../rule-editor/copy.ts';
+import { runFacts, summaryWords, thisWeekWords } from '../../workflows/runs.ts';
+import { NewWorkflow } from '../workflows/NewWorkflow.tsx';
 import { type EventsLists, type EventsNav, readVersions } from './lists.ts';
 import { Day, DRY_RUN, FactsLine, Problem, Sentence, Short, STATUS_WORDS, StatusChip, statusOf } from './parts.tsx';
 import { RuleDetail } from './RuleDetail.tsx';
@@ -45,10 +50,23 @@ import { RuleEditor } from './RuleEditor.tsx';
 
 const EVENTS_VERSION: Call = { kind: 'version', product: 'events-daemon' };
 
-/** Whether this machine's event service has the rule editor's commands (0.33.0): only then is a rule edited here. */
-function useRuleEditor(): boolean {
+/**
+ * The designer (0.36.0), loaded only when a workflow is opened in it: React Flow and its stylesheets come with this
+ * chunk, never with the app's first.
+ */
+const WorkflowEditor = lazy(() =>
+  import('../workflows/WorkflowEditor.tsx').then((module) => ({ default: module.WorkflowEditor })),
+);
+
+/** A run's page (0.36.0), loaded only when one is opened: it draws the run on React Flow, as the designer does. */
+const RunView = lazy(() => import('../workflows/RunView.tsx').then((module) => ({ default: module.RunView })));
+
+/** Which editor this machine's event service has: none, the rule editor (0.33.0), or the designer (0.36.0). */
+function useEditor(): 'none' | 'rules' | 'workflows' {
   const { result } = useCall<string>(EVENTS_VERSION);
-  return result.state === 'ready' && supports(result.value, 'ruleEditor');
+  if (result.state !== 'ready') return 'none';
+  if (supports(result.value, 'workflows')) return 'workflows';
+  return supports(result.value, 'ruleEditor') ? 'rules' : 'none';
 }
 
 /** New rule…: its name first, which the rule keeps for good; then the editor. */
@@ -107,17 +125,20 @@ function NewRule({ taken, onStart }: { taken: ReadonlySet<string>; onStart: (rul
 /** The tab's words (the approved prototype, row 2), in sentence case. */
 export const RULES_COPY = {
   intro:
-    'A rule watches one account, picks out the messages it cares about, and passes them on. An agent writes a rule when you ask it to; you approve each one before it starts. Open a rule to see everything about it.',
+    'A workflow watches one account, picks out the messages it cares about, and does something with them: a straight line, or steps that branch, wait and find the right session. An agent writes one when you ask it to; you approve each one before it starts. Open a workflow to see everything about it.',
   introEditing:
-    'A rule watches one account, picks out the messages it cares about, and passes them on. Write one here, or ask an agent to; you approve each one before it starts. Open a rule to see everything about it, or edit it.',
+    'A workflow watches one account, picks out the messages it cares about, and does something with them: a straight line, or steps that branch, wait and find the right session. Make one here, or ask an agent to; you approve each one before it starts. Open a workflow to see everything about it, or edit it.',
   show: 'Show',
   all: 'All',
   status: STATUS_WORDS,
   dryRun: DRY_RUN,
-  empty: 'No rules yet.',
-  noneHere: 'No rules here.',
+  empty: 'No workflows yet.',
+  noneHere: 'No workflows here.',
   approvalWaits: 'Its approval is in Approvals, if an agent asked for it',
   turnedOff: 'Turned off',
+  lastRun: 'last run',
+  allWorkflows: 'All workflows',
+  toDeliveries: 'Deliveries',
 } as const;
 
 type Filter = 'all' | RuleStatus;
@@ -135,6 +156,27 @@ function lastPassedOn(lists: EventsLists, ruleId: string, versions: readonly Rul
       return at === null ? [] : [at];
     });
   return times.length === 0 ? null : Math.max(...times);
+}
+
+/** A card's runs (0.36.0): how many this week, and when the newest started; nothing for a workflow with none listed. */
+function runsFacts(lists: EventsLists, ruleId: string): ReactNode[] {
+  if (lists.runs === 'off' || lists.runs.state !== 'ready') return [];
+  const { thisWeek, last, capped } = runFacts(lists.runs.value, ruleId, Date.now());
+  if (last === null) return [];
+  // The newest run's story in a few words (B6's summary): its project, its issue, its session and its turn.
+  const newest = lists.runs.value.find((run) => run.ruleId === ruleId && run.startedAt === last);
+  const story = summaryWords(newest?.summary);
+  return [
+    thisWeekWords(thisWeek, capped),
+    <>
+      {RULES_COPY.lastRun} <Short at={last} />
+      {story.length === 0 ? null : (
+        <span data-slot="last-run-summary">
+          : <UntrustedText text={story.join(', ')} />
+        </span>
+      )}
+    </>,
+  ];
 }
 
 /** A card's facts: its last 7 days, its problems and its last delivery while on; how to switch it on; when it went off. */
@@ -212,7 +254,9 @@ function RuleCard({ rule, lists, onOpen }: { rule: RuleRow; lists: EventsLists; 
         </span>
       ) : null}
       <span data-slot="rule-facts" className="block">
-        <FactsLine facts={facts(status, versions, lastPassedOn(lists, rule.id, versions))} />
+        <FactsLine
+          facts={[...facts(status, versions, lastPassedOn(lists, rule.id, versions)), ...runsFacts(lists, rule.id)]}
+        />
       </span>
     </>
   );
@@ -245,8 +289,39 @@ export function RulesTab({
   onScreen?: ((screen: Screen) => void) | undefined;
 }) {
   const [filter, setFilter] = useState<Filter>('all');
-  const canEdit = useRuleEditor();
+  const editor = useEditor();
+  const canEdit = editor !== 'none';
   const editing = nav.editing;
+  if (nav.run !== null && editing === null)
+    return (
+      <Suspense fallback={<Spinner label={COPY.loading} />}>
+        <RunView
+          key={nav.run}
+          runId={nav.run}
+          backLabel={nav.runFrom === 'deliveries' ? RULES_COPY.toDeliveries : (nav.rule ?? RULES_COPY.allWorkflows)}
+          onBack={() => nav.openRun(null)}
+        />
+      </Suspense>
+    );
+  if (editing !== null && editor === 'workflows')
+    return (
+      <Suspense fallback={<Spinner label={COPY.loading} />}>
+        <WorkflowEditor
+          key={`${editing.kind}:${editing.ruleId}`}
+          target={editing}
+          lists={lists}
+          onClose={() => {
+            nav.edit(null);
+            if (editing.kind === 'edit') nav.openRule(editing.ruleId);
+          }}
+          onApproved={(ruleId) => {
+            nav.edit(null);
+            nav.openRule(ruleId);
+            void lists.reloadRules();
+          }}
+        />
+      </Suspense>
+    );
   if (editing !== null)
     return (
       <RuleEditor
@@ -279,10 +354,18 @@ export function RulesTab({
   const { rules } = lists;
   const taken = new Set(rules.state === 'ready' ? rules.value.map((rule) => rule.id) : []);
   return (
-    <section aria-label="Rules" className="flex flex-col gap-(--cue-space-4)">
+    <section aria-label="Workflows" className="flex flex-col gap-(--cue-space-4)">
       <div className="flex flex-wrap items-start gap-(--cue-space-3)">
         <p className="min-w-60 flex-1 text-fg-muted">{canEdit ? RULES_COPY.introEditing : RULES_COPY.intro}</p>
-        {canEdit ? <NewRule taken={taken} onStart={(ruleId) => nav.edit({ kind: 'new', ruleId })} /> : null}
+        {editor === 'workflows' ? (
+          <NewWorkflow
+            taken={taken}
+            workflows={[...taken]}
+            onStart={(ruleId, from) => nav.edit({ kind: 'new', ruleId, from })}
+          />
+        ) : canEdit ? (
+          <NewRule taken={taken} onStart={(ruleId) => nav.edit({ kind: 'new', ruleId })} />
+        ) : null}
       </div>
       {rules.state === 'loading' ? (
         <Spinner label={COPY.loading} />

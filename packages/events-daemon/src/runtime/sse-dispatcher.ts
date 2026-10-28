@@ -66,6 +66,13 @@ export interface SseDispatcherOptions {
   readonly visibilityGate?: SseFrameVisibilityGate | undefined;
   readonly hasConcreteWhatsAppVisibilityFence?: boolean | undefined;
   readonly retentionHooks?: DSourceRetentionHooks | undefined;
+  /**
+   * After a frame is in `stream_log` and its delivery settled: hands it to the subscriber's open streams (0.36.0), each
+   * through its replay gate. A frame no stream takes waits for the next replay, as before.
+   */
+  readonly live?:
+    | ((frame: { subscriberId: string; subscriberVersion: number; streamLogId: string }) => Promise<unknown>)
+    | undefined;
 }
 
 /**
@@ -84,6 +91,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
   readonly #visibilityGate: SseFrameVisibilityGate | undefined;
   readonly #hasConcreteWhatsAppVisibilityFence: boolean;
   readonly #retentionHooks: DSourceRetentionHooks | undefined;
+  readonly #live: SseDispatcherOptions['live'];
 
   constructor(options: SseDispatcherOptions) {
     this.#store = options.store;
@@ -96,6 +104,7 @@ export class SseDispatcher implements DeliveryDispatchHandler {
     this.#visibilityGate = options.visibilityGate;
     this.#hasConcreteWhatsAppVisibilityFence = options.hasConcreteWhatsAppVisibilityFence ?? false;
     this.#retentionHooks = options.retentionHooks;
+    this.#live = options.live;
   }
 
   /** Task 9 supplies a sealed synchronous ServerResponse callback to this retained-content writer. */
@@ -197,7 +206,8 @@ export class SseDispatcher implements DeliveryDispatchHandler {
       releaseDeliveryClaim(this.#store, claim);
       throw error;
     }
-    if (row.whatsapp_message_id === null) return this.#append(claim, row, subscriber.retentionMs, encrypted);
+    if (row.whatsapp_message_id === null)
+      return this.#pushLive(this.#append(claim, row, subscriber.retentionMs, encrypted), row);
     if (this.#visibilityGate === undefined || !this.#hasConcreteWhatsAppVisibilityFence) {
       this.#store.immediate(() => this.#cancel(claim));
       return { state: 'terminal', deliveryId: claim.id };
@@ -252,9 +262,21 @@ export class SseDispatcher implements DeliveryDispatchHandler {
         cause: error,
       });
     }
-    if (appended !== undefined) return appended;
+    if (appended !== undefined) return this.#pushLive(appended, row);
     this.#store.immediate(() => this.#cancel(claim));
     return { state: 'terminal', deliveryId: claim.id };
+  }
+
+  /** A delivered frame goes to the open streams; a stream that fails to take it is the stream's, never the delivery's. */
+  async #pushLive(result: DispatchResult, row: CurrentSseDelivery): Promise<DispatchResult> {
+    if (result.state !== 'delivered' || this.#live === undefined) return result;
+    if (row.subscriber_id === null || row.subscriber_version === null) return result;
+    await this.#live({
+      subscriberId: row.subscriber_id,
+      subscriberVersion: row.subscriber_version,
+      streamLogId: result.deliveryId,
+    }).catch(() => undefined);
+    return result;
   }
 
   #append(
@@ -479,7 +501,7 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
         WHERE deliveries.id = ?`,
     )
     .get(deliveryId) as { document: string } | undefined;
-  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the SSE delivery has no exact rule version');
+  if (row === undefined) throw new CommsError('APPROVAL_VOID', 'the SSE delivery has no exact workflow version');
   try {
     const document = JSON.parse(row.document) as { source?: { channel?: unknown } };
     // B2's Gmail-only immutable documents predate the source field.  Absence means that durable Gmail binding;
@@ -490,5 +512,5 @@ function sourceOfDelivery(store: EventDatabase, deliveryId: string): 'gmail' | '
   } catch {
     // The closed refusal below is the safe result for a damaged immutable rule row.
   }
-  throw new CommsError('APPROVAL_VOID', 'the SSE delivery rule has no recognised event source');
+  throw new CommsError('APPROVAL_VOID', 'the workflow of this SSE delivery has no recognised event source');
 }

@@ -42,6 +42,7 @@ import type { AuthenticatedControlRequest } from '../control/protocol.ts';
 import { type ControlServerOptions, type RunningControlServer, startControlServer } from '../control/server.ts';
 import { normaliseActivationDocument } from '../domain/activation-documents.ts';
 import { HumanSecret } from '../domain/human-secret.ts';
+import { personSetupApprover } from '../domain/judge-setup.ts';
 import {
   type LayaPlatformProbe,
   type LayaReviewedAssetSource,
@@ -90,11 +91,7 @@ import {
   type PendingRuleJudgeTestSelector,
   verifyPendingRuleJudgeTestContext,
 } from './b3-pending-rule-judge-test.ts';
-import {
-  createRetainedRuleTestControl,
-  type RetainedRuleTestControl,
-  runCatalogueRuleTest,
-} from './b3-retained-control.ts';
+import { createRetainedRuleTestControl, type RetainedRuleTestControl } from './b3-retained-control.ts';
 import { consumeGeneratedTerminalReveal, type SecretReceipt } from './b3-secret-control.ts';
 import {
   B3TargetTestControl,
@@ -108,6 +105,11 @@ import { hasLiveDeliveryLineage } from './delivery-claim.ts';
 import { DeliveryReader } from './delivery-show.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
 import { DeliveryDispatcher, DryRunDispatcher } from './dispatcher.ts';
+import { workflowEventsListResult, workflowEventsShowResult } from './events/catalogue.ts';
+import { assertAgentMayStopEventDelivery } from './events/event-deliveries.ts';
+import { EventDispatcher, type EventDispatcherOptions } from './events/event-dispatcher.ts';
+import { SubscriberListeners } from './events/listeners.ts';
+import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
@@ -116,6 +118,7 @@ import { recoverJudgeWork } from './judge-recovery.ts';
 import { JudgeSetupService } from './judge-setup.ts';
 import { JudgeReader } from './judge-show.ts';
 import { JudgeTestControl } from './judge-test.ts';
+import type { JudgeTransport } from './judge-transport.ts';
 import { LaneService } from './lanes.ts';
 import { type LayaArtifactFailpoint, LayaArtifactManager, type LayaArtifactNetwork } from './laya/manager.ts';
 import { type LayaWorkerStart, LayaWorkerSupervisor, registerLayaJudgeExecutor } from './laya/worker-supervisor.ts';
@@ -132,6 +135,7 @@ import {
   requirePhaseDWhatsAppVisibilitySeam,
 } from './phase-d-whatsapp-owner-composition.ts';
 import { EventProjectionStore } from './projections.ts';
+import { projectControl } from './projects.ts';
 import { type QueueScope, QueueStore } from './queue.ts';
 import { QueueDispatcher } from './queue-dispatcher.ts';
 import { PERSON, type QueueActor } from './queue-history.ts';
@@ -152,7 +156,18 @@ import { TAKE_SWEEP_INTERVAL_MS, TakeOffers, type TakeSweepReport } from './take
 import { isTestProfileState } from './test-profile.ts';
 import { recordEventTaint } from './untrusted.ts';
 import { WebhookDispatcher } from './webhook-dispatcher.ts';
-import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
+import type { WebSocketTiming } from './websocket.ts';
+import { composeWorkflows } from './workflow/compose.ts';
+import { composeOwnerWorkflowEvents } from './workflow/compose-events.ts';
+import { composeProjects } from './workflow/compose-projects.ts';
+import type { WorkflowComposition } from './workflow/contracts.ts';
+import type { WorkflowEngine, WorkflowFailpoint } from './workflow/engine.ts';
+import { checkRuleDocument, runRuleTest } from './workflow/flow-test.ts';
+import { flowJudge } from './workflow/judge-call.ts';
+import { RelayWaits } from './workflow/relay-waits.ts';
+import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
+import { WorkflowDescribeService } from './workflow-describe.ts';
+import { WriterQuiescer, withEventWriterLease, withOwnEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
 
@@ -167,7 +182,10 @@ export interface EventOwnerStatus extends EventLifecycleStatus {
 
 export interface EventOwner {
   status(): EventOwnerStatus;
-  /** Runs one serial owner tick; intended for deterministic local embedding and tests. */
+  /**
+   * Runs one serial owner tick, and waits for the raised events' deliveries it started; intended for deterministic
+   * local embedding and tests. The owner's own ticks never wait for those (W33).
+   */
   tick(): Promise<void>;
   /**
    * Registers a live listener the owner started for one exact immutable subscriber version. The returned cleanup
@@ -272,6 +290,25 @@ export interface EventOwnerOptions {
         readonly homeDirectory?: string | undefined;
         readonly generate?: ContextGenerator | undefined;
         readonly reconcileMs?: number | undefined;
+      }
+    | undefined;
+  /** Test seam only: a point inside one event delivery's attempt (0.36.0), after which its own gates decide. */
+  readonly eventDispatchTestPoint?: EventDispatcherOptions['testPoint'];
+  /** Test seam only: the live listeners' WebSocket ping interval and pong deadline (production: 30 and 60 seconds). */
+  readonly eventsWebSocket?: WebSocketTiming | undefined;
+  /**
+   * Workflows (0.36), test seams only: more compositions than the owner's own — a stand-in executor for a kind another
+   * track adds, which takes the place of the owner's own executor of that kind — the notifier a notify step raises its
+   * notice through, and a crash at a point of a step's life. Production composes every track's part and raises notices
+   * on the person's own screen.
+   */
+  readonly workflows?:
+    | {
+        readonly parts?: readonly WorkflowComposition[] | undefined;
+        readonly notifier?: Notifier | undefined;
+        readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
+        /** The judge transport a workflow step's judge reaches its provider through: a loopback fake under test. */
+        readonly judgeTransport?: JudgeTransport | undefined;
       }
     | undefined;
   readonly laya?:
@@ -455,7 +492,7 @@ function sourceOfDeliveryRule(document: string): SourceOptions['channel'] {
   try {
     return normaliseSourceOptions((JSON.parse(document) as { source?: { options?: unknown } }).source?.options).channel;
   } catch {
-    throw new CommsError('APPROVAL_VOID', 'the delivery rule source is no longer valid');
+    throw new CommsError('APPROVAL_VOID', 'the workflow source of this delivery is no longer valid');
   }
 }
 
@@ -598,10 +635,18 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
             request.args.agentView === true,
           );
         case 'ruleTest':
-          return runCatalogueRuleTest({ document: request.args.document, catalogue: request.args.catalogue as never });
+          // A workflow with a flow is walked over the example, each step answering as asked or with its first outcome
+          // (0.36.0 §7.7): no I/O; one without a flow is tested as before.
+          return runRuleTest({
+            document: request.args.document,
+            catalogue: request.args.catalogue as never,
+            outcomes: request.args.outcomes,
+            installationId: options.store.installationId,
+            now,
+          });
         case 'ruleTestRetained':
           if (options.retainedRuleTest === undefined)
-            throw new CommsError('CONFIG', 'the owner has no retained rule-test reader');
+            throw new CommsError('CONFIG', 'the owner has no retained workflow-test reader');
           return options.retainedRuleTest.test(request.args);
         case 'targetTest': {
           const pendingOrigin = pendingTargetOrigin(request.origin);
@@ -626,7 +671,7 @@ export function createOwnerB3ControlService(options: OwnerB3ControlServiceOption
           if (pendingOrigin === undefined)
             throw new CommsError(
               'APPROVAL_VOID',
-              'a pending rule judge test is available only from the terminal approval flow or app approval screen',
+              'a pending workflow judge test is available only from the terminal approval flow or app approval screen',
             );
           const authority = await verifyPendingRuleJudgeTestContext({
             database: options.store.database,
@@ -692,6 +737,9 @@ function secretAuditReceipt(request: B3OwnerRequest): Readonly<{
       };
     case 'subscriberTokenCreate':
     case 'subscriberTokenRotate':
+    case 'subscriberSecretCreate':
+    case 'subscriberSecretRotate':
+    case 'subscriberUrlSet':
       return {
         operation: request.operation,
         ids: auditOwnerIdentity('subscriberId', request.args.subscriberId, request.args.version),
@@ -825,6 +873,26 @@ async function handleTerminalSecretOperation(
           version: requiredVersion(request.args.version, 'subscriber version'),
         }),
       );
+    case 'subscriberSecretCreate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretCreate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberSecretRotate':
+      return terminalSecretResult(
+        await secrets.subscriberSecretRotate({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case 'subscriberUrlSet':
+      return secrets.subscriberUrlSet({
+        subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+        version: requiredVersion(request.args.version, 'new subscriber version'),
+        hiddenUrl: requiredText(request.args.hidden, 'hidden webhook URL'),
+      });
     case 'judgeKeySet':
       return secrets.judgeKeySet({
         judgeId: requiredText(request.args.judgeId, 'judge id'),
@@ -874,6 +942,7 @@ async function approvalViewFromOwner(
   if (row === undefined || row.status !== 'pending') return { kind: 'STALE_APPROVAL' };
   if (row.digest !== digest) return { kind: 'DIGEST_MISMATCH' };
   const preview = normaliseActivationDocument(JSON.parse(row.document));
+  const subscription = subscriptionPreviewFor(store.database, preview);
   const layaJudge = layaJudges
     ? layaJudgePreviewFor(preview, layaJudgeTermsFor(layaEnablementInputsFor(store.database)))
     : undefined;
@@ -887,6 +956,7 @@ async function approvalViewFromOwner(
       digest: row.digest,
       preview,
       ...(layaJudge === undefined ? {} : { layaJudge }),
+      ...(subscription === undefined ? {} : { subscription }),
     };
   const nextExpiry = now() + 5 * 60 * 1_000;
   const challenge = await activations.issueApprovalViewChallenge(approvalId, nextExpiry);
@@ -905,6 +975,7 @@ async function approvalViewFromOwner(
     }),
     challenge: { approvalId, digest: row.digest, challenge, expiresAt: nextExpiry },
     ...(layaJudge === undefined ? {} : { layaJudge }),
+    ...(subscription === undefined ? {} : { subscription }),
   };
 }
 
@@ -1250,6 +1321,22 @@ async function startOwnerWithLock(
       ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
       now,
     }),
+    // Describe it (0.36.0 §11.4): on Analyse's transport and the person's own provider key, read at the call and never
+    // kept; nothing it does writes a row.
+    describe: new WorkflowDescribeService({
+      database: database.database,
+      accounts: () => connectedEventAccounts(core.config),
+      keyPresence: () => b3Ports.secrets.providerKeys(),
+      keyFor: async (provider) => {
+        const generations = await eventSecrets.readLiveGenerations({
+          owner: providerSecretOwner(provider),
+          purpose: 'provider-key',
+          cipher,
+        });
+        return generations.find((generation) => generation.lifecycle === 'current')?.material ?? null;
+      },
+      ...(options.analyseTransport === undefined ? {} : { transport: options.analyseTransport }),
+    }),
   };
   notifyLaneAppend = () => lanes.notifyAppended();
   // A story per message (0.32.0 §3.6): the person's read joining ingest, decisions, deliveries and queue items.
@@ -1285,6 +1372,42 @@ async function startOwnerWithLock(
     hasConcreteWhatsAppVisibilityFence: true,
     retentionHooks: whatsappComposition.retainedContentHooks,
     now,
+    // `listeners` is made just below; a delivery reaches this only on a tick, after both exist.
+    live: (frame) =>
+      listeners.pushRule(frame.subscriberId, frame.subscriberVersion, { streamLogId: frame.streamLogId }),
+  });
+  // Workflow events (0.36.0, W31–W33): the owner's live listeners — one per subscriber version something may deliver to
+  // — and the dispatcher that delivers raised events to them and to webhook subscribers, both run every tick.
+  const listeners = new SubscriberListeners({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    eventSecrets,
+    registry: sseStreams,
+    now,
+    visibilityGate: whatsappComposition.visibilityFence,
+    hasConcreteWhatsAppVisibilityFence: true,
+    websocket: options.eventsWebSocket,
+  });
+  const eventDispatcher = new EventDispatcher({
+    store: database,
+    cipher,
+    approvals: core.approvals,
+    config: core.config,
+    listeners,
+    now,
+    testPoint: options.eventDispatchTestPoint,
+    secretReader: async ({ subscriberId, subscriberVersion, subscriberDigest, purpose }) =>
+      (
+        await eventSecrets.readLiveGenerations({
+          owner: { kind: 'subscriber', id: subscriberId, version: subscriberVersion, digest: subscriberDigest },
+          purpose,
+          cipher,
+        })
+      ).map(({ generation, lifecycle, secretDigest, material }) => ({ generation, lifecycle, secretDigest, material })),
+    // Each attempt runs apart from the tick that started it, under a writer lease of its own (W33).
+    apart: (work) => withOwnEventWriterLease(writerQuiescer, work),
   });
   // Agent sessions through the person's claude-stream relay (0.33.0 §3.5): the relay's settings and client, the busy
   // queue and its follower of the relay's event stream, and the session target's delivery boundary.
@@ -1313,9 +1436,13 @@ async function startOwnerWithLock(
   });
   const sessionQueue = new SessionQueue({ store: database, now });
   let tickAfterRelease: () => void = () => undefined;
+  // A workflow's waits on the relay (0.36 §6.5): ended by the follower's records and snapshots, each waking its run.
+  let wakeWorkflow: (runId: string) => void = () => undefined;
+  const relayWaits = new RelayWaits({ store: database, wake: (runId) => wakeWorkflow(runId) });
   const sessionFollower = new SessionQueueFollower({
     queue: sessionQueue,
     sessions: agentSessions,
+    relayWaits,
     onReleased: () => tickAfterRelease(),
     ...(options.agentSessions?.reconcileMs === undefined ? {} : { reconcileMs: options.agentSessions.reconcileMs }),
   });
@@ -1368,6 +1495,13 @@ async function startOwnerWithLock(
     session: sessionDispatcher,
     linear,
     assertObjectSecretReady: b3Ports.assertObjectSecretReady,
+    // A workflow step waits on its delivery: once a try of it settles, its run looks again (0.36 §5).
+    onDispatched: (deliveryId) => {
+      const row = database.database.prepare('SELECT run_id FROM deliveries WHERE id = ?').get(deliveryId) as
+        | { run_id: string | null }
+        | undefined;
+      if (row?.run_id !== null && row?.run_id !== undefined) wakeWorkflow(row.run_id);
+    },
   });
   // Activity design S1: one content-free "told" line for what each delivery came to, read back once it is committed.
   const deliveryActivity = new DeliveryActivity({ store: database, core, config: core.config });
@@ -1464,6 +1598,62 @@ async function startOwnerWithLock(
       database.close();
     },
   });
+  // Workflows (0.36): the one engine, its executors and every track's composition (plan B2), under this owner's lease.
+  // A workflow step's judge reads its hosted key at the request boundary, as the gate's does (plan B3).
+  const flowJudgeKeyFor = async ({
+    judgeId,
+    judgeVersion,
+  }: {
+    readonly judgeId: string;
+    readonly judgeVersion: number;
+  }) => {
+    const row = database.database
+      .prepare('SELECT digest FROM judge_versions WHERE judge_id = ? AND version = ? AND revoked_at IS NULL')
+      .get(judgeId, judgeVersion) as { digest: string } | undefined;
+    if (row === undefined) return null;
+    const generations = await eventSecrets.readLiveGenerations({
+      owner: { kind: 'judge', id: judgeId, version: judgeVersion, digest: row.digest },
+      purpose: 'judge-key',
+      cipher,
+    });
+    const current = generations.find((generation) => generation.lifecycle === 'current');
+    return current === undefined ? null : { generation: current.generation, material: current.material };
+  };
+  const workflows = composeWorkflows(
+    {
+      store: database,
+      cipher,
+      approvals: core.approvals,
+      config: core.config,
+      notifier: options.workflows?.notifier ?? makeNotifier({ platform: process.platform, env: process.env }),
+      writerQuiescer,
+      now,
+      interrupt: relayTurnInterrupter({ store: database, relay: () => agentSessions.relay() }),
+      failpoint: options.workflows?.failpoint,
+      // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
+      standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
+      relay: () => agentSessions.relay(),
+      onRelayWait: () => sessionFollower.notify(),
+      judgeFor: (attempt) =>
+        flowJudge({
+          store: database,
+          attempt,
+          hostedApiKeyFor: flowJudgeKeyFor,
+          now,
+          ...(options.workflows?.judgeTransport === undefined ? {} : { transport: options.workflows.judgeTransport }),
+        }),
+    },
+    [
+      // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
+      // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
+      composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
+      // Track D: the Raise step, the sink every transition's ticked events go through — a Raise step's declared
+      // fields opened from the run's record — and the chains each raised event asks for (W34).
+      composeOwnerWorkflowEvents({ store: database, cipher }),
+      ...(options.workflows?.parts ?? []).map((part) => ({ ...part, executors: [] })),
+    ],
+  );
+  wakeWorkflow = (runId) => workflows.wake(runId);
   const activations = new ActivationRuntime({
     store: database,
     approvals: core.approvals,
@@ -1471,6 +1661,7 @@ async function startOwnerWithLock(
     gmailSourceFor,
     assertSessionTargets: (rule) => agentSessions.assertActivation(rule),
     assertLinearTargets: (rule) => readers.linear?.assertActivation(rule) ?? Promise.resolve('none'),
+    flowActivationChecks: workflows.activationChecks,
     sourceStageExpiry,
     sourceBaselineFor: async ({ source, accountId, scopeId }) => {
       if (source === 'gmail') {
@@ -1643,6 +1834,17 @@ async function startOwnerWithLock(
     sourceRegistry,
     whatsappVisibilityFence: whatsappComposition.visibilityFence,
     writerQuiescer,
+    workflowWork: async () => {
+      await listeners.reconcile();
+      // A raised event's delivery never touches the run (W33), so never the tick that runs it either: a subscriber that
+      // hangs would otherwise hold the engine, the sources and every other subscriber for its whole attempt.
+      eventDispatcher.pump();
+    },
+    workflows,
+    // Again after the engine's turn: the first event of a burst a step raised in it goes out in this tick, not the next.
+    afterWorkflows: () => {
+      eventDispatcher.pump();
+    },
     now,
     ...(options.tickMs === undefined ? {} : { tickMs: options.tickMs }),
     ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
@@ -1660,6 +1862,7 @@ async function startOwnerWithLock(
       whatsappVisibilityFence: whatsappComposition.visibilityFence,
     }),
     closeSubscriberStreams: (input) => sseStreams.closeSubscriberStreams(input),
+    subscriberListening: (subscriberId, subscriberVersion) => listeners.status(subscriberId, subscriberVersion),
   };
   const ownerB3Service =
     options.b3OwnerService ??
@@ -1676,6 +1879,8 @@ async function startOwnerWithLock(
         accountLive: ({ source, accountId }) => assertLiveEventAccount(core.config, { source, accountId }),
         whatsappVisibilityFence: whatsappComposition.visibilityFence,
         now,
+        // A workflow with a flow is walked on the message (0.36.0 §7.7): judges, route and find for real; the rest would.
+        flow: (input) => workflows.tryRetained(input),
       }),
       judgeTest: new JudgeTestControl({
         store: database,
@@ -1766,7 +1971,11 @@ async function startOwnerWithLock(
       activationIntents: replacementIntentSummary(database.database),
     }),
     stopped: stoppedPromise,
-    tick: () => withEventWriterLease(writerQuiescer, () => scheduler.tick()),
+    tick: async () => {
+      await withEventWriterLease(writerQuiescer, () => scheduler.tick());
+      // Outside the lease: each delivery holds one of its own, which a waiting rekey must be able to come before.
+      await eventDispatcher.idle();
+    },
     registerSseListener: (input) => sseStreams.register(input),
     sweepTakes: () => takeOffers.sweep(),
     async stop(): Promise<void> {
@@ -1777,9 +1986,15 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
+        // An event delivery a tick started finishes here, while the database and the listeners are still open; its
+        // queue's next event starts no more.
+        await eventDispatcher.stop();
+        // A workflow pass a wake started finishes here, before the database closes; none starts after.
+        await workflows.stop();
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();
+        await listeners.close();
       } finally {
         unregisterLayaWorker();
         unregisterLayaInputs();
@@ -1846,6 +2061,7 @@ async function startOwnerWithLock(
           judgeSetup,
           readers,
           { service: agentSessions, queue: sessionQueue },
+          workflows,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -1854,6 +2070,8 @@ async function startOwnerWithLock(
       await verifyControlSocket(instance.endpoint);
     }
     await writeInstance(paths, instance);
+    // The live listeners start before the first tick, so an approved subscriber can connect at once.
+    await listeners.start();
     scheduler.start();
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     takeOffers.start(options.takes?.sweepMs ?? TAKE_SWEEP_INTERVAL_MS);
@@ -1928,6 +2146,8 @@ interface OwnerReaders {
   readonly rules: RuleReader;
   readonly judges: JudgeReader;
   readonly analyse: RuleAnalyseService;
+  /** Describe it (0.36.0 §11.4): the names a draft may use, a key's draft, and every draft read and checked. */
+  readonly describe: WorkflowDescribeService;
   /** Settings → Integrations → Linear (0.33.0): the workspace, teams and labels the person's Linear key can see. */
   readonly linear?: LinearIntegration | undefined;
 }
@@ -1950,6 +2170,7 @@ async function handleControl(
   judgeSetup?: JudgeSetupService | undefined,
   readers?: OwnerReaders,
   sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
+  workflows?: Pick<WorkflowEngine, 'cancel'>,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -1968,6 +2189,8 @@ async function handleControl(
       assertDeliveryVisibleTo(database, lanes, args.deliveryId, caller);
     if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
       lanes.assertAgentMayStop(args.deliveryId, caller);
+    if (request.operation === OWNER_CONTROL_WIRES.dropDelivery && (caller !== undefined || insideMcpServer === true))
+      assertAgentMayStopEventDelivery(database.database, args.deliveryId);
     try {
       const result = await b3OwnerService.handle({ operation: request.operation, args, origin: request.origin });
       return caller === undefined ? result : lanes.visibleDeliveries(result, caller);
@@ -2074,18 +2297,32 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.messageShow:
       return messages.show(personOnly(request.args, 'message show').eventId);
     // Analyse (0.33.0 §3.3): the person's, from the CLI and the app; a caller is refused. It writes nothing.
+    // Describe it (0.36.0 §11.4): the person's alone, from their origin; it writes nothing. Its brief is for the CLI that
+    // runs the person's own `claude`; the draft is read and checked here, in-process.
+    case OWNER_CONTROL_WIRES.workflowDescribe:
+    case OWNER_CONTROL_WIRES.workflowDescribeBrief: {
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow describe is not available');
+      const args = personOnly(request.args, 'workflow describe');
+      if (personSetupApprover(request.origin) === null)
+        throw new CommsError('APPROVAL_REQUIRED', 'Describe it is yours, from the app or your terminal', {
+          details: { reason: 'PERSON_SETUP_ONLY' },
+        });
+      return request.operation === OWNER_CONTROL_WIRES.workflowDescribe
+        ? readers.describe.describe(args, request.signal)
+        : readers.describe.brief(args);
+    }
     // One judge version's document (0.33.0): content-free, for the person and an agent alike, as judges list is.
     case OWNER_CONTROL_WIRES.judgeShow:
       if (readers === undefined) throw new CommsError('USAGE', 'judge show is not available');
       return readers.judges.show(request.args);
     case OWNER_CONTROL_WIRES.ruleAnalyse:
-      if (readers === undefined) throw new CommsError('USAGE', 'rule analyse is not available');
-      return readers.analyse.analyse(personOnly(request.args, 'rule analyse'), request.signal);
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow analyse is not available');
+      return readers.analyse.analyse(personOnly(request.args, 'workflow analyse'), request.signal);
     // The person's own setup (owner decision 2026-10-26): its service accepts only the person's setup origin.
     case OWNER_CONTROL_WIRES.judgeSetup:
       return requireJudgeSetup(judgeSetup).setup(request.args, request.origin);
     case OWNER_CONTROL_WIRES.approveRuleFromApp:
-      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'rule approve'), request.origin);
+      return requireJudgeSetup(judgeSetup).approveRule(personOnly(request.args, 'workflow approve'), request.origin);
     // Switching the event service on from the app, after its preview (0.34.0 design B4): the person's, as a rule's is.
     case OWNER_CONTROL_WIRES.approveEnableAllFromApp:
       return requireJudgeSetup(judgeSetup).approveEnableAll(
@@ -2112,6 +2349,15 @@ async function handleControl(
     }
     case OWNER_CONTROL_WIRES.sessionQueueDrop:
       return requireSessions(sessions).queue.drop(personOnly(request.args, 'session-queue drop').deliveryId);
+    // Projects (0.36.0 §8.1): the person's alone, from their origin; their folders are checked inside the same allowed
+    // roots and outside the same denied folders as a session's.
+    case OWNER_CONTROL_WIRES.projectsList:
+    case OWNER_CONTROL_WIRES.projectShow:
+    case OWNER_CONTROL_WIRES.projectAdd:
+    case OWNER_CONTROL_WIRES.projectUpdate:
+    case OWNER_CONTROL_WIRES.projectRemove:
+    case OWNER_CONTROL_WIRES.projectScan:
+      return projectControl({ store: database, sessions: requireSessions(sessions).service }, request);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
@@ -2120,6 +2366,24 @@ async function handleControl(
       if (!definition) throw new CommsError('NOT_FOUND', 'the requested event type is not in the local catalogue');
       return { type: definition.type, version: definition.version, channel: definition.type.split('.')[0] };
     }
+    // Workflow events (0.36.0): a subscription is prepared by anyone and approved by the person, from the app's origins
+    // here or with `approve` at a terminal; the step event catalogue is content-free.
+    case OWNER_CONTROL_WIRES.enableSubscriber:
+      return domainAwaited(() =>
+        activations.prepareSubscription({
+          subscriberId: requiredText(request.args.subscriberId, 'subscriber id'),
+          version: requiredVersion(request.args.version, 'subscriber version'),
+        }),
+      );
+    case OWNER_CONTROL_WIRES.approveSubscriberFromApp:
+      return requireJudgeSetup(judgeSetup).approveSubscription(
+        personOnly(request.args, 'subscriber approve'),
+        request.origin,
+      );
+    case OWNER_CONTROL_WIRES.workflowEventsList:
+      return workflowEventsListResult();
+    case OWNER_CONTROL_WIRES.workflowEventsShow:
+      return workflowEventsShowResult(request.args.schema);
     case OWNER_CONTROL_WIRES.sourcesList:
       return sourceRows(database, sourceRegistry, await connectedAccounts());
     case OWNER_CONTROL_WIRES.sourceShow:
@@ -2129,13 +2393,27 @@ async function handleControl(
         requiredText(request.args.source, 'source'),
         await connectedAccounts(),
       );
+    // A workflow's runs (0.36.0 §7.6): the person's alone, from their origin; a cancel is the engine's, at once.
+    case OWNER_CONTROL_WIRES.runsList:
+    case OWNER_CONTROL_WIRES.runShow:
+    case OWNER_CONTROL_WIRES.runCancel:
+      return runControl(
+        { store: database, cancel: (runId, input) => requireWorkflows(workflows).cancel(runId, input) },
+        request,
+      );
+    // `workflow check` (0.36.0 §7.7): what is wrong with a document, every problem named; it writes nothing.
+    case OWNER_CONTROL_WIRES.ruleCheck:
+      return checkRuleDocument(database.database, request.args.document);
     case OWNER_CONTROL_WIRES.rulesList:
       return ruleRows(database);
     case OWNER_CONTROL_WIRES.ruleShow: {
-      if (readers === undefined) throw new CommsError('USAGE', 'rule show is not available');
+      if (readers === undefined) throw new CommsError('USAGE', 'workflow show is not available');
       // An agent window's call names the window: it gets no counts of a lane it is not bound to (review 0.32.0, 8).
       const { caller, args } = splitCaller(request.args);
-      const entries = await readers.rules.show(requiredText(args.ruleId, 'rule id'));
+      const { ruleId, version } = args;
+      if (version !== undefined && (!Number.isSafeInteger(version) || (version as number) < 1))
+        throw new CommsError('USAGE', 'a workflow version is a positive integer');
+      const entries = await readers.rules.show(requiredText(ruleId, 'workflow id'), version as number | undefined);
       return caller === undefined ? entries : lanes.ruleVersionsForWindow(entries, caller);
     }
     case OWNER_CONTROL_WIRES.createRule:
@@ -2146,13 +2424,13 @@ async function handleControl(
       // refused with that fixed reason, as rule create's documents are.
       return domainAwaited(() =>
         activations.prepareRule({
-          ruleId: requiredText(request.args.ruleId, 'rule id'),
-          version: requiredVersion(request.args.version, 'rule version'),
+          ruleId: requiredText(request.args.ruleId, 'workflow id'),
+          version: requiredVersion(request.args.version, 'workflow version'),
         }),
       );
     case OWNER_CONTROL_WIRES.disableRule:
     case OWNER_CONTROL_WIRES.removeRule:
-      return disableRule(database, activations, requiredText(request.args.ruleId, 'rule id'));
+      return disableRule(database, activations, requiredText(request.args.ruleId, 'workflow id'));
     case OWNER_CONTROL_WIRES.targetsList:
       return targetRows(database);
     case OWNER_CONTROL_WIRES.addTarget:
@@ -2178,6 +2456,11 @@ async function handleControl(
     default:
       throw new CommsError('USAGE', 'the local event control operation is not recognised');
   }
+}
+
+function requireWorkflows<T>(workflows: T | undefined): T {
+  if (workflows === undefined) throw new CommsError('CONFIG', 'workflows are not composed for this owner');
+  return workflows;
 }
 
 function requireSessions<T>(sessions: T | undefined): T {
@@ -2288,9 +2571,14 @@ function domain<T>(work: () => T): T {
     return work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
+}
+
+/** A refusal's fixed reason, and the closed detail some carry beside it (a workflow's `FLOW_INVALID` problems). */
+function domainRefusalDetails(error: EventDomainError): Record<string, unknown> {
+  return { ...error.details, reason: error.code };
 }
 
 /** `domain` for an operation that awaits: a refusal is the caller's input, with the same fixed reason. */
@@ -2299,7 +2587,7 @@ async function domainAwaited<T>(work: () => Promise<T>): Promise<T> {
     return await work();
   } catch (error) {
     if (error instanceof EventDomainError)
-      throw new CommsError('BAD_DATA', error.message, { details: { reason: error.code } });
+      throw new CommsError('BAD_DATA', error.message, { details: domainRefusalDetails(error) });
     throw error;
   }
 }

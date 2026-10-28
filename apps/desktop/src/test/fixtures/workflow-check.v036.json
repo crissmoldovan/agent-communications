@@ -1,0 +1,11 @@
+{
+  "ok": false,
+  "problems": [
+    {
+      "code": "FLOW_CYCLE",
+      "message": "The step find leads back to route: a workflow never goes round in a circle.",
+      "stepId": "find",
+      "pointer": "/flow/steps/find/next/busy"
+    }
+  ]
+}

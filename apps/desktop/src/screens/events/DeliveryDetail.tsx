@@ -57,10 +57,10 @@ export const DELIVERY_COPY = {
   subject: 'Subject',
   story: 'See everything that happened to this message',
   why: 'Why it was passed on',
-  noJudge: 'No judge on this rule.',
+  noJudge: 'No judge on this workflow.',
   would: 'What it would have delivered',
   wouldNote:
-    'Only the parts the rule keeps. Text the sender wrote is shown as plain text, never as links or formatting.',
+    'Only the parts the workflow keeps. Text the sender wrote is shown as plain text, never as links or formatting.',
   wouldGone: 'The dry-run log no longer has this entry: each is deleted after 24 hours.',
   sends: 'Where it sends',
   linearAdded: (identifier: string) => `Added ${identifier} in Linear.`,
@@ -448,7 +448,7 @@ function Why({
   return (
     <Part title={DELIVERY_COPY.why}>
       <p className="text-fg">
-        {'Rule '}
+        {'Workflow '}
         {isRuleId(row.ruleId) ? (
           <Link variant="underline" render={<button type="button" />} onClick={() => nav.openRule(row.ruleId)}>
             <UntrustedText text={row.ruleId} />

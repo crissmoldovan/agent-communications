@@ -116,11 +116,13 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_catalogue_list',
           'events_approval_view',
           'events_rule_test',
+          'events_rule_check',
           'events_target_test',
           'events_subscribers_list',
           'events_subscriber_add',
           'events_subscriber_update',
           'events_subscriber_remove',
+          'events_subscriber_enable',
           'events_judges_list',
           'events_judge_show',
           'events_judge_add',
@@ -140,6 +142,8 @@ test('BOOT-B1/B3: the built command has clean help and its MCP server exposes th
           'events_delivery_drop',
           'events_held_list',
           'events_catalogue_show',
+          'events_workflow_events_list',
+          'events_workflow_events_show',
           'events_sources_list',
           'events_source_show',
           'events_rules_list',
@@ -180,11 +184,11 @@ test('PAR-B3: the production reference generator rejects a fixture copy with a r
   try {
     const page = join(fixture.root, 'docs/reference/events-daemon-cli.md');
     const source = await readFile(page, 'utf8');
-    const commandAt = source.indexOf('### `agent-events rule test`\n');
-    assert.notEqual(commandAt, -1, 'the generated page contains the paired rule-test command');
+    const commandAt = source.indexOf('### `agent-events workflow test`\n');
+    assert.notEqual(commandAt, -1, 'the generated page contains the paired workflow-test command');
     const nextCommandAt = source.indexOf('\n### `', commandAt + 1);
     const changed = source.slice(0, commandAt) + source.slice(nextCommandAt === -1 ? source.length : nextCommandAt + 1);
-    assert.notEqual(changed, source, 'the reference-command mutant removes the generated rule-test section');
+    assert.notEqual(changed, source, 'the reference-command mutant removes the generated workflow-test section');
     await writeFile(page, changed);
     await assert.rejects(
       run(

@@ -73,7 +73,7 @@ describe('Settings → Integrations', () => {
     const integrations = await section();
     const linear = await within(integrations).findByRole('region', { name: 'Linear' });
     await within(linear).findByText('Not connected');
-    expect(linear.textContent).toContain('Lets a rule add an issue. Nothing reads your Linear on its own.');
+    expect(linear.textContent).toContain('Lets a workflow add an issue. Nothing reads your Linear on its own.');
     fireEvent.click(within(linear).getByRole('button', { name: 'Connect Linear…' }));
     const field = (await within(linear).findByLabelText('Linear personal API key')) as HTMLInputElement;
     field.value = 'fake-linear-key';
@@ -93,7 +93,7 @@ describe('Settings → Integrations', () => {
     expect((within(linear).getByRole('button', { name: 'Change teams…' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(linear).getByRole('button', { name: 'Disconnect' }));
     const confirm = await screen.findByRole('alertdialog', { name: 'Disconnect Linear?' });
-    expect(confirm.textContent).toContain('a rule that adds Linear issues adds none until you connect it again');
+    expect(confirm.textContent).toContain('a workflow that adds Linear issues adds none until you connect it again');
     fireEvent.click(within(confirm).getByRole('button', { name: 'Disconnect' }));
     await waitFor(() =>
       expect(

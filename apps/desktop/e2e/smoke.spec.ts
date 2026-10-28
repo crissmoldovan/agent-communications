@@ -33,6 +33,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Queue',
     'Messages New',
     'People New',
+    'Projects New',
     'Accounts',
     'MCP connections New',
     'Approvals',
@@ -40,6 +41,7 @@ test('opens on Overview with its sections', async ({ page }) => {
     'Your agents',
     'Updates',
     'Events',
+    'Workflows New',
     'Doctor',
     'Settings',
   ]);

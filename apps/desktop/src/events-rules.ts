@@ -625,7 +625,7 @@ export function limitLine(document: Json | null): PanelLine {
   const cap = whole(document?.deliveryRateCap);
   const agentic = isRecord(document?.agentic) ? document.agentic : null;
   const calls = whole(agentic?.callsPerRollingHour);
-  const detail: RulePart[] = [plain('The limit you approved with the rule')];
+  const detail: RulePart[] = [plain('The limit you approved with the workflow')];
   if (calls !== null) detail.push(plain(` · its judge is asked at most ${calls} times an hour`));
   return { main: [plain(cap === null ? 'No limit is recorded' : `At most ${cap} an hour`)], detail };
 }

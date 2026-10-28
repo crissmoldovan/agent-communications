@@ -11,8 +11,15 @@ import {
   resolvePaths,
   withMarkerHint,
 } from '@agentcomms/core';
-import { Command, CommanderError } from 'commander';
+import { Command, CommanderError, Option } from 'commander';
 import { ANALYSE_PROVIDERS, isAnalyseProvider } from '../domain/analyse-model.ts';
+import {
+  DESCRIBE_LIMITS,
+  DESCRIBE_PROVIDERS,
+  type DescribeProvider,
+  isDescribeProvider,
+  parseDescribeRequest,
+} from '../domain/describe-brief.ts';
 import {
   changeAtTerminal,
   isSetupJudgeKind,
@@ -83,6 +90,14 @@ import {
 import { laneBind, laneList, laneUnbind } from '../operations/lanes.ts';
 import { messageShow, messagesList } from '../operations/messages.ts';
 import { pause, resume } from '../operations/pause.ts';
+import {
+  projectAdd,
+  projectRemove,
+  projectScan,
+  projectShow,
+  projectsList,
+  projectUpdate,
+} from '../operations/projects.ts';
 import { providerKeyRemove, providerKeySet, providerList } from '../operations/providers.ts';
 import {
   queueClear,
@@ -94,6 +109,7 @@ import {
   queueReopen,
   queueShow,
 } from '../operations/queue.ts';
+import { ruleCheck } from '../operations/rule-check.ts';
 import { ruleTest, ruleTestRetained } from '../operations/rule-test.ts';
 import {
   createRule,
@@ -105,12 +121,16 @@ import {
   updateRule,
 } from '../operations/rules.ts';
 import { run as runOwner } from '../operations/run.ts';
+import { runCancel, runShow, runsList } from '../operations/runs.ts';
 import {
   judgeKeyRotate,
   judgeKeySet,
   migrateSecrets,
+  subscriberSecretCreate,
+  subscriberSecretRotate,
   subscriberTokenCreate,
   subscriberTokenRotate,
+  subscriberUrlSet,
   targetSecretCreate,
   targetSecretRotate,
   targetUrlSet,
@@ -118,17 +138,28 @@ import {
 import { sourceShow, sourcesList } from '../operations/sources.ts';
 import { status } from '../operations/status.ts';
 import { stop } from '../operations/stop.ts';
-import { addSubscriber, removeSubscriber, subscribersList, updateSubscriber } from '../operations/subscribers.ts';
+import {
+  addSubscriber,
+  approveSubscriberFromApp,
+  enableSubscriber,
+  removeSubscriber,
+  subscribersList,
+  updateSubscriber,
+} from '../operations/subscribers.ts';
 import { targetResume } from '../operations/target-resume.ts';
 import { targetTest } from '../operations/target-test.ts';
 import { addTarget, removeTarget, targetsList, updateTarget } from '../operations/targets.ts';
+import { workflowDescribe } from '../operations/workflow-describe.ts';
+import { workflowEventsList, workflowEventsShow } from '../operations/workflow-events.ts';
 import type { PendingRuleJudgeTestSelector } from '../runtime/b3-pending-rule-judge-test.ts';
 import { parseJudgeShowArguments } from '../runtime/judge-show.ts';
 import { requireLaneName, requireLaneWindowId } from '../runtime/lanes.ts';
 import { parseMessagesQuery, requireEventId } from '../runtime/messages.ts';
 import { parseQueueQuery, requireQueueItemId } from '../runtime/queue.ts';
 import { ANALYSE_DRAFT_MAX_BYTES, parseRuleAnalyseArguments } from '../runtime/rule-analyse.ts';
+import { ruleShowForAgent } from '../runtime/rule-show.ts';
 import { withinTestProfile } from '../runtime/test-profile.ts';
+import { RUN_STATES, type RunState } from '../runtime/workflow/run-show.ts';
 import { assertHumanTerminal, dryRunRecordAsData, renderDryRunList, renderDryRunRecord } from '../targets/dry-run.ts';
 import {
   assertNotMcpServer,
@@ -156,6 +187,8 @@ export interface EventsCliDeps {
   readonly env?: NodeJS.ProcessEnv | undefined;
   /** Test-only: where this process came from (core's `desktopAppOrigin`), which production always asks. */
   readonly desktopOrigin?: (() => Promise<DesktopOrigin>) | undefined;
+  /** Test-only: a shorter deadline for the person's own `claude` than Describe it's 120 seconds. */
+  readonly claudeDeadlineMs?: number | undefined;
 }
 
 interface EventsCliOptions {
@@ -254,7 +287,7 @@ export async function runTerminalApprovalFlow(input: {
     const selector = start.pendingRuleJudgeTestSelectors[index];
     if (selector === undefined) continue;
     const answer = await input.terminal.question(
-      `Test pending rule judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
+      `Test pending workflow judge ${index + 1} with the fixed synthetic payload before approving? [y/N] `,
     );
     const testPendingRuleJudge = input.testPendingRuleJudge;
     if (/^\s*(?:y|yes)\s*$/iu.test(answer) && testPendingRuleJudge !== undefined)
@@ -479,25 +512,37 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       print(await sourceShow(source, controlOptions(program)));
     });
 
-  const rules = program.command('rules').description('inspect immutable local event rule versions');
+  // One word (workflows design 2026-10-27, W22): a workflow is what the event service stores as a rule version, and the
+  // command line says so. `rules` and `rule` stay as aliases, so scripts and the desktop app keep working; the variable
+  // names, like every identifier inside, keep saying rule.
+  const rules = program.command('workflows').alias('rules').description('inspect immutable local workflow versions');
   rules.command('list').action(async () => {
     ran = true;
     print(await rulesList(controlOptions(program)));
   });
-  const rule = program.command('rule').description('create, inspect and control immutable event rules');
-  rule.command('show <rule-id>').action(async (ruleId: string) => {
-    ran = true;
-    print(await ruleShow(ruleId, controlOptions(program)));
-  });
+  const rule = program.command('workflow').alias('rule').description('create, inspect and control immutable workflows');
+  rule
+    .command('show <workflow-id>')
+    .option('--version <version>', 'that one version alone, as a run of it draws its graph')
+    .action(async (ruleId: string, options: { readonly version?: string }) => {
+      ran = true;
+      const shown = await ruleShow(ruleId, {
+        ...controlOptions(program),
+        ...(options.version === undefined ? {} : { version: parseVersion(options.version) }),
+      });
+      // An agent's shell, or a program inside the event service's MCP server, reads a route step's projects by id and
+      // name, without their folders, as events_rule_show gives them (security review of 0.36.0, M3).
+      print(agentMarker(env) !== null || (env[MCP_SERVER_MARKER] ?? '') !== '' ? ruleShowForAgent(shown) : shown);
+    });
   rule.command('create <document>').action(async (document: string) => {
     ran = true;
-    print(await createRule(await documentArgument(document, 'rule document'), controlOptions(program)));
+    print(await createRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
   });
   rule.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateRule(await documentArgument(document, 'rule document'), controlOptions(program)));
+    print(await updateRule(await documentArgument(document, 'workflow document'), controlOptions(program)));
   });
-  rule.command('enable <rule-id> <version>').action(async (ruleId: string, version: string) => {
+  rule.command('enable <workflow-id> <version>').action(async (ruleId: string, version: string) => {
     ran = true;
     print(await enableRule(ruleId, parseVersion(version), controlOptions(program)));
   });
@@ -505,29 +550,49 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     ['disable', disableRule],
     ['remove', removeRule],
   ] as const) {
-    rule.command(`${name} <rule-id>`).action(async (ruleId: string) => {
+    rule.command(`${name} <workflow-id>`).action(async (ruleId: string) => {
       ran = true;
       print(await operation(ruleId, controlOptions(program)));
     });
   }
   rule.command('test <document> <catalogue-example>').action(async (document: string, catalogueExample: string) => {
     ran = true;
+    // A workflow with a flow is walked over the example (0.36.0 §7.7): each step named answers as asked, every other
+    // with its first outcome. `-` reads the document from stdin, as the app gives it.
+    const outcomes = outcomeArguments(ruleTestCommand.opts<{ readonly outcome: string[] }>().outcome);
     print(
-      await ruleTest(
-        jsonArgument(document, 'rule document'),
-        catalogueArgument(catalogueExample),
-        controlOptions(program),
-      ),
+      await ruleTest(await documentArgument(document, 'workflow document'), catalogueArgument(catalogueExample), {
+        ...controlOptions(program),
+        ...(outcomes === undefined ? {} : { outcomes }),
+      }),
     );
   });
+  // The command just made: the guarded line above is left as it is, and its option is added here.
+  const ruleTestCommand = rule.commands.at(-1) as Command;
+  ruleTestCommand
+    .description('try a workflow on a catalogue example; a flow is walked, each effect a would, with no I/O')
+    .option(
+      '--outcome <step=outcome>',
+      'the outcome a step of the flow answers with (repeat for more); every other step answers its first',
+      collect,
+      [],
+    );
   rule
     .command('test-retained <event-id>')
-    .requiredOption('--rule <rule-id>')
+    .addOption(
+      new Option(
+        '--workflow <workflow-id>',
+        'the workflow to try on the retained event, at the version --version names (required)',
+      ),
+    )
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .requiredOption('--version <version>')
-    .action(async (eventId: string, options) => {
+    .action(async (eventId: string, options, command: Command) => {
       ran = true;
+      // `--workflow` is required, and the hidden `--rule` it replaced still names the same workflow (W22). Checked
+      // before the terminal is, as Commander checks a required option.
+      const ruleId = workflowOption(options, command, true) as string;
       assertHuman();
-      const ruleId = options.rule as string;
       const ruleVersion = parseVersion(options.version as string);
       printHumanResult(
         await humanB3('ruleTestRetained', { eventId, ruleId, ruleVersion }, () =>
@@ -535,13 +600,80 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         ),
       );
     });
+  rule
+    .command('check <document>')
+    .description('check a workflow document as the event service reads it, every problem named; - reads it from stdin')
+    .action(async (document: string) => {
+      ran = true;
+      print(await ruleCheck(await documentArgument(document, 'workflow document'), controlOptions(program)));
+    });
+  // A workflow's runs (0.36.0 workflows design §7.6, §11.1): `runs`, not `run`, which starts the service. Each command is
+  // the person's alone, from the app or their terminal: personSetupOrigin refuses the event service's MCP server, an
+  // agent's shell and, on macOS, a process the app did not start, before anything is asked; the owner takes them only
+  // from the person's origin; and no tool reads or cancels a run.
+  const asPersonForRuns = (what: string) =>
+    personSetupOrigin(what, {
+      where: "Events → Workflows, a workflow's Runs",
+      action: 'runs',
+      terminal: 'output',
+      // Nothing here loosens anything: a list and a run are read, and a cancel is a tightening.
+      unattested: 'accept',
+    });
+  const runs = program
+    .command('runs')
+    .description("a workflow's runs: list them, show one, cancel one (a person only)");
+  runs
+    .command('list')
+    .description(
+      'list the runs, newest first, at most 200: their state, version and what each waits on (a person only)',
+    )
+    .option('--workflow <workflow-id>', "only this workflow's runs")
+    .option('--state <state>', `only the runs in this state: ${RUN_STATES.join(', ')}`)
+    .action(async (options: { readonly workflow?: string; readonly state?: string }) => {
+      ran = true;
+      const origin = await asPersonForRuns("list your workflows' runs");
+      if (options.state !== undefined && !(RUN_STATES as readonly string[]).includes(options.state))
+        throw new CommsError('USAGE', `a run's state is ${RUN_STATES.join(', ')}`);
+      print(
+        await runsList({
+          ...controlOptions(program),
+          origin,
+          ruleId: options.workflow,
+          state: options.state as RunState | undefined,
+        }),
+      );
+    });
+  runs
+    .command('show <run-id>')
+    .description(
+      "show one run of the version it started on: its path, each step's outcome, output and wait, and the events it raised (a person only)",
+    )
+    .action(async (runId: string) => {
+      ran = true;
+      const origin = await asPersonForRuns('see a run');
+      print(await runShow(runId, { ...controlOptions(program), origin }));
+    });
+  runs
+    .command('cancel <run-id>')
+    .description(
+      'cancel a live run at once: its waiting deliveries and undelivered events are cancelled and what it kept purged (a person only)',
+    )
+    .option('--interrupt', 'also interrupt the turn it gave a session; without it, that turn runs on')
+    .action(async (runId: string, options: { readonly interrupt?: boolean }) => {
+      ran = true;
+      const origin = await asPersonForRuns('cancel a run');
+      print(await runCancel(runId, { interrupt: options.interrupt === true }, { ...controlOptions(program), origin }));
+    });
 
   rule
-    .command('analyse <rule-id>')
+    .command('analyse <workflow-id>')
     .description(
-      "suggest improvements to a rule, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
+      "suggest improvements to a workflow, or to a draft of it, from its own text and its last 30 days' content-free counts (a person)",
     )
-    .option('--draft <source>', 'analyse a draft rule document instead of the stored version: - reads it from stdin')
+    .option(
+      '--draft <source>',
+      'analyse a draft workflow document instead of the stored version: - reads it from stdin',
+    )
     .option('--provider <provider>', `the provider Analyse's model runs on: ${ANALYSE_PROVIDERS.join(' or ')}`)
     .action(async (ruleId: string, options: Record<string, unknown>) => {
       ran = true;
@@ -549,8 +681,8 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // is, it is taken only from the Agent Comms app (attested on macOS) or an interactive terminal — one whose output
       // the person reads, since a draft may come on stdin — and an agent's shell and the MCP server are refused before
       // anything is read or sent (security review of 0.33.0, finding 10).
-      await personSetupOrigin('analyse a rule', {
-        where: 'Events → Rules, Analyse',
+      await personSetupOrigin('analyse a workflow', {
+        where: 'Events → Workflows, Analyse',
         action: 'analyse',
         terminal: 'output',
         // It changes nothing: Windows and Linux keep `provider key set`'s former rule for it (second look of 0.33.0).
@@ -567,6 +699,43 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       // The owner reads these again; checking here first gives a bad argument its exit (64) without the owner.
       parseRuleAnalyseArguments({ ruleId, ...(draft === undefined ? {} : { draft }), provider });
       print(await ruleAnalyse(ruleId, { ...controlOptions(program), draft, provider }));
+    });
+
+  // Describe it (0.36.0 workflows design §11.4, W21): the person's words drafted into a workflow, written nowhere. It is
+  // the person's, as Analyse is: from the app (attested on macOS) or a terminal whose output they read; the event
+  // service's MCP server, an agent's shell and, on macOS, a process the app did not start are refused before anything
+  // is read or sent. Their own `claude` runs here, in this process, never in the event service.
+  rule
+    .command('describe')
+    .description(
+      'draft a workflow from your words on stdin — { words, example?, answers?, draft? } as JSON, or the words alone — by your Claude, OpenRouter or Anthropic; nothing is saved (a person)',
+    )
+    .option(
+      '--provider <provider>',
+      `who drafts it: ${DESCRIBE_PROVIDERS.join(', ')}; your Claude first when it is found`,
+    )
+    .action(async (options: Record<string, unknown>) => {
+      ran = true;
+      const origin = await personSetupOrigin('describe a workflow', {
+        where: 'Events → Workflows, Describe it in the designer',
+        action: 'describe',
+        terminal: 'output',
+        // It changes nothing: as Analyse, Windows and Linux take it from an unattested origin.
+        unattested: 'accept',
+      });
+      const provider = options.provider as string | undefined;
+      if (provider !== undefined && !isDescribeProvider(provider))
+        throw new CommsError('USAGE', `Describe it's provider is ${DESCRIBE_PROVIDERS.join(', ')}`);
+      const request = await describeInput(streams);
+      // The owner reads it again; checking here first gives a bad request its exit (64) before anything is sent.
+      parseDescribeRequest(request);
+      print(
+        await workflowDescribe(
+          request,
+          { provider: provider as DescribeProvider | undefined },
+          { ...controlOptions(program), origin, env, claudeDeadlineMs: deps.claudeDeadlineMs },
+        ),
+      );
     });
 
   const targets = program.command('targets').description('inspect immutable local event target versions');
@@ -672,19 +841,24 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
       );
     });
 
-  const subscribers = program.command('subscribers').description('inspect immutable SSE subscriber versions');
+  const subscribers = program
+    .command('subscribers')
+    .description('inspect immutable subscriber versions: live on this Mac, or by signed webhook');
   subscribers.command('list').action(async () => {
     ran = true;
     print(await subscribersList(controlOptions(program)));
   });
-  const subscriber = program.command('subscriber').description('create, update, and revoke immutable SSE subscribers');
+  const subscriber = program
+    .command('subscriber')
+    .description('create, update, enable and revoke immutable subscribers: live on this Mac, or by signed webhook');
+  // A document given as `-` is read from stdin (0.36.0, plan I7): the app hands the subscriber it made there.
   subscriber.command('add <document>').action(async (document: string) => {
     ran = true;
-    print(await addSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+    print(await addSubscriber(await documentArgument(document, 'subscriber document'), controlOptions(program)));
   });
   subscriber.command('update <document>').action(async (document: string) => {
     ran = true;
-    print(await updateSubscriber(jsonArgument(document, 'subscriber document'), controlOptions(program)));
+    print(await updateSubscriber(await documentArgument(document, 'subscriber document'), controlOptions(program)));
   });
   subscriber.command('remove <subscriber-id>').action(async (subscriberId: string) => {
     ran = true;
@@ -709,6 +883,83 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
         );
       });
   }
+  // Workflow events (0.36.0, W29): a subscriber version given events is inert until the person approves it. `enable`
+  // prepares that approval — an agent may — and the person approves it with `approve` at a terminal or `subscriber
+  // approve` from the app; a webhook subscriber's signing secret and secret URL are made at the terminal only.
+  subscriber
+    .command('enable <subscriber-id> <version>')
+    .description("prepare the person's approval of an inert subscriber version's events; nothing is approved here")
+    .action(async (subscriberId: string, version: string) => {
+      ran = true;
+      print(await enableSubscriber(subscriberId, parseVersion(version), controlOptions(program)));
+    });
+  subscriber
+    .command('approve <approval-id>')
+    .description("approve a subscriber version's events from the Agent Comms app, after its preview, as the person")
+    .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
+    .action(async (approvalId: string, options: { readonly digest: string }) => {
+      ran = true;
+      // As for a workflow: Windows and Linux attest nothing, so there the person is sent to their terminal; the owner
+      // refuses the same origin too.
+      const origin = await personSetupOrigin("approve a subscriber's events", {
+        where: 'Events → Subscribers, Approve',
+        action: 'approve',
+        unattested: { words: ruleApprovalWords(approvalId) },
+      });
+      print(await approveSubscriberFromApp(approvalId, options.digest, { ...controlOptions(program), origin }));
+    });
+  const subscriberSecret = subscriber
+    .command('secret')
+    .description("create or rotate a webhook subscriber's terminal-only signing secret");
+  for (const [name, operation, request] of [
+    ['create', subscriberSecretCreate, 'subscriberSecretCreate'],
+    ['rotate', subscriberSecretRotate, 'subscriberSecretRotate'],
+  ] as const) {
+    subscriberSecret
+      .command(`${name} <subscriber-id>`)
+      .requiredOption('--version <version>')
+      .action(async (subscriberId: string, options) => {
+        ran = true;
+        assertNotMcpServer(env, 'secret');
+        assertHuman();
+        const version = parseVersion(options.version as string);
+        printHumanResult(
+          await humanB3(request, { subscriberId, version }, () =>
+            operation(subscriberId, version, controlOptions(program)),
+          ),
+        );
+      });
+  }
+  subscriber
+    .command('url')
+    .description("set a webhook subscriber's concealed URL into a new immutable version")
+    .command('set <subscriber-id>')
+    .requiredOption('--version <version>', 'the new version to make, from the newest one before it')
+    .action(async (subscriberId: string, options) => {
+      ran = true;
+      assertNotMcpServer(env, 'secret');
+      assertHuman();
+      const version = parseVersion(options.version as string);
+      const value = await hidden('Webhook URL');
+      printHumanResult(
+        await humanB3('subscriberUrlSet', { subscriberId, version, hidden: value }, () =>
+          subscriberUrlSet(subscriberId, version, { ...controlOptions(program), hidden: value }),
+        ),
+      );
+    });
+
+  // The step event catalogue (W25, Appendix W.3): every schema's words and closed outputs, content-free.
+  const workflowEvents = program
+    .command('workflow-events')
+    .description('the step event catalogue: the events each step kind can raise, and what they carry');
+  workflowEvents.command('list').action(async () => {
+    ran = true;
+    print(await workflowEventsList(controlOptions(program)));
+  });
+  workflowEvents.command('show <schema>').action(async (schema: string) => {
+    ran = true;
+    print(await workflowEventsShow(schema, controlOptions(program)));
+  });
 
   const judges = program.command('judges').description('inspect immutable content-free judge metadata');
   judges.command('list').action(async () => {
@@ -832,7 +1083,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     what: string,
     options: {
       readonly where?: string;
-      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve';
+      readonly action?: 'setup' | 'relay' | 'analyse' | 'approve' | 'projects' | 'runs' | 'describe';
       // `prompt`: a terminal the person types into (a key is their hidden input); `output`: one whose output they read.
       readonly terminal?: 'prompt' | 'output';
       /**
@@ -974,14 +1225,14 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // setup is, from the same origins. At a terminal the person approves with `approve`, which asks for the challenge.
   rule
     .command('approve <approval-id>')
-    .description("approve a rule's activation from the Agent Comms app, after its preview, as the person")
+    .description("approve a workflow's activation from the Agent Comms app, after its preview, as the person")
     .requiredOption('--digest <digest>', 'the fingerprint of the activation the preview showed')
     .action(async (approvalId: string, options: { readonly digest: string }) => {
       ran = true;
       // Windows and Linux attest nothing: a standing disclosure is approved there at the terminal, never on a missing
       // marker alone (security review of 0.33.0, finding 2). The owner refuses the same origin too.
-      const origin = await personSetupOrigin('approve a rule', {
-        where: 'Events → Rules, Review and approve',
+      const origin = await personSetupOrigin('approve a workflow', {
+        where: 'Events → Workflows, Review and approve',
         action: 'approve',
         unattested: { words: ruleApprovalWords(approvalId) },
       });
@@ -1020,7 +1271,7 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const integration = program
     .command('integration')
     .description(
-      'the services a rule can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
+      'the services a workflow can act in — Linear, and agent-sessions (your claude-stream relay) — and what each can see (a person only)',
     );
   integration
     .command('show <integration>')
@@ -1079,6 +1330,81 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
           { ...controlOptions(program), origin },
         ),
       );
+    });
+  // Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints.
+  // Each command is the person's alone, from the app or their terminal: personSetupOrigin refuses the event service's
+  // MCP server, an agent's shell and, on macOS, a process the app did not start, before anything is read; the owner
+  // takes them only from the person's origin; and no tool reads or changes a project (taking design T7).
+  const asPerson = (what: string) =>
+    personSetupOrigin(what, {
+      where: 'Events → Projects',
+      action: 'projects',
+      terminal: 'output',
+      // Nothing here approves anything: a project's folders become authority only inside a workflow's own approval.
+      unattested: 'accept',
+    });
+  program
+    .command('projects')
+    .description('the GitHub repositories on this Mac a workflow can route to (a person only)')
+    .command('list')
+    .description(
+      'list every project, with its folders, profile and hints, and the relay sessions working in it, busy or idle (a person only)',
+    )
+    .action(async () => {
+      ran = true;
+      const origin = await asPerson('list your projects');
+      print(await projectsList({ ...controlOptions(program), origin }));
+    });
+  const project = program
+    .command('project')
+    .description(
+      'add, show, change, remove or find a project: a GitHub repository, its folders on this Mac, a profile and hints (a person only)',
+    );
+  project
+    .command('show <project-id>')
+    .description('show one project, with the relay sessions working in it, busy or idle (a person only)')
+    .action(async (projectId: string) => {
+      ran = true;
+      const origin = await asPerson('see a project');
+      print(await projectShow(projectId, { ...controlOptions(program), origin }));
+    });
+  for (const [name, operation, what] of [
+    ['add', projectAdd, 'add a project'],
+    ['update', projectUpdate, 'change a project'],
+  ] as const) {
+    project
+      .command(`${name} <document>`)
+      .description(
+        `${what} from its JSON document { projectId, name, repo, profile, hints, folders }, or - to read it from stdin (a person only)`,
+      )
+      .action(async (document: string) => {
+        ran = true;
+        const origin = await asPerson(what);
+        print(
+          await operation(await documentArgument(document, 'project document'), { ...controlOptions(program), origin }),
+        );
+      });
+  }
+  project
+    .command('remove <project-id>')
+    .description(
+      'remove a project and its folders; a workflow that chose among them then finds it changed (a person only)',
+    )
+    .action(async (projectId: string) => {
+      ran = true;
+      const origin = await asPerson('remove a project');
+      print(await projectRemove(projectId, { ...controlOptions(program), origin }));
+    });
+  project
+    .command('scan')
+    .description(
+      "find the GitHub checkouts under the relay's allowed roots, else ~/work and ~/code, to 4 folders down; reads no file (a person only)",
+    )
+    .option('--root <path>', 'a folder to look under instead (repeat for more, at most 8)', collect, [])
+    .action(async (options: { readonly root: string[] }) => {
+      ran = true;
+      const origin = await asPerson('look for your projects');
+      print(await projectScan(options.root, { ...controlOptions(program), origin }));
     });
   const sessionQueue = program
     .command('session-queue')
@@ -1193,11 +1519,13 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   // app (which runs them with --json); they refuse inside an MCP server's process (Q1). The rest are content-free.
   const queue = program
     .command('queue')
-    .description('work through the action queue: what matched your queue rules, and what you have done with it');
-  const queueFilters = (options: Record<string, unknown>, withSince: boolean) => {
+    .description('work through the action queue: what your workflows sent to it, and what you have done with it');
+  const queueFilters = (options: Record<string, unknown>, withSince: boolean, command: Command) => {
+    // The filter keeps its identifier, `rule`; the person names the workflow with `--workflow` (W22).
+    const workflow = workflowOption(options, command, false);
     const filters = {
       ...(options.state === undefined ? {} : { state: options.state as string }),
-      ...(options.rule === undefined ? {} : { rule: options.rule as string }),
+      ...(workflow === undefined ? {} : { rule: workflow }),
       ...(options.channel === undefined ? {} : { channel: options.channel as string }),
       ...(withSince && options.since !== undefined ? { since: options.since as string } : {}),
       ...(options.limit === undefined ? {} : { limit: parseLimit(options.limit as string) }),
@@ -1214,14 +1542,15 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     .command('list')
     .description('list queue items with what they say, newest first (a person at a terminal or in the app)')
     .option('--state <state>', 'open (the default), done, dismissed or all')
-    .option('--rule <rule-id>', 'only this rule')
+    .option('--workflow <workflow-id>', "only this workflow's items")
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
     .option('--since <when>', 'an ISO time, or a span back from now such as 7d or 12h')
     .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
-    .action(async (options: Record<string, unknown>) => {
+    .action(async (options: Record<string, unknown>, command: Command) => {
       ran = true;
       assertNotMcpServer(env);
-      const result = await queueList(queueFilters(options, true), controlOptions(program));
+      const result = await queueList(queueFilters(options, true, command), controlOptions(program));
       printQueue(result, () => renderQueueList(result));
     });
   queue
@@ -1235,18 +1564,19 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
     });
   queue
     .command('items')
-    .description('list queue items without what they say: ids, rules, channels, accounts, states and times')
+    .description('list queue items without what they say: ids, workflows, channels, accounts, states and times')
     .option('--state <state>', 'open (the default), done, dismissed or all')
-    .option('--rule <rule-id>', 'only this rule')
+    .option('--workflow <workflow-id>', "only this workflow's items")
+    .addOption(new Option('--rule <workflow-id>').hideHelp())
     .option('--channel <channel>', 'gmail, slack, resend or whatsapp')
     .option('--limit <n>', 'at most this many items (1 to 500, default 50)')
-    .action(async (options: Record<string, unknown>) => {
+    .action(async (options: Record<string, unknown>, command: Command) => {
       ran = true;
-      print(await queueItems(queueFilters(options, false), controlOptions(program)));
+      print(await queueItems(queueFilters(options, false, command), controlOptions(program)));
     });
   queue
     .command('counts')
-    .description('count open, done and dismissed queue items, and each rule’s open items')
+    .description('count open, done and dismissed queue items, and each workflow’s open items')
     .action(async () => {
       ran = true;
       print(await queueCounts(controlOptions(program)));
@@ -1279,11 +1609,11 @@ export async function run(argv: readonly string[], deps: EventsCliDeps = {}): Pr
   const lane = program
     .command('lane')
     .description(
-      'bind a lane — a queue your rules send to — to the one agent window woken for its items, and unbind it',
+      'bind a lane — a queue your workflows send to — to the one agent window woken for its items, and unbind it',
     );
   lane
     .command('list')
-    .description('list every lane, its rules, channels and open items, and the agent window bound to it')
+    .description('list every lane, its workflows, channels and open items, and the agent window bound to it')
     .action(async () => {
       ran = true;
       print(await laneList(controlOptions(program)));
@@ -1475,8 +1805,25 @@ function parseBefore(value: string): number | string {
 function parseVersion(value: string): number {
   const version = Number(value);
   if (!Number.isSafeInteger(version) || version < 1)
-    throw new CommsError('USAGE', 'rule version must be a positive integer');
+    throw new CommsError('USAGE', 'a version must be a positive integer');
   return version;
+}
+
+/**
+ * The workflow a command names (W22): `--workflow`, or the hidden `--rule` it replaced, which scripts and the desktop
+ * app still pass. Both naming different workflows is a usage error. A required one that is missing is refused in
+ * Commander's own words for a missing required option, which name `--workflow`.
+ */
+function workflowOption(options: Record<string, unknown>, command: Command, required: boolean): string | undefined {
+  const { workflow, rule } = options as { readonly workflow?: string; readonly rule?: string };
+  if (workflow !== undefined && rule !== undefined && workflow !== rule)
+    throw new CommsError('USAGE', 'name the workflow once, with --workflow <workflow-id>');
+  const named = workflow ?? rule;
+  if (named === undefined && required)
+    command.error("error: required option '--workflow <workflow-id>' not specified", {
+      code: 'commander.missingMandatoryOptionValue',
+    });
+  return named;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1503,6 +1850,20 @@ function isTerminalSecretReveal(
 }
 
 /** Commander's repeatable option: each value given, in order. */
+/** `--outcome <step>=<outcome>`, each once: the steps of a flow a test answers for (0.36.0 §7.7). */
+function outcomeArguments(values: readonly string[] | undefined): Readonly<Record<string, string>> | undefined {
+  if (values === undefined || values.length === 0) return undefined;
+  const outcomes: Record<string, string> = {};
+  for (const value of values) {
+    const match = /^([a-z][a-z0-9-]{0,31})=([a-z][a-z-]{0,31})$/u.exec(value);
+    if (match === null) throw new CommsError('USAGE', '--outcome is a step and its outcome: step=outcome');
+    const [, step, outcome] = match as unknown as [string, string, string];
+    if (Object.hasOwn(outcomes, step)) throw new CommsError('USAGE', `--outcome names the step ${step} twice`);
+    Object.defineProperty(outcomes, step, { value: outcome, enumerable: true });
+  }
+  return outcomes;
+}
+
 function collect(value: string, previous: string[]): string[] {
   return [...previous, value];
 }
@@ -1555,11 +1916,44 @@ async function draftInput(streams: EventsCliStreams): Promise<Readonly<Record<st
   try {
     parsed = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks)));
   } catch {
-    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON workflow document');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed))
-    throw new CommsError('USAGE', 'the draft on stdin must be one JSON rule document');
+    throw new CommsError('USAGE', 'the draft on stdin must be one JSON workflow document');
   return parsed as Readonly<Record<string, unknown>>;
+}
+
+/**
+ * What Describe it is asked, on stdin (0.36.0 §11.4): one JSON object `{ words, example?, answers?, draft? }`, or plain
+ * words, which are the words alone. At most the largest request a draft rides in.
+ */
+async function describeInput(streams: EventsCliStreams): Promise<unknown> {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const most = DESCRIBE_LIMITS.draftBytes + 4 * (DESCRIBE_LIMITS.words + DESCRIBE_LIMITS.example) + 16_384;
+  // At a terminal nothing is piped in: say what it waits for, rather than wait in silence.
+  if (streams.stdin.isTTY === true)
+    streams.stderr.write('Say what should happen, in your words. End with Ctrl-D on a line of its own.\n');
+  for await (const chunk of streams.stdin) {
+    const bytes = Buffer.from(chunk as Uint8Array);
+    total += bytes.byteLength;
+    if (total > most) throw new CommsError('USAGE', 'what Describe it is asked is too large');
+    chunks.push(bytes);
+  }
+  let text: string;
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks));
+  } catch {
+    throw new CommsError('USAGE', 'what Describe it is asked is UTF-8 text');
+  }
+  if (text.trimStart().startsWith('{')) {
+    try {
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw new CommsError('USAGE', 'what Describe it is asked is one JSON object, or your words alone');
+    }
+  }
+  return { words: text.replace(/\r?\n$/u, '') };
 }
 
 /** The most a provider key read from the app's stdin may be. */

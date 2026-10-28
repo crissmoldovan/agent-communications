@@ -7,10 +7,13 @@
  * in Terminal instead: the events service's `approve <approval-id>`, opened as Bind in Terminal is, which shows the
  * preview again and asks for its challenge there. Back, or leaving before the terminal opened, revokes the approval:
  * the new version is never switched on, and the one that runs keeps running.
+ *
+ * A workflow with steps (0.36.0) is reviewed from its numbered effects beside its graph, laid out afresh, and what
+ * changed step by step (`Approve.tsx`); the typed name, the terminal and Back are the same.
  */
-import { Button, Dialog, Field, FieldLabel, Input } from '@cueplusplus/ui';
+import { Button, Dialog, Field, FieldLabel, Input, Spinner } from '@cueplusplus/ui';
 import { Plus } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { AccountNames } from '../../account-aliases.ts';
 import { aliasOf } from '../../account-aliases.ts';
 import { useBridge } from '../../bridge-context.tsx';
@@ -19,9 +22,17 @@ import { UntrustedText } from '../../components/UntrustedText.tsx';
 import { errorMessage, type TerminalOutcome } from '../../ipc.ts';
 import { isMac } from '../../platform.ts';
 import { REVIEW_COPY as COPY } from '../../rule-editor/copy.ts';
-import type { JsonObject } from '../../rule-editor/model.ts';
+import { isObject, type JsonObject } from '../../rule-editor/model.ts';
 import { whatChanges, whatLeaves } from '../../rule-editor/submit.ts';
 import { Sentence } from './parts.tsx';
+
+/**
+ * A workflow with steps is approved from its numbered effects beside its graph (0.36.0, `Approve.tsx`), which loads with
+ * the designer's chunk; a straight line keeps the review it always had.
+ */
+const FlowApproval = lazy(() =>
+  import('../workflows/Approve.tsx').then((module) => ({ default: module.FlowApproval })),
+);
 
 /** An activation the editor prepared, waiting for the person. */
 export interface PreparedReview {
@@ -135,7 +146,8 @@ export function RuleReview({
   };
 
   const before = review.running?.document ?? null;
-  const changes = whatChanges(before, review.rule, (id) => aliasOf(names, id));
+  const flow = isObject(review.rule.flow);
+  const changes = flow ? [] : whatChanges(before, review.rule, (id) => aliasOf(names, id));
   const leaves = whatLeaves(review.rule);
   return (
     <Dialog.Root
@@ -147,26 +159,37 @@ export function RuleReview({
         else onDone();
       }}
     >
-      <Dialog.Content width="md" showCloseButton={false}>
+      <Dialog.Content width={flow ? 'lg' : 'md'} showCloseButton={false}>
         <Dialog.Title>{COPY.title(review.version, review.ruleId)}</Dialog.Title>
         <Dialog.Description>
           {review.running === null ? COPY.nothingRuns : COPY.running(review.running.version)}
         </Dialog.Description>
         <div className="flex flex-col gap-(--cue-space-3)">
-          <section aria-label={COPY.whatChanges} className="flex flex-col gap-(--cue-space-1)">
-            <h3 className="font-medium text-fg">{COPY.whatChanges}</h3>
-            <ul className="flex flex-col gap-(--cue-space-1)">
-              {changes.map((line, index) => (
-                // biome-ignore lint/suspicious/noArrayIndexKey: the lines come in the sections' fixed order.
-                <li key={index} className="flex items-start gap-(--cue-space-2)">
-                  <Plus aria-hidden="true" className="mt-0.5 size-(--cue-icon-sm) shrink-0 text-ok" />
-                  <span>
-                    <Sentence parts={line} names={names} />
-                  </span>
-                </li>
-              ))}
-            </ul>
-          </section>
+          {flow ? (
+            <Suspense fallback={<Spinner size="sm" label={COPY.preparing} />}>
+              <FlowApproval
+                rule={review.rule}
+                before={before}
+                beforeVersion={review.running?.version ?? null}
+                names={names}
+              />
+            </Suspense>
+          ) : (
+            <section aria-label={COPY.whatChanges} className="flex flex-col gap-(--cue-space-1)">
+              <h3 className="font-medium text-fg">{COPY.whatChanges}</h3>
+              <ul className="flex flex-col gap-(--cue-space-1)">
+                {changes.map((line, index) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: the lines come in the sections' fixed order.
+                  <li key={index} className="flex items-start gap-(--cue-space-2)">
+                    <Plus aria-hidden="true" className="mt-0.5 size-(--cue-icon-sm) shrink-0 text-ok" />
+                    <span>
+                      <Sentence parts={line} names={names} />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
           <section aria-label={COPY.whatLeaves} className="rounded-control bg-warn-subtle p-(--cue-space-3)">
             <h3 className="font-semibold text-fg">{COPY.whatLeaves}</h3>
             <ul className="flex flex-col gap-(--cue-space-1)">

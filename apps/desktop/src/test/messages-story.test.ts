@@ -51,7 +51,7 @@ function said(parts: readonly Part[]): string {
 describe('a card', () => {
   it('Replied: the rule, the judge, the lane, the read, the reply after your approval, and done by the agent', () => {
     expect(cardSteps(only('event:e1'), CONTEXT).map(said)).toEqual([
-      'Rule ⟨invoices⟩',
+      'Workflow ⟨invoices⟩',
       'Jev: yes',
       'Queue, lane billing',
       'Woke the agent bound to lane billing',
@@ -64,7 +64,7 @@ describe('a card', () => {
 
   it('Acknowledged: a reaction, and no reply yet', () => {
     expect(cardSteps(only('event:e2'), CONTEXT).map(said)).toEqual([
-      'Rule ⟨david-on-slack⟩',
+      'Workflow ⟨david-on-slack⟩',
       'Queue, lane david',
       'Woke the agent bound to lane david',
       'Read 11:32',
@@ -76,7 +76,7 @@ describe('a card', () => {
 
   it('Waiting for you: in the queue, and no agent has read it', () => {
     expect(cardSteps(only('event:e3'), CONTEXT).map(said)).toEqual([
-      'Rule ⟨family-chat⟩',
+      'Workflow ⟨family-chat⟩',
       'Queue',
       'No agent has read it',
     ]);
@@ -85,16 +85,16 @@ describe('a card', () => {
 
   it('Read by an agent, on its own: no rule, and where the agent read it', () => {
     expect(cardSteps(only('item:18c2f0a1b2c3e000'), CONTEXT).map(said)).toEqual([
-      'No rule',
+      'No workflow',
       'Read by the agent in ~/work/personal, while searching your mail',
     ]);
     expect(statusLabel(only('item:').status)).toEqual({ label: 'Read by an agent', tone: 'neutral' });
   });
 
   it('Not seen: no rule matched, or a dry run, and no agent has read it', () => {
-    expect(cardSteps(only('event:e4'), CONTEXT).map(said)).toEqual(['No rule matched', 'No agent has read it']);
+    expect(cardSteps(only('event:e4'), CONTEXT).map(said)).toEqual(['No workflow matched', 'No agent has read it']);
     expect(cardSteps(only('event:e6'), CONTEXT).map(said)).toEqual([
-      'Rule ⟨newsletter-test⟩',
+      'Workflow ⟨newsletter-test⟩',
       'Dry run',
       'No agent has read it',
     ]);
@@ -103,7 +103,7 @@ describe('a card', () => {
 
   it('Replied in a Slack thread, then marked done by you', () => {
     expect(cardSteps(only('event:e5'), CONTEXT).map(said)).toEqual([
-      'Rule ⟨deploys⟩',
+      'Workflow ⟨deploys⟩',
       'Local model: yes',
       'Queue',
       'Read by the agent in ~/work/acme',
@@ -133,10 +133,10 @@ describe('a card', () => {
 
   it('with nothing that kept its sender, a card says so, and where to open it', () => {
     expect(unknownSender('gmail')).toBe(
-      'A Gmail message. No rule kept its sender or subject, so open it in Gmail to see it.',
+      'A Gmail message. No workflow kept its sender or subject, so open it in Gmail to see it.',
     );
     expect(unknownSender('slack')).toBe(
-      'A Slack message. No rule kept its sender or subject, so open it in Slack to see it.',
+      'A Slack message. No workflow kept its sender or subject, so open it in Slack to see it.',
     );
   });
 });
@@ -157,7 +157,7 @@ describe('a story', () => {
       entries.map((entry) => [entry.at === null ? '' : CONTEXT.time(entry.at), said(entry.what), entry.tone]),
     ).toEqual([
       ['11:40', 'Arrived in example/gmail', 'idle'],
-      ['', 'Matched the rule ⟨invoices⟩', 'accent'],
+      ['', 'Matched the workflow ⟨invoices⟩', 'accent'],
       ['', 'Jev said yes, 0.86 sure', 'accent'],
       ['', 'Put in the Queue, lane billing', 'accent'],
       ['11:40', 'Woke the agent window bound to billing', 'accent'],
@@ -195,6 +195,34 @@ describe('a story', () => {
     expect(said(timeline(asked, CONTEXT)[2]?.sub ?? [])).toBe('“⟨Is this <b>urgent</b>?⟩”');
   });
 
+  it('a hold that ran out, or was cancelled, says so in words, never the outcome’s own word', () => {
+    const event = invoice.event;
+    if (event === null) throw new Error('the invoice has its event');
+    const decision = event.decisions[0];
+    if (decision === undefined) throw new Error('the invoice was decided');
+    const ended = {
+      ...invoice,
+      event: {
+        ...event,
+        deliveries: [],
+        decisions: [
+          { ...decision, ruleId: 'invoices', outcome: 'hold-expired', judge: null },
+          { ...decision, ruleId: 'mail-subject', outcome: 'cancelled', judge: null },
+        ],
+      },
+    };
+    expect(cardSteps(ended, CONTEXT).map(said).slice(0, 2)).toEqual([
+      'Workflow ⟨invoices⟩: its judge did not answer in time',
+      'Workflow ⟨mail-subject⟩: its hold was cancelled',
+    ]);
+    const told = timeline(ended, CONTEXT).map((entry) => said(entry.what));
+    expect(told.slice(1, 3)).toEqual([
+      'The judge of the workflow ⟨invoices⟩ did not answer in time',
+      'The hold of the workflow ⟨mail-subject⟩ was cancelled',
+    ]);
+    expect(told.join('\n')).not.toMatch(/hold-expired|: cancelled/);
+  });
+
   it('without the approval’s time, the send says it came after your approval', () => {
     const entries = timeline(invoice, CONTEXT);
     expect(entries.some((entry) => said(entry.what) === 'You approved the reply')).toBe(false);
@@ -214,18 +242,18 @@ describe('a story', () => {
   it('no rule matched, a dry run, and a Slack thread reply, each in its words', () => {
     expect(timeline(only('event:e4'), CONTEXT).map((entry) => said(entry.what))).toEqual([
       'Arrived in example/gmail',
-      'No rule matched',
+      'No workflow matched',
     ]);
     const dry = timeline(only('event:e6'), CONTEXT);
     expect(dry.map((entry) => said(entry.what))).toEqual([
       'Arrived in example/gmail',
-      'Matched the rule ⟨newsletter-test⟩',
+      'Matched the workflow ⟨newsletter-test⟩',
       'Logged as a dry run',
     ]);
     expect(said(dry[2]?.sub ?? [])).toBe('Nothing was sent anywhere');
     expect(timeline(only('event:e5'), CONTEXT).map((entry) => said(entry.what))).toEqual([
       'Arrived in example/slack',
-      'Matched the rule ⟨deploys⟩',
+      'Matched the workflow ⟨deploys⟩',
       'Local model said yes, 0.71, uncalibrated',
       'Put in the Queue',
       'An agent read its thread',

@@ -1,23 +1,23 @@
 /** The rule editor's words (the approved prototype's RuleEdit, RuleEditText and RuleAnalyse), in sentence case. */
 export const EDITOR_COPY = {
   edit: 'Edit…',
-  newRule: 'New rule…',
-  newRuleTitle: 'New rule',
+  newRule: 'New workflow…',
+  newRuleTitle: 'New workflow',
   newRuleBody:
-    'Name the rule: letters, digits and . _ : @ -. Agents and the event service know it by this name, and it cannot change.',
+    'Name the workflow: letters, digits and . _ : @ -. Agents and the event service know it by this name, and it cannot change.',
   ruleName: 'Name',
-  ruleNameTaken: 'A rule has this name already.',
+  ruleNameTaken: 'A workflow has this name already.',
   ruleNameWrong: 'Use letters, digits and . _ : @ - only, starting with a letter or a digit.',
   start: 'Start',
   editTitle: (id: string) => `Edit ${id}`,
-  newTitle: (id: string) => `New rule ${id}`,
+  newTitle: (id: string) => `New workflow ${id}`,
   notSaved: (version: number) => `Version ${version}, not saved`,
   editAs: 'Edit as',
   visual: 'Visual',
   text: 'Text',
   json: 'Advanced: JSON',
   analyse: 'Analyse',
-  analyseThis: 'Analyse this rule',
+  analyseThis: 'Analyse this workflow',
   analyseBody:
     "Looks for gaps, and sharpens the judge's question and what each session is told. You see every change before it's made.",
   inPlainWords: 'In plain words',
@@ -131,11 +131,11 @@ export const EDITOR_COPY = {
       : `Saving makes version ${version}. Version ${running} keeps running until you approve version ${version}.`,
   cancel: 'Cancel',
   review: 'Review and approve…',
-  textBar: 'Plain text. Each line is one part of the rule; the visual editor shows the same rule.',
-  ruleText: 'The rule as text',
+  textBar: 'Plain text. Each line is one part of the workflow; the other views show the same workflow.',
+  ruleText: 'The workflow as text',
   checks: 'Checks, as you type',
-  fixTextFirst: 'Fix the text first: the visual editor shows the rule once it reads.',
-  jsonBar: 'The canonical rule document: what you approve. Read-only.',
+  fixTextFirst: 'Fix the text first: the visual editor shows the workflow once it reads.',
+  jsonBar: 'The canonical workflow document: what you approve. Read-only.',
   newVersion: 'Version',
 } as const;
 
@@ -169,12 +169,12 @@ export const ANALYSE_COPY = {
   suggestions: (n: number) => (n === 1 ? '1 suggestion' : `${n} suggestions`),
   howMadeTitle: 'How this was made',
   howMade:
-    "Analyse read the rule and its last 30 days on this Mac: counts, the judge's answers and what you dismissed, never the messages themselves. A model tuned for each part then rewrote it: Jev's question guide for the judge, and a prompt optimiser for what a session is told.",
+    "Analyse read the workflow and its last 30 days on this Mac: counts, the judge's answers and what you dismissed, never the messages themselves. A model tuned for each part then rewrote it: Jev's question guide for the judge, and a prompt optimiser for what a session is told.",
   ranOn: (name: string, model: string | null) => `Ran on ${name}${model === null ? '' : `, ${model}`}.`,
   noKey:
     'No model ran: there is no OpenRouter or Anthropic key on this Mac. These suggestions come from the counts alone.',
   addKey: 'Add a key',
-  noModelParts: 'No model ran: nothing in this rule is a model’s to rewrite.',
+  noModelParts: 'No model ran: nothing in this workflow is a model’s to rewrite.',
   noModel: 'No model ran.',
   runOn: 'Run on',
   byModel: 'Written by a model',
@@ -189,7 +189,7 @@ export const ANALYSE_COPY = {
     `${count} of ${of} will be applied. Nothing changes until you approve the new version.`,
   applyAndReview: 'Apply and review…',
   analysing: 'Analysing…',
-  none: 'Nothing to suggest: the rule reads well as it is.',
+  none: 'Nothing to suggest: the workflow reads well as it is.',
   notApplied: (n: number) =>
     n === 1
       ? 'One suggestion was not applied: its part changed since Analyse read it.'

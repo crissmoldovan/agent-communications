@@ -87,3 +87,29 @@ test('B2-T6: an invalid Standard Webhooks secret refuses without echoing its mat
     (error: unknown) => error instanceof Error && !error.message.includes('not-a-webhook-secret'),
   );
 });
+
+test('a previous secret made before 0.36.0 (base64url, which never signed) is left out, so a rotation signs at once', () => {
+  // Before 0.36.0 every generated secret was base64url, which this signer refuses: rotating to a standard one must not
+  // keep failing for the five-minute overlap because the old generation is still in it.
+  const BEFORE_036 = 'whsec_7nYv-Pq1_s9KQ0sF4cDgYb2xkLXNlY3JldA0aXo9Rk3Lw';
+  const rotated = signStandardWebhook({
+    id: 'msg_123',
+    timestamp: 1_700_000_000,
+    body: BODY,
+    current: CURRENT,
+    overlap: [BEFORE_036],
+  });
+  const alone = signStandardWebhook({
+    id: 'msg_123',
+    timestamp: 1_700_000_000,
+    body: BODY,
+    current: CURRENT,
+    overlap: [],
+  });
+  assert.deepEqual(rotated, alone);
+  assert.throws(
+    () =>
+      signStandardWebhook({ id: 'msg_123', timestamp: 1_700_000_000, body: BODY, current: BEFORE_036, overlap: [] }),
+    (error: unknown) => error instanceof Error && !error.message.includes(BEFORE_036),
+  );
+});

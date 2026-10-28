@@ -383,7 +383,7 @@ test('LANE-E: a bound window is woken by a new item with a pointer and no sender
     t.diagnostic(`the wake's pointer: ${text}`);
     assert.match(
       text,
-      /^1 new item in lane david \(Gmail, rule david-by-mail\): read it with events_lane_item, item qi_[0-9A-HJKMNP-TV-Z]{26}\. Then call events_watch for lane david again to keep watching\.$/u,
+      /^1 new item in lane david \(Gmail, workflow david-by-mail\): read it with events_lane_item, item qi_[0-9A-HJKMNP-TV-Z]{26}\. Then call events_watch for lane david again to keep watching\.$/u,
     );
     const item = String(pointer.item);
     assert.deepEqual(Object.keys(pointer).sort(), ['channel', 'item', 'lane', 'rule', 'text', 'waiting']);

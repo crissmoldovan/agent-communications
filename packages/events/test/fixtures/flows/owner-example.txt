@@ -1,0 +1,73 @@
+workflow client-asks, version 5
+
+when a Slack message is posted in acme/slack, in conversation C0123
+match text exists
+
+ask jev, version 2, via typesafe
+  question "Is this person asking for a change to one of our sites?"
+  looking at text
+  yes at 0.7, if unsure drop
+  at most 60 calls an hour, 1000000 input tokens in 30 days, 1 at a time
+  each call up to 2000 tokens in and 16 tokens out
+  judge typesafe, model jev-1.13.0
+    endpoint https://api.typesafe.ai/v1/systemone
+    prompt template typesafe-jev-noul-v1
+    protocol noul
+
+flow, at most 6 runs an hour
+  events in acme as client-asks, run emits failed and finished
+  step route: choose a project among acme-site and billing, by hints then by jev version 2 via typesafe
+    looking at text
+    project acme-site, in /example/home/work/acme-site
+    project billing, in /example/home/work/billing
+    asking
+      question "Is this message about this project?"
+      looking at text
+      yes at 0.7, if unsure drop
+      at most 60 calls an hour, 1000000 input tokens in 30 days, 1 at a time
+      each call up to 2000 tokens in and 16 tokens out
+      judge typesafe, model jev-1.13.0
+        endpoint https://api.typesafe.ai/v1/systemone
+        prompt template typesafe-jev-noul-v1
+        protocol noul
+    emits matched and none
+    none → tell
+  step found: raise project-found
+  step issue: linear issue client-issues, version 1, in team ACME, assigned to me
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    title "{{author.name}} asks about {{steps.route.project}}"
+    description "{{text}}"
+    emits created
+  step find: find a session in route's project, with claude-code
+    idle → give
+    busy → free
+    none → another
+  step free: wait for find's session to be free, up to 2 hours
+    free → give
+    otherwise → tell
+  step another: find an idle session in route's project, with claude-code
+    idle → give
+    none → tree
+  step tree: make a worktree of route's project, branch "ac/{{steps.issue.identifier}}"
+    refused → tell
+  step start: start a session in tree, with claude-code, mode manual
+  step give: session client-prompt, version 2, with claude-code, to find, another or start
+    give
+      fields text, author.name
+      text "Do what they ask, on a branch of its own. Don't push."
+    report done and needs-the-person
+    emits given
+  step wait: wait for give's turn to end, up to 1 day
+    done → note
+    otherwise → tell
+  step note: linear change client-done, version 1, in team ACME, on issue
+    team id 0b6a6f0e-8a8e-4c55-9d7c-6a1c0f8b8c11
+    comment "{{steps.wait.summary}}"
+    state Done, a completed state
+    state id 5c1d2e3f-4a5b-4c6d-8e7f-9a0b1c2d3e4f
+    emits closed
+    then → end
+  step tell: tell me "A message for {{steps.route.project}} needs you"
+
+keep author.name, text
+at most 60 an hour

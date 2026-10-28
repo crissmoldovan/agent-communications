@@ -7,6 +7,7 @@ export { UNICODE_VERSION } from '../vendor/unicode-15.1.0/generated/version.ts';
 export * from './catalogue/index.ts';
 export * from './conditions/index.ts';
 export * from './context/index.ts';
+export * from './flow/index.ts';
 export * from './formats/index.ts';
 export * from './identity/event-id.ts';
 export * from './idna/domain.ts';
@@ -17,6 +18,7 @@ export { formatPointer, getPointer, parsePointer, relatePointers } from './point
 export * from './result.ts';
 export * from './retention.ts';
 export * from './rule-text/index.ts';
+export { describeFlow, type FlowLine } from './rules/describe-flow.ts';
 export {
   type DescribableRuleDocument,
   type DescribableTarget,
@@ -29,3 +31,4 @@ export * from './text.ts';
 export * from './unicode/fold.ts';
 export * from './unicode/nfc.ts';
 export * from './wire/index.ts';
+export * from './workflow-events/index.ts';

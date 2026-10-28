@@ -42,13 +42,13 @@ const EXPECTED_B1_ROWS = [
   ['events-daemon.source.show.slack', 'source show', 'events_source_show', 'both', 'sourceShow'],
   ['events-daemon.source.show.resend', 'source show', 'events_source_show', 'both', 'sourceShow'],
   ['events-daemon.source.show.whatsapp', 'source show', 'events_source_show', 'both', 'sourceShow'],
-  ['events-daemon.rules.list', 'rules list', 'events_rules_list', 'both', 'rulesList'],
-  ['events-daemon.rule.show', 'rule show', 'events_rule_show', 'both', 'ruleShow'],
-  ['events-daemon.rule.create', 'rule create', 'events_rule_create', 'both', 'createRule'],
-  ['events-daemon.rule.update', 'rule update', 'events_rule_update', 'both', 'updateRule'],
-  ['events-daemon.rule.enable', 'rule enable', 'events_rule_enable', 'both', 'enableRule'],
-  ['events-daemon.rule.disable', 'rule disable', 'events_rule_disable', 'both', 'disableRule'],
-  ['events-daemon.rule.remove', 'rule remove', 'events_rule_remove', 'both', 'removeRule'],
+  ['events-daemon.rules.list', 'workflows list', 'events_rules_list', 'both', 'rulesList'],
+  ['events-daemon.rule.show', 'workflow show', 'events_rule_show', 'both', 'ruleShow'],
+  ['events-daemon.rule.create', 'workflow create', 'events_rule_create', 'both', 'createRule'],
+  ['events-daemon.rule.update', 'workflow update', 'events_rule_update', 'both', 'updateRule'],
+  ['events-daemon.rule.enable', 'workflow enable', 'events_rule_enable', 'both', 'enableRule'],
+  ['events-daemon.rule.disable', 'workflow disable', 'events_rule_disable', 'both', 'disableRule'],
+  ['events-daemon.rule.remove', 'workflow remove', 'events_rule_remove', 'both', 'removeRule'],
   ['events-daemon.targets.list', 'targets list', 'events_targets_list', 'both', 'targetsList'],
   ['events-daemon.target.add', 'target add', 'events_target_add', 'both', 'addTarget'],
   ['events-daemon.target.update', 'target update', 'events_target_update', 'both', 'updateTarget'],
@@ -62,8 +62,8 @@ const EXPECTED_B1_ROWS = [
 /** Tasks 5–6 register B3's paired rows and its deliberately unpaired terminal exceptions in plan-table order. */
 const EXPECTED_B3_ROWS = [
   ['events-daemon.approval.view', 'approval view', 'events_approval_view', 'both', 'approvalView'],
-  ['events-daemon.rule.test', 'rule test', 'events_rule_test', 'both', 'ruleTest'],
-  ['events-daemon.rule.test-retained', 'rule test-retained', null, 'exception', 'ruleTestRetained'],
+  ['events-daemon.rule.test', 'workflow test', 'events_rule_test', 'both', 'ruleTest'],
+  ['events-daemon.rule.test-retained', 'workflow test-retained', null, 'exception', 'ruleTestRetained'],
   ['events-daemon.target.test', 'target test', 'events_target_test', 'both', 'targetTest'],
   ['events-daemon.target.resume', 'target resume', null, 'exception', 'targetResume'],
   ['events-daemon.subscribers.list', 'subscribers list', 'events_subscribers_list', 'both', 'subscribersList'],
@@ -154,13 +154,15 @@ const EXPECTED_SETUP_ROWS = [
  * service on (0.34.0 design B4) is approved the same way.
  */
 const EXPECTED_RULE_APPROVAL_ROWS = [
-  ['events-daemon.rule.approve', 'rule approve', null, 'exception', 'approveRuleFromApp'],
+  ['events-daemon.rule.approve', 'workflow approve', null, 'exception', 'approveRuleFromApp'],
   ['events-daemon.collection.approve', 'collection approve', null, 'exception', 'approveEnableAllFromApp'],
 ] as const;
 
 /** Analyse (0.33.0 design §3.3, §3.7): the person's view of one rule and its last 30 days, a CLI-only exception. */
 const EXPECTED_ANALYSE_ROWS = [
-  ['events-daemon.rule.analyse', 'rule analyse', null, 'exception', 'ruleAnalyse'],
+  ['events-daemon.rule.analyse', 'workflow analyse', null, 'exception', 'ruleAnalyse'],
+  // Describe it (0.36.0 workflows design §11.4, W21): the person's words drafted into a workflow, written nowhere.
+  ['events-daemon.rule.describe', 'workflow describe', null, 'exception', 'workflowDescribe'],
 ] as const;
 
 /** Settings → Integrations (0.33.0 design §3.4): what the person's Linear key can see is their own read, CLI-only. */
@@ -184,6 +186,19 @@ const EXPECTED_SESSION_ROWS = [
   ['events-daemon.session-queue.drop', 'session-queue drop', null, 'exception', 'sessionQueueDrop'],
 ] as const;
 
+/**
+ * Projects (0.36.0 workflows design §8.1): the GitHub repositories on this Mac, their folders, a profile and hints —
+ * the person's alone, CLI-only, with no tool.
+ */
+const EXPECTED_PROJECT_ROWS = [
+  ['events-daemon.projects.list', 'projects list', null, 'exception', 'projectsList'],
+  ['events-daemon.project.show', 'project show', null, 'exception', 'projectShow'],
+  ['events-daemon.project.add', 'project add', null, 'exception', 'projectAdd'],
+  ['events-daemon.project.update', 'project update', null, 'exception', 'projectUpdate'],
+  ['events-daemon.project.remove', 'project remove', null, 'exception', 'projectRemove'],
+  ['events-daemon.project.scan', 'project scan', null, 'exception', 'projectScan'],
+] as const;
+
 const rowShape = (row: Capability) => ({
   id: row.id,
   cli: row.cli,
@@ -201,9 +216,55 @@ const shapedRows = (source: readonly (readonly [string, string | null, string | 
     ...(operation === undefined ? {} : { operation }),
   }));
 
+/**
+ * Workflow events (0.36.0, W29, W25): a webhook subscriber's secrets are the person's at the terminal; a subscription is
+ * prepared by anyone, CLI and MCP alike, and approved from the app only by the person; the step event catalogue is
+ * content-free. They sit after the subscriber token rows.
+ */
+const EXPECTED_WORKFLOW_EVENT_ROWS = [
+  ['events-daemon.subscriber-secret.create', 'subscriber secret create', null, 'exception', 'subscriberSecretCreate'],
+  ['events-daemon.subscriber-secret.rotate', 'subscriber secret rotate', null, 'exception', 'subscriberSecretRotate'],
+  ['events-daemon.subscriber-url.set', 'subscriber url set', null, 'exception', 'subscriberUrlSet'],
+  ['events-daemon.subscriber.enable', 'subscriber enable', 'events_subscriber_enable', 'both', 'enableSubscriber'],
+  ['events-daemon.subscriber.approve', 'subscriber approve', null, 'exception', 'approveSubscriberFromApp'],
+  [
+    'events-daemon.workflow-events.list',
+    'workflow-events list',
+    'events_workflow_events_list',
+    'both',
+    'workflowEventsList',
+  ],
+  [
+    'events-daemon.workflow-events.show',
+    'workflow-events show',
+    'events_workflow_events_show',
+    'both',
+    'workflowEventsShow',
+  ],
+] as const;
+
+/**
+ * A workflow's runs and its checks (0.36.0 workflows design §7.6, §7.7, plan B6–B7): checking a document is content-free,
+ * CLI and MCP alike; listing, showing and cancelling a run are the person's, CLI-only, with no tool. They sit after
+ * `workflow test`.
+ */
+const EXPECTED_WORKFLOW_RUN_ROWS = [
+  ['events-daemon.rule.check', 'workflow check', 'events_rule_check', 'both', 'ruleCheck'],
+  ['events-daemon.runs.list', 'runs list', null, 'exception', 'runsList'],
+  ['events-daemon.runs.show', 'runs show', null, 'exception', 'runShow'],
+  ['events-daemon.runs.cancel', 'runs cancel', null, 'exception', 'runCancel'],
+] as const;
+
+const ruleTestRows = EXPECTED_B3_ROWS.findIndex((row) => row[0] === 'events-daemon.rule.test') + 1;
+const subscriberTokenRows = EXPECTED_B3_ROWS.findIndex((row) => row[0] === 'events-daemon.subscriber-token.rotate') + 1;
+
 const expectedRows = [
   ...shapedRows(EXPECTED_B1_ROWS.slice(0, 27)),
-  ...shapedRows(EXPECTED_B3_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(0, ruleTestRows)),
+  ...shapedRows(EXPECTED_WORKFLOW_RUN_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(ruleTestRows, subscriberTokenRows)),
+  ...shapedRows(EXPECTED_WORKFLOW_EVENT_ROWS),
+  ...shapedRows(EXPECTED_B3_ROWS.slice(subscriberTokenRows)),
   ...shapedRows(EXPECTED_B1_ROWS.slice(27, 29)),
   ...shapedRows(EXPECTED_READABLE_ROWS),
   ...shapedRows(EXPECTED_QUEUE_ROWS),
@@ -213,7 +274,9 @@ const expectedRows = [
   ...shapedRows(EXPECTED_RULE_APPROVAL_ROWS),
   ...shapedRows(EXPECTED_ANALYSE_ROWS),
   ...shapedRows(EXPECTED_INTEGRATION_ROWS),
-  ...shapedRows(EXPECTED_SESSION_ROWS),
+  ...shapedRows(EXPECTED_SESSION_ROWS.slice(0, 2)),
+  ...shapedRows(EXPECTED_PROJECT_ROWS),
+  ...shapedRows(EXPECTED_SESSION_ROWS.slice(2)),
   ...shapedRows(EXPECTED_JUDGE_SHOW_ROWS),
   ...shapedRows(EXPECTED_B1_ROWS.slice(29)),
 ];
@@ -257,7 +320,7 @@ async function expectStrictParityFailure(root: string, explanation: string): Pro
 const EXPECTED_B3_EXCEPTIONS = [
   [
     'events-daemon.rule.test-retained',
-    'rule test-retained',
+    'workflow test-retained',
     'ruleTestRetained',
     'Retained sender content may be selected only by a person outside model context.',
   ],
@@ -304,6 +367,24 @@ const EXPECTED_B3_EXCEPTIONS = [
     'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
   ],
   [
+    'events-daemon.subscriber-secret.create',
+    'subscriber secret create',
+    'subscriberSecretCreate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-secret.rotate',
+    'subscriber secret rotate',
+    'subscriberSecretRotate',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
+    'events-daemon.subscriber-url.set',
+    'subscriber url set',
+    'subscriberUrlSet',
+    'secret material must never enter model input or output; the person completes this operation at the terminal or app.',
+  ],
+  [
     'events-daemon.judge-key.set',
     'judge key set',
     'judgeKeySet',
@@ -347,10 +428,14 @@ function assertDaemonCapabilityAudit(rows: readonly Capability[]): void {
     'events-daemon.rule.approve',
     'events-daemon.collection.approve',
     'events-daemon.rule.analyse',
+    'events-daemon.rule.describe',
     'events-daemon.integration.show',
     'events-daemon.integration.show-agent-sessions',
     'events-daemon.integration.set',
     'events-daemon.session-queue.drop',
+    'events-daemon.subscriber.approve',
+    ...EXPECTED_PROJECT_ROWS.map(([id]) => id),
+    ...EXPECTED_WORKFLOW_RUN_ROWS.filter(([, , mcp]) => mcp === null).map(([id]) => id),
   ]) {
     const row = exceptions.get(id);
     assert.equal(row?.mcp, null, `${id} stays a human-only or owner-starting exception`);
@@ -503,7 +588,7 @@ test('PAR-B3: generated daemon references exactly describe the completed registr
   assert.deepEqual([...new Set(cliCommands)].sort(), [...new Set([...daemon.commands, ...daemon.groups])].sort());
   assert.deepEqual(headings(mcpPage).sort(), [...daemon.tools].sort());
 
-  for (const command of ['rule test-retained', 'target resume', 'held decide', 'secrets migrate'])
+  for (const command of ['workflow test-retained', 'target resume', 'held decide', 'secrets migrate'])
     assert.match(cliPage, new RegExp(`\\bagent-events ${command}\\b`, 'u'));
   for (const tool of [
     'events_run',
@@ -549,7 +634,7 @@ test('PAR-B3: paired controls and terminal-only exceptions occupy their delibera
 
   const pairedCommands = [
     'approval view',
-    'rule test',
+    'workflow test',
     'target test',
     'subscriber add',
     'subscriber remove',
@@ -575,7 +660,7 @@ test('PAR-B3: paired controls and terminal-only exceptions occupy their delibera
   for (const tool of pairedTools) assert.ok(daemon.tools.includes(tool), `${tool} is paired in Task 5`);
 
   const humanOnlyCommands = [
-    'rule test-retained',
+    'workflow test-retained',
     'target resume',
     'held decide',
     'target secret create',

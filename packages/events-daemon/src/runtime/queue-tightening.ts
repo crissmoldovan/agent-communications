@@ -41,6 +41,6 @@ export function tighteningPreviewFor(
     openQueueItemsRemoved: open,
     ...(open === 0
       ? {}
-      : { notice: `${open} open queue item${open === 1 ? '' : 's'} under this rule will be removed` }),
+      : { notice: `${open} open queue item${open === 1 ? '' : 's'} under this workflow will be removed` }),
   };
 }

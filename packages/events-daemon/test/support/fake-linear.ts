@@ -5,7 +5,8 @@ import type { LinearClientOptions } from '../../src/runtime/linear-client.ts';
 
 /*
  * A loopback fake of Linear's GraphQL API, for the Linear target's tests (0.33.0 design §3.4). It answers the few
- * operations the event service sends — the workspace, a team's labels, an issue lookup and `issueCreate` — on
+ * operations the event service sends — the workspace, a team's labels and states, an issue lookup and `issueCreate`, and
+ * for a workflow's Linear change (0.36 §6.7) its lookup, `commentCreate` and `issueUpdate` — on
  * 127.0.0.1, and records each request. The client reaches it through its own seams: the resolver gives a global
  * address (never contacted), the TCP connect goes to the fake's port instead, and TLS is the plain socket, so the client
  * still prepares exactly `https://api.linear.app/graphql` with its pinned, global-only checks. Never the real Linear,
@@ -27,19 +28,47 @@ export interface FakeLinearIssue {
 }
 
 /** A scripted answer: an HTTP status and a JSON body, or a dropped connection after the request was handled. */
+/** A comment `commentCreate` made, as it was asked for. */
+export interface FakeLinearComment {
+  readonly id: string;
+  readonly issueId: string;
+  readonly body: string;
+}
+
+/** An `issueUpdate`, as it was asked for: the issue, and the input. */
+export interface FakeLinearUpdate {
+  readonly id: string;
+  readonly input: Record<string, unknown>;
+}
+
 export type FakeLinearScript =
   | { readonly status: number; readonly body: unknown }
   | { readonly drop: true; readonly after?: 'handled' | 'unhandled' };
 
+/** An issue as Linear would show it now: its state's name from the last `issueUpdate` that set one, and its comments. */
+export interface FakeLinearIssueNow extends FakeLinearIssue {
+  readonly state: string | null;
+  readonly comments: readonly string[];
+}
+
+export interface FakeLinearOptions {
+  /** The workspace's one team, in place of FAKE_TEAM: its key names the issues it makes (`ACME-1`). */
+  readonly team?: { readonly id: string; readonly key: string; readonly name: string } | undefined;
+}
+
 export interface FakeLinear {
   readonly requests: FakeLinearRequest[];
   readonly issues: FakeLinearIssue[];
+  readonly comments: FakeLinearComment[];
+  readonly updates: FakeLinearUpdate[];
   /** Hosts the client resolved, TCP peers it asked for, and the names it verified TLS as. */
   readonly lookups: string[];
   readonly peers: string[];
   readonly tlsNames: string[];
   /** The next answers to `operation`, in order, before the fake answers as Linear would. */
   script(operation: string, ...answers: FakeLinearScript[]): void;
+  /** The issue with this identifier as Linear would show it now, or undefined when none was made. */
+  issue(identifier: string): FakeLinearIssueNow | undefined;
   clientOptions(): LinearClientOptions;
   close(): Promise<void>;
 }
@@ -52,13 +81,23 @@ export const FAKE_LABELS = [
   { id: '1a2b3c4d-5e6f-4a1b-8c2d-3e4f5a6b7c8d', name: 'Urgent' },
 ] as const;
 
+/** The fake team's workflow states, as Linear's `team.states` gives them (workflows design §4.2). */
+export const FAKE_STATES = [
+  { id: '7d1c2b3a-4e5f-4a6b-8c7d-9e0f1a2b3c4d', name: 'In Progress', type: 'started' },
+  { id: '8e2d3c4b-5f6a-4b7c-9d8e-0f1a2b3c4d5e', name: 'Done', type: 'completed' },
+  { id: '9f3e4d5c-6a7b-4c8d-8e9f-1a2b3c4d5e6f', name: 'Canceled', type: 'canceled' },
+] as const;
+
 function operationOf(query: unknown): string {
   return typeof query === 'string' ? (/^\s*(?:query|mutation)\s+([A-Za-z0-9_]+)/u.exec(query)?.[1] ?? '') : '';
 }
 
-export async function startFakeLinear(): Promise<FakeLinear> {
+export async function startFakeLinear(options: FakeLinearOptions = {}): Promise<FakeLinear> {
+  const team = options.team ?? FAKE_TEAM;
   const requests: FakeLinearRequest[] = [];
   const issues: FakeLinearIssue[] = [];
+  const comments: FakeLinearComment[] = [];
+  const updates: FakeLinearUpdate[] = [];
   const scripts = new Map<string, FakeLinearScript[]>();
   const lookups: string[] = [];
   const peers: string[] = [];
@@ -72,7 +111,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           body: {
             data: {
               viewer: { organization: { name: 'Example Workspace' } },
-              teams: { nodes: [FAKE_TEAM, { id: 'not-a-uuid', key: 'BAD', name: 'dropped' }] },
+              teams: { nodes: [team, { id: 'not-a-uuid', key: 'BAD', name: 'dropped' }] },
             },
           },
         };
@@ -81,8 +120,17 @@ export async function startFakeLinear(): Promise<FakeLinear> {
           status: 200,
           body: {
             data: {
-              team: variables.team === FAKE_TEAM.id ? { labels: { nodes: [FAKE_LABELS[0]] } } : null,
+              team: variables.team === team.id ? { labels: { nodes: [FAKE_LABELS[0]] } } : null,
               issueLabels: { nodes: [FAKE_LABELS[1], FAKE_LABELS[0]] },
+            },
+          },
+        };
+      case 'AgentCommsLinearStates':
+        return {
+          status: 200,
+          body: {
+            data: {
+              team: variables.team === team.id ? { states: { nodes: [...FAKE_STATES] } } : null,
             },
           },
         };
@@ -105,7 +153,7 @@ export async function startFakeLinear(): Promise<FakeLinear> {
             status: 400,
             body: { errors: [{ message: 'Entity already exists', extensions: { code: 'INVALID_INPUT' } }] },
           };
-        const identifier = `${FAKE_TEAM.key}-${issues.length + 1}`;
+        const identifier = `${team.key}-${issues.length + 1}`;
         const issue = {
           id: input.id as string,
           identifier,
@@ -122,6 +170,47 @@ export async function startFakeLinear(): Promise<FakeLinear> {
             data: { issueCreate: { success: true, issue: { id: issue.id, identifier, url: issue.url } } },
           },
         };
+      }
+      case 'AgentCommsLinearChangeLookup': {
+        // Every issue is the fake team's.
+        const found = issues.filter((issue) => issue.id === variables.issue);
+        return {
+          status: 200,
+          body: {
+            data: {
+              viewer: { id: FAKE_VIEWER_ID },
+              issues: { nodes: found.map(({ id }) => ({ id, team: { id: team.id } })) },
+              comments: {
+                nodes: comments.filter((comment) => comment.id === variables.comment).map(({ id }) => ({ id })),
+              },
+            },
+          },
+        };
+      }
+      case 'AgentCommsLinearCommentCreate': {
+        const input = variables.input as Record<string, unknown>;
+        if (comments.some((comment) => comment.id === input.id))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity already exists', extensions: { code: 'INVALID_INPUT' } }] },
+          };
+        if (!issues.some((issue) => issue.id === input.issueId))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity not found', extensions: { code: 'ENTITY_NOT_FOUND' } }] },
+          };
+        const comment = { id: String(input.id), issueId: String(input.issueId), body: String(input.body) };
+        comments.push(comment);
+        return { status: 200, body: { data: { commentCreate: { success: true, comment: { id: comment.id } } } } };
+      }
+      case 'AgentCommsLinearIssueUpdate': {
+        if (!issues.some((issue) => issue.id === variables.id))
+          return {
+            status: 400,
+            body: { errors: [{ message: 'Entity not found', extensions: { code: 'ENTITY_NOT_FOUND' } }] },
+          };
+        updates.push({ id: String(variables.id), input: variables.input as Record<string, unknown> });
+        return { status: 200, body: { data: { issueUpdate: { success: true } } } };
       }
       default:
         return {
@@ -177,11 +266,25 @@ export async function startFakeLinear(): Promise<FakeLinear> {
   return {
     requests,
     issues,
+    comments,
+    updates,
     lookups,
     peers,
     tlsNames,
     script(operation, ...answers) {
       scripts.set(operation, [...(scripts.get(operation) ?? []), ...answers]);
+    },
+    issue(identifier) {
+      const issue = issues.find((candidate) => candidate.identifier === identifier);
+      if (issue === undefined) return undefined;
+      const stateId = updates
+        .filter((update) => update.id === issue.id && typeof update.input.stateId === 'string')
+        .at(-1)?.input.stateId;
+      return {
+        ...issue,
+        state: FAKE_STATES.find((state) => state.id === stateId)?.name ?? null,
+        comments: comments.filter((comment) => comment.issueId === issue.id).map((comment) => comment.body),
+      };
     },
     clientOptions() {
       return {

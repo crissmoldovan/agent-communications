@@ -220,3 +220,82 @@ export async function startBrowserSseFixture(): Promise<BrowserSseFixture> {
     throw error;
   }
 }
+
+/**
+ * An events page (0.36.0, W31): a loopback page whose script opens a subscriber's live listener the two ways a browser
+ * can — a credential-free fetch of the SSE stream with its bearer in `Authorization` (an EventSource cannot set it),
+ * and a WebSocket offering `agentcomms.events.v1` and its bearer as subprotocols — and returns the first event each
+ * receives. Its origin is the one the subscriber lists.
+ */
+export interface BrowserEventsPage {
+  readonly pageUrl: string;
+  readonly origin: string;
+  close(): Promise<void>;
+}
+
+const EVENTS_PAGE_SCRIPT = `
+globalThis.agentcommsEvents = {
+  async sse({ url, token, after }) {
+    try {
+      const headers = { Authorization: 'Bearer ' + token };
+      if (after) headers['Last-Event-ID'] = after;
+      const response = await fetch(url, { headers, credentials: 'omit' });
+      if (!response.ok) return { ok: false, status: response.status };
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let received = '';
+      while (true) {
+        const next = await reader.read();
+        if (next.done) return { ok: false };
+        received += decoder.decode(next.value, { stream: true });
+        for (const frame of received.split('\\n\\n')) {
+          if (frame.includes('\\nevent: ')) {
+            await reader.cancel();
+            return { ok: true, frame: frame + '\\n\\n' };
+          }
+        }
+      }
+    } catch (error) {
+      return { ok: false, error: String(error) };
+    }
+  },
+  open({ url, token, after }) {
+    const protocols = ['agentcomms.events.v1', 'agentcomms.bearer.' + token];
+    if (after) protocols.push('agentcomms.after.' + after);
+    const socket = new WebSocket(url, protocols);
+    globalThis.agentcommsEventsSocket = socket;
+    globalThis.agentcommsEventsMessages = [];
+    socket.addEventListener('message', (event) => globalThis.agentcommsEventsMessages.push(String(event.data)));
+    return new Promise((resolve) => {
+      socket.addEventListener('open', () => resolve({ ok: true, protocol: socket.protocol }));
+      socket.addEventListener('close', (event) => resolve({ ok: false, code: event.code }));
+    });
+  },
+  async next() {
+    for (let waited = 0; waited < 10000; waited += 20) {
+      if (globalThis.agentcommsEventsMessages.length > 0) return globalThis.agentcommsEventsMessages[0];
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    return null;
+  },
+};
+`;
+
+export async function startBrowserEventsPage(): Promise<BrowserEventsPage> {
+  const server = createServer((request, response) => {
+    const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    if (path === '/') {
+      response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      response.end('<!doctype html><html><head><script src="/events-client.js"></script></head><body></body></html>');
+      return;
+    }
+    if (path === '/events-client.js') {
+      response.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+      response.end(EVENTS_PAGE_SCRIPT);
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  return { pageUrl: `http://127.0.0.1:${port}/`, origin: `http://127.0.0.1:${port}`, close: () => close(server) };
+}

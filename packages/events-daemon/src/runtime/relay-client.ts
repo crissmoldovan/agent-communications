@@ -297,6 +297,8 @@ export interface RelaySessionV1 {
   readonly provider: string;
   readonly cwd: string;
   readonly createdAt: string;
+  /** Its title, as whoever started it gave it: a workflow's marks the run that made it (0.36 §7.4). */
+  readonly title?: string | undefined;
   readonly nativeSessionId?: string | undefined;
   readonly activeRunId?: string | undefined;
   readonly requestedMode?: string | undefined;
@@ -326,6 +328,16 @@ export interface RelaySnapshotV1 {
   readonly session: RelaySessionV1;
   readonly runs: readonly RelayRunV1[];
   readonly cursor: number;
+  /**
+   * The session's open requests to the person — an approval, a question, any kind (api-contract `pendingRequests`, read
+   * 2026-10-27) — each by the turn that asked, when the relay says it. Only that: never what was asked.
+   */
+  readonly pendingRequests?: readonly { readonly runId: string | null }[] | undefined;
+}
+
+/** Whether the person is needed for `turn` in claude-stream: an open request of that turn, or of the session's own. */
+export function needsThePerson(snapshot: RelaySnapshotV1, turn: string): boolean {
+  return (snapshot.pendingRequests ?? []).some((request) => request.runId === null || request.runId === turn);
 }
 
 export interface RelayInfoV1 {
@@ -378,6 +390,7 @@ function session(value: unknown): RelaySessionV1 {
     provider: value.provider,
     cwd: value.cwd,
     createdAt: value.createdAt,
+    ...(optionalText(value.title) === undefined ? {} : { title: (value.title as string).slice(0, 200) }),
     ...(optionalText(value.nativeSessionId) === undefined ? {} : { nativeSessionId: value.nativeSessionId as string }),
     ...(activeRunId === undefined ? {} : { activeRunId }),
     ...(optionalText(value.requestedMode) === undefined ? {} : { requestedMode: value.requestedMode as string }),
@@ -485,6 +498,29 @@ export class RelayClient {
     return body.value.sessions.map(session);
   }
 
+  /**
+   * `GET /v1/events` (one page, not followed): the value a run's result carried under its `outputFormat`, from the
+   * run's `structured.final` record (Claude only), or null when it published none. Only that record type is asked for.
+   */
+  async structuredFinal(sessionId: string, runId: string): Promise<unknown | null> {
+    if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
+    if (!RUN_ID.test(runId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay run id is run_<uuid>');
+    const query = new URLSearchParams({ sessionId, runId, types: 'structured.final', follow: '0', limit: '20' });
+    const body = await this.#json('GET', `/v1/events?${query.toString()}`);
+    if (!isRecord(body.value) || !Array.isArray(body.value.events))
+      throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered its events in a shape this client cannot read');
+    for (const event of [...body.value.events].reverse())
+      if (
+        isRecord(event) &&
+        event.type === 'structured.final' &&
+        event.runId === runId &&
+        isRecord(event.payload) &&
+        Object.hasOwn(event.payload, 'value')
+      )
+        return event.payload.value;
+    return null;
+  }
+
   /** `GET /v1/sessions/:id`: the session, its runs and the journal cursor it reflects; null when there is none. */
   async snapshot(sessionId: string): Promise<RelaySnapshotV1 | null> {
     if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
@@ -492,7 +528,15 @@ export class RelayClient {
     if (body.status === 404) return null;
     if (!isRecord(body.value) || !Array.isArray(body.value.runs) || typeof body.value.cursor !== 'number')
       throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a session in a shape this client cannot read');
-    return { session: session(body.value.session), runs: body.value.runs.map(run), cursor: body.value.cursor };
+    const pending = Array.isArray(body.value.pendingRequests) ? body.value.pendingRequests : [];
+    return {
+      session: session(body.value.session),
+      runs: body.value.runs.map(run),
+      cursor: body.value.cursor,
+      pendingRequests: pending.filter(isRecord).map((request) => ({
+        runId: typeof request.runId === 'string' && RUN_ID.test(request.runId) ? request.runId : null,
+      })),
+    };
   }
 
   /** `POST /v1/sessions`: a new session in `cwd`, which the relay checks is inside its allowed roots. */
@@ -513,7 +557,18 @@ export class RelayClient {
    */
   async startRun(
     sessionId: string,
-    input: { readonly prompt: string; readonly requestedMode: string; readonly startId: string },
+    input: {
+      readonly prompt: string;
+      readonly requestedMode: string;
+      readonly startId: string;
+      /**
+       * The shape the turn's result takes (claude-stream's `outputFormat`, Claude only): a workflow's deliver step
+       * that asks for a report sends one, and reads the turn's `structured.final` when it ends (workflows §6.4).
+       */
+      readonly outputFormat?:
+        | { readonly type: 'json_schema'; readonly schema: Readonly<Record<string, unknown>> }
+        | undefined;
+    },
   ): Promise<RelayStartResult> {
     if (!SESSION_ID.test(sessionId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay session id is sess_<uuid>');
     if (!START_ID.test(input.startId))
@@ -536,6 +591,17 @@ export class RelayClient {
     }
     if (!isRecord(body.value)) throw new RelayError('RELAY_BAD_RESPONSE', 'the relay answered a started run oddly');
     return { kind: 'started', run: run(body.value.run), repeated: body.value.repeated === true };
+  }
+
+  /**
+   * `POST /v1/runs/:id/interrupt` (api-contract, read 2026-10-27): interrupts a session's live turn, only when the person
+   * cancels a workflow's run with `--interrupt` (workflows design §7.6). True when the relay interrupted it (200); false
+   * for a turn it does not know (404), one no longer live (409), or a provider that cannot interrupt (501).
+   */
+  async interruptRun(runId: string): Promise<boolean> {
+    if (!RUN_ID.test(runId)) throw new RelayError('RELAY_BAD_RESPONSE', 'a relay run id is run_<uuid>');
+    const body = await this.#json('POST', `/v1/runs/${runId}/interrupt`, {}, [200, 404, 409, 501]);
+    return body.status === 200;
   }
 
   /**

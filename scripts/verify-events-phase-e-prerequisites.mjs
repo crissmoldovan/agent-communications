@@ -52,10 +52,41 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * `enable-all-approve` owner wire, which approves switching the event service on — the activation `enable-all` prepared —
  * from the app after its preview, its arguments (the approval and the digest the preview showed) and its result, whose
  * `approvedBy` names `desktop-app` or `desktop-app (test build)`. No existing branch changed.
+ *
+ * 0.36.0 (workflows, design W19) is another, also only additive. The schema and vectors gain the person's owner wires
+ * `runs-list`, `run-show` and `run-cancel` — a run's state, path, steps, waits and events, and its closed `summary`: the
+ * project chosen, the issue made, a session found or started, how the turn ended; `projects-list`, `project-show`,
+ * `project-add`, `project-update`, `project-remove` and `project-scan`, a project naming the sessions working in it,
+ * busy or idle; `workflow-describe`; and `subscriber-approve`. They gain the wires an agent may call as well,
+ * `rule-check`, `subscriber-enable`, `workflow-events-list` and `workflow-events-show`, and the terminal's secret
+ * operations `subscriberSecretCreate`, `subscriberSecretRotate` and `subscriberUrlSet` for a webhook subscriber.
+ * `rule-test` gains its optional `outcomes`, and its result and `rule-test-retained`'s may be a flow's try; `rule-show`
+ * its optional `version`; a workflow document its optional `flow`; `subscriber-add|update` a subscriber's optional
+ * `events` part and the `webhook` kind; an activation the `subscription` kind; a delivery's target kind, in
+ * `deliveries list`, `delivery show` and a message's deliveries, the value `linear-change` — a workflow's change of the
+ * Linear issue its run made — whose row may carry that issue's `linear: { identifier, url }`; and a message's decision
+ * outcome a chained workflow's `awaiting-chain` and `not-chained`. The ordinary result vectors also show a webhook
+ * subscriber's public `address` in `subscribers list`, whose entries the schema already holds as any JSON. The target
+ * document is unchanged: a `linear-change` target is checked by the event service, not by B3 v1. The CLI's `workflow`
+ * words (W22) reach no vector. No existing branch changed.
+ *
+ * 0.36.0's one word (design W22) changes no branch, only two example values the seeded vectors carry, as the event
+ * service now writes them: `judge-setup`'s `destination` ("Messages your workflows choose …") and `rule-analyse`'s
+ * `sent` ("The workflow's own text …"). Both stay plain strings in the schema.
+ *
+ * 0.36.0's subscriber state is another, also only additive: `addSubscriber` and `updateSubscriber`'s result `state`,
+ * always `null` before, may also be `inert` — what `subscribers list` says of a version given events until the person
+ * approves its subscription — and the ordinary webhook vector, regenerated from the owner, says so. A version given no
+ * events still answers `null`. No existing branch changed.
+ *
+ * 0.36.0's ended holds are another, also only additive: a message's decision outcome, in `messages list` and `message
+ * show`, gains `hold-expired` and `cancelled`, which holds have always written when a hold ends unanswered — its own
+ * bound passed, or it was cancelled — and a story with one could not be read before. `rule-analyse`'s closed outcome
+ * counts keep their five. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    '6f1dc812742d13462cbb87232c9994430ab12a59d0630285d9979b1f4447d34d',
+    'acd764bdd1d759ebdca536ae02d60112b837e84f9e12a191989d5a5bf81c369e',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -65,9 +96,9 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-variants.json':
     'b75e356047e2285960e76042996a646c50919be4737c11d926e070a381a4f128',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/b3-operation-results.json':
-    'b917918b966c0c4935a417acf890da26adba9dc59e29b494106cbcb47f8e5a19',
+    '0798951f4ca39f40e51435ebd8a9ad99619cfc922f12abe844f31e8c595d1195',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/desktop-operation-requests.json':
-    '039a8dcf654bd8d6a3a3a8a5a1c043c3aeb6a1bde2d34574dc4494032bc5babb',
+    'a49e15cf784cd42e641ced8477cfc1f5ff108aa95a4ec13f40c7973c777089ad',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/doctor-result.json':
     '2ac2678746992c9c36b9f917cecdc245298a0d8384be0a1b37b84762a1277279',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/error-vectors.json':
@@ -77,15 +108,15 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/holds.json':
     '2e3eaa8886260d56019350e33aa16f3db4ebbc1b4d6292671a9ded44045ab490',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/operation-requests.json':
-    'f722a05d3197e2090a9fd70ae0fe4702119452b6214a8312b8048a7369b6e9c9',
+    'cea5d4fb1a36f9c3648e6d2333382ce615c383af88d2632ba2065f12e163d0f3',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/ordinary-results.json':
-    '0d21b030a2ac336e9c612f96ed568fb9dd8c5877ce82f5bc8b921116cd1d9360',
+    'd2e11df428e6d660eac8637130a401504930468bcb4fbc7ef68b163c2d72122c',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/pending-target.json':
     'b5ced3972a7ea890fe7239edf3f56147b1c2d352d10006405640b3e8bd333b06',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '3b827cbc48680989b4cee4fd24f6cc79a1c9872787e7e32bd289e43676fb7dca',
+    '42b8fae0d8e359f8854935bb07ad6eee7bb68030ce24268d893d77b11285f7bd',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

@@ -1,0 +1,23 @@
+{
+  "catalogueVersion": 1,
+  "schemas": [
+    {
+      "schema": "run",
+      "standard": [],
+      "own": ["started", "held", "finished", "failed", "cancelled", "expired"],
+      "outputs": ["steps", "endCode"]
+    },
+    {
+      "schema": "step.find-session",
+      "standard": ["started", "succeeded", "failed", "skipped", "retrying"],
+      "own": ["found", "busy", "not-found", "watched"],
+      "outputs": ["session", "provider"]
+    },
+    {
+      "schema": "step.deliver.linear",
+      "standard": ["started", "succeeded", "failed", "waiting", "skipped", "retrying"],
+      "own": ["created"],
+      "outputs": ["delivery", "issue"]
+    }
+  ]
+}

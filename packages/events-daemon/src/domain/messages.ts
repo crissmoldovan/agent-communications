@@ -13,7 +13,11 @@ export const MESSAGES_LIST_MAX_LIMIT = 500;
 /** How far back `messages list` looks when no `since` is given: 30 days. */
 export const MESSAGES_LIST_DEFAULT_SPAN_MS: number = 30 * 86_400_000;
 
-/** A decision's outcome, as the decisions table keeps it. */
+/**
+ * A decision's outcome as it is made, and as Analyse counts it — a closed set its counts keep. The decisions table also
+ * keeps the outcome a hold ends with when it ends unanswered (`HOLD_ENDED_DECISION_OUTCOMES`) and a chained workflow's
+ * (`CHAIN_DECISION_OUTCOMES`), which a message's story names too.
+ */
 export const MESSAGE_DECISION_OUTCOMES: readonly [
   'matched',
   'no-match',
@@ -23,10 +27,40 @@ export const MESSAGE_DECISION_OUTCOMES: readonly [
 ] = Object.freeze(['matched', 'no-match', 'mapping-rejected', 'retention-expired', 'hold'] as const);
 export type MessageDecisionOutcome = (typeof MESSAGE_DECISION_OUTCOMES)[number];
 
-/** A delivery's target kind, as the deliveries table keeps it. */
-export const MESSAGE_TARGET_KINDS: readonly ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] = Object.freeze(
-  ['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session'] as const,
-);
+/**
+ * The outcomes only a chained workflow's decision has (workflows design W34): waiting for a run about the message to
+ * raise what starts it, and the wait ended with none. A message's story names them; an analysis of judged decisions,
+ * which a chain's wait never is, does not.
+ */
+export const CHAIN_DECISION_OUTCOMES: readonly ['awaiting-chain', 'not-chained'] = Object.freeze([
+  'awaiting-chain',
+  'not-chained',
+] as const);
+/**
+ * How a hold ends with no answer, as holds write it: its own bound passed (`hold-expired`; `retention-expired`, which
+ * Analyse counts, when ingest retention bound it), or it was cancelled — its account removed, the person's drop, or a
+ * WhatsApp message no longer visible. A message's story names them; Analyse counts such a decision in its total only.
+ */
+export const HOLD_ENDED_DECISION_OUTCOMES: readonly ['hold-expired', 'cancelled'] = Object.freeze([
+  'hold-expired',
+  'cancelled',
+] as const);
+/** A decision's outcome in a message's story. */
+export type MessageStoryOutcome =
+  | MessageDecisionOutcome
+  | (typeof HOLD_ENDED_DECISION_OUTCOMES)[number]
+  | (typeof CHAIN_DECISION_OUTCOMES)[number];
+
+/** A delivery's target kind, as the deliveries table keeps it; `linear-change` is a workflow's only (0.36). */
+export const MESSAGE_TARGET_KINDS: readonly [
+  'dry-run',
+  'webhook',
+  'sse',
+  'queue',
+  'linear',
+  'session',
+  'linear-change',
+] = Object.freeze(['dry-run', 'webhook', 'sse', 'queue', 'linear', 'session', 'linear-change'] as const);
 export type MessageTargetKind = (typeof MESSAGE_TARGET_KINDS)[number];
 
 /** A delivery's state, as the deliveries table keeps it (`store/schema-v1.ts`). */
@@ -102,7 +136,7 @@ export interface MessageJudgeV1 {
 export interface MessageDecisionV1 {
   readonly ruleId: string;
   readonly ruleVersion: number;
-  readonly outcome: MessageDecisionOutcome;
+  readonly outcome: MessageStoryOutcome;
   readonly judge: MessageJudgeV1 | null;
 }
 

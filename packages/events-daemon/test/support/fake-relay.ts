@@ -8,7 +8,8 @@ import { join } from 'node:path';
  * A loopback stand-in for a claude-stream relay (0.33.0 design §3.5), serving the shapes of its API contract
  * (`agent-stream/docs/agent-relay/api-contract.md`, read 2026-10-26) and nothing else: `GET /v1/relay`,
  * `GET /v1/workspace`, the session list and snapshot, `POST /v1/sessions`, `POST /v1/sessions/:id/runs` with
- * `startId` idempotency and its 409, and the `GET /v1/events?follow=1` SSE stream with `Last-Event-ID` resume. No real
+ * `startId` idempotency and its 409, `POST /v1/runs/:id/interrupt`, and the `GET /v1/events?follow=1` SSE stream with
+ * `Last-Event-ID` resume. No real
  * claude-stream is ever started or contacted; tests drive what its sessions do through this object.
  */
 
@@ -38,6 +39,8 @@ export interface FakeRun {
   prompt: string;
   requestedMode?: string;
   sender?: unknown;
+  /** The `outputFormat` the run was started with, when it was given one (Claude only, workflows §6.4). */
+  outputFormat?: unknown;
 }
 
 export interface FakeRelayRecord {
@@ -55,6 +58,7 @@ interface Journal {
   readonly sessionId: string;
   readonly runId?: string;
   readonly type: string;
+  readonly payload?: Record<string, unknown>;
 }
 
 export interface FakeRelayOptions {
@@ -71,7 +75,8 @@ export class FakeRelay {
   readonly sessions: FakeSession[] = [];
   readonly runs: FakeRun[] = [];
   readonly requests: FakeRelayRecord[] = [];
-  readonly #journal: Journal[] = [];
+  #journal: Journal[] = [];
+  #journalId = 'jrn_00000000-0000-4000-8000-000000000001';
   readonly #streams = new Set<ServerResponse>();
   readonly #options: FakeRelayOptions;
   #server: Server | undefined;
@@ -148,20 +153,59 @@ export class FakeRelay {
     return run;
   }
 
-  /** Ends the session's live run with a terminal status, publishing its `run.*` record. */
-  endRun(sessionId: string, status: 'completed' | 'failed' | 'cancelled' | 'interrupted' = 'completed'): void {
+  /**
+   * Ends the session's live run with a terminal status, publishing its `run.*` record — first, when `final` is given,
+   * the `structured.final` record a Claude turn started with an `outputFormat` publishes, holding that value.
+   */
+  endRun(
+    sessionId: string,
+    status: 'completed' | 'failed' | 'cancelled' | 'interrupted' = 'completed',
+    final?: unknown,
+    publish = true,
+  ): void {
     const session = this.sessions.find((candidate) => candidate.id === sessionId);
     const run = this.runs.find((candidate) => candidate.id === session?.activeRunId);
     if (session === undefined || run === undefined) throw new Error('no live run to end');
     run.status = status;
     run.endedAt = new Date().toISOString();
     delete session.activeRunId;
-    this.#publish({ sessionId, runId: run.id, type: `run.${status}` });
+    if (final !== undefined)
+      this.#publish({ sessionId, runId: run.id, type: 'structured.final', payload: { value: final } }, publish);
+    this.#publish({ sessionId, runId: run.id, type: `run.${status}` }, publish);
+  }
+
+  /**
+   * A relay whose journal starts again — a new journal id, no records — as a reinstall or a reset does; its sessions
+   * and runs stay. Followers are dropped, and find the new journal when they come back.
+   */
+  resetJournal(): void {
+    this.#journalId = `jrn_${uuid()}`;
+    this.#journal = [];
+    this.disconnectStreams();
   }
 
   /** Publishes a run-end record for the session without ending anything: a relay that repeats or invents them. */
   publishRunEnd(sessionId: string, status = 'completed'): void {
     this.#publish({ sessionId, runId: `run_${uuid()}`, type: `run.${status}` });
+  }
+
+  /** The open requests to the person, as a session's snapshot lists them: who asked, never what. */
+  readonly personRequests: { requestId: string; sessionId: string; runId: string; kind: string; state: string }[] = [];
+
+  /** The session's live turn asks the person something (an approval), as claude-stream's `request.requested`. */
+  askThePerson(sessionId: string): void {
+    const session = this.sessions.find((candidate) => candidate.id === sessionId);
+    if (session?.activeRunId === undefined) throw new Error('no live run to ask from');
+    const requestId = `apr_${uuid()}`;
+    this.personRequests.push({ requestId, sessionId, runId: session.activeRunId, kind: 'approval', state: 'pending' });
+    this.#publish({ sessionId, runId: session.activeRunId, type: 'request.requested' });
+  }
+
+  /** The person answers every open request of the session. */
+  answerThePerson(sessionId: string): void {
+    for (let index = this.personRequests.length - 1; index >= 0; index -= 1)
+      if (this.personRequests[index]?.sessionId === sessionId) this.personRequests.splice(index, 1);
+    this.#publish({ sessionId, type: 'request.resolved' });
   }
 
   /** Writes `text` as it is to every open follow stream: a relay that sends what no record is. */
@@ -191,6 +235,7 @@ export class FakeRelay {
       ...(typeof body?.startId === 'string' ? { startId: body.startId } : {}),
       ...(typeof body?.requestedMode === 'string' ? { requestedMode: body.requestedMode } : {}),
       ...(body?.sender === undefined ? {} : { sender: body.sender }),
+      ...(body?.outputFormat === undefined ? {} : { outputFormat: body.outputFormat }),
     };
     this.runs.push(run);
     session.activeRunId = run.id;
@@ -198,10 +243,11 @@ export class FakeRelay {
     return run;
   }
 
-  #publish(event: Omit<Journal, 'id' | 'cursor'>): void {
+  #publish(event: Omit<Journal, 'id' | 'cursor'>, live = true): void {
     const record: Journal = { id: `evt_${uuid()}`, cursor: this.#journal.length + 1, ...event };
     this.#journal.push(record);
-    for (const stream of this.#streams) this.#write(stream, record);
+    // `live: false` journals it without telling an open stream: a record the follower missed while it was away.
+    if (live) for (const stream of this.#streams) this.#write(stream, record);
   }
 
   #write(stream: ServerResponse, record: Journal): void {
@@ -245,7 +291,7 @@ export class FakeRelay {
       if (this.#options.noRelayInfo) return refuse(404, 'not_found', 'no such route');
       return send(200, {
         relay: {
-          journalId: 'jrn_00000000-0000-4000-8000-000000000001',
+          journalId: this.#journalId,
           version: '0.2.20',
           protocol: this.#options.protocol ?? 1,
           capabilities: this.#options.capabilities ?? ['journal-id', 'sender', 'answered-by', 'command-ids'],
@@ -269,7 +315,7 @@ export class FakeRelay {
         session,
         runs: this.runs.filter((run) => run.sessionId === session.id),
         pendingApprovals: [],
-        pendingRequests: [],
+        pendingRequests: this.personRequests.filter((request) => request.sessionId === session.id),
         cursor: this.#journal.length,
       });
     }
@@ -328,6 +374,39 @@ export class FakeRelay {
       }
       return send(202, { run: made });
     }
+    // `POST /v1/runs/:id/interrupt` (api-contract, read 2026-10-27): 200 for a live run, which ends `interrupted`; 404 for
+    // a run it does not know; 409 for one no longer live.
+    const interruptMatch = /^\/v1\/runs\/(run_[0-9a-f-]{36})\/interrupt$/u.exec(url.pathname);
+    if (method === 'POST' && interruptMatch !== null) {
+      const run = this.runs.find((candidate) => candidate.id === interruptMatch[1]);
+      if (run === undefined) return refuse(404, 'not_found', 'no such run');
+      if (run.status !== 'running') return refuse(409, 'conflict', `run ${run.id} is not active`);
+      this.endRun(run.sessionId, 'interrupted');
+      return send(200, { ok: true });
+    }
+    if (method === 'GET' && url.pathname === '/v1/events' && url.searchParams.get('follow') !== '1') {
+      // One page, every filter honoured, as `GET /v1/events?follow=0` answers.
+      const after = Number(url.searchParams.get('after') ?? '0');
+      const sessionId = url.searchParams.get('sessionId');
+      const runId = url.searchParams.get('runId');
+      const types = (url.searchParams.get('types') ?? '').split(',').filter((type) => type.length > 0);
+      const events = this.#journal
+        .filter((record) => record.cursor > after)
+        .filter((record) => sessionId === null || record.sessionId === sessionId)
+        .filter((record) => runId === null || record.runId === runId)
+        .filter((record) => types.length === 0 || types.includes(record.type))
+        .map((record) => ({ schemaVersion: 1, provider: 'claude', payload: {}, ...record }));
+      return send(200, {
+        journalId: this.#journalId,
+        events,
+        nextCursor: events.at(-1)?.cursor ?? after,
+        hasMore: false,
+        limit: 200,
+        maxLimit: 500,
+        gap: false,
+        retentionFloor: 0,
+      });
+    }
     if (method === 'GET' && url.pathname === '/v1/events' && url.searchParams.get('follow') === '1') {
       const after = Number(url.searchParams.get('after') ?? '0');
       const last = Number(request.headers['last-event-id'] ?? '0');
@@ -335,7 +414,7 @@ export class FakeRelay {
       const types = (url.searchParams.get('types') ?? '').split(',').filter((type) => type.length > 0);
       response.writeHead(200, {
         'content-type': 'text/event-stream',
-        'x-relay-journal': 'jrn_00000000-0000-4000-8000-000000000001',
+        'x-relay-journal': this.#journalId,
       });
       Object.assign(response, { types });
       response.write(`: subscribed after=${from}\n\n`);

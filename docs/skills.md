@@ -38,7 +38,7 @@ Each family of skills shares one contract, copied into every skill as `reference
 
 | Skill | What it is for |
 |---|---|
-| [`agentcomms-events`](#agentcomms-events) | Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person. |
+| [`agentcomms-events`](#agentcomms-events) | Plan and locally test safe event workflows with the events MCP tools, keeping proposals disabled and handing approvals to a person. |
 | [`comms-onboarding`](#comms-onboarding) | Set a person up with agent-communications from chat: which channels and accounts, which mode each account should have, the servers registered, every sign-in started, and the steps only they can take named. |
 | [`comms-update`](#comms-update) | Bring agent-communications on this computer up to the latest release from chat: see what is behind, update the servers, their runtimes and any global commands in one approved step, then restart and clear out the old versions. |
 | [`gmail-attachments`](#gmail-attachments) | Find files people sent, save them where the person says — Downloads, the current folder, or a folder they name — and attach a local file to a draft. |
@@ -62,9 +62,9 @@ Each family of skills shares one contract, copied into every skill as `reference
 
 ### `agentcomms-events`
 
-Plan and locally test safe event-emission rules with the events MCP tools, keeping proposals disabled and handing approvals to a person.
+Plan and locally test safe event workflows with the events MCP tools, keeping proposals disabled and handing approvals to a person.
 
-**Reach for it when:** 'notify me when a message arrives', 'test this event rule', 'why is this event rule not active'
+**Reach for it when:** 'notify me when a message arrives', 'test this workflow', 'why is this workflow not active'
 
 **Not for** secrets, retained content, approvals, target resume or held decisions.
 

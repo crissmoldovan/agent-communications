@@ -332,7 +332,7 @@ test('judge setup sets Jev up and turns it on in one step, idempotently, from ke
       },
       key: 'stored',
       destination:
-        "Messages your rules choose are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev to be judged.",
+        "Messages your workflows choose are sent to OpenRouter (openrouter.ai), which passes them to TypeSafe's Jev to be judged.",
       approvedBy: 'desktop-app',
     });
     assert.equal((await kinds()).typesafe, 'enabled');

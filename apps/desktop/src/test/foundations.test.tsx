@@ -218,7 +218,7 @@ describe('the data the screens share', () => {
 });
 
 describe('the shell', () => {
-  it('the sidebar has its sections in order, Queue after Overview, Messages after Queue, People after Messages, MCP connections after Accounts, Activity after Approvals, then Settings', async () => {
+  it('the sidebar has its sections in order, Queue after Overview, Messages after Queue, People after Messages, Projects after People, MCP connections after Accounts, Activity after Approvals, Workflows after Events, then Settings', async () => {
     renderApp(createFakeBridge());
     const navigation = await screen.findByRole('navigation', { name: 'Sections' });
     // Each section's name, as its label holds it: a count or a New tag beside it is not its name.
@@ -230,6 +230,7 @@ describe('the shell', () => {
       'Queue',
       'Messages',
       'People',
+      'Projects',
       'Accounts',
       'MCP connections',
       'Approvals',
@@ -237,6 +238,7 @@ describe('the shell', () => {
       'Your agents',
       'Updates',
       'Events',
+      'Workflows',
       'Doctor',
       'Settings',
     ]);

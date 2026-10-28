@@ -123,7 +123,7 @@ export function ruleApprovalWords(approvalId: unknown): string {
 
 /** `rule approve`'s refusal of an unattested origin, as the owner gives it. */
 export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
-  return changeAtTerminal('approve a rule', ruleApprovalWords(approvalId), {
+  return changeAtTerminal('approve a workflow', ruleApprovalWords(approvalId), {
     approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
   });
 }
@@ -134,6 +134,16 @@ export function ruleApprovalAtTerminal(approvalId: unknown): CommsError {
  */
 export function enableAllApprovalAtTerminal(approvalId: unknown): CommsError {
   return changeAtTerminal('switch the event service on', ruleApprovalWords(approvalId), {
+    approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
+  });
+}
+
+/**
+ * `subscriber approve`'s refusal of an unattested origin (0.36.0, W29): a subscription is approved at the terminal there,
+ * with the approval's own `approve <approval-id>`.
+ */
+export function subscriptionApprovalAtTerminal(approvalId: unknown): CommsError {
+  return changeAtTerminal("approve a subscriber's events", ruleApprovalWords(approvalId), {
     approvalId: typeof approvalId === 'string' && APPROVAL_ID_WORD.test(approvalId) ? approvalId : '<approval-id>',
   });
 }

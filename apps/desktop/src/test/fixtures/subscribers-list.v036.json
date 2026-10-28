@@ -1,0 +1,43 @@
+[
+  {
+    "subscriberId": "events-dashboard",
+    "version": 2,
+    "digest": "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0",
+    "revokedAt": null,
+    "kind": "sse",
+    "events": { "namespaces": ["acme"], "patterns": ["*.*.*.failed", "acme.client-asks.*.*"], "content": "none" },
+    "state": "active",
+    "listening": { "host": "127.0.0.1", "port": 4801 },
+    "listenError": null,
+    "address": null,
+    "backlog": 0,
+    "lastDeliveredAt": 1792915201900
+  },
+  {
+    "subscriberId": "crm-hook",
+    "version": 1,
+    "digest": "a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1",
+    "revokedAt": null,
+    "kind": "webhook",
+    "events": { "namespaces": ["acme"], "patterns": ["acme.client-asks.issue.created"], "content": "none" },
+    "state": "inert",
+    "listening": null,
+    "listenError": null,
+    "address": { "url": "https://hooks.example.test:443/agentcomms/events" },
+    "backlog": 0,
+    "lastDeliveredAt": null
+  },
+  {
+    "subscriberId": "stream-page",
+    "version": 1,
+    "digest": "b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2",
+    "revokedAt": null,
+    "kind": "sse",
+    "events": null,
+    "state": null,
+    "listening": null,
+    "listenError": "PORT_IN_USE",
+    "backlog": 3,
+    "lastDeliveredAt": null
+  }
+]

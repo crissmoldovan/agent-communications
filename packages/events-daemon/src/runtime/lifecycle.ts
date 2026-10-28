@@ -1,9 +1,11 @@
 import { CommsError } from '@agentcomms/core';
 import type { EventDatabase } from '../store/database.ts';
+import { cancelEventDeliveriesInTransaction } from './events/event-ledger.ts';
 import { JudgePurgeParticipant } from './judge-purge.ts';
 import { purgeAllB2StreamRecords } from './phase-d-b2-retention.ts';
 import { purgeAllQueueItems } from './queue-retention.ts';
 import { purgeUnreferencedSystemTargets, removeRetainedDeliveryTargetReference } from './target-version-references.ts';
+import { cancelRunsInTransaction } from './workflow/runs.ts';
 
 export interface EventLifecycleStatus {
   readonly enabled: boolean;
@@ -80,6 +82,8 @@ export class EventLifecycle {
         "UPDATE deliveries SET state = 'in-flight-at-disable', encrypted_record = NULL, lease_until = NULL, next_at = NULL WHERE state = 'disclosing'",
       );
       database.exec("UPDATE deliveries SET encrypted_record = NULL WHERE state = 'dead-lettered'");
+      // Raised workflow events (0.36.0) go the same way: switching off revokes every workflow's disclosure.
+      cancelEventDeliveriesInTransaction(database, { all: true }, now, 'SWITCHED_OFF');
       for (const delivery of retained) {
         for (const target of removeRetainedDeliveryTargetReference(database, delivery.id))
           purgeUnreferencedSystemTargets(database, { ...target, now });
@@ -89,6 +93,8 @@ export class EventLifecycle {
           "UPDATE activation_intents SET status = 'cancelled', updated_at = ? WHERE status IN ('pending', 'pending-completion')",
         )
         .run(now);
+      // Every workflow run ends with collection (workflows design W10): cancelled, its record purged.
+      cancelRunsInTransaction(database, { all: true }, 'DISABLED_ALL', now);
       database
         .prepare(
           'UPDATE event_settings SET enabled = 0, switch_generation = switch_generation + 1, changed_at = ? WHERE singleton = 1',

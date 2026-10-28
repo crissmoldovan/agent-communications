@@ -8,6 +8,7 @@ import { commitDecisionOutbox, type DecisionFailpoint, StaleDecisionError } from
 import { prepareDeliveries } from './deliveries.ts';
 import type { ActiveDisclosableRequest, DisclosureSnapshot } from './disclosure-fence.ts';
 import { assertDisclosable } from './disclosure-fence.ts';
+import { type ChainStart, chainRequestFor, chainStartFor, isAwaitingChain } from './events/chains.ts';
 import { sqliteTransactionNow } from './holds.ts';
 import { JudgeCoordinator } from './judge-coordinator.ts';
 import { recoverJudgeReservation } from './judge-recovery.ts';
@@ -16,6 +17,8 @@ import { evaluateRuleProjection, matchesRuleCondition } from './mapping.ts';
 import { EventProjectionStore, type ProjectionCipher } from './projections.ts';
 import { keepSenderDomain, senderDomainLocation } from './sender-domains.ts';
 import type { EventTaintRecorder } from './untrusted.ts';
+import { runMessageOf } from './workflow/run-message.ts';
+import { prepareFlowRun } from './workflow/runs.ts';
 import { WriterQuiescer, withEventWriterLease } from './writer-quiescer.ts';
 
 type EvaluationFenceRequest = Omit<ActiveDisclosableRequest, 'approvals' | 'config'>;
@@ -49,7 +52,7 @@ function ruleFor(store: EventDatabase, ruleId: string, ruleVersion: number): Can
   const row = store.database
     .prepare('SELECT document FROM rule_versions WHERE rule_id = ? AND version = ?')
     .get(ruleId, ruleVersion) as RuleRow | undefined;
-  if (!row) throw new CommsError('NOT_FOUND', 'the exact rule version is unavailable for evaluation');
+  if (!row) throw new CommsError('NOT_FOUND', 'the exact workflow version is unavailable for evaluation');
   return JSON.parse(row.document) as CanonicalFullRuleDocument;
 }
 
@@ -204,6 +207,10 @@ export class EventEvaluator {
     // transaction. Deterministic D decisions retain their established injected-clock semantics.
     const dbNow = this.#store.immediate(() => sqliteTransactionNow(this.#store.database));
     const expiryNow = rule.agentic === undefined ? this.#now() : dbNow;
+    // A chained workflow (W34) waits for a run about this message to raise what starts it: its decision replaces the
+    // waiting one, and a wait that ran out ends `not-chained`.
+    const on = rule.flow?.on;
+    const chain = on === undefined ? undefined : { at: expiryNow };
     if (expiryNow >= row.decisionDeadline) {
       return this.#commit(() =>
         commitDecisionOutbox(
@@ -214,10 +221,11 @@ export class EventEvaluator {
             accountId: ingest.account_id,
             ruleId: input.ruleId,
             ruleVersion: input.ruleVersion,
-            outcome: 'retention-expired',
+            outcome: on === undefined ? 'retention-expired' : 'not-chained',
             metadataExpiresAt: fixedDeadline(expiryNow, rule.retention.decisionMetadataMs),
             switchGeneration: this.#switchGeneration(),
             deliveries: [],
+            ...(chain === undefined ? {} : { chain }),
           },
           this.#failpoint,
         ),
@@ -226,8 +234,13 @@ export class EventEvaluator {
 
     // The fence is intentionally before projection decryption, mapping and every persistent outbox mutation.
     let authorised: DisclosureSnapshot | undefined;
+    // Each bound target, or — a workflow whose flow delivers to none — the version and account alone (0.36 W1).
+    const bounds: readonly { readonly targetId?: string; readonly targetVersion?: number }[] =
+      rule.targets.length > 0
+        ? rule.targets.map((target) => ({ targetId: target.targetId, targetVersion: target.version }))
+        : [{}];
     try {
-      for (const target of rule.targets) {
+      for (const bound of bounds) {
         const snapshot = await this.#fence({
           database: this.#store.database,
           accountId: ingest.account_id,
@@ -235,8 +248,7 @@ export class EventEvaluator {
           ruleId: input.ruleId,
           ruleVersion: input.ruleVersion,
           switchGeneration: this.#switchGeneration(),
-          targetId: target.targetId,
-          targetVersion: target.version,
+          ...bound,
         });
         if (authorised !== undefined && authorised.switchGeneration !== snapshot.switchGeneration) {
           throw new CommsError('APPROVAL_VOID', 'the disclosure fence changed generations during target evaluation');
@@ -257,6 +269,65 @@ export class EventEvaluator {
       if (error instanceof CommsError) return 'pending';
       throw error;
     }
+    // A chained workflow decides nothing until its chain request comes (§9.3). Until then it keeps the projection under
+    // an `awaiting-chain` decision, content-free, so the source moves on: a waiting message holds back no later one.
+    let started: ChainStart | undefined;
+    if (on !== undefined) {
+      const request = chainRequestFor(this.#store.database, input.eventId, input.ruleId, input.ruleVersion);
+      if (request === undefined) {
+        if (isAwaitingChain(this.#store.database, input.eventId, input.ruleId, input.ruleVersion)) return 'terminal';
+        const now = this.#now();
+        return this.#commit(() =>
+          commitDecisionOutbox(
+            this.#store,
+            {
+              id: this.#newId(),
+              eventId: input.eventId,
+              accountId: ingest.account_id,
+              ruleId: input.ruleId,
+              ruleVersion: input.ruleVersion,
+              outcome: 'awaiting-chain',
+              metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
+              switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+              ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
+                ? {}
+                : {
+                    whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion },
+                  }),
+              deliveries: [],
+              retainProjection: true,
+              chain: { at: now, until: Math.min(fixedDeadline(now, on.withinMs), row.decisionDeadline) },
+            },
+            this.#failpoint,
+          ),
+        );
+      }
+      // The raised event's closed data, opened for the run's `/trigger`. Gone — its event expired or was cancelled —
+      // the chain has nothing to start from, and the wait ends.
+      const start = await chainStartFor(this.#store.database, this.#cipher, request);
+      if (start === null) {
+        const now = this.#now();
+        return this.#commit(() =>
+          commitDecisionOutbox(
+            this.#store,
+            {
+              id: this.#newId(),
+              eventId: input.eventId,
+              accountId: ingest.account_id,
+              ruleId: input.ruleId,
+              ruleVersion: input.ruleVersion,
+              outcome: 'not-chained',
+              metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
+              switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+              deliveries: [],
+              chain: { at: now },
+            },
+            this.#failpoint,
+          ),
+        );
+      }
+      started = start;
+    }
     const projection = await this.#projections.read(row);
     const now = this.#now();
     // This is intentionally before input-envelope construction, provenance, taint, reservation and all network I/O.
@@ -271,6 +342,7 @@ export class EventEvaluator {
           outcome: 'no-match',
           metadataExpiresAt: fixedDeadline(now, rule.retention.decisionMetadataMs),
           switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+          ...(chain === undefined ? {} : { chain: { at: now } }),
           ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
             ? {}
             : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
@@ -302,7 +374,9 @@ export class EventEvaluator {
       // failures (notably no budget before I/O) are completed content-free here without a second reservation path.
       if (judged.kind === 'closed') {
         const terminal = this.#store.database
-          .prepare('SELECT 1 AS present FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ?')
+          .prepare(
+            "SELECT 1 AS present FROM decisions WHERE event_id = ? AND rule_id = ? AND rule_version = ? AND outcome != 'awaiting-chain'",
+          )
           .get(input.eventId, input.ruleId, input.ruleVersion);
         if (terminal !== undefined) return 'terminal';
         return this.#commit(() =>
@@ -315,6 +389,7 @@ export class EventEvaluator {
             outcome: 'no-match',
             metadataExpiresAt: fixedDeadline(this.#now(), rule.retention.decisionMetadataMs),
             switchGeneration: authorised?.switchGeneration ?? this.#switchGeneration(),
+            ...(chain === undefined ? {} : { chain: { at: this.#now() } }),
             ...(row.whatsappMessageId === null || row.whatsappVisibilityVersion === null
               ? {}
               : { whatsapp: { messageId: row.whatsappMessageId, visibilityVersion: row.whatsappVisibilityVersion } }),
@@ -357,6 +432,24 @@ export class EventEvaluator {
                   createdAt: this.#now(),
                   newId: this.#newId,
                   data: evaluated.mapped.data,
+                });
+          // A match of a workflow with a flow is a run, its mapped values sealed here, outside the transaction, as a
+          // delivery's are (workflows design §5, W7).
+          const run =
+            evaluated === null || outcome !== 'matched'
+              ? undefined
+              : await prepareFlowRun({
+                  cipher: this.#cipher,
+                  rule,
+                  data: evaluated.mapped.data,
+                  createdAt: this.#now(),
+                  matched: {
+                    definition: evaluated.definition,
+                    event: projection.event,
+                    classification: evaluated.classification,
+                  },
+                  message: runMessageOf(rule, projection.event),
+                  ...(started === undefined ? {} : started),
                 });
           // The judge-input taint was flushed before its transport.  A derived delivery can disclose additional
           // mapped fields, so record its exact mapping provenance before the atomic outbox write too.
@@ -401,6 +494,8 @@ export class EventEvaluator {
                       },
                     }),
                 deliveries,
+                ...(run === undefined ? {} : { run }),
+                ...(chain === undefined ? {} : { chain: { at: this.#now() } }),
                 settlement: {
                   reservationId: judged.reservationId,
                   actualInputTokens: judged.actualInputTokens,
@@ -459,6 +554,23 @@ export class EventEvaluator {
             newId: this.#newId,
             data: evaluated.mapped.data,
           });
+    // A match of a workflow with a flow is a run, its mapped values sealed outside the transaction (0.36 §5, W7).
+    const run =
+      evaluated === null
+        ? undefined
+        : await prepareFlowRun({
+            cipher: this.#cipher,
+            rule,
+            data: evaluated.mapped.data,
+            createdAt: now,
+            matched: {
+              definition: evaluated.definition,
+              event: projection.event,
+              classification: evaluated.classification,
+            },
+            message: runMessageOf(rule, projection.event),
+            ...(started === undefined ? {} : started),
+          });
     // Taint is part of the disclosure boundary. A failed flush retains the projection and creates no outbox row.
     if (evaluated !== null)
       await this.#taint.record({
@@ -508,6 +620,8 @@ export class EventEvaluator {
                 },
               }),
           deliveries,
+          ...(run === undefined ? {} : { run }),
+          ...(chain === undefined ? {} : { chain: { at: now } }),
         },
         this.#failpoint,
       ),

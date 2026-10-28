@@ -30,9 +30,29 @@ async function plannedRows(): Promise<
     .map((cells) => {
       const [_, id, cli, mcp, operation] = cells;
       if (!id || !cli || !mcp || !operation) throw new Error(`the B3-2 row is malformed: ${cells.join(' | ')}`);
-      return { id, cli, mcp: mcp === '—' ? null : mcp, operation };
+      return { id, cli: workflowWord(cli), mcp: mcp === '—' ? null : mcp, operation };
     });
 }
+
+/**
+ * The plan's commands as 0.36.0 names them (workflows design 2026-10-27, W22): `rule` became `workflow`, kept as its
+ * alias, and test-retained's `--rule` became `--workflow`, kept hidden. Ids, tools and operations are identifiers and
+ * stay. Only these two rewrites are made, so any other drift from the plan still fails.
+ */
+function workflowWord(cli: string): string {
+  return cli.replace(/^rule /u, 'workflow ').replace(' --rule <rule-id> ', ' --workflow <workflow-id> ');
+}
+
+/**
+ * The secret rows 0.36.0 added after the B3 plan (workflows design W29: a webhook subscriber's signing secret and its
+ * concealed URL), each a terminal-only secret exception like the plan's own. Only these are set aside from the plan's
+ * table, so any other drift from it still fails.
+ */
+const ADDED_IN_036: readonly string[] = [
+  'events-daemon.subscriber-secret.create',
+  'events-daemon.subscriber-secret.rotate',
+  'events-daemon.subscriber-url.set',
+];
 
 async function plannedExceptionReasons(): Promise<ReadonlyMap<string, string>> {
   const plan = await readFile(join(ROOT, 'docs/superpowers/plans/2026-10-10-events-phase-b3.md'), 'utf8');
@@ -59,8 +79,22 @@ test('B3 capability contract pins every B3-2 command, tool absence and owner ope
   const exceptionReasons = await plannedExceptionReasons();
   assert.equal(planned.length, 34, 'the plan has the complete B3-2 capability delta');
   assert.deepEqual(
-    B3_CAPABILITIES.map(({ id, cli, mcp, operation }) => ({ id, cli, mcp, operation })),
+    B3_CAPABILITIES.filter((entry) => !ADDED_IN_036.includes(entry.id)).map(({ id, cli, mcp, operation }) => ({
+      id,
+      cli,
+      mcp,
+      operation,
+    })),
     planned,
+  );
+  assert.deepEqual(
+    B3_CAPABILITIES.filter((entry) => ADDED_IN_036.includes(entry.id)).map((entry) => [
+      entry.id,
+      entry.mcp,
+      entry.secret,
+    ]),
+    ADDED_IN_036.map((id) => [id, null, true]),
+    "0.36.0's subscriber secret rows are terminal-only secret exceptions",
   );
   for (const capability of B3_CAPABILITIES) {
     assert.equal(
@@ -78,7 +112,11 @@ test('B3 capability contract pins every B3-2 command, tool absence and owner ope
     );
   }
   const secretExceptions = B3_CAPABILITIES.filter((entry) => entry.secret === true);
-  assert.equal(secretExceptions.length, 8, 'D10 gives every named secret action its own closed exception row');
+  assert.equal(
+    secretExceptions.length,
+    8 + ADDED_IN_036.length,
+    'D10 gives every named secret action its own closed exception row, and so does 0.36.0',
+  );
   assert.ok(secretExceptions.every((entry) => entry.reason === B3_EXCEPTION_REASON_SECRET));
 });
 
