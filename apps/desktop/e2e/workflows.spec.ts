@@ -263,9 +263,7 @@ async function middle(locator: Locator): Promise<{ x: number; y: number }> {
 test('a workflow made on an empty canvas by dragging, two events ticked, approved, and its run lit', async ({
   page,
 }) => {
-  // Wide enough that the canvas, beside the palette and a step's settings, holds two steps side by side (it was 550
-  // pixels wide at 1600, CI 2026-10-27).
-  await page.setViewportSize({ width: 2100, height: 1100 });
+  await page.setViewportSize({ width: 1600, height: 1000 });
   await installMockIpc(page, scenario());
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
@@ -282,9 +280,11 @@ test('a workflow made on an empty canvas by dragging, two events ticked, approve
   await expect(editor.locator('[data-step]')).toHaveCount(0);
 
   // Two steps, each dragged from the palette to where it should go.
-  const waited = await dragOn(editor, 'wait-time', { x: 200, y: 420 });
+  // Side by side: a step is 240 pixels wide (`NODE_WIDTH`), dropped by its top-left corner, and the canvas is 550 wide
+  // whatever the window, so the second starts 30 pixels after the first ends.
+  const waited = await dragOn(editor, 'wait-time', { x: 20, y: 200 });
   await expect(editor.locator('[data-step="wait-1"]'), waited).toBeVisible();
-  const told = await dragOn(editor, 'notify', { x: 620, y: 420 });
+  const told = await dragOn(editor, 'notify', { x: 290, y: 200 });
   const tell = editor.locator('[data-settings="notify-1"]');
   await expect(tell, told).toBeVisible();
   await tell.getByRole('textbox', { name: 'It says' }).fill('Time to look at it again');
