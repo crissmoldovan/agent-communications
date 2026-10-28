@@ -54,6 +54,10 @@ export interface WorkflowOwnerDeps {
   readonly relay?: (() => Promise<ReadyRelay>) | undefined;
   /** Told when a step starts waiting on the relay, so its follower follows (B4). */
   readonly onRelayWait?: (() => void) | undefined;
+  /** Told each time a step of a pass has settled, and when a pass ends, so what it raised goes out (0.37.0 §1). */
+  readonly afterStep?: (() => void) | undefined;
+  /** Test seam only: how long a pass claims new steps (production: 5 seconds). */
+  readonly passBudgetMs?: number | undefined;
 }
 
 /** Several compositions' sinks as one: each prepares its own rows, and each writes them in the same transaction. */
@@ -115,5 +119,7 @@ export function composeWorkflows(deps: WorkflowOwnerDeps, parts: readonly Workfl
     judgeFor: deps.judgeFor,
     deliveries: createFlowDeliveries({ store: deps.store, cipher: deps.cipher, now: deps.now ?? Date.now }),
     onRelayWait: deps.onRelayWait,
+    afterStep: deps.afterStep,
+    passBudgetMs: deps.passBudgetMs,
   });
 }

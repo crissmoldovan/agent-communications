@@ -183,8 +183,9 @@ export interface EventOwnerStatus extends EventLifecycleStatus {
 export interface EventOwner {
   status(): EventOwnerStatus;
   /**
-   * Runs one serial owner tick, and waits for the raised events' deliveries it started; intended for deterministic
-   * local embedding and tests. The owner's own ticks never wait for those (W33).
+   * Runs one serial owner tick, with the workflow engine's pass in its turn, and waits for that pass, any a wake
+   * started, and the raised events' deliveries it started; intended for deterministic local embedding and tests. The
+   * owner's own ticks never wait for those (W33, 0.37.0 §1).
    */
   tick(): Promise<void>;
   /**
@@ -309,6 +310,8 @@ export interface EventOwnerOptions {
         readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
         /** The judge transport a workflow step's judge reaches its provider through: a loopback fake under test. */
         readonly judgeTransport?: JudgeTransport | undefined;
+        /** How long a pass claims new steps (0.37.0 §1; production: 5 seconds), shortened under test. */
+        readonly passBudgetMs?: number | undefined;
       }
     | undefined;
   readonly laya?:
@@ -1629,7 +1632,12 @@ async function startOwnerWithLock(
       writerQuiescer,
       now,
       interrupt: relayTurnInterrupter({ store: database, relay: () => agentSessions.relay() }),
+      // A pass runs apart from the tick (0.37.0 §1): what each step raised goes out as it settles, not at the next tick.
+      afterStep: () => {
+        eventDispatcher.pump();
+      },
       failpoint: options.workflows?.failpoint,
+      passBudgetMs: options.workflows?.passBudgetMs,
       // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
       standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
       relay: () => agentSessions.relay(),
@@ -1972,8 +1980,10 @@ async function startOwnerWithLock(
     }),
     stopped: stoppedPromise,
     tick: async () => {
-      await withEventWriterLease(writerQuiescer, () => scheduler.tick());
-      // Outside the lease: each delivery holds one of its own, which a waiting rekey must be able to come before.
+      await withEventWriterLease(writerQuiescer, () => scheduler.tick({ awaitWorkflows: true }));
+      // Outside the lease: a pass a wake started, and each delivery, holds one of its own, which a waiting rekey must be
+      // able to come before.
+      await workflows.idle();
       await eventDispatcher.idle();
     },
     registerSseListener: (input) => sseStreams.register(input),
@@ -1986,11 +1996,12 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
-        // An event delivery a tick started finishes here, while the database and the listeners are still open; its
-        // queue's next event starts no more.
-        await eventDispatcher.stop();
-        // A workflow pass a wake started finishes here, before the database closes; none starts after.
+        // A workflow pass a tick or a wake started finishes here, before the database closes, and so does a cancelled
+        // run's cleanup; none starts after. What its steps raised is pumped while the dispatcher still goes.
         await workflows.stop();
+        // An event delivery a tick or a pass started finishes here, while the database and the listeners are still
+        // open; its queue's next event starts no more.
+        await eventDispatcher.stop();
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();
@@ -2076,9 +2087,9 @@ async function startOwnerWithLock(
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     takeOffers.start(options.takes?.sweepMs ?? TAKE_SWEEP_INTERVAL_MS);
     // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are
-    // followed again.
+    // followed again. A tick of the owner's own: it waits for no workflow pass (0.37.0 §1).
     tickAfterRelease = () => {
-      if (!stopped) void owner.tick().catch(() => undefined);
+      if (!stopped) void scheduler.tick().catch(() => undefined);
     };
     sessionFollower.notify();
     return owner;

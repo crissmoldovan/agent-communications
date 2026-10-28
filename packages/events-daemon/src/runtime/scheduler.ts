@@ -80,10 +80,12 @@ export interface EventSchedulerOptions {
    */
   readonly workflowWork?: (() => Promise<void>) | undefined;
   /**
-   * The workflow engine (workflows design §5): each tick it ends expired runs, whatever the switch, and — collection on
-   * and not paused — starts held runs and runs every step whose time has come, before deliveries go out.
+   * The workflow engine (workflows design §5): each tick pumps its pass, which ends expired runs, whatever the switch,
+   * and — collection on and not paused — starts held runs and runs every step whose time has come. The pass runs apart
+   * from the tick, under a writer lease of its own (0.37.0 §1), so a slow step holds back no poll and no delivery. Only
+   * the owner's manual tick seam awaits it, in the tick's turn (`tick({ awaitWorkflows: true })`).
    */
-  readonly workflows?: { tick(): Promise<number> } | undefined;
+  readonly workflows?: { tick(): Promise<number>; pump(failed?: () => void): unknown } | undefined;
   /**
    * The event dispatcher's second pump of the tick (0.36.0, W33), right after the engine's turn: an event a step raised
    * in that turn starts out at once, apart, rather than waiting a whole tick for the next pass's `workflowWork`.
@@ -124,6 +126,8 @@ export class EventScheduler {
   #readyKey = '';
   #timer: ReturnType<typeof setInterval> | undefined;
   #running: Promise<void> | undefined;
+  /** Whether the tick running awaits the engine's pass in its turn: only the owner's manual tick seam asks it. */
+  #awaitWorkflows = false;
 
   constructor(options: EventSchedulerOptions) {
     this.#store = options.store;
@@ -173,9 +177,15 @@ export class EventScheduler {
     await this.#running;
   }
 
-  /** Test and embedding seam: runs one complete serial tick and waits for its account-isolated work. */
-  async tick(): Promise<void> {
+  /**
+   * Test and embedding seam: runs one complete serial tick and waits for its account-isolated work. The workflow
+   * engine's pass is pumped, apart, and not waited for (0.37.0 §1), as the owner's own timer's ticks do — unless
+   * `awaitWorkflows`, the owner's manual tick seam for deterministic tests, under which the pass runs in its turn, under
+   * this tick's lease. A tick already running is joined as it is.
+   */
+  async tick(options: { readonly awaitWorkflows?: boolean } = {}): Promise<void> {
     if (this.#running !== undefined) return this.#running;
+    this.#awaitWorkflows = options.awaitWorkflows === true;
     const work = withEventWriterLease(this.#writerQuiescer, () => this.#tick()).finally(() => {
       if (this.#running === work) this.#running = undefined;
     });
@@ -199,7 +209,16 @@ export class EventScheduler {
       this.#recordFailure('dispatch', 'workflow-events');
     }
 
-    await this.#workflows?.tick().catch(() => this.#recordFailure('workflow', 'owner'));
+    const failed = () => this.#recordFailure('workflow', 'owner');
+    if (this.#awaitWorkflows) await this.#workflows?.tick().catch(failed);
+    else {
+      // A slow step — a relay call, a worktree, a judge — holds back none of what follows, nor the next tick (§1).
+      try {
+        this.#workflows?.pump(failed);
+      } catch {
+        failed();
+      }
+    }
     // Before the chains, whose gate may wait on a judge: what the engine just raised is not held behind it.
     try {
       this.#afterWorkflows?.();
