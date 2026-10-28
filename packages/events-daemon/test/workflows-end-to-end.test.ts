@@ -1220,7 +1220,9 @@ test("a webhook subscriber that hangs leaves the run's timing unchanged", { skip
         );
         assert.ok(run);
         assert.deepEqual((await runShow(harness, run.id)).path, ['route', 'found', 'pause']);
-        assert.ok(run.updated_at - run.started_at < 1_000, `the run took ${run.updated_at - run.started_at} ms`);
+        // Well short of the subscriber's 20-second hang, which would have held it: 1 s was too tight for a loaded runner
+        // (1.1 s, 0.37.0's dry run on Ubuntu).
+        assert.ok(run.updated_at - run.started_at < 5_000, `the run took ${run.updated_at - run.started_at} ms`);
         // The subscriber had its first event's request, and held it open, unanswered, while the run went on.
         assert.ok(hook.requests.length >= 1, 'the webhook was asked');
         assert.ok((hook.requests[0] as Received).at < run.updated_at, 'before the run finished');

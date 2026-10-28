@@ -405,6 +405,17 @@ at most 60 an hour
   120), events an hour (120, at most 600) and a run's deadline (3 days, at most 30). A flow has at most 32 steps and a
   run at most 64 executed steps; a step a limit holds isn't counted again each time it wakes. Runs a limit holds wait
   their turn, oldest first, and never hold back another workflow's runs.
+- **How git runs for a worktree.** As you, with no shell, without the repository's hooks, with every key that names a
+  program by a fixed name (`core.fsmonitor`, `core.sshCommand`, `credential.helper`, …) overridden on the command line,
+  and without the system git config; your global one is read. A run's worktree shares its checkout's config, which a
+  session working in it can write. So before git adds, checks out, checks or removes a worktree, the event service reads
+  the repository's config. It refuses a repository whose own config (local or worktree scope) names a filter, diff or
+  merge program, or an include: `REPO_CONFIG_UNSAFE`, with the key and its scope, never its value (0.37.0). A worktree
+  is added with nothing checked out, and the config is read again before the checkout, so a filter planted in between
+  never runs. Git LFS in your global config, where `git lfs install` puts it, keeps working; LFS set in one
+  repository's own config is refused like any other filter: move it to your global config. The check trusts your global
+  config (`~/.gitconfig`) as yours: it holds as long as a session can't write there, so don't let a session's agent edit
+  your home folder's git config.
 - **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
   the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). Only
   a take by an agent window's own session counts, never one by a command that joined no window, and the session found
@@ -415,8 +426,10 @@ at most 60 an hour
   message for 15 minutes after it is handed over, and still takes it itself.
 - **Approved as a whole.** The approval lists, after the workflow's plain words, one numbered line per step that does
   something: the folders a session may work in, the projects it may choose, each Linear team and state, the fields that
-  leave and each event it raises. The JSON you approve under them holds the limits too. Moving a box in the designer
-  doesn't change the version; changing a step, an arrow, a limit or an event makes a new one, approved again.
+  leave and each event it raises. From 0.37.0 its last line says the limits, every one, defaults too: "At most 6 runs
+  an hour, 2 at a time; at most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day;
+  a run ends after 3 days." The JSON you approve under them holds them too. Moving a box in the designer doesn't change
+  the version; changing a step, an arrow, a limit or an event makes a new one, approved again.
 - **In the app** a workflow opens in its designer: the canvas, the text and the JSON are three views of one document,
   with the checks under them.
 
@@ -452,8 +465,11 @@ It is `runs`, not `run`: `agent-events run` starts the event service.
 - **How long a run is kept.** A run's history — its steps, its waits, the events it raised and their deliveries — is
   kept as long as its decision's metadata (`retention.decisionMetadataMs`, `decisions <duration>` in the text; 90 days
   by default), then purged with it. A run still going, or one with an event still being delivered or a dead letter
-  still kept, stays until those end. A worktree's row goes once the worktree was removed or never made; the row of one
-  that may still be on disk stays, and the sweep never touches the worktree itself.
+  still kept, stays until those end. A worktree's row goes once the worktree was removed or never made. From 0.37.0
+  the row of a worktree a purged run made or kept is looked at every 10 minutes, at most 100 at a time: once its folder
+  is gone, or is no longer a worktree of its checkout (`git worktree list --porcelain`), the row goes; a worktree still
+  on disk keeps its row, and Projects keeps showing it, for you to remove; a row whose checkout can't be read stays for
+  the next look. The sweep never touches the worktree itself.
 - **How a run ends** (`endCode`). Done carries none. Otherwise:
   - `RUN_EXPIRED`: it reached its deadline (`flow.limits.runMs`);
   - `CANCELLED_BY_PERSON`: you cancelled it;
@@ -510,7 +526,7 @@ agent-events workflow show client-asks --version 5 --json                     # 
   ticked on a step it does run — a condition, Which project?, a find — and each of the run's own is a dry-run record
   too. Nothing leaves, and it raises no event, so no subscriber gets one.
 - **A flow's approval** lists, after the workflow's plain words, one numbered line per step that does something, as
-  `describeFlow` says it.
+  `describeFlow` says it, and last the flow's limits.
 
 ## Projects
 
@@ -530,7 +546,9 @@ agent-events project remove acme-site --json
 
 - **Scan finds, you choose.** `project scan` walks the relay's allowed roots, or `~/work` and `~/code`, four folders
   down (or the `--root` folders you name, at most 8). It follows no symlink, reads no file, and groups what it finds
-  by the GitHub repository each checkout's origin names, with each checkout's worktrees. You pick the folders.
+  by the GitHub repository each checkout's origin names, with each checkout's worktrees. You pick the folders. A folder
+  whose repository's own git config names a program git would run is passed over as `unsafe-config`, with the key and
+  its scope, and `project add` refuses it until you move that key to your global config or remove it (0.37.0).
 - **Hints choose without a judge:** sender domains (`acme.example`), Slack conversations (`C0123ABCD`) and people (a
   Slack user id or an email address), matched exactly. A message they don't settle goes to the judge, when the step
   names one, with the profile (at most 2,000 characters) and only the fields the step looks at.
@@ -619,10 +637,11 @@ echo "When acme writes in C0123, find a session in their project and hand it ove
 - **What is sent:** your words (at most 4,000 characters) and your answers, a fixed brief with the text's grammar, and
   the names a draft may use — your accounts, lanes, judges, targets, projects' ids and names, the step event words and
   your namespaces. When you ask again, the current draft goes too, with its folders, URLs, address sets and templates
-  replaced by placeholders (`/redacted/folder-1`, `https://redacted.invalid/1`, `"template 1"`), and the event service
-  puts your values back in what comes back; a draft that does not read as a workflow goes as you wrote it, for the model
-  to fix. Never a message's content (unless you paste one, which goes inside the untrusted envelope), never a profile,
-  a folder, a target's URL, a secret or a key.
+  replaced by placeholders (`/redacted/folder-1`, `https://redacted.invalid/1`, `"template 1"`), and your answers go
+  through the same replacement, so a choice that names your folder goes as its placeholder (from 0.37.0). The event
+  service puts your values back in what comes back: the draft, and the model's questions and choices. A draft that
+  does not read as a workflow goes as you wrote it, for the model to fix. Never a message's content (unless you paste
+  one, which goes inside the untrusted envelope), never a profile, a folder, a target's URL, a secret or a key.
 - **Yours alone.** `workflow describe` refuses inside the event service's MCP server, in an agent's shell and, on
   macOS, from a process the app did not start; no tool runs it. An agent writes a workflow itself with
   `workflow create`, which you approve as any other.

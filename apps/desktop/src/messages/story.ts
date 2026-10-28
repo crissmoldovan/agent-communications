@@ -19,7 +19,7 @@
 import { productLabel } from '../components/ApprovalCard.tsx';
 import { shownFolder } from '../lanes.ts';
 import { outcomeWords } from '../workflows/copy.ts';
-import { providerWords, routeBecause } from '../workflows/runs.ts';
+import { providerWords, routeBecause, worktreeRefusal } from '../workflows/runs.ts';
 import { isHandedBack, type JoinedMessage, type RunStep, type Status, type Touch } from './join.ts';
 import type {
   DecisionView,
@@ -492,6 +492,9 @@ function runCardSteps(message: JoinedMessage, context: StoryContext): Part[][] {
           steps.push(run.branch == null ? words('Worktree made') : [{ text: 'Worktree ' }, { untrusted: run.branch }]);
         break;
       }
+      case 'worktree-refused':
+        steps.push(words('Worktree refused'));
+        break;
       case 'given':
         steps.push(words(`Given ${context.time(touch.at)}`));
         break;
@@ -558,6 +561,19 @@ function runEntry(touch: Touch, context: StoryContext): TimelineEntry {
         run.branch == null ? words('Made a worktree') : [{ text: 'Made the worktree ' }, { untrusted: run.branch }],
         folder === null ? null : words(`In ${folder}`),
       );
+    case 'worktree-refused': {
+      // Why, in the app's words; a key the repository's own config names is the repository's, so it is marked.
+      const why = worktreeRefusal(run.refusal, run.configKey, run.configScope);
+      return entry(
+        'warn',
+        words('Could not make a worktree'),
+        why === null
+          ? null
+          : why.key === null
+            ? words(capital(why.words))
+            : [{ text: `${capital(why.words)} (` }, { untrusted: why.key }, { text: `, ${why.scope})` }],
+      );
+    }
     case 'given':
       return entry('accent', words('Given to the session'), [{ text: 'By the workflow ' }, { untrusted: run.ruleId }]);
     case 'turn-ended':
@@ -739,6 +755,7 @@ function touchEntry(touch: Touch, message: JoinedMessage, context: StoryContext,
     case 'session-found':
     case 'session-started':
     case 'worktree-made':
+    case 'worktree-refused':
     case 'turn-ended':
     case 'issue-closed':
     case 'event-raised':

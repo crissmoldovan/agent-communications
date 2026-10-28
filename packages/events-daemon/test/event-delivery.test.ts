@@ -523,8 +523,10 @@ test('D5: a burst of six reaches each subscriber in order at once, not one event
                 .all() as Array<{ delivered_at: number }>
             ).map((row) => row.delivered_at),
           );
-          assert.ok(hooked < 2_000, `the webhook had them within ${hooked} ms of each other`);
-          assert.ok(delivered < 2_000, `the live subscriber within ${delivered} ms`);
+          // Less than one of the owner's 5-second ticks: one event per tick would spread them over 25 s or more. (2 s was
+          // too tight for a loaded machine: 2.6 s, 0.37.0's full run.)
+          assert.ok(hooked < 5_000, `the webhook had them within ${hooked} ms of each other`);
+          assert.ok(delivered < 5_000, `the live subscriber within ${delivered} ms`);
         } finally {
           live.close();
         }

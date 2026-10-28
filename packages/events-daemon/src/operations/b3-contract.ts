@@ -1453,10 +1453,20 @@ function assertProjectScan(value: Readonly<Record<string, unknown>>): void {
   }
   if (!Array.isArray(value.skipped)) throw new TypeError("a scan's passed-over folders are a list");
   for (const entry of value.skipped) {
-    assertClosedRecord(entry, ['folder', 'reason'], 'a folder a scan passed over');
+    // A folder whose repository's own config names a program says the key and its scope (0.37.0), never the value.
+    const unsafe = isRecord(entry) && entry.reason === 'unsafe-config';
+    assertClosedRecord(
+      entry,
+      unsafe ? ['folder', 'reason', 'key', 'scope'] : ['folder', 'reason'],
+      'a folder a scan passed over',
+    );
     assertText(entry.folder, 'a folder a scan passed over');
     if (!(PROJECT_SCAN_SKIP_REASONS as readonly unknown[]).includes(entry.reason))
       throw new TypeError('a scan passes a folder over for a closed reason');
+    if (unsafe) {
+      assertText(entry.key, "the key a passed-over folder's config names");
+      assertText(entry.scope, "the scope of the key a passed-over folder's config names");
+    }
   }
 }
 

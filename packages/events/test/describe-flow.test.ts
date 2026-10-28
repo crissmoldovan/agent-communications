@@ -5,7 +5,10 @@ import { test } from 'node:test';
 import {
   type DescribableRuleDocument,
   describeFlow,
+  FLOW_LIMIT_CEILINGS,
+  FLOW_LIMIT_DEFAULTS,
   type FlowDocumentV1,
+  type FlowLimits,
   type FlowLine,
   type RulePart,
 } from '../src/index.ts';
@@ -44,10 +47,92 @@ test('one line per step that does something, in stepOrder, numbered from 1', () 
   );
   assert.deepEqual(line(owner, 'give')?.stepIds, ['give', 'find', 'free', 'another', 'start']);
   assert.match(
-    text(lines.at(-1)),
+    text(lines.at(-2)),
     /^When a run fails or finishes, it raises acme\.client-asks\.run\.failed or acme\.client-asks\.run\.finished/,
   );
-  assert.deepEqual(lines.at(-1)?.stepIds, []);
+  assert.deepEqual(lines.at(-2)?.stepIds, []);
+});
+
+/*
+ * 0.37.0 §6: the approval's lines name the limits (§10.2). The last line says every one of `flow.limits` as written,
+ * defaults too, in a fixed order, and its number follows the effects'.
+ */
+
+const limited = (limits: FlowLimits): FlowRule => ({ ...owner, flow: { ...owner.flow, limits } });
+
+test("§6: the owner example's approval ends with its limits line, exactly", () => {
+  const lines = describeFlow(owner);
+  const last = lines.at(-1);
+  assert.equal(
+    text(last),
+    'At most 6 runs an hour, 2 at a time; at most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day; a run ends after 3 days.',
+  );
+  assert.deepEqual(last?.stepIds, [], 'the line is about the whole workflow, not a step');
+  assert.equal(last?.number, lines.length, 'its number follows the effects');
+  assert.ok(
+    last?.parts.every((part) => part.kind === 'plain'),
+    'a limit is a number the check bounds, never author text',
+  );
+});
+
+test("§6: every limit's word and value appear, defaults too", () => {
+  const said = text(describeFlow(limited({ ...FLOW_LIMIT_DEFAULTS })).at(-1));
+  assert.equal(
+    said,
+    'At most 10 runs an hour, 2 at a time; at most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day; a run ends after 3 days.',
+  );
+  // Each limit, by its own words, in the fixed order: none is left out because it is the default.
+  const words: Record<keyof FlowLimits, string> = {
+    runsPerHour: `${FLOW_LIMIT_DEFAULTS.runsPerHour} runs an hour`,
+    concurrentRuns: `${FLOW_LIMIT_DEFAULTS.concurrentRuns} at a time`,
+    sessionsPerHour: `${FLOW_LIMIT_DEFAULTS.sessionsPerHour} sessions started`,
+    linearWritesPerHour: `${FLOW_LIMIT_DEFAULTS.linearWritesPerHour} Linear writes`,
+    eventsPerHour: `${FLOW_LIMIT_DEFAULTS.eventsPerHour} events an hour`,
+    worktreesPerDay: `${FLOW_LIMIT_DEFAULTS.worktreesPerDay} worktrees a day`,
+    runMs: 'a run ends after 3 days',
+  };
+  assert.deepEqual(Object.keys(words).sort(), Object.keys(FLOW_LIMIT_DEFAULTS).sort(), 'every limit has its words');
+  const at = Object.values(words).map((each) => said.indexOf(each));
+  assert.ok(
+    at.every((index) => index >= 0),
+    `each limit is named: ${JSON.stringify(words)}`,
+  );
+  assert.deepEqual(
+    at,
+    [...at].sort((left, right) => left - right),
+    'in a fixed order',
+  );
+  // A straight line drawn as a flow has the defaults, and says them too.
+  assert.equal(text(describeFlow(fixture('straight-with-events')).at(-1)), said);
+});
+
+test('§6: a flow with a non-default limit names its value', () => {
+  assert.equal(
+    text(
+      describeFlow(
+        limited({
+          runsPerHour: 1,
+          concurrentRuns: 1,
+          sessionsPerHour: 1,
+          worktreesPerDay: 1,
+          linearWritesPerHour: 1,
+          eventsPerHour: 1,
+          runMs: 86_400_000,
+        }),
+      ).at(-1),
+    ),
+    'At most 1 run an hour, 1 at a time; at most 1 session started, 1 Linear write and 1 event an hour; at most 1 worktree a day; a run ends after 1 day.',
+  );
+  assert.equal(
+    text(describeFlow(limited({ ...FLOW_LIMIT_CEILINGS })).at(-1)),
+    'At most 60 runs an hour, 8 at a time; at most 10 sessions started, 120 Linear writes and 600 events an hour; at most 20 worktrees a day; a run ends after 30 days.',
+  );
+  assert.equal(
+    text(describeFlow(limited({ ...FLOW_LIMIT_DEFAULTS, runMs: 90 * 60_000, eventsPerHour: 240 })).at(-1)),
+    'At most 10 runs an hour, 2 at a time; at most 2 sessions started, 30 Linear writes and 240 events an hour; at most 5 worktrees a day; a run ends after 90 minutes.',
+  );
+  // The chained example's own: 4 runs an hour, 1 at a time.
+  assert.match(text(describeFlow(fixture('chained')).at(-1)), /^At most 4 runs an hour, 1 at a time; /u);
 });
 
 test('a start line names its folder, provider and mode in words', () => {
@@ -167,7 +252,8 @@ test('a step that only decides, and that no effect follows, still has a line of 
   const lines = describeFlow(lone);
   assert.deepEqual(
     lines.map((each) => each.stepIds),
-    [['judge']],
+    [['judge'], []],
+    'the judge, then the limits',
   );
   assert.equal(
     text(lines[0]),

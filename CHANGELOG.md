@@ -3,6 +3,84 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.37.0
+
+**Security fix.** On 0.36.0, a coding-agent session that a workflow started in a worktree could make the event service
+run a program as you, outside the session. The worktree shares its repository's git config, and git runs a program
+that config names (`core.fsmonitor`, or a filter beside a `.gitattributes`) the next time the event service makes a
+worktree of that repository or cleans one up. Anyone who approved a workflow that makes a worktree and starts a session
+in it, on 0.36.0, should update. Nobody else was exposed: no workflow made a worktree before 0.36.0.
+
+**What.** The fix, and the five other items 0.36.0's security review left:
+- git runs with every fixed-name program setting switched off, never reads the system's git config, and refuses a
+  repository whose own config names a filter, diff or merge program, or pulls in another file, saying which key;
+- a slow workflow step no longer holds up the event service: steps run beside it, four runs at a time;
+- `runs cancel --interrupt` interrupts the session's turn at once;
+- the record of a worktree an old run made is cleaned up once its folder is gone;
+- Describe it's questions show your own values, and your answers go back to the model hidden;
+- an approval ends with one line naming the workflow's limits.
+
+**Why.** An independent review of the git surface (2026-10-28), which 0.36.0's own security review had left open,
+confirmed the flaw against the real code. The owner, the same day: "let's make progress on all". The design is
+`docs/superpowers/specs/2026-10-28-0370-design.md`.
+
+**Impact.** A minor release, and a security fix: the background update installs it after 24 hours rather than 72, and
+announces it at once.
+- **A repository can now be refused.** If its own git config names a filter, diff or merge program, or an include, a
+  run's worktree step is `refused` with `REPO_CONFIG_UNSAFE`, naming the key. `project scan` shows the folder as
+  `unsafe-config`, and `project add` refuses it. If the key is yours (Git LFS set up with `git lfs install --local`,
+  say), move it to your global config (`git lfs install`) or remove it. LFS in your global config keeps working.
+- **Steps of different runs now overlap,** up to four at once. A run's own steps keep their order. A delivery or chain a
+  step asks for goes out at the event service's next cycle, a few seconds later.
+- **Approvals gain a line,** and the app's "This workflow does N things" counts it.
+- No stored data migrates, and nothing is removed.
+- **To use it:** update with `agentcomms update` and the app's own update, then restart your MCP clients.
+
+**In detail**
+- **Security fix: git in a folder a session can write to** (an independent review, 2026-10-28). On 0.36.0, anyone who
+  approved a workflow that makes a worktree and starts a session in it was exposed. The worktree shares its checkout's
+  git config, so the session could write a key there that names a program — `core.fsmonitor`, or a filter's `smudge`,
+  `clean` or `process` beside a `.gitattributes` it committed — and git ran that program as you, outside the session,
+  the next time the event service made a worktree of that project or cleaned one up. Turning off the repository's hooks
+  didn't stop it. Update to 0.37.0. Now:
+  - every git the event service runs overrides each fixed-name key that names a program, and never reads the system
+    git config;
+  - before it adds, checks out, checks or removes a worktree, it reads the repository's git config, and refuses a
+    repository whose own config names a filter, diff or merge program, or an include (`REPO_CONFIG_UNSAFE`, naming the
+    key and its scope, never its value);
+  - a worktree is added with nothing checked out, and the config is read again before the checkout, so a filter planted
+    in between never runs.
+
+  **A refused repository** shows in the run view and the message's story as "the repository's own config names a
+  program git would run (filter.x.process, local)". `project scan` passes its folders over as `unsafe-config`, with the
+  key, and `project add` refuses them. If the key is yours — Git LFS set up with `git lfs install --local`, say — move it
+  to your global config (`git lfs install`, or `git config --global`), or remove it (`git config --unset <key>` in the
+  checkout). Then the folder works again. LFS in your global config, where `git lfs install` puts it, keeps working.
+- **A slow workflow step no longer holds up the event service (§1).** The event service now starts a workflow's steps
+  and goes on without waiting for them, so a find step whose relay is slow to answer, a worktree being made or a judge
+  still thinking no longer delays new mail being read, other deliveries going out or the next round of work. Steps of
+  different runs now run side by side, four at most; a run's own steps still run one at a time, in their order. A round
+  of steps takes no new step after 5 seconds, and a key rotation still waits for the steps that are running.
+- **`runs cancel --interrupt` interrupts the session's turn at once (§4).** It no longer waits for the step the engine
+  is running to finish before it asks the relay, so its answer comes at once and says whether the turn was
+  interrupted. Only the cleanup — removing a worktree that is still clean — waits for that step.
+- **The worktrees of purged runs (§2):** once a run's history is purged, the event service looks at each worktree it
+  made or kept, every 10 minutes and at most 100 at a time. One whose folder is gone, or is no longer a worktree of its
+  checkout (`git worktree list --porcelain`, through the same git runner), loses its record, so Projects stops showing
+  it. A worktree still on disk keeps its record, for you to remove, and one whose checkout can't be read is looked at
+  again next time. The worktree itself is never touched.
+- **Describe it's questions say your own values (§5):** a question or a choice the model writes about your draft shows
+  your folder, address or template, never `/redacted/folder-1`. When you answer, your answers go back through the same
+  placeholders as that round's draft, so a choice that names your folder reaches the model as its placeholder.
+- **An approval names the limits (§6):** a workflow's approval ends with one numbered line of its limits, every one,
+  defaults included, in the app's Approve view and the terminal preview alike: "At most 6 runs an hour, 2 at a time; at
+  most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day; a run ends after 3
+  days."
+- **An MCP install reads all of what the client said.** When a client refused a server it already had, core could read
+  the client's words only after it had settled, and report the client as unavailable (`PROVIDER_UNAVAILABLE`) instead
+  of the refusal (`CONFIG`, "already has an MCP server called …"), depending on timing. It now waits for the client's
+  output to end. Found by the release dry runs of 0.36.0 and 0.37.0 on macOS.
+
 ## 0.36.0
 
 **What.** Workflows that branch, wait, finish the job and tell others, in the command line, the agents' tools and the

@@ -231,8 +231,17 @@ export interface ProjectsListResultV1 {
   projects: ProjectV1[];
 }
 
-export const SCAN_SKIP_REASONS = ['symlink', 'hidden', 'agent-comms', 'unreadable', 'depth'] as const;
+export const SCAN_SKIP_REASONS = ['symlink', 'hidden', 'agent-comms', 'unreadable', 'depth', 'unsafe-config'] as const;
 export type ScanSkipReason = (typeof SCAN_SKIP_REASONS)[number];
+
+/**
+ * A folder the scan passed over. `unsafe-config` (0.37.0): its repository's own git config names a program git would
+ * run, so it can't be a project's folder until that is moved to the global config; the key and its scope say which,
+ * never its value.
+ */
+export type ScanSkippedV1 =
+  | { folder: string; reason: Exclude<ScanSkipReason, 'unsafe-config'> }
+  | { folder: string; reason: 'unsafe-config'; key: string; scope: string };
 
 export interface ScanRepoV1 {
   repo: string;
@@ -244,7 +253,7 @@ export interface ScanRepoV1 {
 export interface ProjectScanResultV1 {
   roots: string[];
   repos: ScanRepoV1[];
-  skipped: { folder: string; reason: ScanSkipReason }[];
+  skipped: ScanSkippedV1[];
 }
 
 /** What a subscriber is given (spec §4.2, W30). */
@@ -597,12 +606,13 @@ export function readScan(data: unknown): ProjectScanResultV1 {
         }),
       };
     }),
-    skipped: list(fields.skipped, 'project scan.skipped', (item, at) => {
+    skipped: list(fields.skipped, 'project scan.skipped', (item, at): ScanSkippedV1 => {
       const skipped = object(item, at);
-      return {
-        folder: text(skipped.folder, `${at}.folder`),
-        reason: word(skipped.reason, SCAN_SKIP_REASONS, `${at}.reason`),
-      };
+      const folder = text(skipped.folder, `${at}.folder`);
+      const reason = word(skipped.reason, SCAN_SKIP_REASONS, `${at}.reason`);
+      return reason === 'unsafe-config'
+        ? { folder, reason, key: text(skipped.key, `${at}.key`), scope: text(skipped.scope, `${at}.scope`) }
+        : { folder, reason };
     }),
   };
 }

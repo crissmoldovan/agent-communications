@@ -23,7 +23,7 @@ import {
 } from './canvas.ts';
 import { outcomeWords } from './copy.ts';
 import { stepOrder } from './flow.ts';
-import { isLive, routeBecause, sessionWords, waitingWords } from './runs.ts';
+import { isLive, routeBecause, sessionWords, waitingWords, worktreeRefusalLine } from './runs.ts';
 import type { Output, RunShowResultV1, RunStepV1 } from './types.ts';
 
 /** Where a step stands in the run: what its box and its line say. */
@@ -173,8 +173,10 @@ function settledLine(
       return `Started ${sessionWords(projectOf(run, stepsOf(document), routeOfPlace(step)), output.provider)}`;
     }
     case 'worktree': {
-      if (outcome === 'refused')
-        return text(output.refusal) === null ? 'Refused' : `Refused: ${text(output.refusal) as string}`;
+      if (outcome === 'refused') {
+        const why = worktreeRefusalLine(output.refusal, output.configKey, output.configScope);
+        return why === null ? 'Refused' : `Refused: ${why}`;
+      }
       const branch = text(output.branch);
       const path = text(output.path);
       const where = path === null ? '' : ` in ${shownFolder(path, context.home)}`;

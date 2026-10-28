@@ -111,6 +111,7 @@ import { EventDispatcher, type EventDispatcherOptions } from './events/event-dis
 import { SubscriberListeners } from './events/listeners.ts';
 import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
+import { createGitRunner, type GitRunner } from './git.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
@@ -167,6 +168,7 @@ import { flowJudge } from './workflow/judge-call.ts';
 import { RelayWaits } from './workflow/relay-waits.ts';
 import { relayTurnInterrupter, runControl } from './workflow/run-show.ts';
 import { WorkflowDescribeService } from './workflow-describe.ts';
+import { WorktreeRecordSweep } from './worktree-records.ts';
 import { WriterQuiescer, withEventWriterLease, withOwnEventWriterLease } from './writer-quiescer.ts';
 
 export { OWNER_CONTROL_WIRE_OPERATIONS } from './control-operation-registry.ts';
@@ -183,8 +185,9 @@ export interface EventOwnerStatus extends EventLifecycleStatus {
 export interface EventOwner {
   status(): EventOwnerStatus;
   /**
-   * Runs one serial owner tick, and waits for the raised events' deliveries it started; intended for deterministic
-   * local embedding and tests. The owner's own ticks never wait for those (W33).
+   * Runs one serial owner tick, with the workflow engine's pass in its turn, and waits for that pass, any a wake
+   * started, and the raised events' deliveries it started; intended for deterministic local embedding and tests. The
+   * owner's own ticks never wait for those (W33, 0.37.0 §1).
    */
   tick(): Promise<void>;
   /**
@@ -309,6 +312,8 @@ export interface EventOwnerOptions {
         readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
         /** The judge transport a workflow step's judge reaches its provider through: a loopback fake under test. */
         readonly judgeTransport?: JudgeTransport | undefined;
+        /** How long a pass claims new steps (0.37.0 §1; production: 5 seconds), shortened under test. */
+        readonly passBudgetMs?: number | undefined;
       }
     | undefined;
   readonly laya?:
@@ -1242,7 +1247,21 @@ async function startOwnerWithLock(
       now,
     }),
   ]);
-  const expiry = new EventExpiry(database, now, sourceStageExpiry);
+  // Every git the event service runs (worktrees, project scans, the worktree rows' sweep) runs as the person, with the
+  // person's global git config. A stand-in home, under test, is the home git reads too: never the real ~/.gitconfig.
+  const git =
+    options.homeDirectory === undefined
+      ? createGitRunner()
+      : createGitRunner({
+          env: {
+            ...process.env,
+            HOME: options.homeDirectory,
+            XDG_CONFIG_HOME: join(options.homeDirectory, '.config'),
+          },
+        });
+  // The worktree rows of purged runs (0.37.0 §2): looked at on disk and by git, apart from the history sweep's tick.
+  const worktreeRecords = new WorktreeRecordSweep({ store: database, git, now });
+  const expiry = new EventExpiry(database, now, sourceStageExpiry, worktreeRecords);
   const dryrun = new DryRunDispatcher({
     store: database,
     cipher,
@@ -1629,7 +1648,12 @@ async function startOwnerWithLock(
       writerQuiescer,
       now,
       interrupt: relayTurnInterrupter({ store: database, relay: () => agentSessions.relay() }),
+      // A pass runs apart from the tick (0.37.0 §1): what each step raised goes out as it settles, not at the next tick.
+      afterStep: () => {
+        eventDispatcher.pump();
+      },
       failpoint: options.workflows?.failpoint,
+      passBudgetMs: options.workflows?.passBudgetMs,
       // A test's stand-ins take their kinds' place; its parts' sinks and checks join the owner's own.
       standIns: (options.workflows?.parts ?? []).flatMap((part) => part.executors),
       relay: () => agentSessions.relay(),
@@ -1646,7 +1670,7 @@ async function startOwnerWithLock(
     [
       // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
       // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
-      composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
+      composeProjects({ store: database, sessions: agentSessions, takes: core.takes, git }),
       // Track D: the Raise step, the sink every transition's ticked events go through — a Raise step's declared
       // fields opened from the run's record — and the chains each raised event asks for (W34).
       composeOwnerWorkflowEvents({ store: database, cipher }),
@@ -1972,8 +1996,10 @@ async function startOwnerWithLock(
     }),
     stopped: stoppedPromise,
     tick: async () => {
-      await withEventWriterLease(writerQuiescer, () => scheduler.tick());
-      // Outside the lease: each delivery holds one of its own, which a waiting rekey must be able to come before.
+      await withEventWriterLease(writerQuiescer, () => scheduler.tick({ awaitWorkflows: true }));
+      // Outside the lease: a pass a wake started, and each delivery, holds one of its own, which a waiting rekey must be
+      // able to come before.
+      await workflows.idle();
       await eventDispatcher.idle();
     },
     registerSseListener: (input) => sseStreams.register(input),
@@ -1986,11 +2012,12 @@ async function startOwnerWithLock(
       try {
         await sessionFollower.stop();
         await scheduler.stop();
-        // An event delivery a tick started finishes here, while the database and the listeners are still open; its
-        // queue's next event starts no more.
-        await eventDispatcher.stop();
-        // A workflow pass a wake started finishes here, before the database closes; none starts after.
+        // A workflow pass a tick or a wake started finishes here, before the database closes, and so does a cancelled
+        // run's cleanup; none starts after. What its steps raised is pumped while the dispatcher still goes.
         await workflows.stop();
+        // An event delivery a tick or a pass started finishes here, while the database and the listeners are still
+        // open; its queue's next event starts no more.
+        await eventDispatcher.stop();
         await control?.close();
         await layaWorker.close();
         await layaArtifacts.stop();
@@ -2001,6 +2028,8 @@ async function startOwnerWithLock(
         unregisterLayaPurge();
         // A sweep in flight finishes while the database is still open; this never throws.
         await takeOffers.stop();
+        // So does a look at the worktree rows of purged runs, and none starts after.
+        await worktreeRecords.stop();
         // The last work's outcomes are recorded while the database is still open; this never throws.
         await deliveryActivity.stop();
         database.close();
@@ -2062,6 +2091,7 @@ async function startOwnerWithLock(
           readers,
           { service: agentSessions, queue: sessionQueue },
           workflows,
+          git,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -2076,9 +2106,9 @@ async function startOwnerWithLock(
     deliveryActivity.start(options.tickMs ?? DELIVERY_ACTIVITY_INTERVAL_MS);
     takeOffers.start(options.takes?.sweepMs ?? TAKE_SWEEP_INTERVAL_MS);
     // An item let go from the busy queue is passed on at once, not at the next tick; items a restart left waiting are
-    // followed again.
+    // followed again. A tick of the owner's own: it waits for no workflow pass (0.37.0 §1).
     tickAfterRelease = () => {
-      if (!stopped) void owner.tick().catch(() => undefined);
+      if (!stopped) void scheduler.tick().catch(() => undefined);
     };
     sessionFollower.notify();
     return owner;
@@ -2171,6 +2201,7 @@ async function handleControl(
   readers?: OwnerReaders,
   sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
   workflows?: Pick<WorkflowEngine, 'cancel'>,
+  git?: GitRunner,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -2357,7 +2388,7 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.projectUpdate:
     case OWNER_CONTROL_WIRES.projectRemove:
     case OWNER_CONTROL_WIRES.projectScan:
-      return projectControl({ store: database, sessions: requireSessions(sessions).service }, request);
+      return projectControl({ store: database, sessions: requireSessions(sessions).service, git }, request);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {

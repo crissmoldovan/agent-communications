@@ -155,7 +155,9 @@ test('by words only, with no model, and it says so; by meaning too with the loca
   }
   const meaning = await seeded(true);
   try {
-    const run = await runSearchIndex(meaning.machine.core, { budgetMs: 5_000, waitMs: 1_000 }, meaning.machine.deps);
+    // The stand-in model answers at once; the budget and the wait are room for a slow machine (a Windows runner made
+    // none of the seven in 5 s, 0.37.0's dry run), not time the test spends.
+    const run = await runSearchIndex(meaning.machine.core, { budgetMs: 30_000, waitMs: 10_000 }, meaning.machine.deps);
     assert.equal(run.embedded, 7);
     assert.equal(run.pending, 0);
     const found = await query(meaning.machine, 'invoice');
@@ -181,7 +183,7 @@ test('by words only, with no model, and it says so; by meaning too with the loca
 test('a model that fails falls back to words, and says why', async () => {
   const { machine, close } = await seeded(true);
   try {
-    await runSearchIndex(machine.core, { budgetMs: 5_000, waitMs: 1_000 }, machine.deps);
+    await runSearchIndex(machine.core, { budgetMs: 30_000, waitMs: 10_000 }, machine.deps);
     // The server gone: nothing listens on port 9 here.
     machine.write({
       enabled: 'on',
@@ -203,7 +205,7 @@ test('a model that fails falls back to words, and says why', async () => {
 test('the filters run first: account, channel, time, person and direction', async () => {
   const { machine, close } = await seeded(true);
   try {
-    await runSearchIndex(machine.core, { budgetMs: 5_000, waitMs: 1_000 }, machine.deps);
+    await runSearchIndex(machine.core, { budgetMs: 30_000, waitMs: 10_000 }, machine.deps);
     const channel = await query(machine, 'invoice', { channel: 'slack' });
     assert.deepEqual([...new Set(channel.hits.map((hit) => hit.channel))], ['slack']);
     const account = await query(machine, 'invoice', { accounts: [MAIL.alias] });
@@ -441,7 +443,7 @@ test('a reply whose send proved no message is linked by its thread, to the last 
 test('a new digest starts a new set of vectors; the old one serves until the new one is complete', async () => {
   const { machine, close } = await seeded(true);
   try {
-    const first = await runSearchIndex(machine.core, { budgetMs: 5_000, waitMs: 1_000 }, machine.deps);
+    const first = await runSearchIndex(machine.core, { budgetMs: 30_000, waitMs: 10_000 }, machine.deps);
     assert.equal(first.pending, 0);
     const weights = /has new weights/u;
     const before = await searchStatus(machine.core, { env: machine.env, deps: machine.deps });
@@ -480,7 +482,7 @@ test('a new digest starts a new set of vectors; the old one serves until the new
       assert.equal(serving.pending, 7);
       assert.ok(serving.hits.some((hit) => hit.sourceId === '18c00000000000d1' && hit.rank.meaning !== null));
       ollama.failBatches = false;
-      const done = await runSearchIndex(machine.core, { budgetMs: 5_000, waitMs: 1_000 }, machine.deps);
+      const done = await runSearchIndex(machine.core, { budgetMs: 30_000, waitMs: 10_000 }, machine.deps);
       assert.equal(done.pending, 0);
       const remade = await searchStatus(machine.core, { env: machine.env, deps: machine.deps });
       assert.equal(remade.model?.vectorsDigest, `sha256:${'2'.repeat(64)}`);

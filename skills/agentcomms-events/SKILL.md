@@ -2,7 +2,7 @@
 name: agentcomms-events
 description: "Plan and locally test safe event workflows with the events MCP tools, keeping proposals disabled and handing approvals to a person. Symptoms: 'notify me when a message arrives', 'test this workflow', 'why is this workflow not active'. Not for secrets, retained content, approvals, target resume or held decisions."
 license: MIT
-compatibility: "@agentcomms/events-daemon@0.36.0"
+compatibility: "@agentcomms/events-daemon@0.37.0"
 metadata:
   group: communications
   lifecycle: release

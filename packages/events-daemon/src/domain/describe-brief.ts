@@ -31,9 +31,10 @@ import { DESCRIBE_GRAMMAR } from './describe-grammar.ts';
  * and name, the step event words, the person's namespaces, and the team keys, labels and states their Linear targets
  * name); the current draft when asking again, its folders, URLs, addresses and templates replaced by placeholders that
  * are put back in the answer (`redactDraft`, security review of 0.36.0, M5), or as written when it does not read as a
- * workflow; and a message only when the person pastes one, inside the untrusted envelope, marked as an example. Never a
- * message's content otherwise, a profile, a folder, a count, a target's URL or template, a subscriber, or any key,
- * token or secret.
+ * workflow — and the person's answers through the same redaction, so a choice that named their folder goes back as its
+ * placeholder, while the model's questions and choices come back with their values (0.37.0 §5); and a message only when
+ * the person pastes one, inside the untrusted envelope, marked as an example. Never a message's content otherwise, a
+ * profile, a folder, a count, a target's URL or template, a subscriber, or any key, token or secret.
  *
  * What comes back is the model's, read strictly: `{ text, notes, questions }`. A note must quote the person's own words
  * exactly — 12 characters and three words at least, at word boundaries — or it is dropped; a step with none is listed
@@ -388,6 +389,38 @@ function restoreValue(value: JsonValue, pattern: RegExp, values: ReadonlyMap<str
 }
 
 /**
+ * A piece of text with each of the person's values a redaction holds replaced by its placeholder (0.37.0 §5): an answer
+ * goes back to the model through the same redaction as its round's draft, so a choice that names their folder goes as
+ * the placeholder that draft gave it. The longest value is replaced first, in one pass: a folder inside a longer one
+ * keeps its own placeholder, and nothing a replacement wrote is replaced again. A value the draft does not hold is the
+ * person's own words, and goes as they wrote it.
+ */
+export function redactText(text: string, redaction: DraftRedaction): string {
+  const placeholderOf = new Map<string, string>();
+  for (const [placeholder, value] of redaction.values)
+    if (value !== '' && !placeholderOf.has(value)) placeholderOf.set(value, placeholder);
+  if (placeholderOf.size === 0) return text;
+  const pattern = new RegExp(
+    [...placeholderOf.keys()]
+      .sort((left, right) => right.length - left.length)
+      .map(escapeRegExp)
+      .join('|'),
+    'gu',
+  );
+  return text.replace(pattern, (found) => placeholderOf.get(found) ?? found);
+}
+
+/**
+ * A piece of the model's text — a question, a choice — with each placeholder of its round's redaction back as the
+ * person's own value (0.37.0 §5), each whole: `template 1` never inside `template 12`. The person reads their folder,
+ * never `/redacted/folder-1`.
+ */
+export function restoreText(text: string, redaction: DraftRedaction): string {
+  if (redaction.values.size === 0) return text;
+  return text.replace(placeholderPattern(redaction.values), (found) => redaction.values.get(found) ?? found);
+}
+
+/**
  * The model's text with the person's values back (M5): when it reads as a workflow, each placeholder wherever it
  * appears in the document is the value it stands for, and the document is printed again; when it does not, each is
  * replaced in the text as the model wrote it, so the checks show the model's mistake with the person's own values.
@@ -537,9 +570,13 @@ export function describePrompt(input: {
     parts.push(
       '',
       'Their answers to the questions you asked before:',
-      ...request.answers.map((entry) =>
-        entry.question === '' ? `- ${entry.answer}` : `- ${entry.question} ${entry.answer}`,
-      ),
+      // Through the draft's own redaction (0.37.0 §5): a question or a choice that names one of its values goes back
+      // as that value's placeholder, never the value.
+      ...request.answers.map((entry) => {
+        const question = redactText(entry.question, redacted);
+        const answer = redactText(entry.answer, redacted);
+        return question === '' ? `- ${answer}` : `- ${question} ${answer}`;
+      }),
     );
   if (request.example !== undefined)
     parts.push(
@@ -695,8 +732,8 @@ function stepIds(document: Readonly<Record<string, JsonValue>>): string[] {
 
 /**
  * The draft as the person sees it (§11.4): the model's text, each note that quotes the description exactly and names
- * one of the draft's steps, the steps with none, its questions, the parse's errors, and — when it parses — the event
- * service's check. A draft that writes `raw` JSON is refused.
+ * one of the draft's steps, the steps with none, its questions with the person's values back in them, the parse's
+ * errors, and — when it parses — the event service's check. A draft that writes `raw` JSON is refused.
  */
 export function describeResult(input: {
   readonly request: DescribeRequestV1;
@@ -715,8 +752,10 @@ export function describeResult(input: {
         hint: 'Describe it again: the draft is asked to say every step in words.',
       },
     );
-  // The person's own values back where the model kept their placeholders (M5), before anything reads the draft.
-  const answer = { ...input.answer, text: restoreDraft(input.answer.text, redactDraft(request.draft)) };
+  // The person's own values back where the model kept their placeholders (M5), before anything reads the draft; the
+  // same placeholders, this round's, in its questions and choices (0.37.0 §5).
+  const redaction = redactDraft(request.draft);
+  const answer = { ...input.answer, text: restoreDraft(input.answer.text, redaction) };
   const parsed = parseRuleText(answer.text);
   const document = parsed.ok ? (parsed.doc as Readonly<Record<string, JsonValue>>) : null;
   const steps = document === null ? [] : stepIds(document);
@@ -731,8 +770,8 @@ export function describeResult(input: {
     unnoted: steps.filter((step) => !noted.has(step)),
     questions: answer.questions.map((question) => ({
       step: question.step !== null && steps.includes(question.step) ? question.step : null,
-      question: question.question,
-      choices: question.choices,
+      question: restoreText(question.question, redaction),
+      choices: question.choices.map((choice) => restoreText(choice, redaction)),
     })),
     parse: { ok: parsed.ok, errors: parsed.ok ? [] : parsed.errors },
     check: document === null ? null : input.check(document),

@@ -281,6 +281,57 @@ test("add refuses a folder outside the allowed roots and a folder that is not th
   }
 });
 
+test("a folder whose repository's own config names a program is shown with the key, and can't be added until fixed", {
+  skip: WINDOWS_SKIP,
+}, async () => {
+  const box = await sandbox('aev-project-unsafe-');
+  try {
+    const site = repo(box, join(box.work, 'acme-site'), 'https://github.com/example/acme-site.git');
+    const billing = repo(box, join(box.work, 'billing'), 'https://github.com/example/billing.git');
+    git(box, site, 'worktree', 'add', '-q', '-b', 'ac/acme-1', join(box.work, 'acme-site-wt', 'ac-acme-1'));
+    // Planted from the worktree, it lands in the checkout's own config: every folder of the repository has it.
+    git(box, join(box.work, 'acme-site-wt', 'ac-acme-1'), 'config', 'filter.x.process', '/example/planted');
+    const result = await scanProjects({ roots: [box.work], maxDepth: 4, git: runner(box), known: () => null });
+    assert.deepEqual(result.repos, [
+      {
+        repo: 'github.com/example/billing',
+        known: null,
+        folders: [{ folder: billing, kind: 'checkout', defaultBranch: 'main' }],
+      },
+    ]);
+    assert.deepEqual(result.skipped, [
+      { folder: site, reason: 'unsafe-config', key: 'filter.x.process', scope: 'local' },
+      {
+        folder: join(box.work, 'acme-site-wt', 'ac-acme-1'),
+        reason: 'unsafe-config',
+        key: 'filter.x.process',
+        scope: 'local',
+      },
+    ]);
+    assert.equal(JSON.stringify(result).includes('/example/planted'), false, 'never the value');
+    await withProjects(box, async (projects) => {
+      await assert.rejects(projects.add(documentFor(site)), (error: unknown) => {
+        refusedWith('REPO_CONFIG_UNSAFE')(error);
+        assert.match((error as Error).message, /\(filter\.x\.process, local\)/u);
+        assert.equal((error as Error).message.includes('/example/planted'), false);
+        return true;
+      });
+      assert.deepEqual(projects.list(), { projects: [] });
+      // Moved to the person's own global config, it is theirs: the folder is listed and added.
+      git(box, site, 'config', '--unset', 'filter.x.process');
+      git(box, site, 'config', '--global', 'filter.x.process', '/example/planted');
+      const again = await scanProjects({ roots: [box.work], maxDepth: 4, git: runner(box), known: () => null });
+      assert.deepEqual(again.skipped, []);
+      assert.equal((await projects.add(documentFor(site))).projectId, 'acme-site');
+      // And a change that brings a planted key back is refused too.
+      git(box, site, 'config', 'diff.x.textconv', '/example/planted');
+      await assert.rejects(projects.update(documentFor(site)), refusedWith('REPO_CONFIG_UNSAFE'));
+    });
+  } finally {
+    await rm(box.root, { recursive: true, force: true });
+  }
+});
+
 test("a hint list and a profile are the person's words, at most 2,000 characters", () => {
   const folder = '/example/home/work/acme-site';
   const at = (overrides: Record<string, unknown>) => () => canonicalProject(documentFor(folder, overrides));
@@ -379,7 +430,7 @@ for (const command of projectCommands)
     }
   });
 
-test('git runs with no shell, no GIT_* variables and hooks off', async () => {
+test('git runs with no shell, no GIT_* variables but GIT_CONFIG_NOSYSTEM, and hooks off', async () => {
   const recordedGit: { file: string; args: readonly string[]; env: NodeJS.ProcessEnv; options: GitExecOptions }[] = [];
   const git = createGitRunner({
     env: { PATH: '/usr/bin', HOME: '/example/home', GIT_DIR: '/example/elsewhere/.git', git_work_tree: '/example/x' },
@@ -393,7 +444,7 @@ test('git runs with no shell, no GIT_* variables and hooks off', async () => {
   assert.equal(result.stdout.length, 64 * 1024, 'what git prints is read up to 64 KiB');
   assert.deepEqual(recordedGit.at(0)?.env.GIT_DIR, undefined);
   assert.equal(recordedGit.at(0)?.env.git_work_tree, undefined);
-  assert.deepEqual(recordedGit.at(0)?.env, { PATH: '/usr/bin', HOME: '/example/home' });
+  assert.deepEqual(recordedGit.at(0)?.env, { PATH: '/usr/bin', HOME: '/example/home', GIT_CONFIG_NOSYSTEM: '1' });
   assert.ok(recordedGit.at(0)?.file.startsWith('/'), "git's path is absolute");
   assert.deepEqual(recordedGit.at(0)?.args, [...GIT_FIXED_OPTIONS, 'config', '--get', 'remote.origin.url']);
   assert.equal(recordedGit.at(0)?.options.shell, false);

@@ -2,18 +2,25 @@ import type { Dirent } from 'node:fs';
 import { lstat, readdir, realpath, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { compareUtf8 } from '@agentcomms/events';
-import { foldGitHubRepo, type ProjectScanResultV1, type ProjectScanSkipReason } from '../domain/projects.ts';
+import {
+  foldGitHubRepo,
+  type ProjectScanResultV1,
+  type ProjectScanSkippedV1,
+  type ProjectScanSkipReason,
+} from '../domain/projects.ts';
 import { isInside } from './agent-sessions.ts';
-import type { GitRunner } from './git.ts';
+import { type GitRunner, repoConfigRefusal } from './git.ts';
 
 /**
  * `project scan` (workflows design §8.1): the GitHub repositories checked out on this Mac, found by walking the roots
  * to `maxDepth` folders down. It follows no symlink, passes over hidden folders (but `.claude/worktrees`, where Claude
  * Code keeps its worktrees) and Agent Comms' own folders, and stops at a checkout: what is inside one is the person's
  * work, not something to list. It never reads a file's contents. It looks at whether `.git` is a folder (a checkout) or
- * a file (a worktree), and runs only `git config --get remote.origin.url` and `git worktree list --porcelain`, through
- * the git runner (no shell, no `GIT_*`, no hooks). Checkouts are grouped by the repository their origin names, in https
- * or ssh form alike; a remote that is not GitHub's is passed over.
+ * a file (a worktree), and runs only `git config --get remote.origin.url`, `git worktree list --porcelain` and the
+ * gate's `git config --list --show-scope -z`, through the git runner (no shell, no `GIT_*`, no hooks). Checkouts are
+ * grouped by the repository their origin names, in https or ssh form alike; a remote that is not GitHub's is passed
+ * over. A folder whose repository's own config names a program git would run is passed over too (`unsafe-config`, with
+ * the key and its scope; 0.37.0 design §3), so the person sees why before choosing it.
  */
 
 /** Folders looked at in one scan, at most: a root that holds more is cut short, and says so. */
@@ -65,11 +72,12 @@ function hiddenBelow(path: string, base: string): boolean {
 
 export async function scanProjects(input: ScanProjectsInput): Promise<ProjectScanResultV1> {
   const denied = (path: string) => (input.deniedFolders ?? []).some((folder) => isInside(path, folder));
-  const skipped: { folder: string; reason: ProjectScanSkipReason }[] = [];
-  const skip = (folder: string, reason: ProjectScanSkipReason) => {
-    if (skipped.length < LIST_MAX && !skipped.some((entry) => entry.folder === folder))
-      skipped.push({ folder, reason });
+  const skipped: ProjectScanSkippedV1[] = [];
+  const passOver = (entry: ProjectScanSkippedV1) => {
+    if (skipped.length < LIST_MAX && !skipped.some((each) => each.folder === entry.folder)) skipped.push(entry);
   };
+  const skip = (folder: string, reason: Exclude<ProjectScanSkipReason, 'unsafe-config'>) =>
+    passOver({ folder, reason });
   const repoFolders: string[] = [];
   let budget = VISIT_BUDGET;
 
@@ -168,6 +176,17 @@ export async function scanProjects(input: ScanProjectsInput): Promise<ProjectSca
         continue;
       }
       if (group.has(real)) continue;
+      // The gate, in each folder: its config as git reads it there (a worktree's own scope, an include its git
+      // directory matches), the key named and its scope, never its value.
+      const refusal = await repoConfigRefusal(input.git, real);
+      if (refusal?.code === 'REPO_CONFIG_UNSAFE') {
+        passOver({ folder: real, reason: 'unsafe-config', key: refusal.key, scope: refusal.scope });
+        continue;
+      }
+      if (refusal !== null) {
+        skip(real, 'unreadable');
+        continue;
+      }
       group.set(
         real,
         index === 0 ? { kind: 'checkout', defaultBranch: worktree.branch } : { kind: 'worktree', defaultBranch: null },
