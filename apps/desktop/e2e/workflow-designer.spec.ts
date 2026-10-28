@@ -118,6 +118,11 @@ test('a wire drawn from timed out on wait to tell writes next.timed-out', async 
   const to = editor.locator('[data-step="tell"] .react-flow__handle.target');
   await expect(from).toBeVisible();
   await expect(to).toBeVisible();
+  // The canvas in the middle of the window, so both handles are where the mouse can reach them: visible is not on
+  // screen, and the release workflow's macOS runner left them below the window (desktop-v0.36.0, 2026-10-28).
+  await editor.locator('.react-flow').evaluate((element) => element.scrollIntoView({ block: 'center' }));
+  await expect(from).toBeInViewport();
+  await expect(to).toBeInViewport();
   // Untouched, there is nothing to save.
   await expect(editor.getByRole('button', { name: 'Save draft' })).toBeDisabled();
   const start = await from.boundingBox();
