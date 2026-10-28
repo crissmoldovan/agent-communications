@@ -2123,13 +2123,28 @@
           "type": "array",
           "maxItems": 256,
           "items": {
-            "type": "object",
-            "additionalProperties": false,
-            "required": ["folder", "reason"],
-            "properties": {
-              "folder": { "$ref": "#/$defs/absoluteFolder" },
-              "reason": { "enum": ["symlink", "hidden", "agent-comms", "unreadable", "depth"] }
-            }
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["folder", "reason"],
+                "properties": {
+                  "folder": { "$ref": "#/$defs/absoluteFolder" },
+                  "reason": { "enum": ["symlink", "hidden", "agent-comms", "unreadable", "depth"] }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["folder", "reason", "key", "scope"],
+                "properties": {
+                  "folder": { "$ref": "#/$defs/absoluteFolder" },
+                  "reason": { "const": "unsafe-config" },
+                  "key": { "type": "string", "minLength": 1, "maxLength": 256 },
+                  "scope": { "type": "string", "minLength": 1, "maxLength": 32 }
+                }
+              }
+            ]
           }
         }
       }

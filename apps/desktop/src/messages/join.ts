@@ -82,6 +82,7 @@ export type TouchKind =
   | 'session-found'
   | 'session-started'
   | 'worktree-made'
+  | 'worktree-refused'
   | 'turn-ended'
   | 'issue-closed'
   | 'event-raised'
@@ -107,6 +108,13 @@ export interface RunStep {
   /** A worktree's branch, and its folder: the person's own view, never an event's. */
   branch?: string | null;
   folder?: string | null;
+  /**
+   * Why a worktree was refused: its closed code, and for a repository whose own config names a program (0.37.0), the
+   * key and its scope as the event service folded them — the repository's words, so shown marked.
+   */
+  refusal?: string | null;
+  configKey?: string | null;
+  configScope?: string | null;
   /** A raised event's name: `<namespace>.<workflow>.<step>.<event>`, closed segments. */
   eventType?: string | null;
   /** The run's end code, for its end. */
@@ -559,6 +567,16 @@ export function runTouches(run: MessageRun): Touch[] {
                 ...said,
                 branch: fieldText(output, 'branch'),
                 folder: fieldText(output, 'path'),
+              }),
+            );
+          else if (step.outcome === 'refused')
+            touches.push(
+              touch('worktree-refused', at, {
+                ...said,
+                branch: fieldText(output, 'branch'),
+                refusal: fieldText(output, 'refusal'),
+                configKey: fieldText(output, 'configKey'),
+                configScope: fieldText(output, 'configScope'),
               }),
             );
           break;

@@ -19,7 +19,7 @@ import {
 } from '../domain/projects.ts';
 import type { EventDatabase } from '../store/database.ts';
 import { isInside, isTooWideRoot } from './agent-sessions.ts';
-import { createGitRunner, type GitRunner } from './git.ts';
+import { assertSafeRepoConfig, createGitRunner, type GitRunner } from './git.ts';
 import { scanProjects } from './project-scan.ts';
 import { madeWorktreesOf, withProjectSessions } from './project-sessions.ts';
 import type { RelayClient } from './relay-client.ts';
@@ -29,7 +29,8 @@ import type { RelayClient } from './relay-client.ts';
  * allowed roots and the denied folders it already holds. Adding or changing one checks each folder against the disk:
  * it is its own realpath, a checkout (`.git` a folder) or a worktree (`.git` a file) as the document says, of the
  * document's repository by its `remote.origin.url`, inside the folders a session may work in (the relay's allowed
- * roots, else the person's) and outside Agent Comms' own. A checkout's worktree root is held to the same roots.
+ * roots, else the person's) and outside Agent Comms' own, and its repository's own config names no program git would
+ * run (the gate, 0.37.0 design §3). A checkout's worktree root is held to the same roots.
  *
  * Every act here is the person's: the owner takes it only without a window's `caller` and from a person's origin (the
  * terminal, or the app), and the CLI refuses the event service's MCP server and an agent's shell first. No MCP tool
@@ -324,6 +325,8 @@ export class Projects {
       const repo = origin.code === 0 ? foldGitHubRepo(origin.stdout.trim()) : null;
       if (repo !== project.repo)
         refused(`the folder ${entry.folder} is not a checkout of ${project.repo}`, 'NOT_THE_REPOSITORY');
+      // A run makes worktrees of it and runs git there: until its own config names no program, it is no project's.
+      await assertSafeRepoConfig(this.#git, entry.folder);
       if (entry.worktreeRoot !== null) {
         placed(entry.worktreeRoot, 'the worktree root');
         const root = await lstat(entry.worktreeRoot).catch(() => undefined);

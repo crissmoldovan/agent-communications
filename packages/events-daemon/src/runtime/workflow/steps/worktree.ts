@@ -5,15 +5,24 @@ import { closedSlotValue } from '../../../domain/flow.ts';
 import type { ProjectV1 } from '../../../domain/projects.ts';
 import type { EventDatabase } from '../../../store/database.ts';
 import { isInside } from '../../agent-sessions.ts';
-import type { GitRunner } from '../../git.ts';
+import { type GitRunner, type RepoConfigRefusal, repoConfigRefusal } from '../../git.ts';
 import type { Output, StepContext, StepExecutor, StepResult } from '../contracts.ts';
 import { candidateChanged } from './route.ts';
 import { chosenCandidate } from './session-place.ts';
 
 /**
  * Make a worktree (workflows design §6.6, W14): the one new execution surface, and a local one. Git runs as the person,
- * through the git runner — no shell, no `GIT_*`, `core.hooksPath=/dev/null`, so no hook the repository carries ever
- * runs — as `git worktree add -b <branch> <path> <base>` in the approved checkout of the project the route step chose.
+ * through the git runner — no shell, no `GIT_*` but `GIT_CONFIG_NOSYSTEM`, `core.hooksPath=/dev/null` and every
+ * fixed-name program key overridden, so no hook the repository carries ever runs — as
+ * `git worktree add --no-checkout -b <branch> <path> <base>` in the approved checkout of the project the route step
+ * chose, then `git checkout` in the worktree.
+ *
+ * The gate (0.37.0 design §3): a session in a run's worktree can write the checkout's own config, so before git runs
+ * anything that reads or writes a working tree — the add, the checkout, the cleanup's `status` and `worktree remove` —
+ * the config is read again, and a repository whose own config names a filter, diff or merge program, or an include, is
+ * refused by that key and its scope (`REPO_CONFIG_UNSAFE`), never its value. The add checks nothing out, so a filter
+ * planted after the first read runs at neither; the second read, in the new worktree, sees it before the checkout
+ * would. The person's global config is theirs, and its LFS runs at the checkout.
  *
  * The jail: the checkout is one of the version's approved folders, and still the project's; the root — the candidate's
  * worktree root, else `<checkout>-wt` beside it — is no symlink, its own realpath, inside the relay's allowed roots and
@@ -24,8 +33,10 @@ import { chosenCandidate } from './session-place.ts';
  *
  * Idempotency: `workflow_worktrees` records the path, branch and run before git runs. A retry that finds its row adopts
  * the worktree its earlier attempt made; a branch that exists and this run did not make is refused. Cleanup, when the
- * run ends: `keep`, or `remove-if-clean` — `git worktree remove` without `--force`, only when `git status --porcelain`
- * is empty and the branch has no commit its upstream (or, with none, its base) lacks; otherwise it is kept, and why.
+ * run ends: `keep`, or `remove-if-clean` — `git worktree remove` without `--force`, only when the gate passes, `git
+ * status --porcelain` is empty and the branch has no commit its upstream (or, with none, its base) lacks; otherwise it
+ * is kept, and why. Between the gate's read and `status` or `worktree remove` there is no split like the add's: a
+ * session writing the config at that instant is a known limit (workflows design §14).
  */
 
 /** The longest branch a run makes. */
@@ -134,6 +145,24 @@ function refused(branch: string | null, refusal: string): StepResult {
   return { kind: 'settled', outcome: 'refused', output };
 }
 
+/** The gate's refusal as the step's: its code, and for an unsafe key that key and its scope, for the run view. */
+function refusedByConfig(branch: string | null, refusal: RepoConfigRefusal): StepResult {
+  const output: Output =
+    refusal.code === 'REPO_CONFIG_UNSAFE'
+      ? { branch, path: null, refusal: refusal.code, configKey: refusal.key, configScope: refusal.scope }
+      : { branch, path: null, refusal: refusal.code };
+  return { kind: 'settled', outcome: 'refused', output };
+}
+
+/** The first of `folders` whose own config the gate refuses, and why; null when it refuses none. */
+async function gated(git: GitRunner, ...folders: string[]): Promise<RepoConfigRefusal | null> {
+  for (const folder of folders) {
+    const refusal = await repoConfigRefusal(git, folder);
+    if (refusal !== null) return refusal;
+  }
+  return null;
+}
+
 async function isRealFolder(path: string): Promise<boolean> {
   const found = await lstat(path).catch(() => undefined);
   if (found === undefined || found.isSymbolicLink() || !found.isDirectory()) return false;
@@ -202,6 +231,13 @@ async function worktree(ctx: StepContext, deps: WorktreeStepDeps): Promise<StepR
   if (rootFound === undefined && !(await isRealFolder(dirname(root))))
     return refuse(branch, 'ROOT_NOT_REAL', earlier !== undefined);
 
+  // The gate's first read, in the checkout the add runs in: before anything is charged or recorded.
+  const unsafe = await gated(deps.git, checkout);
+  if (unsafe !== null) {
+    if (earlier !== undefined) settle('refused', unsafe.code);
+    return refusedByConfig(branch, unsafe);
+  }
+
   if (earlier === undefined) {
     // A branch that is there already, and that this run did not record, is someone else's.
     const exists = await deps.git.run(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], checkout);
@@ -232,10 +268,11 @@ async function worktree(ctx: StepContext, deps: WorktreeStepDeps): Promise<StepR
   const branchThere =
     (await deps.git.run(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], checkout)).code === 0;
   const base = step.base === 'default' ? (checkoutFolder.defaultBranch ?? 'HEAD') : step.base.branch;
-  // This run's branch, made by an attempt that stopped before its worktree: it is checked out, not made again.
+  // This run's branch, made by an attempt that stopped before its worktree: it is checked out, not made again. Nothing
+  // is checked out by the add: no filter runs until the gate has read the config again, in the worktree.
   const add = branchThere
-    ? await deps.git.run(['worktree', 'add', path, branch], checkout)
-    : await deps.git.run(['worktree', 'add', '-b', branch, path, base], checkout);
+    ? await deps.git.run(['worktree', 'add', '--no-checkout', path, branch], checkout)
+    : await deps.git.run(['worktree', 'add', '--no-checkout', '-b', branch, path, base], checkout);
   if (add.code !== 0) {
     if (existsSync(join(checkout, '.git', 'index.lock')) && ctx.attempt.number < WORKTREE_INDEX_LOCK_TRIES)
       return { kind: 'retry', at: ctx.now() + 2_000, code: 'INDEX_LOCKED' };
@@ -244,16 +281,32 @@ async function worktree(ctx: StepContext, deps: WorktreeStepDeps): Promise<StepR
   return adopt(ctx, deps, branch, path);
 }
 
-/** The worktree is where it was computed to be, or it is removed and the step refused; then the row says made. */
+/**
+ * The worktree is where it was computed to be, or it is removed and the step refused. Then the gate reads the config
+ * again, in the worktree, and it is checked out — `git checkout` fills a worktree the add left empty, and leaves one an
+ * earlier attempt filled as it is — and the row says made. A worktree the gate refuses here stays, empty: removing it
+ * would run the very `status` the gate refused.
+ */
 async function adopt(ctx: StepContext, deps: WorktreeStepDeps, branch: string, path: string): Promise<StepResult> {
   const where = await realpath(path).catch(() => null);
   const store = deps.store;
   const settle = (state: 'made' | 'refused', reason: string | null) => settleRow(store, ctx, state, reason);
   if (where !== path) {
     const row = rowOf(store, ctx);
-    if (row !== undefined) await deps.git.run(['worktree', 'remove', path], row.checkout);
+    if (row !== undefined && (await gated(deps.git, row.checkout, path)) === null)
+      await deps.git.run(['worktree', 'remove', path], row.checkout);
     settle('refused', 'PATH_NOT_REAL');
     return refused(branch, 'PATH_NOT_REAL');
+  }
+  const unsafe = await gated(deps.git, path);
+  if (unsafe !== null) {
+    settle('refused', unsafe.code);
+    return refusedByConfig(branch, unsafe);
+  }
+  const checkedOut = await deps.git.run(['checkout', '--quiet'], path);
+  if (checkedOut.code !== 0) {
+    settle('refused', 'GIT_FAILED');
+    return refused(branch, 'GIT_FAILED');
   }
   settle('made', null);
   return made(branch, path);
@@ -276,6 +329,9 @@ async function finish(ctx: StepContext, deps: WorktreeStepDeps): Promise<void> {
           .run(reason, ctx.now(), ctx.run.id, ctx.stepId),
       );
     if (!existsSync(row.path)) return void keep('GONE');
+    // The gate, right before each command that hashes the working tree: `status`, then `worktree remove`'s own.
+    const before = await gated(deps.git, row.path);
+    if (before !== null) return void keep(before.code);
     const status = await deps.git.run(['status', '--porcelain'], row.path);
     if (status.code !== 0) return void keep('STATUS_FAILED');
     if (status.stdout.trim().length > 0) return void keep('DIRTY');
@@ -285,6 +341,8 @@ async function finish(ctx: StepContext, deps: WorktreeStepDeps): Promise<void> {
       row.path,
     );
     if (ahead.code !== 0 || Number(ahead.stdout.trim()) > 0) return void keep('UNPUSHED');
+    const unsafe = await gated(deps.git, row.checkout, row.path);
+    if (unsafe !== null) return void keep(unsafe.code);
     const removed = await deps.git.run(['worktree', 'remove', row.path], row.checkout);
     if (removed.code !== 0) return void keep('REMOVE_FAILED');
     deps.store.immediate(() =>

@@ -16,6 +16,7 @@ import {
   type Fixture,
   RECENT_SESSIONS,
 } from './fake-bridge.ts';
+import projectScan from './fixtures/project-scan.v036.json';
 import projectsFixture from './fixtures/projects-list.v036.json';
 import { renderApp } from './render.tsx';
 
@@ -142,6 +143,28 @@ describe('Projects', () => {
     // Back on the list, which is read again.
     expect(await screen.findByText(/^Added billing-tool\./)).toBeTruthy();
     await waitFor(() => expect(callsOf(bridge, 'eventsProjectsList').length).toBeGreaterThanOrEqual(2));
+  });
+
+  it("Add a project… shows a folder whose repository's own config names a program, with the key, and offers it not", async () => {
+    const scan = JSON.parse(JSON.stringify(projectScan)) as { skipped: unknown[] };
+    scan.skipped.push({
+      folder: '/example/home/work/booking',
+      reason: 'unsafe-config',
+      key: 'filter.x.process',
+      scope: 'local',
+    });
+    renderApp(bridgeAt('0.37.0', { eventsProjectScan: scan }), { screen: 'projects' });
+    fireEvent.click(await screen.findByRole('button', { name: 'Add a project…' }));
+    const page = await screen.findByRole('region', { name: 'Add a project' });
+    const repos = await within(page).findByRole('radiogroup', { name: 'Its repository' });
+    const unsafe = page.querySelector('[data-slot="unsafe-config"]');
+    expect(unsafe?.textContent).toContain(
+      '1 folder can’t be added: the repository’s own config names a program git would run. Move it to your global git config (~/.gitconfig), or remove it, then look again.',
+    );
+    expect(unsafe?.textContent).toContain('~/work/booking (filter.x.process, local)');
+    // The other two are passed over as before, and the refused folder is no repository to pick.
+    expect(page.textContent).toContain('2 folders were passed over: links, hidden folders, or Agent Comms’ own.');
+    expect(repos.textContent).not.toContain('booking');
   });
 
   it('a typed owner/name with no checkout found says so', async () => {

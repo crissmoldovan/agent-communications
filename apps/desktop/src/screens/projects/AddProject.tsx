@@ -64,6 +64,9 @@ export const ADD_PROJECT_COPY = {
     count === 1
       ? '1 folder was passed over: a link, a hidden folder, or Agent Comms’ own.'
       : `${count} folders were passed over: links, hidden folders, or Agent Comms’ own.`,
+  unsafe: (count: number) =>
+    `${count === 1 ? '1 folder can’t be added' : `${count} folders can’t be added`}: the repository’s own config names a program git would run. Move it to your global git config (~/.gitconfig), or remove it, then look again.`,
+  unsafeFolder: (folder: string, key: string, scope: string) => `${folder} (${key}, ${scope})`,
   folders: 'Its folders on this Mac',
   foldersHint: 'A workflow’s session may work in a ticked folder once you approve a workflow that names this project.',
   noFolderTicked: 'Tick at least one folder.',
@@ -198,6 +201,10 @@ export function AddProject({
   }, [bridge, rootsKey]);
 
   const repos = scan.state === 'ready' ? scan.value.repos : [];
+  // A folder whose repository's own git config names a program (0.37.0): shown with the key, never offered.
+  const unsafe = (scan.state === 'ready' ? scan.value.skipped : []).flatMap((entry) =>
+    entry.reason === 'unsafe-config' ? [entry] : [],
+  );
   const typedRepo = typed.trim() === '' ? null : foldTypedRepo(typed);
   const typedWrong = typed.trim() !== '' && typedRepo === null;
   const chosen: ScanRepoV1 | null = useMemo(() => {
@@ -312,9 +319,23 @@ export function AddProject({
                 ))}
               </RadioGroup>
             )}
-            {scan.value.skipped.length === 0 ? null : (
+            {unsafe.length === 0 ? null : (
+              <div data-slot="unsafe-config" className="flex flex-col gap-(--cue-space-1)">
+                <p className="text-warn">{ADD_PROJECT_COPY.unsafe(unsafe.length)}</p>
+                <ul className="flex flex-col gap-(--cue-space-1) text-(length:--cue-text-label)">
+                  {unsafe.map((entry) => (
+                    <li key={entry.folder} className="break-all text-fg-muted">
+                      <UntrustedText
+                        text={ADD_PROJECT_COPY.unsafeFolder(shownFolder(entry.folder, home), entry.key, entry.scope)}
+                      />
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+            {scan.value.skipped.length === unsafe.length ? null : (
               <p className="text-(length:--cue-text-label) text-fg-subtle">
-                {ADD_PROJECT_COPY.skipped(scan.value.skipped.length)}
+                {ADD_PROJECT_COPY.skipped(scan.value.skipped.length - unsafe.length)}
               </p>
             )}
           </>

@@ -7,7 +7,10 @@
 import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { Call } from '../ipc.ts';
+import type { JsonObject } from '../rule-editor/model.ts';
 import { RUN_POLL_MS } from '../screens/workflows/RunView.tsx';
+import { runSteps } from '../workflows/run-graph.ts';
+import type { RunShowResultV1 } from '../workflows/types.ts';
 import { failed } from './fake-bridge.ts';
 import { renderApp } from './render.tsx';
 import { OWNER, polyfillCanvas, workflowService } from './workflow-bridge.ts';
@@ -203,6 +206,35 @@ describe('a workflow run', () => {
     );
     expect(steps.querySelector('[data-run-step="issue"]')?.textContent).toContain('Made ACME-123');
     expect(within(view).getByText(/Which project\?: a project → Raise an event: raised/)).toBeTruthy();
+  });
+
+  it("a worktree refused for its repository's own config says why, with the key and its scope (0.37)", () => {
+    const ended = liveRun('done');
+    const refusedWith = (output: Record<string, unknown>) =>
+      ({
+        ...ended,
+        steps: ended.steps.map((each) =>
+          each.stepId === 'tree'
+            ? step('tree', 'worktree', { outcome: 'refused', settledAt: T + 400_000, output })
+            : each,
+        ),
+      }) as unknown as RunShowResultV1;
+    const lineOf = (output: Record<string, unknown>) =>
+      runSteps(V4 as JsonObject, refusedWith(output), { time: () => '11:20', home: '/example/home' }).find(
+        (each) => each.stepId === 'tree',
+      )?.line;
+    const refused = { branch: 'ac/acme-123', path: null };
+    expect(
+      lineOf({ ...refused, refusal: 'REPO_CONFIG_UNSAFE', configKey: 'filter.x.process', configScope: 'local' }),
+    ).toBe('Refused: the repository’s own config names a program git would run (filter.x.process, local)');
+    // An attempt that lost its output keeps the words, without a key to name.
+    expect(lineOf({ ...refused, refusal: 'REPO_CONFIG_UNSAFE' })).toBe(
+      'Refused: the repository’s own config names a program git would run',
+    );
+    expect(lineOf({ ...refused, refusal: 'REPO_CONFIG_UNREADABLE' })).toBe(
+      'Refused: the repository’s git config could not be read',
+    );
+    expect(lineOf({ ...refused, refusal: 'BRANCH_EXISTS' })).toBe('Refused: BRANCH_EXISTS');
   });
 
   it('Waiting for acme-site · Claude Code, 1 ahead, and Needs you in claude-stream', async () => {

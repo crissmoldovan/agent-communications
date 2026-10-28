@@ -405,6 +405,15 @@ at most 60 an hour
   120), events an hour (120, at most 600) and a run's deadline (3 days, at most 30). A flow has at most 32 steps and a
   run at most 64 executed steps; a step a limit holds isn't counted again each time it wakes. Runs a limit holds wait
   their turn, oldest first, and never hold back another workflow's runs.
+- **How git runs for a worktree.** As you, with no shell, without the repository's hooks, with every key that names a
+  program by a fixed name (`core.fsmonitor`, `core.sshCommand`, `credential.helper`, …) overridden on the command line,
+  and without the system git config; your global one is read. A run's worktree shares its checkout's config, which a
+  session working in it can write. So before git adds, checks out, checks or removes a worktree, the event service reads
+  the repository's config. It refuses a repository whose own config (local or worktree scope) names a filter, diff or
+  merge program, or an include: `REPO_CONFIG_UNSAFE`, with the key and its scope, never its value (0.37.0). A worktree
+  is added with nothing checked out, and the config is read again before the checkout, so a filter planted in between
+  never runs. Git LFS in your global config, where `git lfs install` puts it, keeps working; LFS set in one
+  repository's own config is refused like any other filter: move it to your global config.
 - **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
   the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). Only
   a take by an agent window's own session counts, never one by a command that joined no window, and the session found
@@ -530,7 +539,9 @@ agent-events project remove acme-site --json
 
 - **Scan finds, you choose.** `project scan` walks the relay's allowed roots, or `~/work` and `~/code`, four folders
   down (or the `--root` folders you name, at most 8). It follows no symlink, reads no file, and groups what it finds
-  by the GitHub repository each checkout's origin names, with each checkout's worktrees. You pick the folders.
+  by the GitHub repository each checkout's origin names, with each checkout's worktrees. You pick the folders. A folder
+  whose repository's own git config names a program git would run is passed over as `unsafe-config`, with the key and
+  its scope, and `project add` refuses it until you move that key to your global config or remove it (0.37.0).
 - **Hints choose without a judge:** sender domains (`acme.example`), Slack conversations (`C0123ABCD`) and people (a
   Slack user id or an email address), matched exactly. A message they don't settle goes to the judge, when the step
   names one, with the profile (at most 2,000 characters) and only the fields the step looks at.

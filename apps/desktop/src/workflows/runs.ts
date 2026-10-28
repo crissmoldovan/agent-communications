@@ -140,6 +140,38 @@ export function routeBecause(reason: unknown, project: string, score: unknown): 
   }
 }
 
+/**
+ * Why a worktree step was refused, in words (0.37.0 design §3): a repository whose own git config names a program git
+ * would run says the key and its scope — as the event service folded them, never the key's value — and one whose
+ * config git could not read says so. Any other refusal is its closed code; null when there is none. The key is the
+ * repository's, so a caller that can mark it shows it marked.
+ */
+export function worktreeRefusal(
+  refusal: unknown,
+  key: unknown,
+  scope: unknown,
+): { readonly words: string; readonly key: string | null; readonly scope: string | null } | null {
+  if (typeof refusal !== 'string' || refusal === '') return null;
+  if (refusal === 'REPO_CONFIG_UNSAFE') {
+    const named = typeof key === 'string' && key !== '' && typeof scope === 'string' && scope !== '';
+    return {
+      words: 'the repository’s own config names a program git would run',
+      key: named ? key : null,
+      scope: named ? scope : null,
+    };
+  }
+  if (refusal === 'REPO_CONFIG_UNREADABLE')
+    return { words: 'the repository’s git config could not be read', key: null, scope: null };
+  return { words: refusal, key: null, scope: null };
+}
+
+/** `worktreeRefusal` as one line of text: its words, then the key and its scope in brackets. */
+export function worktreeRefusalLine(refusal: unknown, key: unknown, scope: unknown): string | null {
+  const said = worktreeRefusal(refusal, key, scope);
+  if (said === null) return null;
+  return said.key === null ? said.words : `${said.words} (${said.key}, ${said.scope})`;
+}
+
 /** A subscriber's delivery of one raised event, as its state says (spec §9.2). */
 export function eventDeliveryWords(state: string): string {
   switch (state) {

@@ -224,6 +224,48 @@ describe("a message's story follows its workflow", () => {
     expect(cardSteps(messageWith([run(SENTINEL)]), context).map(text)).toContain('Project acme-site');
   });
 
+  it("a worktree refused for its repository's own config is a step of the story, the key marked (0.37)", () => {
+    const refused = (output: Record<string, unknown>): RunShowResultV1 => {
+      const whole = run();
+      return {
+        ...whole,
+        state: 'failed',
+        endCode: 'STEP_FAILED',
+        path: ['route', 'found', 'issue', 'find', 'another', 'tree'],
+        steps: whole.steps
+          .filter((each) => !['start', 'give', 'wait', 'note'].includes(each.stepId))
+          .map((each) => (each.stepId === 'tree' ? step('tree', 'worktree', 'refused', T, { output }) : each)),
+      };
+    };
+    const message = messageWith([
+      refused({
+        branch: 'ac/acme-123',
+        path: null,
+        refusal: 'REPO_CONFIG_UNSAFE',
+        configKey: 'filter.x.process',
+        configScope: 'local',
+      }),
+    ]);
+    expect(runTouches(refused({ refusal: 'REPO_CONFIG_UNSAFE' })).map((touch) => touch.kind)).toContain(
+      'worktree-refused',
+    );
+    expect(cardSteps(message, context).map(text)).toContain('Worktree refused');
+    const entry = timeline(message, context).find((each) => text(each.what) === 'Could not make a worktree');
+    expect(entry?.tone).toBe('warn');
+    expect(entry?.sub && text(entry.sub)).toBe(
+      'The repository’s own config names a program git would run (filter.x.process, local)',
+    );
+    // The key is the repository's, so it is the one marked part.
+    expect(entry?.sub?.filter((part) => 'untrusted' in part)).toEqual([{ untrusted: 'filter.x.process' }]);
+    const other = timeline(
+      messageWith([refused({ branch: 'ac/acme-123', path: null, refusal: 'ROOT_SYMLINK' })]),
+      context,
+    );
+    expect(other.find((each) => text(each.what) === 'Could not make a worktree')?.sub).toEqual([
+      { text: 'ROOT_SYMLINK' },
+    ]);
+  });
+
   it('a raised event shows as event-raised with its type', () => {
     const message = messageWith([run()]);
     const raised = message.touches.find((touch) => touch.kind === 'event-raised');
