@@ -235,16 +235,20 @@ async function calls(page: Page, kind: string): Promise<Recorded[]> {
 }
 
 /**
- * Drags a palette step onto the canvas, dropped `at` a point of the canvas's own box, kept inside it: the canvas is as
- * wide as the window leaves it (550 pixels in CI's), and a drop beyond its edge lands on the page around it
- * (CI, 2026-10-27). Returns where the drop was aimed, for the message of an expectation that the step arrived.
+ * Drags a palette step onto the canvas, dropped `at` a point of the canvas's own box. The canvas is as wide as the
+ * window leaves it, and a drop beyond its edge lands on the page around it (CI, 2026-10-27), so a point outside it is
+ * refused here, saying so. Returns where the drop was aimed, for the message of an expectation that the step arrived.
  */
 async function dragOn(editor: Locator, item: string, at: { x: number; y: number }): Promise<string> {
   const canvas = editor.locator('.react-flow');
   await canvas.evaluate((element) => element.scrollIntoView({ block: 'center' }));
   const box = await canvas.boundingBox();
   if (box === null) throw new Error('the canvas has no place on the page');
-  const target = { x: Math.min(at.x, box.width - 40), y: Math.min(at.y, box.height - 40) };
+  if (at.x > box.width - 40 || at.y > box.height - 40)
+    throw new Error(
+      `a drop at (${at.x}, ${at.y}) is beyond a canvas ${Math.round(box.width)}×${Math.round(box.height)}`,
+    );
+  const target = at;
   await editor.locator(`[data-palette="${item}"]`).dragTo(canvas, { targetPosition: target });
   return `a ${item} dropped at (${target.x}, ${target.y}) of a canvas ${Math.round(box.width)}×${Math.round(box.height)}`;
 }
@@ -259,7 +263,9 @@ async function middle(locator: Locator): Promise<{ x: number; y: number }> {
 test('a workflow made on an empty canvas by dragging, two events ticked, approved, and its run lit', async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1600, height: 1000 });
+  // Wide enough that the canvas, beside the palette and a step's settings, holds two steps side by side (it was 550
+  // pixels wide at 1600, CI 2026-10-27).
+  await page.setViewportSize({ width: 2100, height: 1100 });
   await installMockIpc(page, scenario());
   await page.goto('/');
   await page.getByRole('navigation', { name: 'Sections' }).getByRole('button', { name: 'Events' }).click();
@@ -276,10 +282,9 @@ test('a workflow made on an empty canvas by dragging, two events ticked, approve
   await expect(editor.locator('[data-step]')).toHaveCount(0);
 
   // Two steps, each dragged from the palette to where it should go.
-  // One above the other near the canvas's left edge, so both fit whatever width the canvas has.
-  const waited = await dragOn(editor, 'wait-time', { x: 60, y: 60 });
+  const waited = await dragOn(editor, 'wait-time', { x: 200, y: 420 });
   await expect(editor.locator('[data-step="wait-1"]'), waited).toBeVisible();
-  const told = await dragOn(editor, 'notify', { x: 60, y: 330 });
+  const told = await dragOn(editor, 'notify', { x: 620, y: 420 });
   const tell = editor.locator('[data-settings="notify-1"]');
   await expect(tell, told).toBeVisible();
   await tell.getByRole('textbox', { name: 'It says' }).fill('Time to look at it again');
