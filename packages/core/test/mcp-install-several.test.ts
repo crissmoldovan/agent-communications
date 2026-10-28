@@ -364,3 +364,39 @@ for (const how of ['approval', 'app-approval'] as const) {
     },
   );
 }
+
+test(
+  'a refusal the client writes as it ends is read whole, however late its words arrive after the client has exited',
+  NOT_ON_WINDOWS,
+  async () => {
+    // The macOS dry runs of 0.36.0 and 0.37.0: the stand-in's "already exists" reached core after the process had
+    // exited, and core, which settled on `exit`, read no words and called it PROVIDER_UNAVAILABLE. Here the stand-in
+    // exits at once for Gmail and leaves its stderr to a grandchild that writes the refusal 300 ms later: only a run
+    // that waits for its streams to close (`close`) reads it.
+    const m = machine();
+    const bin = join(m.env.HOME as string, 'bin');
+    const log = join(bin, 'claude.log');
+    writeFileSync(
+      join(bin, 'claude'),
+      [
+        `#!${process.execPath}`,
+        `require('node:fs').appendFileSync(${JSON.stringify(log)}, process.argv.slice(2).join(' ') + '\\n');`,
+        "if (process.argv[3] === 'add-json' && process.argv[4] === 'gmail') {",
+        "  const { spawn } = require('node:child_process');",
+        '  spawn(process.execPath, [',
+        "    '-e',",
+        '    "setTimeout(() => process.stderr.write(\'MCP server gmail already exists in user config\\\\n\'), 300)",',
+        "  ], { stdio: ['ignore', 'ignore', 'inherit'] });",
+        '  process.exit(1);',
+        '}',
+        '',
+      ].join('\n'),
+    );
+    const { approvalId } = await prepare(m);
+    const stopped = await m.run([...WORDS, '--approval', approvalId], { extra: { CLAUDECODE: '1' } });
+    assert.equal(stopped.code, 78, `${stopped.stdout}${stopped.stderr}`);
+    const error = errorOf(stopped);
+    assert.equal(error.code, 'CONFIG');
+    assert.match(error.message, /^stopped at the Gmail server: claude already has an MCP server called "gmail"/u);
+  },
+);

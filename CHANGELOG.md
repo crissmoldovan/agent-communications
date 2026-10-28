@@ -76,6 +76,10 @@ announces it at once.
   defaults included, in the app's Approve view and the terminal preview alike: "At most 6 runs an hour, 2 at a time; at
   most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day; a run ends after 3
   days."
+- **An MCP install reads all of what the client said.** When a client refused a server it already had, core could read
+  the client's words only after it had settled, and report the client as unavailable (`PROVIDER_UNAVAILABLE`) instead
+  of the refusal (`CONFIG`, "already has an MCP server called …"), depending on timing. It now waits for the client's
+  output to end. Found by the release dry runs of 0.36.0 and 0.37.0 on macOS.
 
 ## 0.36.0
 

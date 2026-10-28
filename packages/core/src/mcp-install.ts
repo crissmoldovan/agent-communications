@@ -657,7 +657,9 @@ function run(env: NodeJS.ProcessEnv, command: string, args: string[], cwd?: stri
       stderr += String(chunk);
     });
     child.once('error', reject);
-    child.once('exit', (code) => {
+    // `close`, not `exit`: a command's last words on stderr may reach this process after it has exited, and what it said
+    // decides the refusal (a client's "already exists" is a CONFIG one). `close` comes once its streams have ended.
+    child.once('close', (code) => {
       if (code === 0) resolvePromise();
       else reject(new CommsError('PROVIDER_UNAVAILABLE', `${command} failed: ${stderr.trim().slice(0, 400)}`));
     });
