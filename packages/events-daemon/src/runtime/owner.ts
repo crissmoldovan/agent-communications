@@ -111,7 +111,7 @@ import { EventDispatcher, type EventDispatcherOptions } from './events/event-dis
 import { SubscriberListeners } from './events/listeners.ts';
 import { subscriptionPreviewFor } from './events/subscriptions.ts';
 import { EventExpiry, SourceStageExpiryGroup } from './expiry.ts';
-import { createGitRunner } from './git.ts';
+import { createGitRunner, type GitRunner } from './git.ts';
 import { HoldResolver } from './holds.ts';
 import { JudgeKinds } from './judge-kinds.ts';
 import { registerJudgeWorkPurgeListener } from './judge-purge.ts';
@@ -1247,8 +1247,20 @@ async function startOwnerWithLock(
       now,
     }),
   ]);
+  // Every git the event service runs (worktrees, project scans, the worktree rows' sweep) runs as the person, with the
+  // person's global git config. A stand-in home, under test, is the home git reads too: never the real ~/.gitconfig.
+  const git =
+    options.homeDirectory === undefined
+      ? createGitRunner()
+      : createGitRunner({
+          env: {
+            ...process.env,
+            HOME: options.homeDirectory,
+            XDG_CONFIG_HOME: join(options.homeDirectory, '.config'),
+          },
+        });
   // The worktree rows of purged runs (0.37.0 §2): looked at on disk and by git, apart from the history sweep's tick.
-  const worktreeRecords = new WorktreeRecordSweep({ store: database, git: createGitRunner(), now });
+  const worktreeRecords = new WorktreeRecordSweep({ store: database, git, now });
   const expiry = new EventExpiry(database, now, sourceStageExpiry, worktreeRecords);
   const dryrun = new DryRunDispatcher({
     store: database,
@@ -1658,7 +1670,7 @@ async function startOwnerWithLock(
     [
       // Track C: route, find and start a session, a worktree, and the route candidates' activation check.
       // Core's take store, as the offers use it: who took a conversation, for a find in this conversation (W36).
-      composeProjects({ store: database, sessions: agentSessions, takes: core.takes }),
+      composeProjects({ store: database, sessions: agentSessions, takes: core.takes, git }),
       // Track D: the Raise step, the sink every transition's ticked events go through — a Raise step's declared
       // fields opened from the run's record — and the chains each raised event asks for (W34).
       composeOwnerWorkflowEvents({ store: database, cipher }),
@@ -2079,6 +2091,7 @@ async function startOwnerWithLock(
           readers,
           { service: agentSessions, queue: sessionQueue },
           workflows,
+          git,
         ),
       verifyEndpoint: () => verifyPrivateSocketDirectory(paths),
     });
@@ -2188,6 +2201,7 @@ async function handleControl(
   readers?: OwnerReaders,
   sessions?: { readonly service: AgentSessionService; readonly queue: SessionQueue },
   workflows?: Pick<WorkflowEngine, 'cancel'>,
+  git?: GitRunner,
 ): Promise<unknown> {
   if (!isOwnerControlWireOperation(request.operation))
     throw new CommsError('USAGE', 'the local event control operation is not recognised');
@@ -2374,7 +2388,7 @@ async function handleControl(
     case OWNER_CONTROL_WIRES.projectUpdate:
     case OWNER_CONTROL_WIRES.projectRemove:
     case OWNER_CONTROL_WIRES.projectScan:
-      return projectControl({ store: database, sessions: requireSessions(sessions).service }, request);
+      return projectControl({ store: database, sessions: requireSessions(sessions).service, git }, request);
     case OWNER_CONTROL_WIRES.catalogueList:
       return CATALOGUE.map((definition) => ({ type: definition.type, version: definition.version }));
     case OWNER_CONTROL_WIRES.catalogueShow: {
