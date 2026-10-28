@@ -289,9 +289,13 @@ test('a workflow made on an empty canvas by dragging, two events ticked, approve
   await expect(tell, told).toBeVisible();
   await tell.getByRole('textbox', { name: 'It says' }).fill('Time to look at it again');
 
-  // A wire drawn from the wait's "elapsed" to the notice's input.
+  // A wire drawn from the wait's "elapsed" to the notice's input. Typing in the notice's settings may have scrolled the
+  // canvas partly out of the window: it comes back first, so both handles are where the mouse can reach them.
+  await editor.locator('.react-flow').evaluate((element) => element.scrollIntoView({ block: 'center' }));
   const from = editor.locator('[data-step="wait-1"] [data-outcome="elapsed"] .react-flow__handle');
   const to = editor.locator('[data-step="notify-1"] .react-flow__handle.target');
+  await expect(from).toBeInViewport();
+  await expect(to).toBeInViewport();
   const start = await middle(from);
   const end = await middle(to);
   await page.mouse.move(start.x, start.y);
