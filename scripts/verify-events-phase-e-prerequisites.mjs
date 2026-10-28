@@ -83,10 +83,15 @@ const PREVIEW_FIXTURES = 'packages/events-daemon/test/fixtures/b3-approval-previ
  * show`, gains `hold-expired` and `cancelled`, which holds have always written when a hold ends unanswered — its own
  * bound passed, or it was cancelled — and a story with one could not be read before. `rule-analyse`'s closed outcome
  * counts keep their five. No existing branch changed.
+ *
+ * 0.37.0 (git in a folder a session can write to, design §3) is another, also only additive: a folder `project scan`
+ * passes over may say `unsafe-config` — its repository's own config names a program git would run — with that key and
+ * its scope, never its value, and the seeded scan vector carries one. Every other passed-over folder keeps its two
+ * fields. No existing branch changed.
  */
 const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/src/operations/contracts/b3-control-v1.schema.json':
-    'acd764bdd1d759ebdca536ae02d60112b837e84f9e12a191989d5a5bf81c369e',
+    'e8b816cafffab961154121f9ef1148611fc49513735f28079633085c334369d3',
   'packages/events-daemon/src/operations/contracts/doctor-v1.schema.json':
     'f1c9127451c729427b301c503214e59a7b698d07d5d130f350b23f0fcf827d6a',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/approval-view-ready.json':
@@ -116,7 +121,7 @@ const B3_V1_INVENTORY = Object.freeze({
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/secret-origin.json':
     'e0192f61837d2e8faaca1cfe5ad99db26ffb02ee1a325c31eb595243e6a4e6b4',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/seeded-results.json':
-    '42b8fae0d8e359f8854935bb07ad6eee7bb68030ce24268d893d77b11285f7bd',
+    '2597151d86af1de00ddccacb259330ef7d88efc10f13f90188c4eb084f0fcce9',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/target-test.json':
     'dda54666b9959991200f3a67c1ef6173142db7ca1bb1730de1efa480e3f34c3b',
   'packages/events-daemon/test/fixtures/b3-control-contract-v1/unavailable-e2.json':

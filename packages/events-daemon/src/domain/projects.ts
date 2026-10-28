@@ -85,10 +85,25 @@ export interface ProjectRemoveResultV1 {
   readonly removed: true;
 }
 
-/** Why `project scan` passed a folder over. */
-export const PROJECT_SCAN_SKIP_REASONS: readonly ['symlink', 'hidden', 'agent-comms', 'unreadable', 'depth'] =
-  Object.freeze(['symlink', 'hidden', 'agent-comms', 'unreadable', 'depth'] as const);
+/**
+ * Why `project scan` passed a folder over. `unsafe-config` (0.37.0): its repository's own config names a program git
+ * would run — a filter, diff or merge driver's, or an include — so it can't be a project's folder until that is moved to
+ * the person's global config or removed.
+ */
+export const PROJECT_SCAN_SKIP_REASONS: readonly [
+  'symlink',
+  'hidden',
+  'agent-comms',
+  'unreadable',
+  'depth',
+  'unsafe-config',
+] = Object.freeze(['symlink', 'hidden', 'agent-comms', 'unreadable', 'depth', 'unsafe-config'] as const);
 export type ProjectScanSkipReason = (typeof PROJECT_SCAN_SKIP_REASONS)[number];
+
+/** A folder `project scan` passed over: for `unsafe-config`, the key its config names and that key's scope, never its value. */
+export type ProjectScanSkippedV1 =
+  | { readonly folder: string; readonly reason: Exclude<ProjectScanSkipReason, 'unsafe-config'> }
+  | { readonly folder: string; readonly reason: 'unsafe-config'; readonly key: string; readonly scope: string };
 
 /** `project scan`: the checkouts found under the roots, by repository, and the folders passed over (plan I6). */
 export interface ProjectScanResultV1 {
@@ -103,7 +118,7 @@ export interface ProjectScanResultV1 {
       readonly defaultBranch: string | null;
     }[];
   }[];
-  readonly skipped: readonly { readonly folder: string; readonly reason: ProjectScanSkipReason }[];
+  readonly skipped: readonly ProjectScanSkippedV1[];
 }
 
 export const PROJECT_ID: RegExp = /^[a-z0-9-]{1,64}$/u;
