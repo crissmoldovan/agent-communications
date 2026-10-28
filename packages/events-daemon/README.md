@@ -415,8 +415,10 @@ at most 60 an hour
   message for 15 minutes after it is handed over, and still takes it itself.
 - **Approved as a whole.** The approval lists, after the workflow's plain words, one numbered line per step that does
   something: the folders a session may work in, the projects it may choose, each Linear team and state, the fields that
-  leave and each event it raises. The JSON you approve under them holds the limits too. Moving a box in the designer
-  doesn't change the version; changing a step, an arrow, a limit or an event makes a new one, approved again.
+  leave and each event it raises. From 0.37.0 its last line says the limits, every one, defaults too: "At most 6 runs
+  an hour, 2 at a time; at most 2 sessions started, 30 Linear writes and 120 events an hour; at most 5 worktrees a day;
+  a run ends after 3 days." The JSON you approve under them holds them too. Moving a box in the designer doesn't change
+  the version; changing a step, an arrow, a limit or an event makes a new one, approved again.
 - **In the app** a workflow opens in its designer: the canvas, the text and the JSON are three views of one document,
   with the checks under them.
 
@@ -452,8 +454,11 @@ It is `runs`, not `run`: `agent-events run` starts the event service.
 - **How long a run is kept.** A run's history — its steps, its waits, the events it raised and their deliveries — is
   kept as long as its decision's metadata (`retention.decisionMetadataMs`, `decisions <duration>` in the text; 90 days
   by default), then purged with it. A run still going, or one with an event still being delivered or a dead letter
-  still kept, stays until those end. A worktree's row goes once the worktree was removed or never made; the row of one
-  that may still be on disk stays, and the sweep never touches the worktree itself.
+  still kept, stays until those end. A worktree's row goes once the worktree was removed or never made. From 0.37.0
+  the row of a worktree a purged run made or kept is looked at every 10 minutes, at most 100 at a time: once its folder
+  is gone, or is no longer a worktree of its checkout (`git worktree list --porcelain`), the row goes; a worktree still
+  on disk keeps its row, and Projects keeps showing it, for you to remove; a row whose checkout can't be read stays for
+  the next look. The sweep never touches the worktree itself.
 - **How a run ends** (`endCode`). Done carries none. Otherwise:
   - `RUN_EXPIRED`: it reached its deadline (`flow.limits.runMs`);
   - `CANCELLED_BY_PERSON`: you cancelled it;
@@ -510,7 +515,7 @@ agent-events workflow show client-asks --version 5 --json                     # 
   ticked on a step it does run — a condition, Which project?, a find — and each of the run's own is a dry-run record
   too. Nothing leaves, and it raises no event, so no subscriber gets one.
 - **A flow's approval** lists, after the workflow's plain words, one numbered line per step that does something, as
-  `describeFlow` says it.
+  `describeFlow` says it, and last the flow's limits.
 
 ## Projects
 
@@ -619,10 +624,11 @@ echo "When acme writes in C0123, find a session in their project and hand it ove
 - **What is sent:** your words (at most 4,000 characters) and your answers, a fixed brief with the text's grammar, and
   the names a draft may use — your accounts, lanes, judges, targets, projects' ids and names, the step event words and
   your namespaces. When you ask again, the current draft goes too, with its folders, URLs, address sets and templates
-  replaced by placeholders (`/redacted/folder-1`, `https://redacted.invalid/1`, `"template 1"`), and the event service
-  puts your values back in what comes back; a draft that does not read as a workflow goes as you wrote it, for the model
-  to fix. Never a message's content (unless you paste one, which goes inside the untrusted envelope), never a profile,
-  a folder, a target's URL, a secret or a key.
+  replaced by placeholders (`/redacted/folder-1`, `https://redacted.invalid/1`, `"template 1"`), and your answers go
+  through the same replacement, so a choice that names your folder goes as its placeholder (from 0.37.0). The event
+  service puts your values back in what comes back: the draft, and the model's questions and choices. A draft that
+  does not read as a workflow goes as you wrote it, for the model to fix. Never a message's content (unless you paste
+  one, which goes inside the untrusted envelope), never a profile, a folder, a target's URL, a secret or a key.
 - **Yours alone.** `workflow describe` refuses inside the event service's MCP server, in an agent's shell and, on
   macOS, from a process the app did not start; no tool runs it. An agent writes a workflow itself with
   `workflow create`, which you approve as any other.
