@@ -189,6 +189,31 @@ describe("workflows' results, read (0.36.0, plan I8)", () => {
     ).toThrow(UnknownShapeError);
   });
 
+  test("readScan reads a folder whose repository's own config names a program, with the key and its scope (0.37)", () => {
+    const unsafe = changed(projectScanFixture, (result) => {
+      (result.skipped as unknown[]).push({
+        folder: '/example/home/work/booking',
+        reason: 'unsafe-config',
+        key: 'filter.x.process',
+        scope: 'local',
+      });
+    });
+    expect(readScan(unsafe).skipped.at(-1)).toEqual({
+      folder: '/example/home/work/booking',
+      reason: 'unsafe-config',
+      key: 'filter.x.process',
+      scope: 'local',
+    });
+    // One that does not say which key is refused, not shown as no reason.
+    expect(() =>
+      readScan(
+        changed(projectScanFixture, (result) => {
+          Object.assign(result.skipped[0] ?? {}, { reason: 'unsafe-config' });
+        }),
+      ),
+    ).toThrow(UnknownShapeError);
+  });
+
   test('readSubscribers reads each version, live or webhook, given events or not, and refuses an unknown kind', () => {
     const subscribers = readSubscribers(subscribersFixture);
     expect(subscribers.map((each) => [each.subscriberId, each.kind, each.state, each.listenError])).toEqual([
