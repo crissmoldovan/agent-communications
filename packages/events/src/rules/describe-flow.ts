@@ -4,7 +4,7 @@
  * in `stepOrder`, after the workflow's own words (`describeRule`). The steps that only decide or wait (a condition, a
  * judge, a find, a wait, a split) are named inside the "If …" of each line they lead to, so every effect says when it
  * happens; a deciding step that leads to no effect still has a line of its own, so no step is left out. A chained
- * workflow, a shadow and the run's own events have a line each.
+ * workflow, a shadow and the run's own events have a line each, and the last line says the flow's limits (0.37.0 §6).
  *
  * The parts are `describeRule`'s: `plain` (these words), `value` (ids, names and events the workflow holds) and
  * `untrusted` (the author's text: labels, templates, questions, notices, folders, condition operands). Pure and
@@ -12,7 +12,7 @@
  */
 import type { CanonicalCondition } from '../conditions/types.ts';
 import { outcomesOf, stepOrder } from '../flow/graph.ts';
-import type { FlowDocumentV1, FlowStep, Place, StepId } from '../flow/types.ts';
+import type { FlowDocumentV1, FlowLimits, FlowStep, Place, StepId } from '../flow/types.ts';
 import { parsePointer } from '../pointer.ts';
 import { formatDuration } from '../rule-text/vocabulary.ts';
 import { WORKFLOW_EVENT_CATALOGUE_V1, type WorkflowEventSchema } from '../workflow-events/catalogue.ts';
@@ -139,7 +139,7 @@ interface Scope {
   readonly labels: FieldLabels | undefined;
 }
 
-/** The workflow's numbered effects (§10.2), in `stepOrder`, numbered from 1. */
+/** The workflow's numbered effects (§10.2), in `stepOrder`, numbered from 1, and its limits last. */
 export function describeFlow(
   rule: DescribableRuleDocument & { flow: FlowDocumentV1 },
   labels?: FieldLabels,
@@ -202,6 +202,7 @@ export function describeFlow(
       return line === undefined ? [] : [line];
     }),
     ...runLines(scope),
+    limitsLine(scope.rule.flow.limits),
   ];
   return ordered.map((line, index) => ({ number: index + 1, stepIds: line.stepIds, parts: line.parts }));
 }
@@ -854,4 +855,28 @@ function runLines(scope: Scope): { stepIds: readonly StepId[]; parts: readonly R
       ],
     },
   ];
+}
+
+/** A count and its noun: `1 run`, `6 runs`. */
+const counted = (count: number, one: string, more: string) => `${count} ${count === 1 ? one : more}`;
+
+/**
+ * The flow's limits (§10.2, 0.37.0 §6): the last line, every one of `flow.limits` as written, defaults too, in a fixed
+ * order — the runs an hour and at a time; the sessions started, Linear writes and events an hour; the worktrees a day;
+ * and when a run ends. Each is a number `checkFlow` bounds, never the author's text, so the line is plain words.
+ */
+function limitsLine(limits: FlowLimits): { stepIds: readonly StepId[]; parts: readonly RulePart[] } {
+  return {
+    stepIds: [],
+    parts: [
+      plain(
+        `At most ${counted(limits.runsPerHour, 'run', 'runs')} an hour, ${limits.concurrentRuns} at a time; ` +
+          `at most ${counted(limits.sessionsPerHour, 'session', 'sessions')} started, ` +
+          `${counted(limits.linearWritesPerHour, 'Linear write', 'Linear writes')} and ` +
+          `${counted(limits.eventsPerHour, 'event', 'events')} an hour; ` +
+          `at most ${counted(limits.worktreesPerDay, 'worktree', 'worktrees')} a day; ` +
+          `a run ends after ${formatDuration(limits.runMs)}.`,
+      ),
+    ],
+  };
 }
