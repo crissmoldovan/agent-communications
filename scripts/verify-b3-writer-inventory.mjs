@@ -166,18 +166,29 @@ export async function verifyB3WriterInventory({ root = ROOT, inventory = undefin
       () => '',
     );
     const schedulerText = await readFile(join(root, scheduler), 'utf8').catch(() => '');
+    const engine = await readFile(join(root, 'packages/events-daemon/src/runtime/workflow/engine.ts'), 'utf8').catch(
+      () => '',
+    );
     const starts = [
       [
         // 0.36.0 (W33): the manual tick then waits, outside its lease, for the event deliveries it started apart.
+        // 0.37.0 (§1): it runs the workflow engine's pass in its turn, under its lease, and then waits, outside it, for
+        // any pass a wake started apart.
         'manual owner tick',
         owner.includes(
-          'tick: async () => {\n      await withEventWriterLease(writerQuiescer, () => scheduler.tick());',
+          'tick: async () => {\n      await withEventWriterLease(writerQuiescer, () => scheduler.tick({ awaitWorkflows: true }));',
         ),
       ],
       [
         // 0.36.0 (W33): a raised event's delivery runs apart from the tick that started it, under a lease of its own.
         'event delivery attempt apart from the tick',
         owner.includes('apart: (work) => withOwnEventWriterLease(writerQuiescer, work),'),
+      ],
+      [
+        // 0.37.0 (§1): a workflow pass the owner's tick pumps, or a wake starts, runs apart from it under a lease of its
+        // own, taken before it joins the passes in turn, so a rekey waits for it and it for a rekey.
+        'workflow pass apart from the tick',
+        engine.includes('this.#quiescer === undefined ? pass() : withOwnEventWriterLease(this.#quiescer, pass)'),
       ],
       [
         'startup expiry recovery',

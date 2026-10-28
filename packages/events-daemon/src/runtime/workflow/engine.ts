@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
+import { performance } from 'node:perf_hooks';
 import { type ApprovalStore, CommsError, type ConfigStore } from '@agentcomms/core';
 import {
   FAILURE_OUTCOMES,
@@ -15,7 +16,7 @@ import type { EventDatabase } from '../../store/database.ts';
 import { isRemovedAccountError } from '../account-fence.ts';
 import { assertDisclosable } from '../disclosure-fence.ts';
 import type { ProjectionCipher } from '../projections.ts';
-import { type WriterQuiescer, withEventWriterLease } from '../writer-quiescer.ts';
+import { type WriterQuiescer, withOwnEventWriterLease } from '../writer-quiescer.ts';
 import { stepContextFor } from './context.ts';
 import {
   type FlowActivationCheck,
@@ -67,12 +68,14 @@ import { SPLIT_OUTCOME } from './steps/split.ts';
 
 /*
  * The workflow engine (workflows design §5, §7): inside the event service's owner, beside the dispatcher, under the same
- * writer lease, driven by the scheduler's tick and woken when something a run waits on changes. One step at a time per
- * branch: claim it (an attempt, a lease token, a lease), fence the version's authority and its account, run it through
- * its kind's executor, and settle it in one transaction that proves the claim is still this attempt's — its outcome,
- * its closed output, the steps it makes ready, the steps it leaves unreachable as skipped, and every transition's
- * ticked events through the sink, prepared before the transaction and written inside it. A run starts in turn as its
- * limits allow and is never dropped; it ends done, failed, cancelled or expired, and its sealed record goes with it.
+ * writer lease, pumped by the scheduler's tick and woken when something a run waits on changes. Its pass runs apart from
+ * the tick (0.37.0 §1), so a slow step holds back no poll and no delivery. One step at a time per run, and steps of
+ * different runs side by side: claim it (an attempt, a lease token, a lease), fence the version's authority and its
+ * account, run it through its kind's executor, and settle it in one transaction that proves the claim is still this
+ * attempt's — its outcome, its closed output, the steps it makes ready, the steps it leaves unreachable as skipped, and
+ * every transition's ticked events through the sink, prepared before the transaction and written inside it. A run
+ * starts in turn as its limits allow and is never dropped; it ends done, failed, cancelled or expired, and its sealed
+ * record goes with it.
  */
 
 /** Where a test may stop the engine, as a crash would: after a claim, after an effect, or just before a settle commits. */
@@ -125,19 +128,30 @@ export interface WorkflowEngineOptions {
   readonly onRelayWait?: (() => void) | undefined;
   /** B6's turn interrupt through the relay, for `runs cancel --interrupt`. */
   readonly interrupt?: ((run: RunView) => Promise<boolean>) | undefined;
-  /** The owner's writer lease, held by the ticks a wake starts, as by the scheduler's own. */
+  /** The owner's writer lease: each pass `pump` or a wake starts holds one of its own for its whole length. */
   readonly writerQuiescer?: WriterQuiescer | undefined;
+  /**
+   * Told each time a step of a pass has settled, and when a pass ends: the owner's event dispatcher goes, so what the
+   * step raised goes out at once, not behind the pass's slower steps (W33).
+   */
+  readonly afterStep?: (() => void) | undefined;
   readonly now?: (() => number) | undefined;
   readonly newId?: (() => string) | undefined;
   readonly leaseMs?: number | undefined;
-  /** How many steps one round of a tick claims at most. */
+  /** How many steps one look of a pass claims at most. */
   readonly batch?: number | undefined;
+  /** How long a pass claims new steps (0.37.0 §1: 5 seconds). Test seam only: production never supplies it. */
+  readonly passBudgetMs?: number | undefined;
   /** Test seam only: throwing here is a crash at that point. Production never supplies it. */
   readonly failpoint?: ((point: WorkflowFailpoint) => void) | undefined;
 }
 
-/** How many rounds of claims one tick makes: a settle that makes a step ready is run in the same tick. */
+/** How many rounds of claims one pass gives a run at most: a settle that makes a step ready is run in the same pass. */
 const ROUNDS_PER_TICK = 16;
+/** How many runs' steps one pass runs side by side (0.37.0 §1); two steps of one run never run at once. */
+const PASS_CONCURRENCY = 4;
+/** How long a pass claims new steps (0.37.0 §1); a step already running finishes, bounded by its own deadline. */
+const PASS_BUDGET_MS = 5_000;
 /** How many settle plans a step makes before it gives the settle up to a later tick. */
 const SETTLE_TRIES = 3;
 /** How many times an executor that throws is tried again before its step fails. */
@@ -182,13 +196,29 @@ export class WorkflowEngine {
   readonly #interrupt: WorkflowEngineOptions['interrupt'];
   readonly #onRelayWait: WorkflowEngineOptions['onRelayWait'];
   readonly #quiescer: WriterQuiescer | undefined;
+  readonly #afterStep: (() => void) | undefined;
   readonly #now: () => number;
   readonly #newId: () => string;
   readonly #leaseMs: number;
   readonly #batch: number;
+  readonly #passBudgetMs: number;
   readonly #failpoint: WorkflowEngineOptions['failpoint'];
   readonly #rules = new Map<string, CanonicalFullRuleDocument>();
-  #queue: Promise<unknown> = Promise.resolve();
+  /**
+   * The last of the passes in turn, each of which joins only once it holds its writer lease — the caller's, or one of
+   * its own — so none ever waits for one that still waits for a lease: a rekey can always come between.
+   */
+  #inTurn: Promise<void> = Promise.resolve();
+  /** The passes started and not yet ended: those in turn, and a pump's before it has its lease. */
+  readonly #passes = new Set<Promise<unknown>>();
+  /** The cleanups of cancelled runs still going: each waits for the passes in turn when it was asked, none for it. */
+  readonly #cleanups = new Set<Promise<void>>();
+  /** A pump came while a pass was going: the pass looks again, or — if it looked for the last time — another follows. */
+  #again = false;
+  /** Wakes the running pass from its wait for a step to end, so it looks again at once. */
+  #nudge: (() => void) | undefined;
+  /** Told when a pass `pump` started, or one that followed it, failed: the scheduler's content-free health record. */
+  #passFailed: (() => void) | undefined;
   #wakeScheduled = false;
   #stopped = false;
 
@@ -212,51 +242,108 @@ export class WorkflowEngine {
     this.#interrupt = options.interrupt;
     this.#onRelayWait = options.onRelayWait;
     this.#quiescer = options.writerQuiescer;
+    this.#afterStep = options.afterStep;
     this.#now = options.now ?? Date.now;
     this.#newId = options.newId ?? (() => randomBytes(16).toString('hex'));
     this.#leaseMs = options.leaseMs ?? RUN_STEP_LEASE_MS;
     this.#batch = options.batch ?? 100;
+    this.#passBudgetMs = options.passBudgetMs ?? PASS_BUDGET_MS;
     this.#failpoint = options.failpoint;
   }
 
   /**
-   * One pass: expired runs end, held runs start in turn, and every step whose time has come runs and settles. Content
-   * expiry runs whatever the switch; nothing is claimed while collection is off or paused. Returns how many steps ran.
+   * One pass, awaited, under the caller's writer lease, in turn behind any pass going: the owner's manual tick seam,
+   * for deterministic local embedding and tests. Expired runs end, held runs start in turn, and every step whose time
+   * has come runs and settles. Content expiry runs whatever the switch; nothing is claimed while collection is off or
+   * paused. Returns how many steps ran.
    */
   tick(): Promise<number> {
     if (this.#stopped) return Promise.resolve(0);
-    const work = this.#queue.then(() => (this.#stopped ? 0 : this.#tick()));
-    this.#queue = work.catch(() => undefined);
-    return work;
+    return this.#going(this.#pass());
   }
 
-  /** Something a run waits on changed: look again soon, under the owner's writer lease. Never throws. */
+  /**
+   * The owner's ticks (0.37.0 §1): starts a pass apart from the caller, under a writer lease of its own, and returns at
+   * once, as `EventDispatcher.pump` does. A pass going is never started twice: it looks again at once, or, if it has
+   * looked for the last time, another follows it — the next tick would pump again in any case. `failed` is told when the
+   * pass fails. True when this started one.
+   */
+  pump(failed?: () => void): boolean {
+    if (failed !== undefined) this.#passFailed = failed;
+    if (this.#stopped) return false;
+    if (this.#passes.size > 0) {
+      this.#again = true;
+      this.#nudge?.();
+      return false;
+    }
+    this.#apart();
+    return true;
+  }
+
+  /** Something a run waits on changed: look again soon, in a pass of its own lease. Never throws. */
   wake(_runId: string): void {
     if (this.#wakeScheduled || this.#stopped) return;
     this.#wakeScheduled = true;
     setImmediate(() => {
       this.#wakeScheduled = false;
-      const pass = () => this.tick();
-      void (this.#quiescer === undefined ? pass() : withEventWriterLease(this.#quiescer, pass)).catch(() => undefined);
+      this.pump();
     });
   }
 
   /**
+   * Resolves once no pass is going — nor one that follows it — and no cancelled run's cleanup: the owner's manual tick
+   * waits for this, outside its lease, so a pass that waits for a lease of its own is never waited for under one.
+   */
+  async idle(): Promise<void> {
+    while (this.#passes.size > 0 || this.#cleanups.size > 0)
+      await Promise.allSettled([...this.#passes, ...this.#cleanups]);
+  }
+
+  /**
    * The service stops: no pass starts after this, and the one in flight finishes while the database is still open — a
-   * step a wake claimed as the follower stopped settles, rather than holding its claim's lease into the next start.
+   * step a wake claimed as the follower stopped settles, rather than holding its claim's lease into the next start —
+   * and so does each cancelled run's cleanup.
    */
   async stop(): Promise<void> {
     this.#stopped = true;
-    await this.#queue;
+    await this.idle();
+  }
+
+  /** A pass apart from its caller, under a writer lease of its own, taken before it joins the passes in turn. */
+  #apart(): void {
+    const pass = () => this.#pass();
+    void this.#going(this.#quiescer === undefined ? pass() : withOwnEventWriterLease(this.#quiescer, pass)).catch(
+      () => {
+        try {
+          this.#passFailed?.();
+        } catch {
+          // The health record is the scheduler's; a pass that failed is taken up again by the next pump.
+        }
+      },
+    );
+  }
+
+  /** Counts a pass as going until it ends; the last to end starts another when a pump came that it did not see. */
+  #going<T>(pass: Promise<T>): Promise<T> {
+    const going: Promise<T> = pass.finally(() => {
+      this.#passes.delete(going);
+      if (this.#passes.size === 0 && this.#again && !this.#stopped) {
+        this.#again = false;
+        this.#apart();
+      }
+    });
+    this.#passes.add(going);
+    return going;
   }
 
   /**
    * The person cancels a live run (§7.6), a tightening, at once: in its own transaction, never behind the pass in
    * flight, its waiting deliveries and undelivered events are cancelled, its waits dropped and its record purged, as an
-   * ending of authority cancels it. A step of it the pass is running settles nothing further. Only what follows an end
-   * — each step's cleanup, and the turn's interrupt when asked — waits for that pass, so the cleanup finds what the
-   * pass's step left. It answers once the run has ended; with `interrupt`, once the interrupt was tried, so
-   * `interrupted` says whether it did.
+   * ending of authority cancels it. A step of it the pass is running settles nothing further. With `interrupt`, the
+   * turn's interrupt is asked as soon as the run has ended (0.37.0 §4): the turn came from the session dispatcher, not
+   * from a step, so waiting for the pass would catch nothing more; `interrupted` says whether it happened. Only each
+   * step's cleanup waits for the passes in flight, so it finds what their step left. It answers once the run has
+   * ended; with `interrupt`, once the interrupt was tried.
    */
   async cancel(runId: string, input: { readonly interrupt: boolean }): Promise<RunCancelResultV1> {
     const row = readRun(this.#store.database, runId);
@@ -274,14 +361,21 @@ export class WorkflowEngine {
       return ended;
     });
     if (ending === null) throw runNotLive();
-    const finishing = this.#queue.then(async () => {
-      await this.#ended(row, rule, 'cancelled');
-      return input.interrupt && this.#interrupt !== undefined ? await this.#interrupt(runViewOf(row)) : false;
-    });
-    this.#queue = finishing.catch(() => undefined);
+    const interrupting =
+      input.interrupt && this.#interrupt !== undefined ? this.#interrupt(runViewOf(row)) : Promise.resolve(false);
+    this.#afterPasses(() => this.#ended(row, rule, 'cancelled'));
     // The run has ended whatever its cleanup or the relay does: neither fails the cancel.
-    const interrupted = input.interrupt ? await finishing.catch(() => false) : false;
+    const interrupted = await interrupting.catch(() => false);
     return { runId, state: 'cancelled', ...ending, interrupted };
+  }
+
+  /** Work that waits for the passes in turn now — never for one that starts later — and that no pass waits for. */
+  #afterPasses(work: () => Promise<void>): void {
+    const cleanup: Promise<void> = this.#inTurn
+      .then(work)
+      .catch(() => undefined)
+      .finally(() => this.#cleanups.delete(cleanup));
+    this.#cleanups.add(cleanup);
   }
 
   /**
@@ -346,27 +440,114 @@ export class WorkflowEngine {
     };
   }
 
-  async #tick(): Promise<number> {
+  /**
+   * One pass in turn: it joins the passes in turn once it holds its writer lease — the caller's, or its own — then
+   * waits for the one before it, so two passes never run at once. None runs after the service stops.
+   */
+  async #pass(): Promise<number> {
+    const before = this.#inTurn;
+    let ended: () => void = () => {};
+    this.#inTurn = new Promise<void>((resolve) => {
+      ended = resolve;
+    });
+    try {
+      await before;
+      return this.#stopped ? 0 : await this.#run();
+    } finally {
+      ended();
+      try {
+        this.#afterStep?.();
+      } catch {
+        // The owner's dispatcher is its own: what a pass raised goes out at its next pump.
+      }
+    }
+  }
+
+  /**
+   * A pass's work (0.37.0 §1): runs ended elsewhere finish, expired runs end, and — collection on and not paused — held
+   * runs start in turn and every step whose time has come runs and settles. Steps of different runs run side by side,
+   * at most `PASS_CONCURRENCY` at a time; a run's own steps run one after another, in the order the claim reads them,
+   * each claimed and settled as before, so a run's steps keep their order. A run whose steps ran comes round again in
+   * the same pass for those its settles made ready, at most `ROUNDS_PER_TICK` times; one whose round ran nothing waits
+   * for the next pass. Once the budget is spent the pass claims no new step, and the steps it is running finish,
+   * bounded by their own deadlines. Returns how many steps ran.
+   */
+  async #run(): Promise<number> {
     await this.#finishEndedElsewhere();
     await this.#expire();
     if (!this.#collecting()) return 0;
+    const claimUntil = performance.now() + this.#passBudgetMs;
+    // Each run with a round going, its rounds in this pass, and the runs whose last round ran nothing.
+    const going = new Map<string, Promise<void>>();
+    const rounds = new Map<string, number>();
+    const resting = new Set<string>();
     let ran = 0;
-    for (let round = 0; round < ROUNDS_PER_TICK; round += 1) {
-      await this.#startHeld();
-      const candidates = claimableSteps(this.#store.database, this.#now(), this.#batch);
-      let progressed = 0;
-      for (const candidate of candidates) {
-        try {
-          if (await this.#runStep(candidate.runId, candidate.stepId)) progressed += 1;
-        } catch {
-          // One step's failure never holds back the others: its claim lapses and a later tick claims it again, each
-          // claim counted, so a step that always fails ends its run at the step limit.
+    try {
+      while (performance.now() < claimUntil) {
+        // This look sees whatever a pump came for since the last.
+        this.#again = false;
+        await this.#startHeld();
+        for (const [runId, stepIds] of this.#claimableByRun()) {
+          if (going.size >= PASS_CONCURRENCY) break;
+          const round = rounds.get(runId) ?? 0;
+          if (going.has(runId) || resting.has(runId) || round >= ROUNDS_PER_TICK) continue;
+          rounds.set(runId, round + 1);
+          const turn = this.#round(runId, stepIds, claimUntil)
+            .then((progressed) => {
+              ran += progressed;
+              if (progressed === 0) resting.add(runId);
+            })
+            .finally(() => {
+              going.delete(runId);
+              try {
+                this.#afterStep?.();
+              } catch {
+                // The owner's dispatcher is its own: what this step raised goes out at its next pump.
+              }
+            });
+          going.set(runId, turn);
         }
+        if (going.size === 0) break;
+        // Until a step ends, or a pump asks this pass to look again.
+        await Promise.race([
+          ...going.values(),
+          new Promise<void>((resolve) => {
+            this.#nudge = resolve;
+          }),
+        ]);
+        this.#nudge = undefined;
       }
-      ran += progressed;
-      if (progressed === 0) break;
+    } finally {
+      this.#nudge = undefined;
+      await Promise.all(going.values());
     }
     return ran;
+  }
+
+  /** The steps the claim would take now, each run's in the order it reads them, the runs oldest first. */
+  #claimableByRun(): ReadonlyMap<string, readonly StepId[]> {
+    const byRun = new Map<string, StepId[]>();
+    for (const { runId, stepId } of claimableSteps(this.#store.database, this.#now(), this.#batch)) {
+      const steps = byRun.get(runId);
+      if (steps === undefined) byRun.set(runId, [stepId]);
+      else steps.push(stepId);
+    }
+    return byRun;
+  }
+
+  /** One round of one run: its steps one after another, none claimed once the pass's budget is spent. */
+  async #round(runId: string, stepIds: readonly StepId[], claimUntil: number): Promise<number> {
+    let progressed = 0;
+    for (const stepId of stepIds) {
+      if (performance.now() >= claimUntil) break;
+      try {
+        if (await this.#runStep(runId, stepId)) progressed += 1;
+      } catch {
+        // One step's failure never holds back the others: its claim lapses and a later pass claims it again, each
+        // claim counted, so a step that always fails ends its run at the step limit.
+      }
+    }
+    return progressed;
   }
 
   /**

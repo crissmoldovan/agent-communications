@@ -25,6 +25,14 @@ together under one version.
   key, and `project add` refuses them. If the key is yours — Git LFS set up with `git lfs install --local`, say — move it
   to your global config (`git lfs install`, or `git config --global`), or remove it (`git config --unset <key>` in the
   checkout). Then the folder works again. LFS in your global config, where `git lfs install` puts it, keeps working.
+- **A slow workflow step no longer holds up the event service (§1).** The event service now starts a workflow's steps
+  and goes on without waiting for them, so a find step whose relay is slow to answer, a worktree being made or a judge
+  still thinking no longer delays new mail being read, other deliveries going out or the next round of work. Steps of
+  different runs now run side by side, four at most; a run's own steps still run one at a time, in their order. A round
+  of steps takes no new step after 5 seconds, and a key rotation still waits for the steps that are running.
+- **`runs cancel --interrupt` interrupts the session's turn at once (§4).** It no longer waits for the step the engine
+  is running to finish before it asks the relay, so its answer comes at once and says whether the turn was
+  interrupted. Only the cleanup — removing a worktree that is still clean — waits for that step.
 
 ## 0.36.0
 
