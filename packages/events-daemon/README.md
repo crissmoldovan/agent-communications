@@ -413,7 +413,9 @@ at most 60 an hour
   merge program, or an include: `REPO_CONFIG_UNSAFE`, with the key and its scope, never its value (0.37.0). A worktree
   is added with nothing checked out, and the config is read again before the checkout, so a filter planted in between
   never runs. Git LFS in your global config, where `git lfs install` puts it, keeps working; LFS set in one
-  repository's own config is refused like any other filter: move it to your global config.
+  repository's own config is refused like any other filter: move it to your global config. The check trusts your global
+  config (`~/.gitconfig`) as yours: it holds as long as a session can't write there, so don't let a session's agent edit
+  your home folder's git config.
 - **The session that took this conversation.** `find the session that took this conversation, with claude-code` finds
   the Claude Code session that took an earlier message in the same Gmail thread or Slack thread (0.35.0's taking). Only
   a take by an agent window's own session counts, never one by a command that joined no window, and the session found
