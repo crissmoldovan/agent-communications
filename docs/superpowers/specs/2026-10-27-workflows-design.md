@@ -1506,8 +1506,13 @@ The loopback seal (`test/helpers/loopback-seal-preload.mjs`) holds. Event-servic
   - no status or `cwd` filter on `GET /v1/sessions`, so find costs one snapshot per candidate, at most 8;
   - `outputFormat` is Claude's alone.
 - **Linear:** comment idempotency is unconfirmed (§6.7). States differ per team.
-- **Git:** `worktree add` on a large repository can be slow (a 60-second cap). LFS smudge filters run, since they come
-  from the person's own git config. Network volumes are untested.
+- **Git:** `worktree add` on a large repository can be slow (a 60-second cap). LFS smudge filters run when they come
+  from the person's global git config; one set in a repository's own config is refused, as a session could have planted
+  it (0.37.0 design §3). Network volumes are untested.
+  - **The gate's residual race** (0.37.0 design §3): the config is read right before `status` and `worktree remove`, and
+    nothing splits those as `--no-checkout` splits the add from its checkout. A session that writes a filter into the
+    config at that instant can still have git run it. Fixed-name keys such as `core.fsmonitor` are overridden on every
+    command line, so they have no such window.
 - **Two schedulers in one owner.** The engine reuses the delivery claim and fences rather than copying them.
 - **The `claude` CLI's flags may change between releases.** They are pinned in one place and tested against a fake. A
   CLI that refuses them makes Describe it say so and offer a key.

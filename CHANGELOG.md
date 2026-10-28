@@ -3,6 +3,29 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.37.0
+
+**In detail**
+- **Security fix: git in a folder a session can write to** (an independent review, 2026-10-28). On 0.36.0, anyone who
+  approved a workflow that makes a worktree and starts a session in it was exposed. The worktree shares its checkout's
+  git config, so the session could write a key there that names a program — `core.fsmonitor`, or a filter's `smudge`,
+  `clean` or `process` beside a `.gitattributes` it committed — and git ran that program as you, outside the session,
+  the next time the event service made a worktree of that project or cleaned one up. Turning off the repository's hooks
+  didn't stop it. Update to 0.37.0. Now:
+  - every git the event service runs overrides each fixed-name key that names a program, and never reads the system
+    git config;
+  - before it adds, checks out, checks or removes a worktree, it reads the repository's git config, and refuses a
+    repository whose own config names a filter, diff or merge program, or an include (`REPO_CONFIG_UNSAFE`, naming the
+    key and its scope, never its value);
+  - a worktree is added with nothing checked out, and the config is read again before the checkout, so a filter planted
+    in between never runs.
+
+  **A refused repository** shows in the run view and the message's story as "the repository's own config names a
+  program git would run (filter.x.process, local)". `project scan` passes its folders over as `unsafe-config`, with the
+  key, and `project add` refuses them. If the key is yours — Git LFS set up with `git lfs install --local`, say — move it
+  to your global config (`git lfs install`, or `git config --global`), or remove it (`git config --unset <key>` in the
+  checkout). Then the folder works again. LFS in your global config, where `git lfs install` puts it, keeps working.
+
 ## 0.36.0
 
 **What.** Workflows that branch, wait, finish the job and tell others, in the command line, the agents' tools and the
