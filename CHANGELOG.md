@@ -3,6 +3,18 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## 0.37.0
+
+**In detail**
+- **A slow workflow step no longer holds up the event service (§1).** The event service now starts a workflow's steps
+  and goes on without waiting for them, so a find step whose relay is slow to answer, a worktree being made or a judge
+  still thinking no longer delays new mail being read, other deliveries going out or the next round of work. Steps of
+  different runs now run side by side, four at most; a run's own steps still run one at a time, in their order. A round
+  of steps takes no new step after 5 seconds, and a key rotation still waits for the steps that are running.
+- **`runs cancel --interrupt` interrupts the session's turn at once (§4).** It no longer waits for the step the engine
+  is running to finish before it asks the relay, so its answer comes at once and says whether the turn was
+  interrupted. Only the cleanup — removing a worktree that is still clean — waits for that step.
+
 ## 0.36.0
 
 **What.** Workflows that branch, wait, finish the job and tell others, in the command line, the agents' tools and the
