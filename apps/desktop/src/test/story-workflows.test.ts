@@ -225,7 +225,7 @@ describe("a message's story follows its workflow", () => {
   });
 
   it("a worktree refused for its repository's own config is a step of the story, the key marked (0.37)", () => {
-    const refused = (output: Record<string, unknown>): RunShowResultV1 => {
+    const refused = (output: NonNullable<RunStepV1['output']>): RunShowResultV1 => {
       const whole = run();
       return {
         ...whole,
