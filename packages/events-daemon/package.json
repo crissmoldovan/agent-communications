@@ -50,8 +50,8 @@
     "@agentcomms/whatsapp": "workspace:*"
   },
   "devDependencies": {
-    "@modelcontextprotocol/client": "2.3.1",
-    "@modelcontextprotocol/server": "^2.3.1",
+    "@modelcontextprotocol/client": "2.4.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "ajv": "8.20.0",
     "commander": "^15.0.0",
     "playwright": "1.64.1",

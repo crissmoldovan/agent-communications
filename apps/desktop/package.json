@@ -22,13 +22,13 @@
     "@cueplusplus/theme-cue": "1.1.2",
     "@cueplusplus/theme-soft": "1.0.0",
     "@cueplusplus/theme-terminal": "1.1.2",
-    "@cueplusplus/tokens": "0.34.0",
-    "@cueplusplus/ui": "0.34.0",
+    "@cueplusplus/tokens": "0.34.1",
+    "@cueplusplus/ui": "0.34.1",
     "@fontsource-variable/inter": "5.3.0",
     "@fontsource/ibm-plex-mono": "5.3.0",
     "@tauri-apps/api": "2.12.4",
     "@xyflow/react": "^12.11.3",
-    "lucide-react": "1.61.0",
+    "lucide-react": "1.62.0",
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "zod": "catalog:"
@@ -36,7 +36,7 @@
   "devDependencies": {
     "@playwright/test": "1.64.1",
     "@tailwindcss/vite": "4.3.3",
-    "@tauri-apps/cli": "2.12.3",
+    "@tauri-apps/cli": "2.12.4",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.3",
     "@types/node": "catalog:",
@@ -46,7 +46,7 @@
     "jsdom": "30.1.3",
     "tailwindcss": "4.3.3",
     "typescript": "catalog:",
-    "vite": "8.3.4",
+    "vite": "8.3.5",
     "vitest": "5.0.5"
   }
 }
