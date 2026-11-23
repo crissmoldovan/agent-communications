@@ -1,7 +1,22 @@
-import { type ActivityItem, approvalOutcome, asLegacy, asV2, CommsError, recipientDomains } from '@agentcomms/core';
+import {
+  type ActivityItem,
+  approvalOutcome,
+  asLegacy,
+  asV2,
+  CommsError,
+  decodeHeaderWords,
+  newBoundary,
+  parseAddressList,
+  recipientDomains,
+} from '@agentcomms/core';
 import { recorded } from '../activity.ts';
 import type { GmailContext } from '../context.ts';
+import { headerValue } from '../domain/mime.ts';
+import { compileQuery } from '../domain/query.ts';
+import { addressField, type FieldEnvelope, wrapField } from '../domain/untrusted-fields.ts';
+import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { refuseGmailHeldElsewhere } from '../takes.ts';
+import { type NumberOption, numberOption } from './numbers.ts';
 
 /**
  * Moving mail around: labels, archiving, read state, stars, the bin.
@@ -12,15 +27,65 @@ import { refuseGmailHeldElsewhere } from '../takes.ts';
  * touch, and returns what it did in a form that can be reversed.
  */
 
-export interface ModifyOptions {
+/** Which messages a change applies to: by id, by conversation, by a search — or any of them together. */
+export interface Selection {
   /** Messages to change. Ids come from search or from reading a thread. */
   messageIds?: string[] | undefined;
   /** Whole threads to change — every message in them. */
   threadIds?: string[] | undefined;
+  /**
+   * A Gmail search, in the same language `gmail_search` takes: every message it matches. Never the bin or spam.
+   *
+   * Held to `limit`: a search that matches more is refused whole, never cut to the first page, because "archive
+   * everything from this sender" acting on an unknown subset is worse than not acting.
+   */
+  query?: string | undefined;
+  /** The most messages `query` may select, as given; checked against {@link SELECTION_LIMIT}. 100 when left out. */
+  limit?: unknown;
+}
+
+/** How many messages one search may select. 500 is Gmail's page; more is a change to make in steps, each seen. */
+export const SELECTION_MAX = 500;
+export const SELECTION_DEFAULT = 100;
+export const SELECTION_LIMIT: NumberOption = {
+  flag: '--limit',
+  arg: 'limit',
+  min: 1,
+  max: SELECTION_MAX,
+  hint: `A search selects at most ${SELECTION_MAX} messages at once; narrow it, or work in steps.`,
+};
+/** How many of the selected messages a result names. The count is always the whole selection. */
+export const SELECTION_SAMPLE = 25;
+
+/** What was selected, so the person can see what a change touches before it is made. */
+export interface SelectionReport {
+  /** The search as sent to Gmail, when one selected messages; null otherwise. */
+  query: string | null;
+  /** How many messages the search matched (all of them: a search over its limit is refused). */
+  matched: number;
+  /**
+   * The first messages of the selection: ids as given, then conversations, then a search's matches newest first.
+   * Sender and subject are the sender's words, enveloped.
+   */
+  sample: SelectedMessage[];
+}
+
+export interface SelectedMessage {
+  messageId: string;
+  threadId: string | null;
+  from: string;
+  subject: string;
+  date: string | null;
+  labelIds: string[];
+}
+
+export interface ModifyOptions extends Selection {
   addLabels?: string[] | undefined;
   removeLabels?: string[] | undefined;
   /** Remove INBOX: the message stays, and stops being in the inbox. */
   archive?: boolean | undefined;
+  /** Add INBOX back: the message returns to the inbox. */
+  unarchive?: boolean | undefined;
   markRead?: boolean | undefined;
   markUnread?: boolean | undefined;
   star?: boolean | undefined;
@@ -37,6 +102,8 @@ export interface ModifyResult {
   threads: number;
   addLabelIds: string[];
   removeLabelIds: string[];
+  /** What the change touches: how many a search matched, and the first of them by sender and subject. */
+  selection: SelectionReport;
   /**
    * What to pass to put it back, as a list of per-message changes.
    *
@@ -167,6 +234,107 @@ async function refuseWhileSending(
 }
 
 /**
+ * The messages a selection names: ids as given, conversations expanded to their messages, and a search's matches,
+ * once each. A search over its limit is refused before anything is changed or even read beyond its ids.
+ */
+async function selectMessages(
+  context: GmailContext,
+  transport: GmailTransport,
+  selection: Selection,
+): Promise<{ ids: string[]; threads: number; query: string | null; matched: number }> {
+  const query = selection.query?.trim() ? selection.query.trim() : undefined;
+  // Checked before anything is read, so a limit out of range is refused the same way from either surface — and a
+  // limit with no search to bound is a mistake worth saying rather than ignoring.
+  const limit = numberOption(context, selection.limit, SELECTION_LIMIT);
+  if (limit !== undefined && query === undefined) {
+    throw new CommsError('USAGE', 'a limit bounds a search, and there is no search', {
+      hint: 'Pass a query with it, or leave the limit out when naming messages by id.',
+    });
+  }
+  const messageIds = selection.messageIds ?? [];
+  const threadIds = selection.threadIds ?? [];
+  if (messageIds.length === 0 && threadIds.length === 0 && query === undefined) {
+    throw new CommsError('USAGE', 'name the messages or threads to change', {
+      hint: 'Pass messageIds or threadIds — search returns both — or a query that selects them.',
+    });
+  }
+
+  const expanded: string[] = [...messageIds];
+  for (const threadId of threadIds) {
+    const thread = await transport.getThread(threadId);
+    for (const message of thread.messages ?? []) if (message.id) expanded.push(message.id);
+  }
+
+  let compiled: string | null = null;
+  let matched = 0;
+  if (query !== undefined) {
+    const cap = limit ?? SELECTION_DEFAULT;
+    const config = await context.config();
+    compiled = compileQuery(query, { timezone: config.defaults.timezone }).compiled;
+    const found: string[] = [];
+    let pageToken: string | undefined;
+    // One more than the cap is enough to know the search is over it.
+    do {
+      const page = await transport.listMessages({
+        query: compiled,
+        pageToken,
+        maxResults: Math.min(500, cap + 1 - found.length),
+      });
+      for (const entry of page.ids) if (entry.id) found.push(entry.id);
+      pageToken = page.nextPageToken;
+    } while (pageToken && found.length <= cap);
+    if (found.length > cap) {
+      throw new CommsError('USAGE', `that search matches more than ${cap} messages, so nothing was changed`, {
+        hint:
+          cap < SELECTION_MAX
+            ? `Narrow the search, or raise the limit (at most ${SELECTION_MAX}) after a dry run shows what it selects.`
+            : 'Narrow the search — by sender, date or label — and make the change in steps.',
+        details: { query: compiled, limit: cap },
+      });
+    }
+    matched = found.length;
+    expanded.push(...found);
+  }
+  return { ids: [...new Set(expanded)], threads: threadIds.length, query: compiled, matched };
+}
+
+/** One selected message as a row a person can recognise. The sender's words travel inside the envelope. */
+function selectedRow(messageId: string, message: RawMessage | undefined, envelope: FieldEnvelope): SelectedMessage {
+  const headers = message?.payload?.headers ?? [];
+  const fields = { ...envelope, id: messageId };
+  const sender = parseAddressList(headerValue(headers, 'From'))[0];
+  const subject = decodeHeaderWords(headerValue(headers, 'Subject') ?? '');
+  return {
+    messageId,
+    threadId: message?.threadId ?? null,
+    from: sender ? addressField(sender.address, 'from', fields) : '(unknown)',
+    subject: subject ? wrapField(subject, 'subject', fields) : '(no subject)',
+    date: message?.internalDate ? new Date(Number(message.internalDate)).toISOString() : null,
+    labelIds: message?.labelIds ?? [],
+  };
+}
+
+/** A search that matched nothing changes nothing, and says so as a result rather than an error. */
+function emptyModify(
+  alias: string,
+  options: ModifyOptions,
+  selected: { threads: number; query: string | null; matched: number },
+  add: string[],
+  remove: string[],
+): ModifyResult {
+  return {
+    inbox: alias,
+    dryRun: Boolean(options.dryRun),
+    messages: 0,
+    threads: selected.threads,
+    addLabelIds: add,
+    removeLabelIds: remove,
+    selection: { query: selected.query, matched: selected.matched, sample: [] },
+    undo: [],
+  };
+}
+
+/**
  * Changes labels, recorded in the activity log by the messages and threads named, by id, and how many messages that
  * came to. A dry run changes nothing, so it is recorded as a read.
  */
@@ -191,17 +359,13 @@ async function modifyLabels(context: GmailContext, alias: string, options: Modif
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);
 
-  const messageIds = options.messageIds ?? [];
-  const threadIds = options.threadIds ?? [];
-  if (messageIds.length === 0 && threadIds.length === 0) {
-    throw new CommsError('USAGE', 'name the messages or threads to change', {
-      hint: 'Pass messageIds or threadIds; search returns both.',
-    });
-  }
-
   const add = new Set(await resolveLabelIds(context, alias, options.addLabels ?? []));
   const remove = new Set(await resolveLabelIds(context, alias, options.removeLabels ?? []));
+  if (options.archive && options.unarchive) {
+    throw new CommsError('USAGE', 'archive and unarchive at once', { hint: 'Ask for one or the other.' });
+  }
   if (options.archive) remove.add('INBOX');
+  if (options.unarchive) add.add('INBOX');
   if (options.markRead) remove.add('UNREAD');
   if (options.markUnread) add.add('UNREAD');
   if (options.star) add.add('STARRED');
@@ -215,17 +379,14 @@ async function modifyLabels(context: GmailContext, alias: string, options: Modif
   }
   if (add.size === 0 && remove.size === 0) {
     throw new CommsError('USAGE', 'nothing to change', {
-      hint: 'Pass labels to add or remove, or one of --archive, --read, --unread, --star, --unstar.',
+      hint: 'Pass labels to add or remove, or one of --archive, --unarchive, --read, --unread, --star, --unstar.',
     });
   }
 
   // Threads are expanded to their messages, so the count reported is the number of messages that will change.
-  const expanded: string[] = [...messageIds];
-  for (const threadId of threadIds) {
-    const thread = await transport.getThread(threadId);
-    for (const message of thread.messages ?? []) if (message.id) expanded.push(message.id);
-  }
-  const unique = [...new Set(expanded)];
+  const selected = await selectMessages(context, transport, options);
+  const unique = selected.ids;
+  if (unique.length === 0) return emptyModify(alias, options, selected, [...add], [...remove]);
   await refuseWhileSending(context, resolved.inbox.id, unique);
   // Housekeeping needs no take, but leaves a message someone else has alone (design 2026-10-26-taking-messages T6).
   if (!options.dryRun) await refuseGmailHeldElsewhere(context, resolved, unique);
@@ -234,10 +395,14 @@ async function modifyLabels(context: GmailContext, alias: string, options: Modif
   // the price of an undo that is actually an undo; a dry run pays it too, so the user can see the reverse before
   // agreeing to the change.
   const undo: NonNullable<ModifyResult['undo']> = [];
+  const envelope: FieldEnvelope = { boundary: newBoundary(), inbox: alias };
+  const sample: SelectedMessage[] = [];
   for (const messageId of unique) {
     let current: string[] = [];
     try {
-      current = (await transport.getMessageMetadata(messageId)).labelIds ?? [];
+      const metadata = await transport.getMessageMetadata(messageId);
+      current = metadata.labelIds ?? [];
+      if (sample.length < SELECTION_SAMPLE) sample.push(selectedRow(messageId, metadata, envelope));
     } catch {
       // A message we cannot read is one we cannot promise to restore. It is still changed — Gmail's batch does not
       // take exceptions — so the undo simply does not claim it.
@@ -256,9 +421,10 @@ async function modifyLabels(context: GmailContext, alias: string, options: Modif
     inbox: alias,
     dryRun: Boolean(options.dryRun),
     messages: unique.length,
-    threads: threadIds.length,
+    threads: selected.threads,
     addLabelIds: [...add],
     removeLabelIds: [...remove],
+    selection: { query: selected.query, matched: selected.matched, sample },
     undo: undo.filter((entry) => entry.addLabelIds.length > 0 || entry.removeLabelIds.length > 0),
   };
   if (options.dryRun) return result;
@@ -281,6 +447,8 @@ export interface TrashResult {
   dryRun: boolean;
   messages: string[];
   action: 'trash' | 'untrash';
+  /** What the move touches: how many a search matched, and the first of them by sender and subject. */
+  selection: SelectionReport;
 }
 
 /**
@@ -290,9 +458,7 @@ export interface TrashResult {
 export async function trash(
   context: GmailContext,
   alias: string,
-  options: {
-    messageIds?: string[] | undefined;
-    threadIds?: string[] | undefined;
+  options: Selection & {
     undo?: boolean | undefined;
     dryRun?: boolean | undefined;
   },
@@ -311,9 +477,7 @@ export async function trash(
 async function moveToBin(
   context: GmailContext,
   alias: string,
-  options: {
-    messageIds?: string[] | undefined;
-    threadIds?: string[] | undefined;
+  options: Selection & {
     undo?: boolean | undefined;
     dryRun?: boolean | undefined;
   },
@@ -322,21 +486,32 @@ async function moveToBin(
   await context.requireCapability(resolved, 'organize');
   const transport = await context.transport(alias);
 
-  const expanded: string[] = [...(options.messageIds ?? [])];
-  for (const threadId of options.threadIds ?? []) {
-    const thread = await transport.getThread(threadId);
-    for (const message of thread.messages ?? []) if (message.id) expanded.push(message.id);
-  }
-  const unique = [...new Set(expanded)];
-  if (unique.length === 0) {
+  const action = options.undo ? 'untrash' : 'trash';
+  // Taking mail out of the bin by search has to search the bin: Gmail leaves it out of every other search.
+  const selection =
+    action === 'untrash' && options.query?.trim()
+      ? { ...options, query: `in:trash (${options.query.trim()})` }
+      : options;
+  const selected = await selectMessages(context, transport, selection);
+  const unique = selected.ids;
+  if (unique.length === 0 && selected.query === null) {
     throw new CommsError('USAGE', 'name the messages or threads to move', { hint: 'Pass messageIds or threadIds.' });
   }
   await refuseWhileSending(context, resolved.inbox.id, unique);
   // Housekeeping needs no take, but leaves a message someone else has alone (design 2026-10-26-taking-messages T6).
   if (!options.dryRun) await refuseGmailHeldElsewhere(context, resolved, unique);
 
-  const action = options.undo ? 'untrash' : 'trash';
-  if (options.dryRun) return { inbox: alias, dryRun: true, messages: unique, action };
+  // The first messages by sender and subject, so a move chosen by a search can be seen before it is made.
+  const envelope: FieldEnvelope = { boundary: newBoundary(), inbox: alias };
+  const sample: SelectedMessage[] = [];
+  for (const messageId of unique.slice(0, SELECTION_SAMPLE)) {
+    const metadata = await transport.getMessageMetadata(messageId).catch(() => undefined);
+    sample.push(selectedRow(messageId, metadata, envelope));
+  }
+  const report: SelectionReport = { query: selected.query, matched: selected.matched, sample };
+  if (options.dryRun || unique.length === 0) {
+    return { inbox: alias, dryRun: Boolean(options.dryRun), messages: unique, action, selection: report };
+  }
 
   for (const messageId of unique) {
     if (action === 'trash') await transport.trashMessage(messageId);
@@ -350,7 +525,7 @@ async function moveToBin(
     surface: context.surface,
     ids: { messageIds: unique },
   });
-  return { inbox: alias, dryRun: false, messages: unique, action };
+  return { inbox: alias, dryRun: false, messages: unique, action, selection: report };
 }
 
 export interface CreatedLabel {

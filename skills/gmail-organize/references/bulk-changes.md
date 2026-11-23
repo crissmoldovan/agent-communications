@@ -22,15 +22,18 @@ meant, and the dry run is where the difference shows up, for the price of reads 
 `gmail_organise` with `dryRun: true` (CLI: `--dry-run`) does everything except the write, in this order:
 
 1. Checks the `organize` capability on the mailbox. A `read`-tier mailbox fails here, before anything else.
-2. Refuses an empty selection: neither `messageIds` nor `threadIds` is a `USAGE` error.
+2. Refuses an empty selection: no `messageIds`, `threadIds` or `query` is a `USAGE` error, and so is a `limit`
+   with no `query` to bound, or one outside 1–500.
 3. Resolves every label name to an id — so a misspelled label fails **before** any thread is expanded.
 4. Folds the convenience flags into the two id sets: `archive` removes `INBOX`, `markRead` removes `UNREAD`,
    `markUnread` adds `UNREAD`, `star` adds `STARRED`, `unstar` removes `STARRED`.
 5. Refuses a contradiction: any id landing in both sets is a `USAGE` error naming it — `--read` with
    `--unread`, or the same label in `--add` and `--remove`.
 6. Refuses a change that changes nothing: both sets empty is a `USAGE` error.
-7. **Expands every thread id into its message ids**, by fetching each thread, then de-duplicates the whole
-   selection.
+7. **Expands every thread id into its message ids**, by fetching each thread; **runs the `query`**, if one was
+   given, page by page until it has one more id than `limit` (default 100, at most 500) — and refuses the whole
+   change as `USAGE` if it got that far, before anything is written; then de-duplicates the whole selection. A
+   search that matches nothing returns `messages: 0` and changes nothing.
 8. **Reads the current labels of every message in that expanded selection**, one metadata call per message, in
    order — this is where the undo comes from, and the dry run pays for it deliberately so you can show the
    reverse before the user agrees.
@@ -44,6 +47,7 @@ The fields that matter in that result:
 | `threads` | How many thread ids you passed | A count of anything that will change |
 | `addLabelIds`, `removeLabelIds` | The resolved ids, flags included | The names you typed |
 | `undo` | The reverse change, pinned to those ids — one entry per message that has something to put back, present on the dry run too | A snapshot of the mailbox: only the labels this change touches are in it, and messages needing nothing are absent rather than listed empty |
+| `selection` | `query` as sent to Gmail (or `null`), `matched`, and a `sample` of the first 25 messages: id, thread, date, sender, subject and labels — the sender's words enveloped | The whole selection: `messages` is the count |
 | `dryRun` | `true` | — |
 
 Two practical notes. The expansion is what produces the number worth reporting: twenty threads from a chatty
@@ -56,8 +60,10 @@ uncovered rather than with the threads you asked about. That is the right price 
 undo, but it is a real charge against the account's rate limit, so dry-run the selection you mean rather than a
 wider one "to see", and on a very wide one expect `TRANSIENT` mid-plan rather than being surprised by it.
 
-`gmail_trash` has its own dry run. It expands threads the same way and returns `messages` as the **list of
-ids** it would move, plus `action: "trash"` or `"untrash"`.
+`gmail_trash` has its own dry run. It expands threads and runs a `query` the same way, under the same cap, and
+returns `messages` as the **list of ids** it would move, plus `action: "trash"` or `"untrash"` and the same
+`selection`. With `undo: true` a `query` is searched in the bin (`in:trash (…)`), since Gmail leaves binned mail
+out of every other search.
 
 ## Applying what was dry-run
 

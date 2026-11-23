@@ -3,6 +3,24 @@
 All notable changes to this project are recorded here, newest first. Every package in this repository is released
 together under one version.
 
+## Unreleased
+
+**Gmail forwards keep their attachments, and organising takes a search.**
+- **`gmail_draft_forward` / `agent-gmail draft forward`** forwards a message — or with `threadId` / `--thread`, a
+  whole conversation, oldest first, its drafts left out, at most 25 messages — into a new draft with an optional note.
+  The original's named attachments travel byte for byte (`keepAttachments: false` / `--no-attachments` to leave them);
+  an image its HTML embedded does not, and a warning says so. A sender's file names reach the model inside the
+  untrusted-content envelope. The forward is an ordinary draft: it is sent only through `gmail_send_prepare`, its
+  preview listing every file, and a person's approval under the mailbox's send policy. `gmail_draft_reply` with
+  `mode: "forward"` is the same operation, so it now keeps attachments too, and a forward with `quote: false` is
+  refused: a forward always quotes the original.
+- **`gmail_organise` and `gmail_trash` select by search.** `query` / `--query` selects every message a Gmail search
+  matches, beside `messageIds` and `threadIds`, held to `limit` / `--limit` (default 100, at most 500): a search
+  matching more is refused whole, and nothing changes. Results carry `selection` — the search as sent, how many it
+  matched, and the first 25 messages by date, sender and subject, enveloped — so a dry run shows what it would touch.
+  Taking mail out of the bin by search searches the bin.
+- **`unarchive` / `--unarchive`** puts mail back in the inbox; its undo takes it out again.
+
 ## 0.37.0
 
 **Security fix.** On 0.36.0, a coding-agent session that a workflow started in a worktree could make the event service

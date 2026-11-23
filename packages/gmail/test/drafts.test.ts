@@ -339,7 +339,7 @@ test('a forward carries the original, and a reply quotes it', async () => {
   assert.match(replied.preview, /wrote:/, 'a reply attributes what it quotes');
   assert.match(replied.preview, /^> /m, 'and quotes it');
 
-  // A short reply can leave the quote off; a forward should not, but that is the caller's call to make.
+  // A short reply can leave the quote off; a forward cannot (forward.test.ts).
   const bare = await replyDraft(context, 'work', 'm1', { text: 'Yes.', quote: false });
   assert.doesNotMatch(bare.preview, /wrote:/);
 });

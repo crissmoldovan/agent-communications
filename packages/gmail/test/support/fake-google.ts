@@ -249,11 +249,15 @@ function matchesQuery(
     }
   };
 
-  // `{a b}` and `a OR b` are any-of; everything else is all-of.
-  const tokens = query.match(/\{[^}]*\}|"[^"]*"|\S+/g) ?? [];
+  // `{a b}` and `a OR b` are any-of; `(a b)` is a group, read as a query of its own; everything else is all-of.
+  const tokens = query.match(/\{[^}]*\}|\([^)]*\)|"[^"]*"|\S+/g) ?? [];
   for (let index = 0; index < tokens.length; index++) {
     const token = tokens[index] ?? '';
     if (token.toUpperCase() === 'OR') continue;
+    if (token.startsWith('(') && token.endsWith(')')) {
+      if (!matchesQuery(message, token.slice(1, -1), now)) return false;
+      continue;
+    }
     if (token.startsWith('{')) {
       const any = token.slice(1, -1).split(/\s+/).filter(Boolean);
       if (!any.some(matchesTerm)) return false;

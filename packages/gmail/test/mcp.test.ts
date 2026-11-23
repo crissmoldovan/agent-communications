@@ -78,6 +78,7 @@ test('the tool list is the same whatever is configured, and every tool says what
     'gmail_doctor',
     'gmail_draft_create',
     'gmail_draft_delete',
+    'gmail_draft_forward',
     'gmail_draft_get',
     'gmail_draft_list',
     'gmail_draft_reply',
@@ -162,6 +163,7 @@ test('a read-only server does not offer the tools that would write', async () =>
     for (const withheld of [
       'gmail_draft_create',
       'gmail_draft_reply',
+      'gmail_draft_forward',
       'gmail_draft_update',
       'gmail_draft_delete',
       'gmail_organise',

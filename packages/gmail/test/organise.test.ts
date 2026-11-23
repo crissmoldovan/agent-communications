@@ -6,6 +6,7 @@ import { GmailContext } from '../src/context.ts';
 import { applyUndo, createLabel, modify, resolveLabelIds, trash } from '../src/operations/organise.ts';
 import type { FakeGoogle, FakeMessage } from './support/fake-google.ts';
 import { type Harness, newHarness } from './support/harness.ts';
+import { cli, connect } from './support/surfaces.ts';
 
 function base64url(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64url');
@@ -192,4 +193,130 @@ test('the undo puts back what each message had, not what the selection had in co
     !google.accounts.get('sub-1')?.messages?.m2?.labelIds?.includes('INBOX'),
     'a message that was already archived stays archived — the undo restores, it does not impose',
   );
+});
+
+// ---- unarchive, and choosing messages by a search ---------------------------------------------------------------
+
+const changes = (google: FakeGoogle): number =>
+  google.requests.filter((request) => request.path.endsWith('/batchModify')).length;
+
+test('unarchiving puts a message back in the inbox, and its undo takes it out again', async () => {
+  const { context, google } = await connected();
+  await modify(context, 'work', { messageIds: ['m1'], archive: true });
+  const back = await modify(context, 'work', { messageIds: ['m1'], unarchive: true });
+  assert.deepEqual(back.addLabelIds, ['INBOX']);
+  assert.ok(google.accounts.get('sub-1')?.messages?.m1?.labelIds?.includes('INBOX'));
+  assert.deepEqual(back.undo, [{ messageId: 'm1', addLabelIds: [], removeLabelIds: ['INBOX'] }]);
+  await assert.rejects(
+    modify(context, 'work', { messageIds: ['m1'], archive: true, unarchive: true }),
+    (error: unknown) => error instanceof CommsError && error.code === 'USAGE',
+  );
+});
+
+test('a search selects the messages, and a dry run names them by sender and subject inside the envelope', async () => {
+  const { context, google } = await connected();
+  const planned = await modify(context, 'work', { query: 'subject:"Message m1"', archive: true, dryRun: true });
+  assert.equal(planned.messages, 1);
+  assert.equal(planned.selection.matched, 1);
+  assert.equal(planned.selection.query, 'subject:"Message m1"');
+  assert.equal(planned.selection.sample[0]?.messageId, 'm1');
+  assert.equal(planned.selection.sample[0]?.from, 'sam@partner.test');
+  assert.match(planned.selection.sample[0]?.subject ?? '', /<untrusted-content[\s\S]*Message m1/);
+  assert.equal(changes(google), 0, 'a dry run changes nothing');
+
+  const done = await modify(context, 'work', { query: 'subject:"Message m1"', addLabels: ['Clients'] });
+  assert.deepEqual(done.undo, [{ messageId: 'm1', addLabelIds: [], removeLabelIds: ['Label_9'] }]);
+  assert.ok(google.accounts.get('sub-1')?.messages?.m1?.labelIds?.includes('Label_9'));
+  assert.ok(!google.accounts.get('sub-1')?.messages?.m2?.labelIds?.includes('Label_9'), 'only what the search matched');
+});
+
+test('a search that matches more than its limit is refused whole, and nothing is changed', async () => {
+  const { context, google } = await connected();
+  await assert.rejects(
+    modify(context, 'work', { query: 'from:sam@partner.test', limit: 2, archive: true }),
+    (error: unknown) => error instanceof CommsError && error.code === 'USAGE' && /more than 2/.test(error.message),
+  );
+  assert.equal(changes(google), 0);
+  // At the limit it goes ahead: three messages, a limit of three.
+  const all = await modify(context, 'work', { query: 'from:sam@partner.test', limit: 3, archive: true, dryRun: true });
+  assert.equal(all.messages, 3);
+});
+
+test('a limit is checked as given, and only bounds a search', async () => {
+  const { context } = await connected();
+  const usage = (error: unknown) => error instanceof CommsError && error.code === 'USAGE';
+  await assert.rejects(modify(context, 'work', { query: 'in:inbox', limit: 501, archive: true }), usage);
+  await assert.rejects(modify(context, 'work', { query: 'in:inbox', limit: 'lots', archive: true }), usage);
+  await assert.rejects(modify(context, 'work', { messageIds: ['m1'], limit: 5, archive: true }), usage);
+});
+
+test('a search that matches nothing changes nothing and says so', async () => {
+  const { context, google } = await connected();
+  const none = await modify(context, 'work', { query: 'from:nobody@nowhere.test', archive: true });
+  assert.equal(none.messages, 0);
+  assert.deepEqual(none.undo, []);
+  assert.equal(changes(google), 0);
+});
+
+test('ids, conversations and a search combine, each message once', async () => {
+  const { context } = await connected();
+  const planned = await modify(context, 'work', {
+    messageIds: ['m1'],
+    threadIds: ['t1'],
+    query: 'subject:"Message m3"',
+    star: true,
+    dryRun: true,
+  });
+  assert.equal(planned.messages, 3, 'm1 named twice counts once');
+});
+
+test('the bin takes a search too, and taking mail back out searches the bin', async () => {
+  const { context, google } = await connected();
+  const planned = await trash(context, 'work', { query: 'subject:"Message m3"', dryRun: true });
+  assert.deepEqual(planned.messages, ['m3']);
+  assert.equal(planned.selection.sample[0]?.messageId, 'm3');
+
+  await trash(context, 'work', { query: 'subject:"Message m3"' });
+  assert.ok(google.accounts.get('sub-1')?.messages?.m3?.labelIds?.includes('TRASH'));
+  const restored = await trash(context, 'work', { query: 'subject:"Message m3"', undo: true });
+  assert.equal(restored.selection.query, 'in:trash (subject:"Message m3")');
+  assert.deepEqual(restored.messages, ['m3']);
+  assert.ok(!google.accounts.get('sub-1')?.messages?.m3?.labelIds?.includes('TRASH'));
+});
+
+test('gmail_organise and `organise` select by search the same way', async () => {
+  const { harness } = await connected();
+  const { call, close } = await connect({ core: harness.core, env: harness.env });
+  try {
+    const result = await call('gmail_organise', {
+      inbox: 'work',
+      query: 'from:sam@partner.test',
+      archive: true,
+      dryRun: true,
+    });
+    assert.notEqual(result.isError, true, JSON.stringify(result.content));
+    assert.equal((result.structuredContent as { messages: number }).messages, 3);
+    const over = await call('gmail_organise', {
+      inbox: 'work',
+      query: 'from:sam@partner.test',
+      limit: 1,
+      unarchive: true,
+    });
+    assert.equal(over.isError, true);
+  } finally {
+    await close();
+  }
+  const run = await cli(harness, [
+    'organise',
+    '--inbox',
+    'work',
+    '--query',
+    'from:sam@partner.test',
+    '--archive',
+    '--dry-run',
+  ]);
+  assert.equal(run.code, 0, run.stderr);
+  assert.match(run.stdout, /Would change 3 messages/);
+  assert.match(run.stdout, /search: from:sam@partner\.test — 3 matched/);
+  assert.match(run.stdout, /Nothing was changed\./);
 });

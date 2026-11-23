@@ -52,7 +52,16 @@ import {
 } from '../operations/confirm-clients.ts';
 import { followUps, searchContacts } from '../operations/contacts.ts';
 import { doctor } from '../operations/doctor.ts';
-import { createDraft, deleteDraft, getDraft, listDrafts, replyDraft, updateDraft } from '../operations/drafts.ts';
+import {
+  createDraft,
+  deleteDraft,
+  FORWARD_MAX_MESSAGES,
+  forwardDraft,
+  getDraft,
+  listDrafts,
+  replyDraft,
+  updateDraft,
+} from '../operations/drafts.ts';
 import { exportMail } from '../operations/export.ts';
 import { inboxImportChange } from '../operations/import-legacy.ts';
 import {
@@ -63,7 +72,7 @@ import {
   inboxShow,
   whoami,
 } from '../operations/inboxes.ts';
-import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
+import { applyUndo, createLabel, modify, SELECTION_DEFAULT, SELECTION_MAX, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import {
@@ -1535,6 +1544,40 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
 
   // ---- drafts -------------------------------------------------------------------
   // A draft is written, never sent. Sending is a separate, approved act, and no tool here can perform it.
+  /** How an organising tool picks its messages: by id, by conversation, by a capped search. */
+  const selectionArguments = {
+    messageIds: mcpStringArray().optional(),
+    threadIds: mcpStringArray().optional().describe('every message in these conversations'),
+    query: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('a Gmail search; every message it matches, never the bin or spam — refused whole if over `limit`'),
+    limit: mcpInteger()
+      .optional()
+      .describe(`the most messages \`query\` may select, 1–${SELECTION_MAX} (default ${SELECTION_DEFAULT})`),
+  };
+  const selectionView = z
+    .object({
+      query: z.string().nullable().describe('the search as sent to Gmail, when one selected messages'),
+      matched: z.number().describe('how many messages the search matched'),
+      sample: z
+        .array(
+          z.object({
+            messageId: z.string(),
+            threadId: z.string().nullable(),
+            from: z.string(),
+            subject: z.string().describe("the sender's words, inside the untrusted-content envelope"),
+            date: z.string().nullable(),
+            labelIds: z.array(z.string()),
+          }),
+        )
+        .describe(
+          'the first messages the change touches: ids as given, then conversations, then the search newest first',
+        ),
+    })
+    .describe('what the change touches');
+
   const draftView = z.object({
     inbox: z.string(),
     draftId: z.string(),
@@ -1558,6 +1601,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     unsent: unsentDraftSchema
       .optional()
       .describe('gmail_draft_get only: when its last preparation expired in the last 7 days, what its records say'),
+    forwarded: z
+      .object({ messageIds: z.array(z.string()), threadId: z.string().nullable() })
+      .optional()
+      .describe('forwards only: the messages forwarded, oldest first, and the conversation when a whole one was'),
   });
   const draftReply = (result: Awaited<ReturnType<typeof createDraft>>): ReturnType<typeof reply> =>
     reply({
@@ -2489,6 +2536,45 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
     );
 
     server.registerTool(
+      'gmail_draft_forward',
+      {
+        title: 'Draft a forward',
+        description:
+          'Forward a message — or with `threadId`, a whole conversation — into a new draft addressed to `to`, with an optional note above it. The original is quoted below as sanitised plain text, never its own HTML, with who it was from, when, to whom and about what; its attachments are carried over byte for byte unless `keepAttachments` is false. Nothing is sent by this tool: the forward is a draft like any other, and leaves only through gmail_send_prepare and the person approving that exact preview, under the mailbox send policy. Show the returned `preview` to the person verbatim. Its From line is labelled `<name> (agent)` unless `as` is `me`, and the preview’s first line says which.',
+        inputSchema: z.object({
+          inbox: inboxArgument(Boolean(pinned)),
+          messageId: z.string().min(1).optional().describe('the message to forward; give this or threadId'),
+          threadId: z
+            .string()
+            .min(1)
+            .optional()
+            .describe(`every message in this conversation, oldest first (at most ${FORWARD_MAX_MESSAGES})`),
+          to: mcpStringArray().describe('who it goes to'),
+          cc: mcpStringArray().optional(),
+          bcc: mcpStringArray().optional(),
+          text: bodyArgument.optional().describe('a note above the forwarded message; optional'),
+          subject: z.string().optional().describe('defaults to "Fwd: " and the original subject'),
+          keepAttachments: mcpBoolean().optional().describe("carry the original's attachments (default true)"),
+          attach: mcpStringArray()
+            .optional()
+            .describe('local files to add; each is checked against the attachment jail'),
+          signature: mcpBoolean().optional(),
+          includeProfile: mcpBoolean().optional(),
+          as: asArgument,
+        }),
+        outputSchema: draftView,
+        annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+      },
+      async ({ inbox, ...input }) => {
+        try {
+          return draftReply(await forwardDraft(context, targetInbox(inbox), input));
+        } catch (error) {
+          return fail(error);
+        }
+      },
+    );
+
+    server.registerTool(
       'gmail_draft_update',
       {
         title: 'Rewrite a draft',
@@ -2545,14 +2631,14 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Label, archive, star, mark read',
         description:
-          'Change labels on messages or whole conversations: add or remove a label, archive, star, mark read or unread. Every change is reversible and the result carries the exact change that puts it back. Pass `dryRun` first when the selection came from a search: it reports how many messages would change and touches nothing.',
+          'Change labels on messages or whole conversations: add or remove a label (by name or id), archive or unarchive, star, mark read or unread. Select by `messageIds`, `threadIds`, or a Gmail search in `query` — any of them together. A search selects at most `limit` messages (default 100, at most 500) and is refused whole if it matches more, never cut short. Every change is reversible and the result carries the exact change that puts it back. Pass `dryRun` first whenever the selection is a search: it reports how many messages would change and names the first of them by sender and subject, and touches nothing.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
-          messageIds: mcpStringArray().optional(),
-          threadIds: mcpStringArray().optional().describe('every message in these conversations'),
+          ...selectionArguments,
           addLabels: mcpStringArray().optional().describe('by name or id; system names work in any case'),
           removeLabels: mcpStringArray().optional(),
-          archive: mcpBoolean().optional(),
+          archive: mcpBoolean().optional().describe('take it out of the inbox'),
+          unarchive: mcpBoolean().optional().describe('put it back in the inbox'),
           markRead: mcpBoolean().optional(),
           markUnread: mcpBoolean().optional(),
           star: mcpBoolean().optional(),
@@ -2566,6 +2652,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           threads: z.number(),
           addLabelIds: z.array(z.string()),
           removeLabelIds: z.array(z.string()),
+          selection: selectionView,
           undo: z
             .array(
               z.object({
@@ -2624,11 +2711,10 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
       {
         title: 'Move to the bin',
         description:
-          'Move messages or conversations to the bin, or take them out again with `undo`. Gmail keeps a binned message for thirty days; permanent deletion is not offered by this server at all. Use `dryRun` to see what would move.',
+          'Move messages or conversations to the bin, or take them out again with `undo`. Select by `messageIds`, `threadIds`, or a Gmail search in `query` (with `undo`, searched in the bin), capped at `limit` (default 100, at most 500) and refused whole if it matches more. Gmail keeps a binned message for thirty days; permanent deletion is not offered by this server at all. Use `dryRun` to see what would move, by sender and subject.',
         inputSchema: z.object({
           inbox: inboxArgument(Boolean(pinned)),
-          messageIds: mcpStringArray().optional(),
-          threadIds: mcpStringArray().optional(),
+          ...selectionArguments,
           undo: mcpBoolean().optional().describe('take them out of the bin instead'),
           dryRun: mcpBoolean().optional(),
         }),
@@ -2637,6 +2723,7 @@ export async function createGmailMcpServer(options: GmailMcpOptions = {}): Promi
           dryRun: z.boolean(),
           messages: z.array(z.string()),
           action: z.enum(['trash', 'untrash']),
+          selection: selectionView,
         }),
         annotations: { readOnlyHint: false, destructiveHint: true, openWorldHint: true },
       },

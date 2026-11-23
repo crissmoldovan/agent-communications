@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { CommsError, type Config } from '@agentcomms/core';
 import { GmailContext } from '../src/context.ts';
-import { replyDraft } from '../src/operations/drafts.ts';
+import { forwardDraft, replyDraft } from '../src/operations/drafts.ts';
 import { modify, trash } from '../src/operations/organise.ts';
 import { readMessage, readThread } from '../src/operations/read.ts';
 import { search } from '../src/operations/search.ts';
@@ -269,7 +269,18 @@ test('another session’s take is respected with taking off: its reply, forward,
     replyDraft(bob, 'work', 'm1', { text: 'Fwd.', mode: 'forward', to: ['kim@partner.test'] }),
     refused('TAKEN_ELSEWHERE', 'HELD'),
   );
+  // The forward tool, by message and by conversation: the same operation, the same refusal, before any draft is made.
+  await assert.rejects(
+    forwardDraft(bob, 'work', { messageId: 'm1', to: ['kim@partner.test'] }),
+    refused('TAKEN_ELSEWHERE', 'HELD'),
+  );
+  await assert.rejects(
+    forwardDraft(bob, 'work', { threadId: 't_m1', to: ['kim@partner.test'] }),
+    refused('TAKEN_ELSEWHERE', 'HELD'),
+  );
   await assert.rejects(modify(bob, 'work', { messageIds: ['m1'], archive: true }), refused('TAKEN_ELSEWHERE', 'HELD'));
+  // A search that selects the held message is refused the same way as naming it.
+  await assert.rejects(modify(bob, 'work', { query: 'in:inbox', archive: true }), refused('TAKEN_ELSEWHERE', 'HELD'));
   await assert.rejects(trash(bob, 'work', { threadIds: ['t_m1'] }), refused('TAKEN_ELSEWHERE', 'HELD'));
   // Housekeeping needs no take: a dry run, the holder, and another message pass.
   await modify(bob, 'work', { messageIds: ['m1'], archive: true, dryRun: true });

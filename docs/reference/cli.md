@@ -434,6 +434,30 @@ agent-gmail draft reply [options] <messageId>
 | `--mode <mode>` | how to answer (choices: "reply", "reply_all", "forward") | — |
 | `--to <address...>` | who it goes to (a forward needs this; a reply computes it) | — |
 
+### `agent-gmail draft forward`
+
+forward a message, or a whole conversation, with its attachments — into Drafts, never sent from here
+
+```
+agent-gmail draft forward [options] [messageId]
+```
+
+| Option | What it does | Default |
+|---|---|---|
+| `--inbox <alias>` | which mailbox | — |
+| `--to <address...>` | who it goes to | — |
+| `--thread <id>` | forward every message in this conversation instead of one message | — |
+| `--subject <subject>` | the subject line | `"Fwd: " and the original subject` |
+| `--text <text>` | a note above the forwarded message, as plain text | — |
+| `--file <path>` | read the note from a file; `-` reads standard input | — |
+| `--cc <address...>` | copy these people | — |
+| `--bcc <address...>` | blind-copy these people | — |
+| `--attach <path...>` | also attach these local files | — |
+| `--no-attachments` | leave the original's attachments off | — |
+| `--no-signature` | leave the mailbox signature off | — |
+| `--profile` | include the mailbox writing profile in the result | `false` |
+| `--as <who>` | who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so) | — |
+
 ### `agent-gmail draft list`
 
 the drafts in a mailbox
@@ -621,9 +645,12 @@ agent-gmail organise|organize [options]
 | `--inbox <alias>` | which mailbox | — |
 | `--message <id...>` | these messages | — |
 | `--thread <id...>` | every message in these conversations | — |
+| `--query <search>` | every message this Gmail search matches (refused whole if over --limit) | — |
+| `--limit <number>` | the most messages --query may select (default 100, at most 500) | — |
 | `--add <label...>` | add these labels (by name or id) | — |
 | `--remove <label...>` | remove these labels | — |
 | `--archive` | take it out of the inbox | `false` |
+| `--unarchive` | put it back in the inbox | `false` |
 | `--read` | mark it read | `false` |
 | `--unread` | mark it unread | `false` |
 | `--star` | star it | `false` |
@@ -656,6 +683,8 @@ agent-gmail trash [options]
 | `--inbox <alias>` | which mailbox | — |
 | `--message <id...>` | these messages | — |
 | `--thread <id...>` | every message in these conversations | — |
+| `--query <search>` | every message this Gmail search matches (refused whole if over --limit) | — |
+| `--limit <number>` | the most messages --query may select (default 100, at most 500) | — |
 | `--undo` | take them out of the bin instead | `false` |
 | `--dry-run` | say what would move and move nothing | `false` |
 

@@ -106,6 +106,7 @@ assert.deepEqual(names, [
   'gmail_doctor',
   'gmail_draft_create',
   'gmail_draft_delete',
+  'gmail_draft_forward',
   'gmail_draft_get',
   'gmail_draft_list',
   'gmail_draft_reply',

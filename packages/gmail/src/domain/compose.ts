@@ -36,7 +36,7 @@ export interface ComposeInput {
    * what was meant. It is quoted rather than re-attached because the original's HTML is somebody else's markup: it
    * may carry a beacon, hidden text, or a form, none of which an agent may put its name to.
    */
-  quoted?: QuotedOriginal | undefined;
+  quoted?: QuotedOriginal | readonly QuotedOriginal[] | undefined;
   inReplyTo?: string | undefined;
   references?: string[] | undefined;
   headers?: Record<string, string> | undefined;
@@ -187,7 +187,16 @@ export async function composeMessage(input: ComposeInput): Promise<ComposedMessa
     throw new CommsError('BAD_DATA', 'a message needs at least one recipient');
   }
 
-  const quote = input.quoted ? renderQuote(input.quoted) : null;
+  // A forwarded conversation is several originals, each introduced and quoted in turn, oldest first.
+  const originals = input.quoted === undefined ? [] : Array.isArray(input.quoted) ? input.quoted : [input.quoted];
+  const rendered = (originals as readonly QuotedOriginal[]).map(renderQuote);
+  const quote =
+    rendered.length === 0
+      ? null
+      : {
+          text: rendered.map((entry) => entry.text).join('\n\n'),
+          html: rendered.map((entry) => entry.html).join('\n'),
+        };
   const written = quote ? `${input.text.replace(/\s+$/, '')}\n\n${quote.text}` : input.text;
   const text = input.signature ? `${written.replace(/\s+$/, '')}\n\n${input.signature.text}` : written;
   // Gmail wraps a signature in its own element so its editor recognises it; the wrapper is kept byte-for-byte.

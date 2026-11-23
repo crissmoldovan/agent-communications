@@ -79,6 +79,7 @@ import { doctor } from '../operations/doctor.ts';
 import {
   createDraft,
   deleteDraft,
+  forwardDraft,
   getDraft,
   listDrafts,
   REPLY_MODES,
@@ -96,7 +97,7 @@ import {
   whoami,
 } from '../operations/inboxes.ts';
 import { runOauthListener } from '../operations/oauth-listen.ts';
-import { applyUndo, createLabel, modify, trash } from '../operations/organise.ts';
+import { applyUndo, createLabel, modify, SELECTION_DEFAULT, SELECTION_MAX, trash } from '../operations/organise.ts';
 import { readMessage, readThread } from '../operations/read.ts';
 import { search } from '../operations/search.ts';
 import {
@@ -1334,6 +1335,47 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     );
 
   draft
+    .command('forward [messageId]')
+    .description('forward a message, or a whole conversation, with its attachments — into Drafts, never sent from here')
+    .requiredOption('--inbox <alias>', 'which mailbox')
+    .requiredOption('--to <address...>', 'who it goes to')
+    .option('--thread <id>', 'forward every message in this conversation instead of one message')
+    .option('--subject <subject>', 'the subject line (default: "Fwd: " and the original subject)')
+    .option('--text <text>', 'a note above the forwarded message, as plain text')
+    .option('--file <path>', 'read the note from a file; `-` reads standard input')
+    .option('--cc <address...>', 'copy these people')
+    .option('--bcc <address...>', 'blind-copy these people')
+    .option('--attach <path...>', 'also attach these local files')
+    .option('--no-attachments', "leave the original's attachments off")
+    .option('--no-signature', 'leave the mailbox signature off')
+    .option('--profile', 'include the mailbox writing profile in the result', false)
+    .option(
+      '--as <who>',
+      'who it appears to come from: agent (labelled in the From line) or me (unlabelled, only when the person said so)',
+    )
+    .action(
+      act(async (context, globalOptions, messageId: string | undefined, options: Options) => {
+        // The note is optional: no --text and no --file forwards the message with nothing of its own.
+        const note = await bodyText(options, { bodyOptional: true });
+        const result = await forwardDraft(context, String(options.inbox), {
+          messageId,
+          threadId: options.thread === undefined ? undefined : String(options.thread),
+          to: options.to as string[] | undefined,
+          cc: options.cc as string[] | undefined,
+          bcc: options.bcc as string[] | undefined,
+          subject: options.subject === undefined ? undefined : String(options.subject),
+          text: note,
+          attach: options.attach as string[] | undefined,
+          keepAttachments: options.attachments !== false,
+          signature: options.signature !== false,
+          includeProfile: Boolean(options.profile),
+          as: options.as === undefined ? undefined : String(options.as),
+        });
+        writeResult(result, output(), (data) => renderDraft(data, globalOptions.color), streams);
+      }),
+    );
+
+  draft
     .command('list')
     .description('the drafts in a mailbox')
     .requiredOption('--inbox <alias>', 'which mailbox')
@@ -1650,9 +1692,15 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--message <id...>', 'these messages')
     .option('--thread <id...>', 'every message in these conversations')
+    .option('--query <search>', 'every message this Gmail search matches (refused whole if over --limit)')
+    .option(
+      '--limit <number>',
+      `the most messages --query may select (default ${SELECTION_DEFAULT}, at most ${SELECTION_MAX})`,
+    )
     .option('--add <label...>', 'add these labels (by name or id)')
     .option('--remove <label...>', 'remove these labels')
     .option('--archive', 'take it out of the inbox', false)
+    .option('--unarchive', 'put it back in the inbox', false)
     .option('--read', 'mark it read', false)
     .option('--unread', 'mark it unread', false)
     .option('--star', 'star it', false)
@@ -1663,9 +1711,12 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const result = await modify(context, String(options.inbox), {
           messageIds: options.message as string[] | undefined,
           threadIds: options.thread as string[] | undefined,
+          query: options.query === undefined ? undefined : String(options.query),
+          limit: options.limit,
           addLabels: options.add as string[] | undefined,
           removeLabels: options.remove as string[] | undefined,
           archive: Boolean(options.archive),
+          unarchive: Boolean(options.unarchive),
           markRead: Boolean(options.read),
           markUnread: Boolean(options.unread),
           star: Boolean(options.star),
@@ -1748,6 +1799,11 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
     .requiredOption('--inbox <alias>', 'which mailbox')
     .option('--message <id...>', 'these messages')
     .option('--thread <id...>', 'every message in these conversations')
+    .option('--query <search>', 'every message this Gmail search matches (refused whole if over --limit)')
+    .option(
+      '--limit <number>',
+      `the most messages --query may select (default ${SELECTION_DEFAULT}, at most ${SELECTION_MAX})`,
+    )
     .option('--undo', 'take them out of the bin instead', false)
     .option('--dry-run', 'say what would move and move nothing', false)
     .action(
@@ -1755,6 +1811,8 @@ Exit codes: 0 ok · 1 unexpected · 10 send refused or approval required · 64 u
         const result = await trash(context, String(options.inbox), {
           messageIds: options.message as string[] | undefined,
           threadIds: options.thread as string[] | undefined,
+          query: options.query === undefined ? undefined : String(options.query),
+          limit: options.limit,
           undo: Boolean(options.undo),
           dryRun: Boolean(options.dryRun),
         });

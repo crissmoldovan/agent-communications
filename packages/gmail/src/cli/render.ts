@@ -698,6 +698,21 @@ export function renderDrafts(drafts: DraftSummary[], color: boolean): string {
   );
 }
 
+/** What a change touches, by sender and subject: the lines a person reads before saying yes to a search's change. */
+function renderSelection(selection: ModifyResult['selection'], total: number, color: boolean): string[] {
+  const lines: string[] = [];
+  if (selection.query !== null) {
+    lines.push(paint(color, 'dim', `search: ${selection.query} — ${selection.matched} matched`));
+  }
+  for (const row of selection.sample) {
+    lines.push(`  ${row.date?.slice(0, 10) ?? '—'}  ${row.from}  ${row.subject}`);
+  }
+  if (total > selection.sample.length && selection.sample.length > 0) {
+    lines.push(paint(color, 'dim', `  …and ${total - selection.sample.length} more`));
+  }
+  return lines;
+}
+
 export function renderModify(result: ModifyResult, color: boolean, handoffs: CliHandoffs): string {
   const what = [
     result.addLabelIds.length > 0 ? `+${result.addLabelIds.join(' +')}` : '',
@@ -706,11 +721,24 @@ export function renderModify(result: ModifyResult, color: boolean, handoffs: Cli
     .filter(Boolean)
     .join(' ');
   const scope = `${result.messages} message${result.messages === 1 ? '' : 's'}`;
+  if (result.messages === 0) {
+    return [
+      ...renderSelection(result.selection, 0, color),
+      `Nothing matched in ${result.inbox}; nothing was changed.`,
+    ].join('\n');
+  }
   if (result.dryRun) {
-    const lines = [`Would change ${scope} in ${result.inbox}: ${what}.`, paint(color, 'dim', 'Nothing was changed.')];
+    const lines = [
+      `Would change ${scope} in ${result.inbox}: ${what}.`,
+      ...renderSelection(result.selection, result.messages, color),
+      paint(color, 'dim', 'Nothing was changed.'),
+    ];
     return lines.join('\n');
   }
-  const lines = [`Changed ${scope} in ${result.inbox}: ${what}.`];
+  const lines = [
+    `Changed ${scope} in ${result.inbox}: ${what}.`,
+    ...renderSelection(result.selection, result.messages, color),
+  ];
   if (result.undo && result.undo.length > 0) {
     // The undo differs per message, so it is not a command line to retype — it is the `undo` array from `--json`.
     lines.push(
@@ -736,12 +764,21 @@ export function renderTrash(result: TrashResult, color: boolean): string {
   // The preview has to name the operation it is previewing. This branch hard-coded "to the bin" while `result.action`
   // already said `untrash`, so someone recovering from a bad bulk bin — exactly the person who runs a dry run first —
   // was told their restore would bin forty more messages. The preview is the one place that claim gets checked.
+  const selected = renderSelection(result.selection, result.messages.length, color);
+  if (result.messages.length === 0) {
+    return [...selected, `Nothing matched in ${result.inbox}; nothing was moved.`].join('\n');
+  }
   if (result.dryRun) {
     const would = result.action === 'trash' ? 'move' : 'restore';
-    return `Would ${would} ${count} ${where} in ${result.inbox}.\n${paint(color, 'dim', 'Nothing was changed.')}`;
+    return [
+      `Would ${would} ${count} ${where} in ${result.inbox}.`,
+      ...selected,
+      paint(color, 'dim', 'Nothing was changed.'),
+    ].join('\n');
   }
   return [
     `${verb} ${count} ${where} in ${result.inbox}.`,
+    ...selected,
     paint(color, 'dim', 'Gmail keeps a binned message for thirty days; nothing is deleted outright.'),
   ].join('\n');
 }

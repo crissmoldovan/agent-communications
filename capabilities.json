@@ -1291,6 +1291,15 @@
       "reason": "The command reads the body from `--text`, `--file <path>` or standard input (`--file -`); the tool takes it as `text`, the chat's way to pass prose that no shell has to quote."
     },
     {
+      "id": "gmail.draft.forward",
+      "package": "gmail",
+      "cli": "draft forward",
+      "mcp": "gmail_draft_forward",
+      "status": "both",
+      "operation": "forwardDraft",
+      "reason": "The note is optional on both: `--text`, `--file <path>` or `--file -` at a terminal, `text` in chat, and neither forwards the message with nothing of its own. A forward is a draft; it leaves only through `send prepare` and the send gate, like any other."
+    },
+    {
       "id": "gmail.draft.list",
       "package": "gmail",
       "cli": "draft list",

@@ -17,6 +17,7 @@ import {
   type MessageIdentity,
   type MessagePreview,
   neutralise,
+  newBoundary,
   parseAddressList,
   readComposeProfile,
   recipientDomains,
@@ -47,6 +48,7 @@ import {
   WARN_ATTACHMENT_BYTES,
 } from '../domain/compose.ts';
 import { headerValue, readParts } from '../domain/mime.ts';
+import { filenameField, mimeTypeField } from '../domain/untrusted-fields.ts';
 import type { GmailTransport, RawMessage } from '../gmail-api/transport.ts';
 import { refuseGmailHeldElsewhere, requireGmailTake, threadAnswered } from '../takes.ts';
 import { ownAddresses } from './analyse.ts';
@@ -90,6 +92,11 @@ export interface DraftResult {
    * records read say of it, in the words of `send list`'s unsent section (design 2026-10-05 §D9). Absent otherwise.
    */
   unsent?: UnsentDraft | undefined;
+  /**
+   * Forwards only: what was forwarded — the original messages, oldest first, and the conversation when a whole one was
+   * forwarded. The draft itself starts a new conversation.
+   */
+  forwarded?: { messageIds: string[]; threadId: string | null } | undefined;
 }
 
 export interface UpdateDraftInput extends Omit<DraftInput, 'text'> {
@@ -365,13 +372,17 @@ function quoteOf(original: RawMessage, mode: 'reply' | 'reply_all' | 'forward'):
   // `includeQuoted: true`: the point of a forward is the original, and collapsing its history meant forwarding a
   // message with the part the recipient needed replaced by a line naming one of our own options.
   const body = buildBody(readParts(original.payload), { maxChars: QUOTE_MAX_CHARS, includeQuoted: true });
-  if (!body.text.trim()) return undefined;
+  // A reply with nothing to quote quotes nothing. A forward still says what it forwards — who, when, about what —
+  // because a message of attachments alone is forwarded as often as any other.
+  if (!body.text.trim() && mode !== 'forward') return undefined;
   // And a cut is said out loud rather than left as text that simply stops.
-  const quotedText = body.truncated
-    ? `${body.text}
+  const quotedText = !body.text.trim()
+    ? '[the original has no text]'
+    : body.truncated
+      ? `${body.text}
 
 [the original continues — ${body.totalChars - body.text.length} more characters not quoted]`
-    : body.text;
+      : body.text;
   // Decoded so a forwarded header reads as the sender wrote it, then neutralised because this text goes into the
   // draft body — which the model reads back, which the human approves, and which is then actually sent. Unlike a
   // read path, defusing here changes outgoing content; that is acceptable only because the change lands solely on
@@ -514,6 +525,11 @@ async function draftReplyTo(
 ): Promise<MadeReply> {
   // Checked before anything is read, so a word that is not a mode is refused the same way from either surface.
   const mode = oneOf(input.mode, REPLY_MODES, 'a reply mode') ?? 'reply';
+  // A forward is one operation whichever tool asked for it, so `mode: forward` keeps the original's attachments too.
+  if (mode === 'forward') {
+    // A forward answers no message, so its line ties to none.
+    return { draft: await makeForward(context, alias, { ...input, messageId }), replyTo: undefined };
+  }
   const resolved = await context.inbox(alias);
   await context.requireCapability(resolved, 'draft');
   const transport = await context.transport(alias);
@@ -528,9 +544,9 @@ async function draftReplyTo(
    * (`threadAnswered`, security review of 0.35.0).
    */
   const own = (original.labelIds ?? []).some((label) => label === 'SENT' || label === 'DRAFT');
-  if (mode === 'forward' || own) await refuseGmailHeldElsewhere(context, resolved, [messageId]);
+  if (own) await refuseGmailHeldElsewhere(context, resolved, [messageId]);
   else await requireGmailTake(context, resolved, messageId, 'gmail.draft.reply');
-  if (mode !== 'forward' && own) {
+  if (own) {
     const answered = await threadAnswered(context, transport, resolved, original.threadId);
     if (answered !== undefined) await requireGmailTake(context, resolved, answered, 'gmail.draft.reply');
   }
@@ -558,7 +574,7 @@ async function draftReplyTo(
   const bcc = input.bcc ?? [];
   if (to.length === 0 && cc.length === 0 && bcc.length === 0) {
     throw new CommsError('REPLY_INVALID', 'there is nobody to reply to', {
-      hint: mode === 'forward' ? 'A forward needs recipients: pass `to`.' : 'Pass `to` explicitly.',
+      hint: 'Pass `to` explicitly.',
     });
   }
 
@@ -649,9 +665,238 @@ async function draftReplyTo(
     profile: input.includeProfile ? await profileFor(context, alias) : undefined,
   };
   // A reply answers the message it was asked for, in that message's thread; a forward starts a conversation of its own.
-  const answers =
-    mode === 'forward' ? undefined : { messageId, ...(original.threadId ? { threadId: original.threadId } : {}) };
+  const answers = { messageId, ...(original.threadId ? { threadId: original.threadId } : {}) };
   return { draft, replyTo: answers };
+}
+
+function noQuoteForward(): CommsError {
+  return new CommsError('USAGE', 'a forward always quotes the original', {
+    hint: 'Without the original the recipient has nothing to read. To write about a message without forwarding it, draft a new one.',
+  });
+}
+
+/** The most messages one forward quotes: a conversation longer than this is better forwarded a message at a time. */
+export const FORWARD_MAX_MESSAGES = 25;
+
+export interface ForwardInput extends Omit<DraftInput, 'text' | 'to'> {
+  /** The message to forward. Give this or `threadId`. */
+  messageId?: string | undefined;
+  /** A whole conversation: every message in it, quoted oldest first, with every attachment. */
+  threadId?: string | undefined;
+  /** Who it goes to. A forward has no one to compute recipients from, so this is required. */
+  to?: string[] | undefined;
+  /** A note above the forwarded message. Optional: a forward may say nothing of its own. */
+  text?: string | undefined;
+  /** Keep the original's attachments (the default). False forwards the text alone. */
+  keepAttachments?: boolean | undefined;
+  /** Accepted only so a caller passing it is told plainly: a forward always quotes. */
+  quote?: boolean | undefined;
+}
+
+/**
+ * The attachments of the messages being forwarded, by their bytes.
+ *
+ * Only parts with a name are carried. An unnamed part is an image the original's HTML embedded — a logo, or a beacon
+ * — or a large body Gmail stored by reference; the original's HTML is not forwarded, so neither is what it pulled
+ * in, and how many were left is said.
+ */
+async function forwardedAttachments(
+  transport: GmailTransport,
+  messages: readonly RawMessage[],
+  envelope: { boundary: string; inbox: string },
+): Promise<{ attachments: ComposeAttachment[]; described: DraftResult['attachments']; warnings: string[] }> {
+  const attachments: ComposeAttachment[] = [];
+  const described: DraftResult['attachments'] = [];
+  const warnings: string[] = [];
+  let unnamed = 0;
+  for (const message of messages) {
+    const messageId = message.id ?? '';
+    for (const part of readParts(message.payload).attachments) {
+      if (!part.filename) {
+        unnamed += 1;
+        continue;
+      }
+      // The name is the sender's: it goes on the wire as it was, and reaches the model only inside the envelope.
+      const fields = { ...envelope, id: messageId };
+      const named = filenameField(part.filename, fields);
+      if (!part.attachmentId || !messageId) {
+        warnings.push(`could not carry an attachment of message ${messageId}: Gmail gave no way to fetch it`);
+        continue;
+      }
+      try {
+        const content = await transport.getAttachment(messageId, part.attachmentId);
+        attachments.push({ filename: part.filename, content, contentType: part.mimeType });
+        described.push({
+          filename: named,
+          size: content.length,
+          mimeType: mimeTypeField(part.mimeType, fields),
+          source: `forwarded from message ${messageId}`,
+        });
+      } catch {
+        // Said, never dropped quietly: the person approving should know the forward is missing a file.
+        warnings.push(`could not carry an attachment of message ${messageId}; it is not on the forward`);
+      }
+    }
+  }
+  if (unnamed > 0) {
+    warnings.push(`${unnamed} unnamed part(s) the original embedded, such as inline images, were not forwarded`);
+  }
+  return { attachments, described, warnings };
+}
+
+/**
+ * Forwards a message, or a whole conversation, into a new draft.
+ *
+ * The draft is an ordinary one: nothing is sent here, and it leaves only through `gmail_send_prepare` and the send
+ * gate, under the mailbox's send policy, like any other message. What makes it a forward is what it carries: the
+ * original quoted as sanitised text below an optional note — never the original's HTML — with who it was from, when,
+ * to whom and about what; and, unless asked not to, the original's attachments, byte for byte.
+ */
+export async function forwardDraft(context: GmailContext, alias: string, input: ForwardInput): Promise<DraftResult> {
+  // Recorded in the activity log by the draft's id and subject, as every draft is.
+  return recorded(context, 'gmail.draft.forward', 'write', alias, () => makeForward(context, alias, input), draftLine);
+}
+
+async function makeForward(context: GmailContext, alias: string, input: ForwardInput): Promise<DraftResult> {
+  if (input.quote === false) throw noQuoteForward();
+  const messageId = input.messageId?.trim() || undefined;
+  const threadId = input.threadId?.trim() || undefined;
+  if ((messageId === undefined) === (threadId === undefined)) {
+    throw new CommsError('USAGE', 'name the message or the conversation to forward — one, not both', {
+      hint: 'Pass messageId for one message, or threadId for every message in a conversation.',
+    });
+  }
+  const to = input.to ?? [];
+  const cc = input.cc ?? [];
+  const bcc = input.bcc ?? [];
+  if (to.length === 0 && cc.length === 0 && bcc.length === 0) {
+    throw new CommsError('REPLY_INVALID', 'a forward needs someone to go to', { hint: 'Pass `to`.' });
+  }
+
+  const resolved = await context.inbox(alias);
+  await context.requireCapability(resolved, 'draft');
+  const transport = await context.transport(alias);
+
+  // Oldest first, the order a reader follows a conversation in. Drafts in it are not forwarded: they were never sent.
+  const messages =
+    messageId !== undefined
+      ? [await transport.getMessage(messageId)]
+      : ((await transport.getThread(threadId as string)).messages ?? [])
+          .filter((message) => !(message.labelIds ?? []).includes('DRAFT'))
+          .sort((a, b) => Number(a.internalDate ?? 0) - Number(b.internalDate ?? 0));
+  if (messages.length === 0) {
+    throw new CommsError('NOT_FOUND', `there is nothing to forward in conversation ${threadId}`, {
+      hint: 'A conversation of drafts alone has nothing sent to forward.',
+    });
+  }
+  if (messages.length > FORWARD_MAX_MESSAGES) {
+    throw new CommsError(
+      'USAGE',
+      `that conversation has ${messages.length} messages; a forward quotes at most ${FORWARD_MAX_MESSAGES}`,
+      {
+        hint: 'Forward the messages that matter one at a time, by messageId.',
+      },
+    );
+  }
+
+  const forwardedIds = messages.map((message) => message.id ?? '').filter(Boolean);
+  // A forward answers nobody, so it needs no take; it still leaves alone a message someone else has (design
+  // 2026-10-26-taking-messages §6), checked before anything is written.
+  await refuseGmailHeldElsewhere(context, resolved, forwardedIds);
+  // A forward starts a new message: the identity of a send (L4), never a reply's.
+  const label = await draftIdentity(context, resolved, {
+    kind: 'send',
+    requested: input.as,
+    recipients: [...to, ...cc, ...bcc],
+  });
+
+  const latest = messages[messages.length - 1] as RawMessage;
+  const subjectBase = decodeHeaderWords(headerValue(latest.payload?.headers ?? [], 'Subject') ?? '')
+    .replace(/^((re|fwd?|aw|sv|vs|rv)\s*(\[\d+\])?\s*:\s*)+/i, '')
+    .trim();
+  // Decoded, not neutralised: this becomes the outgoing subject, as a reply's does.
+  const subject = input.subject ?? `Fwd: ${subjectBase}`;
+  const quoted = messages.map((message) => quoteOf(message, 'forward')).filter((entry) => entry !== undefined);
+
+  const envelope = { boundary: newBoundary(), inbox: alias };
+  const carried =
+    input.keepAttachments === false
+      ? { attachments: [], described: [], warnings: [] }
+      : await forwardedAttachments(transport, messages, envelope);
+  const added = await attachmentsFor(context, input.attach ?? []);
+  const attachments = [...carried.attachments, ...added.attachments];
+  const described = [...carried.described, ...added.described];
+  const total = attachments.reduce((sum, attachment) => sum + attachment.content.byteLength, 0);
+  const sizeWarnings =
+    total > WARN_ATTACHMENT_BYTES && !added.warnings.some((warning) => warning.includes('MB of attachments'))
+      ? [
+          `${Math.round(total / 1_048_576)} MB of attachments: Gmail's limit is 25 MB and some recipients will not receive it. A link may be better.`,
+        ]
+      : [];
+
+  const from = resolved.inbox.email;
+  const signature = input.signature === false ? undefined : await signatureFor(context, alias, from);
+  const composed = await composeMessage({
+    from: label.from,
+    to,
+    cc,
+    bcc,
+    subject,
+    text: input.text ?? '',
+    signature,
+    attachments,
+    quoted,
+  });
+
+  // A new conversation: it goes to people who were never in this one.
+  const created = await transport.createDraft(composed.raw);
+  const warnings = [
+    ...carried.warnings,
+    ...added.warnings,
+    ...sizeWarnings,
+    ...signatureWarnings(composed.signatureResources),
+    ...warningsFor({ to, cc, bcc, ownDomains: resolved.inbox.internalDomains }),
+  ];
+  await context.core.audit.append({
+    inboxId: resolved.inbox.id,
+    alias,
+    operation: 'draft.forward',
+    outcome: 'ok',
+    surface: context.surface,
+    ids: { draftIds: [created.draftId], messageIds: forwardedIds },
+    recipientDomains: recipientDomains([...to, ...cc, ...bcc]),
+  });
+
+  return {
+    inbox: alias,
+    draftId: created.draftId,
+    messageId: created.messageId,
+    threadId: created.threadId,
+    to,
+    cc,
+    bcc,
+    subject,
+    identity: label.identity,
+    from: label.from,
+    preview: labelledPreview(label, {
+      recipients: { from: label.from, to: previewable(to), cc: previewable(cc), bcc: previewable(bcc) },
+      subject,
+      body: composed.text,
+      // The names as they will go out, defused for the preview: the person sees each file, and a name cannot speak.
+      attachments: attachments.map((attachment) => ({
+        filename: neutralise(attachment.filename).text,
+        size: attachment.content.byteLength,
+        mimeType: attachment.contentType ?? 'application/octet-stream',
+      })),
+      context: { inbox: alias, draftId: created.draftId, note: 'nothing has been sent' },
+      warnings,
+    }),
+    attachments: described,
+    bytes: composed.bytes,
+    warnings,
+    profile: input.includeProfile ? await profileFor(context, alias) : undefined,
+    forwarded: { messageIds: forwardedIds, threadId: threadId ?? null },
+  };
 }
 
 export interface DraftSummary {
